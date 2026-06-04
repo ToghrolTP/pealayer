@@ -1,0 +1,7 @@
+/target
+.agent/
+scratch/
+.vscode/
+.idea/
+.DS_Store
+*.log
