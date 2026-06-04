@@ -1,0 +1,204 @@
+use crate::mpv::render::RenderContextWrapper;
+use eframe::egui;
+use libmpv2::Mpv;
+use std::sync::{Arc, Mutex};
+
+pub struct PealayerApp {
+    pub(crate) mpv: &'static Mpv,
+    pub(crate) mpv_client: libmpv2::Mpv,
+    pub(crate) render_context: Arc<Mutex<RenderContextWrapper>>,
+
+    pub(crate) playback_time: f64,
+    pub(crate) duration: f64,
+    pub(crate) is_paused: bool,
+    pub(crate) volume: f64,
+    pub(crate) is_muted: bool,
+
+    pub(crate) seek_pos: Option<f64>,
+    pub(crate) last_mouse_activity: std::time::Instant,
+
+    pub(crate) show_error: Option<String>,
+
+    // Subtitle state
+    pub(crate) show_sub_settings: bool,
+    pub(crate) sub_visibility: bool,
+    pub(crate) sub_font_size: f64,
+    pub(crate) sub_delay: f64,
+    pub(crate) current_sid: String,
+    pub(crate) sub_tracks: Vec<SubtitleTrack>,
+
+    // Audio state
+    pub(crate) show_audio_settings: bool,
+    pub(crate) audio_delay: f64,
+    pub(crate) current_aid: String,
+    pub(crate) audio_tracks: Vec<AudioTrack>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SubtitleTrack {
+    pub id: i64,
+    pub title: Option<String>,
+    pub lang: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AudioTrack {
+    pub id: i64,
+    pub title: Option<String>,
+    pub lang: Option<String>,
+}
+
+impl eframe::App for PealayerApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        use libmpv2::events::{Event, PropertyData};
+
+        let ctx = ui.ctx().clone();
+
+        // Read MPV events
+        loop {
+            match self.mpv_client.wait_event(0.0) {
+                Some(Ok(Event::PropertyChange {
+                    reply_userdata,
+                    change,
+                    ..
+                })) => match (reply_userdata, change) {
+                    (1, PropertyData::Double(v)) => self.playback_time = v,
+                    (2, PropertyData::Double(v)) => self.duration = v,
+                    (3, PropertyData::Flag(v)) => self.is_paused = v,
+                    (4, PropertyData::Double(v)) => self.volume = v,
+                    (5, PropertyData::Flag(v)) => self.is_muted = v,
+                    (6, PropertyData::Flag(v)) => self.sub_visibility = v,
+                    (7, PropertyData::Double(v)) => self.sub_font_size = v,
+                    (8, PropertyData::Double(v)) => self.sub_delay = v,
+                    (9, PropertyData::Str(v)) => self.current_sid = v.to_string(),
+                    (9, PropertyData::OsdStr(v)) => self.current_sid = v.to_string(),
+                    (10, PropertyData::Double(v)) => self.audio_delay = v,
+                    (11, PropertyData::Str(v)) => self.current_aid = v.to_string(),
+                    (11, PropertyData::OsdStr(v)) => self.current_aid = v.to_string(),
+                    _ => {}
+                },
+                Some(Ok(Event::EndFile(reason))) => {
+                    if reason == 4 {
+                        // MPV_END_FILE_REASON_ERROR
+                        self.show_error =
+                            Some("Error: Failed to play the selected file.".to_string());
+                    }
+                }
+                Some(Ok(Event::StartFile)) => {
+                    self.show_error = None;
+                    self.refresh_sub_tracks();
+                    self.refresh_audio_tracks();
+                }
+                Some(Ok(_)) => {}
+                _ => break,
+            }
+        }
+
+        let is_fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+        if !is_fullscreen {
+            crate::ui::menu::draw(self, ui);
+        }
+
+        // Track mouse movement
+        if ctx.input(|i| {
+            i.pointer.delta().length() > 0.0 || i.pointer.any_click() || i.pointer.any_pressed()
+        }) {
+            self.last_mouse_activity = std::time::Instant::now();
+        } else if self.last_mouse_activity.elapsed().as_secs_f32() > 3.0 {
+            // Hide mouse cursor when inactive
+            ctx.set_cursor_icon(egui::CursorIcon::None);
+        }
+
+        // Handle Keyboard Shortcuts
+        if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+            let _ = self.mpv.command("cycle", &["pause"]);
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::F)) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::M)) {
+            let _ = self.mpv.command("cycle", &["mute"]);
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
+            let _ = self.mpv.command("seek", &["-5", "relative"]);
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
+            let _ = self.mpv.command("seek", &["5", "relative"]);
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+            let _ = self.mpv.command("add", &["volume", "5"]);
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+            let _ = self.mpv.command("add", &["volume", "-5"]);
+        }
+
+        let mut frame = egui::Frame::central_panel(&ui.style());
+        frame.inner_margin = egui::Margin::same(0);
+
+        egui::CentralPanel::default()
+            .frame(frame)
+            .show_inside(ui, |ui| {
+                crate::ui::video::draw(self, ui);
+            crate::ui::controls::draw(self, ui);
+            crate::ui::error::draw(self, ui);
+            crate::ui::subtitles::draw_settings_dialog(self, ui);
+            crate::ui::audio::draw_settings_dialog(self, ui);
+        });
+    }
+}
+
+impl PealayerApp {
+    pub(crate) fn refresh_sub_tracks(&mut self) {
+        self.sub_tracks.clear();
+        if let Ok(count) = self.mpv.get_property::<i64>("track-list/count") {
+            for i in 0..count {
+                let track_type_prop = format!("track-list/{}/type", i);
+                if let Ok(track_type) = self.mpv.get_property::<String>(&track_type_prop) {
+                    if track_type == "sub" {
+                        let id_prop = format!("track-list/{}/id", i);
+                        let lang_prop = format!("track-list/{}/lang", i);
+                        let title_prop = format!("track-list/{}/title", i);
+
+                        if let Ok(id) = self.mpv.get_property::<i64>(&id_prop) {
+                            let lang = self.mpv.get_property::<String>(&lang_prop).ok();
+                            let title = self.mpv.get_property::<String>(&title_prop).ok();
+                            
+                            self.sub_tracks.push(SubtitleTrack {
+                                id,
+                                title,
+                                lang,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn refresh_audio_tracks(&mut self) {
+        self.audio_tracks.clear();
+        if let Ok(count) = self.mpv.get_property::<i64>("track-list/count") {
+            for i in 0..count {
+                let track_type_prop = format!("track-list/{}/type", i);
+                if let Ok(track_type) = self.mpv.get_property::<String>(&track_type_prop) {
+                    if track_type == "audio" {
+                        let id_prop = format!("track-list/{}/id", i);
+                        let lang_prop = format!("track-list/{}/lang", i);
+                        let title_prop = format!("track-list/{}/title", i);
+
+                        if let Ok(id) = self.mpv.get_property::<i64>(&id_prop) {
+                            let lang = self.mpv.get_property::<String>(&lang_prop).ok();
+                            let title = self.mpv.get_property::<String>(&title_prop).ok();
+                            
+                            self.audio_tracks.push(AudioTrack {
+                                id,
+                                title,
+                                lang,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

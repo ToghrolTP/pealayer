@@ -1,0 +1,11 @@
+[package]
+name = "pealayer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = { version = "0.34.3", features = ["glow"] }
+env_logger = "0.11.10"
+libmpv2 = { version = "6.0.0", features = ["render"] }
+log = "0.4.31"
+rfd = "0.17.2"
