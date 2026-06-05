@@ -32,6 +32,9 @@ pub struct PealayerApp {
     pub(crate) audio_delay: f64,
     pub(crate) current_aid: String,
     pub(crate) audio_tracks: Vec<AudioTrack>,
+
+    // 4D Cinema state
+    pub(crate) timeline: crate::four_d::models::Timeline,
 }
 
 #[derive(Clone, Debug, PartialEq)]

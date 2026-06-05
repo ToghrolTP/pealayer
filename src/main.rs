@@ -1,6 +1,7 @@
 pub mod app;
 pub mod mpv;
 pub mod ui;
+pub mod four_d;
 
 use app::PealayerApp;
 use eframe::egui;
@@ -126,6 +127,7 @@ fn main() -> eframe::Result {
                 seek_pos: None,
                 last_mouse_activity: std::time::Instant::now(),
                 show_error: None,
+                timeline: crate::four_d::models::Timeline::new(),
             }))
         }),
     )
