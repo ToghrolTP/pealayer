@@ -127,6 +127,7 @@ fn main() -> eframe::Result {
                 seek_pos: None,
                 last_mouse_activity: std::time::Instant::now(),
                 show_error: None,
+                show_four_d_editor: false,
                 timeline: crate::four_d::models::Timeline::new(),
             }))
         }),

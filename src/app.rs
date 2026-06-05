@@ -34,6 +34,7 @@ pub struct PealayerApp {
     pub(crate) audio_tracks: Vec<AudioTrack>,
 
     // 4D Cinema state
+    pub(crate) show_four_d_editor: bool,
     pub(crate) timeline: crate::four_d::models::Timeline,
 }
 
@@ -146,6 +147,7 @@ impl eframe::App for PealayerApp {
             crate::ui::error::draw(self, ui);
             crate::ui::subtitles::draw_settings_dialog(self, ui);
             crate::ui::audio::draw_settings_dialog(self, ui);
+            crate::ui::four_d::draw_editor(self, ui);
         });
     }
 }
