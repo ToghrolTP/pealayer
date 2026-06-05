@@ -4,3 +4,4 @@ pub mod menu;
 pub mod subtitles;
 pub mod audio;
 pub mod video;
+pub mod four_d;

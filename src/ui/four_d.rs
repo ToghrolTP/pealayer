@@ -1,0 +1,137 @@
+use crate::app::PealayerApp;
+use eframe::egui;
+
+pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    if !app.show_four_d_editor {
+        return;
+    }
+
+    let mut open = app.show_four_d_editor;
+    egui::Window::new("4D Cinema Editor")
+        .open(&mut open)
+        .vscroll(true)
+        .default_width(400.0)
+        .show(ui.ctx(), |ui| {
+            // Setup some dummy data if empty for MVP purposes
+            if app.timeline.templates.is_empty() {
+                app.timeline.templates.push(crate::four_d::models::Effect::new(
+                    "Blink Relay 1".to_string(),
+                    "⚡".to_string(),
+                    2000,
+                    crate::four_d::patterns::generate_blink(1, 200, 2000),
+                ));
+            }
+
+            ui.heading("Effect Templates");
+            egui::Grid::new("templates_grid")
+                .striped(true)
+                .min_col_width(80.0)
+                .show(ui, |ui| {
+                    ui.label("Icon");
+                    ui.label("Name");
+                    ui.label("Duration");
+                    ui.label("Actions");
+                    ui.end_row();
+
+                    for template in &app.timeline.templates {
+                        ui.label(&template.icon);
+                        ui.label(&template.name);
+                        ui.label(format!("{}ms", template.duration_ms));
+                        if ui.button("Add to Timeline").clicked() {
+                            let new_instance = crate::four_d::models::EffectInstance::new(
+                                template.id,
+                                app.playback_time as u64 * 1000, // Add at current playback time
+                            );
+                            app.timeline.instances.push(new_instance);
+                        }
+                        ui.end_row();
+                    }
+                });
+
+            ui.add_space(20.0);
+            ui.heading("Timeline Instances");
+            
+            // Sort instances by start time for display
+            app.timeline.instances.sort_by_key(|inst| inst.start_time_ms);
+
+            egui::Grid::new("instances_grid")
+                .striped(true)
+                .min_col_width(80.0)
+                .show(ui, |ui| {
+                    ui.label("Start Time (ms)");
+                    ui.label("Effect");
+                    ui.label("Actions");
+                    ui.end_row();
+
+                    let mut to_remove = None;
+
+                    for (index, instance) in app.timeline.instances.iter_mut().enumerate() {
+                        let id = ui.make_persistent_id(instance.id);
+                        
+                        let mut time_str = ui.data_mut(|d| {
+                            d.get_temp::<String>(id).unwrap_or_else(|| {
+                                let ms = instance.start_time_ms;
+                                let s = ms / 1000;
+                                let cs = (ms % 1000) / 10;
+                                format!("{:02}:{:02}:{:02}.{:02}", s / 3600, (s / 60) % 60, s % 60, cs)
+                            })
+                        });
+
+                        ui.horizontal(|ui| {
+                            let response = ui.add(egui::TextEdit::singleline(&mut time_str).desired_width(80.0));
+
+                            if response.has_focus() {
+                                ui.data_mut(|d| d.insert_temp(id, time_str.clone()));
+                            } else {
+                                ui.data_mut(|d| d.remove::<String>(id));
+                            }
+
+                            if response.changed() || response.lost_focus() {
+                                let parts: Vec<&str> = time_str.split(&[':', '.']).collect();
+                                if parts.len() == 4 {
+                                    if let (Ok(h), Ok(m), Ok(s), Ok(cs)) = (
+                                        parts[0].parse::<u64>(),
+                                        parts[1].parse::<u64>(),
+                                        parts[2].parse::<u64>(),
+                                        parts[3].parse::<u64>(),
+                                    ) {
+                                        instance.start_time_ms = h * 3600000 + m * 60000 + s * 1000 + cs * 10;
+                                    }
+                                }
+                            }
+                            
+                            // Small nudge buttons
+                            if ui.small_button("-").clicked() {
+                                instance.start_time_ms = instance.start_time_ms.saturating_sub(10);
+                            }
+                            if ui.small_button("+").clicked() {
+                                instance.start_time_ms += 10;
+                            }
+
+                            // Pick current time from seekbar/playback
+                            if ui.button("📍").on_hover_text("Set to current playback position").clicked() {
+                                instance.start_time_ms = (app.playback_time * 1000.0) as u64;
+                            }
+                        });
+
+                        let template_name = app.timeline.templates
+                            .iter()
+                            .find(|t| t.id == instance.effect_id)
+                            .map(|t| t.name.clone())
+                            .unwrap_or_else(|| "Unknown".to_string());
+                        
+                        ui.label(template_name);
+
+                        if ui.button("Delete").clicked() {
+                            to_remove = Some(index);
+                        }
+                        ui.end_row();
+                    }
+
+                    if let Some(index) = to_remove {
+                        app.timeline.instances.remove(index);
+                    }
+                });
+        });
+    app.show_four_d_editor = open;
+}
