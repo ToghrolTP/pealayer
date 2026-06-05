@@ -77,6 +77,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             app.show_audio_settings = !app.show_audio_settings;
                         }
                         
+                        if ui.button("🎬").clicked() {
+                            app.show_four_d_editor = !app.show_four_d_editor;
+                        }
+
                         if ui.button("💬").clicked() {
                             app.show_sub_settings = !app.show_sub_settings;
                         }
