@@ -5,6 +5,8 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if !app.show_four_d_editor {
         return;
     }
+    
+    let mut dirty = false;
 
     let mut open = app.show_four_d_editor;
     egui::Window::new("4D Cinema Editor")
@@ -43,6 +45,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 app.playback_time as u64 * 1000, // Add at current playback time
                             );
                             app.timeline.instances.push(new_instance);
+                            dirty = true;
                         }
                         ui.end_row();
                     }
@@ -96,6 +99,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         parts[3].parse::<u64>(),
                                     ) {
                                         instance.start_time_ms = h * 3600000 + m * 60000 + s * 1000 + cs * 10;
+                                        dirty = true;
                                     }
                                 }
                             }
@@ -103,14 +107,17 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             // Small nudge buttons
                             if ui.small_button("-").clicked() {
                                 instance.start_time_ms = instance.start_time_ms.saturating_sub(10);
+                                dirty = true;
                             }
                             if ui.small_button("+").clicked() {
                                 instance.start_time_ms += 10;
+                                dirty = true;
                             }
 
                             // Pick current time from seekbar/playback
                             if ui.button("📍").on_hover_text("Set to current playback position").clicked() {
                                 instance.start_time_ms = (app.playback_time * 1000.0) as u64;
+                                dirty = true;
                             }
                         });
 
@@ -130,8 +137,15 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                     if let Some(index) = to_remove {
                         app.timeline.instances.remove(index);
+                        dirty = true;
                     }
                 });
         });
+        
+    if dirty {
+        let compiled = crate::four_d::engine::compile_timeline(&app.timeline);
+        let _ = app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+    }
+        
     app.show_four_d_editor = open;
 }
