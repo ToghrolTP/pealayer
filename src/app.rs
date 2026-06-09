@@ -37,6 +37,7 @@ pub struct PealayerApp {
     pub(crate) show_four_d_editor: bool,
     pub(crate) timeline: crate::four_d::models::Timeline,
     pub(crate) engine_handle: crate::four_d::engine::EngineHandle,
+    pub(crate) recording_keys: std::collections::HashMap<eframe::egui::Key, (uuid::Uuid, std::time::Instant)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -153,6 +154,64 @@ impl eframe::App for PealayerApp {
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
             let _ = self.mpv.command("add", &["volume", "-5"]);
+        }
+
+        const MACRO_KEYS: [(egui::Key, u8); 8] = [
+            (egui::Key::F1, 1),
+            (egui::Key::F2, 2),
+            (egui::Key::F3, 3),
+            (egui::Key::F4, 4),
+            (egui::Key::F5, 5),
+            (egui::Key::F6, 6),
+            (egui::Key::F7, 7),
+            (egui::Key::F8, 8),
+        ];
+
+        let mut timeline_dirty = false;
+        
+        for (key, relay_id) in MACRO_KEYS {
+            if ctx.input(|i| i.key_pressed(key)) && !self.recording_keys.contains_key(&key) {
+                let start_time = (self.playback_time * 1000.0) as u64;
+                
+                let actions = crate::four_d::patterns::generate_constant(relay_id, true, 100);
+                let template = crate::four_d::models::Effect::new(
+                    format!("Recorded Relay {}", relay_id),
+                    "🔴".to_string(),
+                    100,
+                    actions
+                );
+                let template_id = template.id;
+                self.timeline.templates.push(template);
+                
+                let instance = crate::four_d::models::EffectInstance::new(template_id, start_time);
+                let instance_id = instance.id;
+                self.timeline.instances.push(instance);
+                
+                self.recording_keys.insert(key, (instance_id, std::time::Instant::now()));
+                timeline_dirty = true;
+            }
+            
+            if ctx.input(|i| i.key_released(key)) {
+                if let Some((instance_id, start_instant)) = self.recording_keys.remove(&key) {
+                    if let Some(instance) = self.timeline.instances.iter().find(|i| i.id == instance_id) {
+                        let mut duration = start_instant.elapsed().as_millis() as u64;
+                        if duration < 100 {
+                            duration = 100; // minimum duration
+                        }
+                        
+                        if let Some(template) = self.timeline.templates.iter_mut().find(|t| t.id == instance.effect_id) {
+                            template.duration_ms = duration;
+                            template.actions = crate::four_d::patterns::generate_constant(relay_id, true, duration);
+                        }
+                        timeline_dirty = true;
+                    }
+                }
+            }
+        }
+        
+        if timeline_dirty {
+            let compiled = crate::four_d::engine::compile_timeline(&self.timeline);
+            let _ = self.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
         }
 
         let mut frame = egui::Frame::central_panel(&ui.style());

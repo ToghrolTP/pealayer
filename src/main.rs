@@ -130,6 +130,7 @@ fn main() -> eframe::Result {
                 show_four_d_editor: false,
                 timeline: crate::four_d::models::Timeline::new(),
                 engine_handle: crate::four_d::engine::spawn_engine(),
+                recording_keys: std::collections::HashMap::new(),
             }))
         }),
     )
