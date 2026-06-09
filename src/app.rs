@@ -36,6 +36,7 @@ pub struct PealayerApp {
     // 4D Cinema state
     pub(crate) show_four_d_editor: bool,
     pub(crate) timeline: crate::four_d::models::Timeline,
+    pub(crate) engine_handle: crate::four_d::engine::EngineHandle,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -66,9 +67,19 @@ impl eframe::App for PealayerApp {
                     change,
                     ..
                 })) => match (reply_userdata, change) {
-                    (1, PropertyData::Double(v)) => self.playback_time = v,
+                    (1, PropertyData::Double(v)) => {
+                        self.playback_time = v;
+                        self.engine_handle
+                            .playback_time_ms
+                            .store((v * 1000.0) as u64, std::sync::atomic::Ordering::Relaxed);
+                    }
                     (2, PropertyData::Double(v)) => self.duration = v,
-                    (3, PropertyData::Flag(v)) => self.is_paused = v,
+                    (3, PropertyData::Flag(v)) => {
+                        self.is_paused = v;
+                        self.engine_handle
+                            .is_playing
+                            .store(!v, std::sync::atomic::Ordering::Relaxed);
+                    }
                     (4, PropertyData::Double(v)) => self.volume = v,
                     (5, PropertyData::Flag(v)) => self.is_muted = v,
                     (6, PropertyData::Flag(v)) => self.sub_visibility = v,
@@ -87,6 +98,14 @@ impl eframe::App for PealayerApp {
                         self.show_error =
                             Some("Error: Failed to play the selected file.".to_string());
                     }
+                }
+                Some(Ok(Event::Seek)) => {
+                    let _ =
+                        self.engine_handle
+                            .sender
+                            .send(crate::four_d::engine::EngineMessage::Seek(
+                                (self.playback_time * 1000.0) as u64,
+                            ));
                 }
                 Some(Ok(Event::StartFile)) => {
                     self.show_error = None;
@@ -143,12 +162,12 @@ impl eframe::App for PealayerApp {
             .frame(frame)
             .show_inside(ui, |ui| {
                 crate::ui::video::draw(self, ui);
-            crate::ui::controls::draw(self, ui);
-            crate::ui::error::draw(self, ui);
-            crate::ui::subtitles::draw_settings_dialog(self, ui);
-            crate::ui::audio::draw_settings_dialog(self, ui);
-            crate::ui::four_d::draw_editor(self, ui);
-        });
+                crate::ui::controls::draw(self, ui);
+                crate::ui::error::draw(self, ui);
+                crate::ui::subtitles::draw_settings_dialog(self, ui);
+                crate::ui::audio::draw_settings_dialog(self, ui);
+                crate::ui::four_d::draw_editor(self, ui);
+            });
     }
 }
 
@@ -167,12 +186,8 @@ impl PealayerApp {
                         if let Ok(id) = self.mpv.get_property::<i64>(&id_prop) {
                             let lang = self.mpv.get_property::<String>(&lang_prop).ok();
                             let title = self.mpv.get_property::<String>(&title_prop).ok();
-                            
-                            self.sub_tracks.push(SubtitleTrack {
-                                id,
-                                title,
-                                lang,
-                            });
+
+                            self.sub_tracks.push(SubtitleTrack { id, title, lang });
                         }
                     }
                 }
@@ -194,12 +209,8 @@ impl PealayerApp {
                         if let Ok(id) = self.mpv.get_property::<i64>(&id_prop) {
                             let lang = self.mpv.get_property::<String>(&lang_prop).ok();
                             let title = self.mpv.get_property::<String>(&title_prop).ok();
-                            
-                            self.audio_tracks.push(AudioTrack {
-                                id,
-                                title,
-                                lang,
-                            });
+
+                            self.audio_tracks.push(AudioTrack { id, title, lang });
                         }
                     }
                 }
