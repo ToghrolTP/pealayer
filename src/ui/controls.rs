@@ -41,14 +41,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     ));
 
                     // Calculate available width for the seekbar, leaving space for the right controls
-                    let right_controls_width = 200.0;
+                    let right_controls_width = 250.0;
                     let seekbar_width = ui.available_width() - right_controls_width;
 
                     let mut current_pos = app.seek_pos.unwrap_or(app.playback_time);
                     let slider = egui::Slider::new(&mut current_pos, 0.0..=app.duration)
                         .show_value(false)
                         .trailing_fill(true);
-                        
+
                     let old_width = ui.spacing().slider_width;
                     ui.spacing_mut().slider_width = seekbar_width.max(50.0);
                     let response = ui.add(slider);
@@ -72,11 +72,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 !is_fullscreen,
                             ));
                         }
-                        
+
                         if ui.button("🎵").clicked() {
                             app.show_audio_settings = !app.show_audio_settings;
                         }
-                        
+
                         if ui.button("🎬").clicked() {
                             app.show_four_d_editor = !app.show_four_d_editor;
                         }
