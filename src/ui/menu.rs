@@ -26,7 +26,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
             ui.menu_button("Audio", |ui| {
                 ui.menu_button("Audio Track", |ui| {
-                    if ui.selectable_label(app.current_aid == "no", "None").clicked() {
+                    if ui
+                        .selectable_label(app.current_aid == "no", "None")
+                        .clicked()
+                    {
                         let _ = app.mpv.set_property("aid", "no");
                         ui.close();
                     }
@@ -39,14 +42,17 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         .into_iter()
                         .filter(|s| !s.is_empty())
                         .collect();
-                        
+
                         let label = if parts.is_empty() {
                             format!("Track {}", track.id)
                         } else {
                             format!("Track {} ({})", track.id, parts.join(" - "))
                         };
 
-                        if ui.selectable_label(app.current_aid == track_id_str, label).clicked() {
+                        if ui
+                            .selectable_label(app.current_aid == track_id_str, label)
+                            .clicked()
+                        {
                             let _ = app.mpv.set_property("aid", track_id_str);
                             ui.close();
                         }
