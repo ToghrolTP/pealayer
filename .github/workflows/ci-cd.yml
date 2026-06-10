@@ -71,7 +71,7 @@ jobs:
           $extractDir = Join-Path $env:RUNNER_TEMP 'libmpv'
 
           Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath -UseBasicParsing
-          & 7z x $archivePath "-o$extractDir" -y | Out-Null
+          & 7z x $archivePath "-o$extractDir" -y
 
           $importLib = Get-ChildItem -Path $extractDir -Recurse -Filter 'mpv.lib' | Select-Object -First 1
           if (-not $importLib) {
@@ -117,7 +117,7 @@ jobs:
           SAFE_REF="${GITHUB_REF_NAME//\//-}"
           ARCHIVE_BASE="pealayer-${PLATFORM}-${SAFE_REF}-${GITHUB_SHA::7}"
           if [[ "${ARCHIVE_EXT}" == "zip" ]]; then
-            (cd dist && 7z a "${ARCHIVE_BASE}.zip" "${PLATFORM}" >/dev/null)
+            (cd dist && 7z a "${ARCHIVE_BASE}.zip" "${PLATFORM}")
             ARCHIVE_PATH="dist/${ARCHIVE_BASE}.zip"
           else
             tar -C dist -czf "dist/${ARCHIVE_BASE}.tar.gz" "${PLATFORM}"
@@ -174,12 +174,28 @@ jobs:
             find release-assets -type f -printf '  - `%P`\n'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Prepare release metadata
+        id: release_meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "tag_name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "release_name=Pealayer ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            safe_ref="${GITHUB_REF_NAME//\//-}"
+            echo "tag_name=branch-${safe_ref}-run-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "release_name=Pealayer branch build (${safe_ref})" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('branch-{0}-run-{1}', replace(github.ref_name, '/', '-'), github.run_number) }}
+          tag_name: ${{ steps.release_meta.outputs.tag_name }}
           target_commitish: ${{ github.sha }}
-          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Pealayer {0}', github.ref_name) || format('Pealayer branch build ({0})', replace(github.ref_name, '/', '-')) }}
-          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          name: ${{ steps.release_meta.outputs.release_name }}
+          prerelease: ${{ steps.release_meta.outputs.prerelease }}
           files: |
             release-assets/**/*
