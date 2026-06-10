@@ -19,7 +19,7 @@ permissions:
   contents: read
 
 env:
-  LIBMPV_WINDOWS_URL: https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260610/mpv-dev-x86_64-20260610-git-304426c.7z
+  LIBMPV_WINDOWS_RELEASES_API_URL: https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest
   ARTIFACT_RETENTION_DAYS: "30"
 
 jobs:
@@ -41,10 +41,23 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install MinGW toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install mingw --no-progress -y
+          $mingwBin = 'C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin'
+          if (-not (Test-Path $mingwBin)) {
+            throw "Could not find MinGW bin directory at $mingwBin"
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $mingwBin
+          rustup target add x86_64-pc-windows-gnu
 
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
@@ -52,16 +65,28 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libmpv-dev pkg-config libasound2-dev libx11-dev libxcb-shape0-dev libxcb-xfixes0-dev
 
-      - name: Download libmpv from GitHub (Windows)
+      - name: Download latest libmpv from GitHub releases (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $downloadUrl = '${{ env.LIBMPV_WINDOWS_URL }}'
-          $archiveName = [System.IO.Path]::GetFileName(([System.Uri]$downloadUrl).AbsolutePath)
-          if (-not $archiveName.EndsWith('.7z')) {
-            throw 'LIBMPV_WINDOWS_URL must point to a .7z archive.'
+          $apiUrl = '${{ env.LIBMPV_WINDOWS_RELEASES_API_URL }}'
+          $headers = @{
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
           }
+          $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers
+          $assets = @($release.assets) | Where-Object { $_.name -match '^mpv-dev-x86_64(-v3)?-.*\.7z$' }
+          if (-not $assets) {
+            throw 'Could not find latest x86_64 mpv-dev .7z asset in the GitHub release.'
+          }
+          $asset = $assets | Where-Object { $_.name -match '^mpv-dev-x86_64-v3-' } | Select-Object -First 1
+          if (-not $asset) {
+            $asset = $assets | Select-Object -First 1
+          }
+
+          $downloadUrl = $asset.browser_download_url
+          $archiveName = $asset.name
 
           $archivePath = Join-Path $env:RUNNER_TEMP $archiveName
           $extractDir = Join-Path $env:RUNNER_TEMP 'libmpv'
@@ -70,37 +95,36 @@ jobs:
           Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath -UseBasicParsing
           & 7z x $archivePath "-o$extractDir" -y
 
-          $importLib = Get-ChildItem -Path (Join-Path $extractDir 'lib') -Filter 'mpv.lib' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          $importLib = Get-ChildItem -Path $extractDir -Recurse -File | Where-Object {
+            $_.Name -in @('mpv.lib', 'libmpv.dll.a', 'libmpv.a')
+          } | Select-Object -First 1
           if (-not $importLib) {
-            $importLib = Get-ChildItem -Path $extractDir -Recurse -Filter 'mpv.lib' -File | Select-Object -First 1
-          }
-          if (-not $importLib) {
-            throw 'mpv.lib was not found in the extracted package.'
+            throw 'No supported libmpv import library was found in the extracted package.'
           }
 
-          $mpvDll = Get-ChildItem -Path $extractDir -Filter 'mpv-2.dll' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          $mpvDll = Get-ChildItem -Path $extractDir -Recurse -File | Where-Object {
+            $_.Name -in @('mpv-2.dll', 'libmpv-2.dll')
+          } | Select-Object -First 1
           if (-not $mpvDll) {
-            $mpvDll = Get-ChildItem -Path $extractDir -Recurse -Filter 'mpv-2.dll' -File | Select-Object -First 1
-          }
-          if (-not $mpvDll) {
-            throw 'mpv-2.dll was not found in the extracted package.'
+            throw 'Neither mpv-2.dll nor libmpv-2.dll was found in the extracted package.'
           }
 
-          "MPV_LIB_DIR=$($importLib.DirectoryName)" >> $env:GITHUB_ENV
+          "MPV_IMPORT_LIB_PATH=$($importLib.FullName)" >> $env:GITHUB_ENV
           "MPV_DLL_PATH=$($mpvDll.FullName)" >> $env:GITHUB_ENV
-          if ($env:LIB) {
-            "LIB=$($importLib.DirectoryName);$env:LIB" >> $env:GITHUB_ENV
-          } else {
-            "LIB=$($importLib.DirectoryName)" >> $env:GITHUB_ENV
-          }
+          "RUSTFLAGS=-L native=$($importLib.DirectoryName)" >> $env:GITHUB_ENV
 
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Windows libmpv package"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Source: $downloadUrl"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Import library: $($importLib.FullName)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Import library: $($importLib.Name)"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Runtime DLL: $($mpvDll.FullName)"
 
       - name: Build release binary
+        if: runner.os != 'Windows'
         run: cargo build --release --locked
+
+      - name: Build release binary (Windows GNU)
+        if: runner.os == 'Windows'
+        run: cargo build --release --locked --target x86_64-pc-windows-gnu
 
       - name: Package build output
         id: package
@@ -113,12 +137,17 @@ jobs:
           set -euo pipefail
           DIST_DIR="dist/${PLATFORM}"
           mkdir -p "${DIST_DIR}"
-          cp "target/release/${BINARY_NAME}" "${DIST_DIR}/"
+          binary_path="target/release/${BINARY_NAME}"
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            binary_path="target/x86_64-pc-windows-gnu/release/${BINARY_NAME}"
+          fi
+          cp "${binary_path}" "${DIST_DIR}/"
           cp README.md LICENSE "${DIST_DIR}/"
 
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
             dll_source="${MPV_DLL_PATH//\\//}"
-            cp "${dll_source}" "${DIST_DIR}/mpv-2.dll"
+            dll_name="$(basename "${dll_source}")"
+            cp "${dll_source}" "${DIST_DIR}/${dll_name}"
           fi
 
           SAFE_REF="${GITHUB_REF_NAME//\//-}"
@@ -151,7 +180,7 @@ jobs:
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- SHA256: \`$hash\`"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v8
         with:
           name: ${{ matrix.platform }}-${{ steps.package.outputs.safe_ref }}-${{ steps.package.outputs.short_sha }}
           path: ${{ steps.package.outputs.archive_path }}
@@ -168,7 +197,7 @@ jobs:
 
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           path: release-assets
 
