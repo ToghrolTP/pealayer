@@ -26,10 +26,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         .get_parameter_i32(eframe::glow::FRAMEBUFFER_BINDING)
                 };
 
+                let vp = info.viewport_in_pixels();
                 let _ = rc.0.render::<GetProcAddress>(
                     fbo,
-                    info.viewport.width() as i32,
-                    info.viewport.height() as i32,
+                    vp.width_px,
+                    vp.height_px,
                     true,
                 );
             }
