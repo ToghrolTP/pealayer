@@ -109,7 +109,8 @@ jobs:
             cp "${dll_source}" "${DIST_DIR}/mpv-2.dll"
           fi
 
-          ARCHIVE_BASE="pealayer-${PLATFORM}-${GITHUB_REF_NAME}-${GITHUB_SHA::7}"
+          SAFE_REF="${GITHUB_REF_NAME//\//-}"
+          ARCHIVE_BASE="pealayer-${PLATFORM}-${SAFE_REF}-${GITHUB_SHA::7}"
           if [[ "${ARCHIVE_EXT}" == "zip" ]]; then
             (cd dist && 7z a "${ARCHIVE_BASE}.zip" "${PLATFORM}" >/dev/null)
             ARCHIVE_PATH="dist/${ARCHIVE_BASE}.zip"
@@ -120,27 +121,26 @@ jobs:
 
           echo "archive_path=${ARCHIVE_PATH}" >> "$GITHUB_OUTPUT"
           echo "archive_name=$(basename "${ARCHIVE_PATH}")" >> "$GITHUB_OUTPUT"
+          echo "safe_ref=${SAFE_REF}" >> "$GITHUB_OUTPUT"
 
       - name: Summarize build
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          archive="${{ steps.package.outputs.archive_path }}"
-          sha256=$(sha256sum "$archive" | awk '{print $1}')
-          size=$(du -h "$archive" | cut -f1)
-          {
-            echo "### Build summary (${{ matrix.platform }})"
-            echo "- Ref: \\`${GITHUB_REF}\\`"
-            echo "- Commit: \\`${GITHUB_SHA}\\`"
-            echo "- Archive: \\`${{ steps.package.outputs.archive_name }}\\`"
-            echo "- Size: ${size}"
-            echo "- SHA256: \\`${sha256}\\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          $archive = "${{ steps.package.outputs.archive_path }}"
+          $hash = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLower()
+          $size = (Get-Item $archive).Length
+
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Build summary (${{ matrix.platform }})"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Ref: \`$env:GITHUB_REF\`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Commit: \`$env:GITHUB_SHA\`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Archive: \`${{ steps.package.outputs.archive_name }}\`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Size (bytes): $size"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- SHA256: \`$hash\`"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform }}-${{ github.ref_name }}-${{ github.sha }}
+          name: ${{ matrix.platform }}-${{ steps.package.outputs.safe_ref }}-${{ github.sha }}
           path: ${{ steps.package.outputs.archive_path }}
           if-no-files-found: error
           retention-days: 30
@@ -172,9 +172,9 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('branch-{0}-run-{1}', github.ref_name, github.run_number) }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('branch-{0}-run-{1}', replace(github.ref_name, '/', '-'), github.run_number) }}
           target_commitish: ${{ github.sha }}
-          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Pealayer {0}', github.ref_name) || format('Pealayer branch build ({0})', github.ref_name) }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Pealayer {0}', github.ref_name) || format('Pealayer branch build ({0})', replace(github.ref_name, '/', '-')) }}
           prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
           files: |
             release-assets/**/*
