@@ -58,10 +58,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                 ui.separator();
 
-                let mut vis = app.sub_visibility;
-                if ui.checkbox(&mut vis, "Enable Subtitles").changed() {
-                    let _ = app.mpv.set_property("sub-visibility", vis);
-                }
+let mut vis = app.sub_visibility;
+if ui.checkbox(&mut vis, "Enable Subtitles").changed() {
+    app.sub_visibility = vis;
+    let _ = app.mpv.set_property("sub-visibility", vis);
+}
 
                 ui.separator();
 
