@@ -1,0 +1,180 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "*"
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Create a GitHub release from the selected branch"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            os: ubuntu-latest
+            binary_name: pealayer
+            archive_ext: tar.gz
+          - platform: windows-x64
+            os: windows-latest
+            binary_name: pealayer.exe
+            archive_ext: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libmpv-dev pkg-config libasound2-dev libx11-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      - name: Download libmpv from SourceForge (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $listUrl = 'https://sourceforge.net/projects/mpv-player-windows/files/libmpv/'
+          $page = Invoke-WebRequest -Uri $listUrl -UseBasicParsing
+          $match = [regex]::Match($page.Content, 'https://sourceforge\.net/projects/mpv-player-windows/files/libmpv/(mpv-dev-x86_64-[0-9]{8}-git-[a-f0-9]+\.7z)/download')
+          if (-not $match.Success) {
+            throw 'Could not find latest mpv-dev-x86_64 package in SourceForge listing.'
+          }
+
+          $packageName = $match.Groups[1].Value
+          $downloadUrl = "https://sourceforge.net/projects/mpv-player-windows/files/libmpv/$packageName/download"
+          $archivePath = Join-Path $env:RUNNER_TEMP $packageName
+          $extractDir = Join-Path $env:RUNNER_TEMP 'libmpv'
+
+          Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath -UseBasicParsing
+          & 7z x $archivePath "-o$extractDir" -y | Out-Null
+
+          $importLib = Get-ChildItem -Path $extractDir -Recurse -Filter 'mpv.lib' | Select-Object -First 1
+          if (-not $importLib) {
+            throw 'mpv.lib was not found in the extracted package.'
+          }
+
+          $mpvDll = Get-ChildItem -Path $extractDir -Recurse -Filter 'mpv-2.dll' | Select-Object -First 1
+          if (-not $mpvDll) {
+            throw 'mpv-2.dll was not found in the extracted package.'
+          }
+
+          "MPV_LIB_DIR=$($importLib.DirectoryName)" >> $env:GITHUB_ENV
+          "MPV_DLL_PATH=$($mpvDll.FullName)" >> $env:GITHUB_ENV
+          "LIB=$($importLib.DirectoryName);$env:LIB" >> $env:GITHUB_ENV
+
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Windows libmpv package`
+- Source: $downloadUrl`
+- Import library: $($importLib.FullName)`
+- Runtime DLL: $($mpvDll.FullName)"
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Package build output
+        id: package
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          BINARY_NAME: ${{ matrix.binary_name }}
+          ARCHIVE_EXT: ${{ matrix.archive_ext }}
+        run: |
+          set -euo pipefail
+          DIST_DIR="dist/${PLATFORM}"
+          mkdir -p "${DIST_DIR}"
+          cp "target/release/${BINARY_NAME}" "${DIST_DIR}/"
+          cp README.md LICENSE "${DIST_DIR}/"
+
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            dll_source="${MPV_DLL_PATH//\\//}"
+            cp "${dll_source}" "${DIST_DIR}/mpv-2.dll"
+          fi
+
+          ARCHIVE_BASE="pealayer-${PLATFORM}-${GITHUB_REF_NAME}-${GITHUB_SHA::7}"
+          if [[ "${ARCHIVE_EXT}" == "zip" ]]; then
+            (cd dist && 7z a "${ARCHIVE_BASE}.zip" "${PLATFORM}" >/dev/null)
+            ARCHIVE_PATH="dist/${ARCHIVE_BASE}.zip"
+          else
+            tar -C dist -czf "dist/${ARCHIVE_BASE}.tar.gz" "${PLATFORM}"
+            ARCHIVE_PATH="dist/${ARCHIVE_BASE}.tar.gz"
+          fi
+
+          echo "archive_path=${ARCHIVE_PATH}" >> "$GITHUB_OUTPUT"
+          echo "archive_name=$(basename "${ARCHIVE_PATH}")" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize build
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="${{ steps.package.outputs.archive_path }}"
+          sha256=$(sha256sum "$archive" | awk '{print $1}')
+          size=$(du -h "$archive" | cut -f1)
+          {
+            echo "### Build summary (${{ matrix.platform }})"
+            echo "- Ref: \\`${GITHUB_REF}\\`"
+            echo "- Commit: \\`${GITHUB_SHA}\\`"
+            echo "- Archive: \\`${{ steps.package.outputs.archive_name }}\\`"
+            echo "- Size: ${size}"
+            echo "- SHA256: \\`${sha256}\\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}-${{ github.ref_name }}-${{ github.sha }}
+          path: ${{ steps.package.outputs.archive_path }}
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Summarize release assets
+        run: |
+          {
+            echo "### Release assets"
+            echo "- Trigger: \\`${{ github.event_name }}\\`"
+            echo "- Source ref: \\`${{ github.ref }}\\`"
+            echo "- Files:"
+            find release-assets -type f -printf '  - `%P`\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('branch-{0}-run-{1}', github.ref_name, github.run_number) }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Pealayer {0}', github.ref_name) || format('Pealayer branch build ({0})', github.ref_name) }}
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          files: |
+            release-assets/**/*
