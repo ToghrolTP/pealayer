@@ -19,7 +19,7 @@ permissions:
   contents: read
 
 env:
-  SOURCEFORGE_LIBMPV_URL: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/
+  LIBMPV_WINDOWS_URL: https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260610/mpv-dev-x86_64-20260610-git-304426c.7z
   ARTIFACT_RETENTION_DAYS: "30"
 
 jobs:
@@ -52,24 +52,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libmpv-dev pkg-config libasound2-dev libx11-dev libxcb-shape0-dev libxcb-xfixes0-dev
 
-      - name: Download libmpv from SourceForge (Windows)
+      - name: Download libmpv from GitHub (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $listUrl = '${{ env.SOURCEFORGE_LIBMPV_URL }}'
-          $page = Invoke-WebRequest -Uri $listUrl -UseBasicParsing
-          # Expected filenames: mpv-dev-x86_64-<build-id>.7z
-          $match = [regex]::Match($page.Content, 'https://sourceforge\.net/projects/mpv-player-windows/files/libmpv/(mpv-dev-x86_64-[^"/]+\.7z)/download')
-          if (-not $match.Success) {
-            throw 'Could not find latest mpv-dev-x86_64 package in SourceForge listing.'
+          $downloadUrl = '${{ env.LIBMPV_WINDOWS_URL }}'
+          $archiveName = [System.IO.Path]::GetFileName(([System.Uri]$downloadUrl).AbsolutePath)
+          if (-not $archiveName.EndsWith('.7z')) {
+            throw 'LIBMPV_WINDOWS_URL must point to a .7z archive.'
           }
 
-          $packageName = $match.Groups[1].Value
-          $downloadUrl = "https://sourceforge.net/projects/mpv-player-windows/files/libmpv/$packageName/download"
-          $archivePath = Join-Path $env:RUNNER_TEMP $packageName
+          $archivePath = Join-Path $env:RUNNER_TEMP $archiveName
           $extractDir = Join-Path $env:RUNNER_TEMP 'libmpv'
-          Write-Host "Matched libmpv package: $packageName"
+          Write-Host "Using libmpv package: $archiveName"
 
           Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath -UseBasicParsing
           & 7z x $archivePath "-o$extractDir" -y
