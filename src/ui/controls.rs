@@ -34,9 +34,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         }
                     };
 
+                    let display_time = app.seek_pos.unwrap_or(app.playback_time);
                     ui.label(format!(
                         "{} / {}",
-                        format_time(app.playback_time),
+                        format_time(display_time),
                         format_time(app.duration)
                     ));
 
@@ -84,6 +85,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         let mut vol = app.volume;
                         let vol_slider = egui::Slider::new(&mut vol, 0.0..=130.0).show_value(false);
                         if ui.add_sized([80.0, 15.0], vol_slider).changed() {
+                            app.volume = vol;
                             let _ = app.mpv.set_property("volume", vol);
                         }
                         let mute_icon = if app.is_muted { "🔇" } else { "🔊" };

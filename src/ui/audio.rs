@@ -87,13 +87,15 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     .add(
                         egui::DragValue::new(&mut delay)
                             .speed(0.1)
-                            .range(-10.0..=10.0),
+                            .range(-600.0..=600.0),
                     )
                     .changed()
                 {
+                    app.audio_delay = delay;
                     let _ = app.mpv.set_property("audio-delay", delay);
                 }
                 if ui.button("Reset").clicked() {
+                    app.audio_delay = 0.0;
                     let _ = app.mpv.set_property("audio-delay", 0.0);
                 }
             });

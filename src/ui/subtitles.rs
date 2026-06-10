@@ -95,6 +95,7 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     .add(egui::Slider::new(&mut font_size, 10.0..=100.0))
                     .changed()
                 {
+                    app.sub_font_size = font_size;
                     let _ = app.mpv.set_property("sub-font-size", font_size);
                 }
             });
@@ -110,13 +111,15 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     .add(
                         egui::DragValue::new(&mut delay)
                             .speed(0.1)
-                            .range(-10.0..=10.0),
+                            .range(-600.0..=600.0),
                     )
                     .changed()
                 {
+                    app.sub_delay = delay;
                     let _ = app.mpv.set_property("sub-delay", delay);
                 }
                 if ui.button("Reset").clicked() {
+                    app.sub_delay = 0.0;
                     let _ = app.mpv.set_property("sub-delay", 0.0);
                 }
             });
