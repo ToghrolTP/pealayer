@@ -31,11 +31,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: linux-x64
+          - platform: linux-x86_64
             os: ubuntu-latest
             binary_name: pealayer
             archive_ext: tar.gz
-          - platform: windows-x64
+          - platform: windows-x86_64
             os: windows-latest
             binary_name: pealayer.exe
             archive_ext: zip
@@ -160,7 +160,8 @@ jobs:
           fi
 
           SAFE_REF="${GITHUB_REF_NAME//\//-}"
-          ARCHIVE_BASE="pealayer-${PLATFORM}-${SAFE_REF}-${GITHUB_SHA::7}"
+          BUNDLE_BASE="Pealayer-${PLATFORM}-${SAFE_REF}-${GITHUB_SHA::7}"
+          ARCHIVE_BASE="${BUNDLE_BASE}"
           if [[ "${ARCHIVE_EXT}" == "zip" ]]; then
             (cd dist && 7z a "${ARCHIVE_BASE}.zip" "${PLATFORM}")
             ARCHIVE_PATH="dist/${ARCHIVE_BASE}.zip"
@@ -169,8 +170,10 @@ jobs:
             ARCHIVE_PATH="dist/${ARCHIVE_BASE}.tar.gz"
           fi
 
+          BUNDLE_GLOB="${DIST_DIR}/*"
           echo "archive_path=${ARCHIVE_PATH}" >> "$GITHUB_OUTPUT"
           echo "archive_name=$(basename "${ARCHIVE_PATH}")" >> "$GITHUB_OUTPUT"
+          echo "bundle_glob=${BUNDLE_GLOB}" >> "$GITHUB_OUTPUT"
           echo "safe_ref=${SAFE_REF}" >> "$GITHUB_OUTPUT"
           echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
@@ -191,7 +194,16 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform }}-${{ steps.package.outputs.safe_ref }}-${{ steps.package.outputs.short_sha }}
+          name: Pealayer-${{ matrix.platform }}-${{ steps.package.outputs.safe_ref }}-${{ steps.package.outputs.short_sha }}
+          path: ${{ steps.package.outputs.bundle_glob }}
+          if-no-files-found: error
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+
+      - name: Upload release archive
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}-${{ steps.package.outputs.safe_ref }}-${{ steps.package.outputs.short_sha }}
           path: ${{ steps.package.outputs.archive_path }}
           if-no-files-found: error
           retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
@@ -208,6 +220,8 @@ jobs:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: release-*
+          merge-multiple: true
           path: release-assets
 
       - name: Summarize release assets
