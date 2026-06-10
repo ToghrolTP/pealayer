@@ -21,6 +21,7 @@ permissions:
 env:
   LIBMPV_WINDOWS_RELEASES_API_URL: https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest
   ARTIFACT_RETENTION_DAYS: "30"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   build:
@@ -181,11 +182,11 @@ jobs:
           $size = (Get-Item $archive).Length
 
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Build summary (${{ matrix.platform }})"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Ref: \`${{ github.ref }}\`"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Commit: \`${{ github.sha }}\`"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Archive: \`${{ steps.package.outputs.archive_name }}\`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '- Ref: `${{ github.ref }}`'
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '- Commit: `${{ github.sha }}`'
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '- Archive: `${{ steps.package.outputs.archive_name }}`'
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Size (bytes): $size"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- SHA256: \`$hash\`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- SHA256: $hash"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
