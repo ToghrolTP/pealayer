@@ -59,8 +59,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $listUrl = '${{ env.SOURCEFORGE_LIBMPV_URL }}'
           $page = Invoke-WebRequest -Uri $listUrl -UseBasicParsing
-          # Expected filenames: mpv-dev-x86_64-YYYYMMDD-git-<short_sha>.7z
-          $match = [regex]::Match($page.Content, 'https://sourceforge\.net/projects/mpv-player-windows/files/libmpv/(mpv-dev-x86_64-[0-9]{8}-git-[a-f0-9]+\.7z)/download')
+          # Expected filenames: mpv-dev-x86_64-<build-id>.7z
+          $match = [regex]::Match($page.Content, 'https://sourceforge\.net/projects/mpv-player-windows/files/libmpv/(mpv-dev-x86_64-[^"/]+\.7z)/download')
           if (-not $match.Success) {
             throw 'Could not find latest mpv-dev-x86_64 package in SourceForge listing.'
           }
@@ -74,19 +74,29 @@ jobs:
           Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath -UseBasicParsing
           & 7z x $archivePath "-o$extractDir" -y
 
-          $importLib = Get-ChildItem -Path $extractDir -Recurse -Filter 'mpv.lib' | Select-Object -First 1
+          $importLib = Get-ChildItem -Path (Join-Path $extractDir 'lib') -Filter 'mpv.lib' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $importLib) {
+            $importLib = Get-ChildItem -Path $extractDir -Recurse -Filter 'mpv.lib' -File | Select-Object -First 1
+          }
           if (-not $importLib) {
             throw 'mpv.lib was not found in the extracted package.'
           }
 
-          $mpvDll = Get-ChildItem -Path $extractDir -Recurse -Filter 'mpv-2.dll' | Select-Object -First 1
+          $mpvDll = Get-ChildItem -Path $extractDir -Filter 'mpv-2.dll' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $mpvDll) {
+            $mpvDll = Get-ChildItem -Path $extractDir -Recurse -Filter 'mpv-2.dll' -File | Select-Object -First 1
+          }
           if (-not $mpvDll) {
             throw 'mpv-2.dll was not found in the extracted package.'
           }
 
           "MPV_LIB_DIR=$($importLib.DirectoryName)" >> $env:GITHUB_ENV
           "MPV_DLL_PATH=$($mpvDll.FullName)" >> $env:GITHUB_ENV
-          "LIB=$($importLib.DirectoryName);$env:LIB" >> $env:GITHUB_ENV
+          if ($env:LIB) {
+            "LIB=$($importLib.DirectoryName);$env:LIB" >> $env:GITHUB_ENV
+          } else {
+            "LIB=$($importLib.DirectoryName)" >> $env:GITHUB_ENV
+          }
 
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Windows libmpv package"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Source: $downloadUrl"
