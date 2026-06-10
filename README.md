@@ -52,6 +52,18 @@ brew install mpv
 
 ---
 
+
+## CI/CD
+
+GitHub Actions now builds release artifacts for **Linux (Ubuntu)** and **Windows** on every push and pull request.
+
+- Windows CI downloads **libmpv** from SourceForge and bundles `mpv-2.dll` with the built executable.
+- Each run uploads platform-specific archives as workflow artifacts.
+- Tag-triggered runs publish those artifacts to GitHub Releases automatically.
+- You can also run the workflow manually and enable branch-based prereleases.
+
+---
+
 ## Installation & Running
 
 1. **Clone the repository**:
