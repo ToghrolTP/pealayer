@@ -69,9 +69,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let dropped: Vec<_> = ui.ctx().input(|i| i.raw.dropped_files.clone());
     for file in dropped {
         if let Some(path) = &file.path {
-            let path_str = path.to_str().unwrap_or("");
-            if !path_str.is_empty() {
+            if let Some(path_str) = path.to_str() {
                 let _ = app.mpv.command("loadfile", &[path_str, "replace"]);
+            } else {
+                app.show_error = Some("Cannot open file: path contains non-UTF-8 characters.".to_string());
             }
         }
     }
@@ -110,9 +111,10 @@ fn open_file_dialog(app: &mut PealayerApp) {
         )
         .pick_file()
     {
-        let path_str = path.to_str().unwrap_or("").to_owned();
-        if !path_str.is_empty() {
-            let _ = app.mpv.command("loadfile", &[&path_str, "replace"]);
+        if let Some(path_str) = path.to_str() {
+            let _ = app.mpv.command("loadfile", &[path_str, "replace"]);
+        } else {
+            app.show_error = Some("Cannot open file: path contains non-UTF-8 characters.".to_string());
         }
     }
 }
