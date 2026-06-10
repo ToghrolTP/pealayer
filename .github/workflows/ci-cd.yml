@@ -97,7 +97,7 @@ jobs:
           $extractDir = Join-Path $env:RUNNER_TEMP 'libmpv'
           Write-Host "Using libmpv package: $archiveName"
 
-          Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath -UseBasicParsing
+          Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath
           & 7z x $archivePath "-o$extractDir" -y
 
           $importLib = Get-ChildItem -Path $extractDir -Recurse -File | Where-Object {
