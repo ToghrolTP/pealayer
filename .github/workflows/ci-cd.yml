@@ -82,10 +82,10 @@ jobs:
           "MPV_DLL_PATH=$($mpvDll.FullName)" >> $env:GITHUB_ENV
           "LIB=$($importLib.DirectoryName);$env:LIB" >> $env:GITHUB_ENV
 
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Windows libmpv package`
-- Source: $downloadUrl`
-- Import library: $($importLib.FullName)`
-- Runtime DLL: $($mpvDll.FullName)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Windows libmpv package"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Source: $downloadUrl"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Import library: $($importLib.FullName)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Runtime DLL: $($mpvDll.FullName)"
 
       - name: Build release binary
         run: cargo build --release --locked
