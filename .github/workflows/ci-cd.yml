@@ -106,9 +106,13 @@ jobs:
             throw 'No supported libmpv import library was found in the extracted package.'
           }
 
-          $mpvDll = Get-ChildItem -Path $extractDir -Recurse -File | Where-Object {
+          $mpvDllCandidates = Get-ChildItem -Path $extractDir -Recurse -File | Where-Object {
             $_.Name -in @('libmpv-2.dll', 'mpv-2.dll')
-          } | Sort-Object @{Expression = { if ($_.Name -eq 'libmpv-2.dll') { 0 } else { 1 } } }, FullName | Select-Object -First 1
+          }
+          $mpvDll = $mpvDllCandidates | Where-Object { $_.Name -eq 'libmpv-2.dll' } | Select-Object -First 1
+          if (-not $mpvDll) {
+            $mpvDll = $mpvDllCandidates | Where-Object { $_.Name -eq 'mpv-2.dll' } | Select-Object -First 1
+          }
           if (-not $mpvDll) {
             throw 'Neither mpv-2.dll nor libmpv-2.dll was found in the extracted package.'
           }
