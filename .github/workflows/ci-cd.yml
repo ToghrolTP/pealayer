@@ -69,6 +69,7 @@ jobs:
           $downloadUrl = "https://sourceforge.net/projects/mpv-player-windows/files/libmpv/$packageName/download"
           $archivePath = Join-Path $env:RUNNER_TEMP $packageName
           $extractDir = Join-Path $env:RUNNER_TEMP 'libmpv'
+          Write-Host "Matched libmpv package: $packageName"
 
           Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath -UseBasicParsing
           & 7z x $archivePath "-o$extractDir" -y
@@ -127,6 +128,7 @@ jobs:
           echo "archive_path=${ARCHIVE_PATH}" >> "$GITHUB_OUTPUT"
           echo "archive_name=$(basename "${ARCHIVE_PATH}")" >> "$GITHUB_OUTPUT"
           echo "safe_ref=${SAFE_REF}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: Summarize build
         shell: pwsh
@@ -145,7 +147,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform }}-${{ steps.package.outputs.safe_ref }}-${{ github.sha }}
+          name: ${{ matrix.platform }}-${{ steps.package.outputs.safe_ref }}-${{ steps.package.outputs.short_sha }}
           path: ${{ steps.package.outputs.archive_path }}
           if-no-files-found: error
           retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
@@ -185,7 +187,7 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           else
             safe_ref="${GITHUB_REF_NAME//\//-}"
-            echo "tag_name=branch-${safe_ref}-run-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "tag_name=branch-${safe_ref}" >> "$GITHUB_OUTPUT"
             echo "release_name=Pealayer branch build (${safe_ref})" >> "$GITHUB_OUTPUT"
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           fi
