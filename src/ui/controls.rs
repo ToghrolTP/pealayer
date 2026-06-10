@@ -19,9 +19,16 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .interactable(true)
             .frame(egui::Frame::window(ui.style()).multiply_with_opacity(alpha))
             .show(&ctx, |ui| {
+                // Fade the content (text, buttons, slider) in sync with the window frame.
+                ui.set_opacity(alpha);
+
                 ui.horizontal(|ui| {
+                    // Fixed-width play/pause button so the UI does not shift when the symbol changes.
                     let play_icon = if app.is_paused { "▶" } else { "⏸" };
-                    if ui.button(play_icon).clicked() {
+                    if ui
+                        .add(egui::Button::new(play_icon).min_size(egui::vec2(28.0, 0.0)))
+                        .clicked()
+                    {
                         let _ = app.mpv.command("cycle", &["pause"]);
                     }
 
@@ -40,18 +47,27 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         format_time(app.duration)
                     ));
 
-                    // Calculate available width for the seekbar, leaving space for the right controls
-                    let right_controls_width = 200.0;
+                    // Reserve enough space for: mute icon + volume slider + sub + audio + fullscreen buttons.
+                    // Measured conservatively to prevent the seekbar from running into the mute button.
+                    let right_controls_width = 240.0;
                     let seekbar_width = ui.available_width() - right_controls_width;
 
-                    let mut current_pos = app.seek_pos.unwrap_or(app.playback_time);
-                    let slider = egui::Slider::new(&mut current_pos, 0.0..=app.duration)
+                    // When no video is loaded use a dummy range so the handle sits at the left edge
+                    // (value 0 on 0..=1) rather than at the midpoint of a degenerate 0..=0 range.
+                    let (seek_range, mut current_pos) = if app.has_video {
+                        (0.0..=app.duration, app.seek_pos.unwrap_or(app.playback_time))
+                    } else {
+                        (0.0..=1.0, 0.0)
+                    };
+
+                    let slider = egui::Slider::new(&mut current_pos, seek_range)
                         .show_value(false)
                         .trailing_fill(true);
-                        
+
                     let old_width = ui.spacing().slider_width;
                     ui.spacing_mut().slider_width = seekbar_width.max(50.0);
-                    let response = ui.add(slider);
+                    // Disable the slider entirely when there is nothing loaded.
+                    let response = ui.add_enabled(app.has_video, slider);
                     ui.spacing_mut().slider_width = old_width;
 
                     if response.dragged() {
@@ -72,20 +88,36 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 !is_fullscreen,
                             ));
                         }
-                        
+
                         if ui.button("🎵").clicked() {
                             app.show_audio_settings = !app.show_audio_settings;
                         }
-                        
+
                         if ui.button("💬").clicked() {
                             app.show_sub_settings = !app.show_sub_settings;
                         }
 
                         let mut vol = app.volume;
-                        let vol_slider = egui::Slider::new(&mut vol, 0.0..=130.0).show_value(false);
-                        if ui.add_sized([80.0, 15.0], vol_slider).changed() {
+                        let vol_slider =
+                            egui::Slider::new(&mut vol, 0.0..=130.0).show_value(false);
+                        let vol_response = ui.add_sized([80.0, 15.0], vol_slider);
+                        if vol_response.changed() {
                             let _ = app.mpv.set_property("volume", vol);
                         }
+
+                        // Mousewheel on the volume slider area adjusts volume.
+                        if vol_response.hovered() {
+                            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                            if scroll != 0.0 {
+                                let delta = scroll.round() as f64;
+                                let _ = app.mpv.command("add", &["volume", &delta.to_string()]);
+                                app.show_osd(format!(
+                                    "🔊 Volume: {:.0}%",
+                                    (app.volume + delta).clamp(0.0, 130.0)
+                                ));
+                            }
+                        }
+
                         let mute_icon = if app.is_muted { "🔇" } else { "🔊" };
                         if ui.add(egui::Button::new(mute_icon).frame(false)).clicked() {
                             let _ = app.mpv.command("cycle", &["mute"]);

@@ -113,6 +113,7 @@ fn main() -> eframe::Result {
                 is_paused: false,
                 volume: 100.0,
                 is_muted: false,
+                has_video: false,
                 show_sub_settings: false,
                 sub_visibility: true,
                 sub_font_size: 55.0,
@@ -126,6 +127,9 @@ fn main() -> eframe::Result {
                 seek_pos: None,
                 last_mouse_activity: std::time::Instant::now(),
                 show_error: None,
+                osd_message: None,
+                show_url_dialog: false,
+                url_input: String::new(),
             }))
         }),
     )

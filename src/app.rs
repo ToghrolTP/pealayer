@@ -17,7 +17,18 @@ pub struct PealayerApp {
     pub(crate) seek_pos: Option<f64>,
     pub(crate) last_mouse_activity: std::time::Instant,
 
+    /// True while a file is currently loaded / playing.
+    pub(crate) has_video: bool,
+
     pub(crate) show_error: Option<String>,
+
+    /// Transient OSD message and the instant it was set.
+    pub(crate) osd_message: Option<(String, std::time::Instant)>,
+
+    /// Whether the "Open URL" modal is visible.
+    pub(crate) show_url_dialog: bool,
+    /// Text currently typed in the URL input field.
+    pub(crate) url_input: String,
 
     // Subtitle state
     pub(crate) show_sub_settings: bool,
@@ -78,6 +89,9 @@ impl eframe::App for PealayerApp {
                     _ => {}
                 },
                 Some(Ok(Event::EndFile(reason))) => {
+                    self.has_video = false;
+                    self.playback_time = 0.0;
+                    self.duration = 0.0;
                     if reason == 4 {
                         // MPV_END_FILE_REASON_ERROR
                         self.show_error =
@@ -85,6 +99,7 @@ impl eframe::App for PealayerApp {
                     }
                 }
                 Some(Ok(Event::StartFile)) => {
+                    self.has_video = true;
                     self.show_error = None;
                     self.refresh_sub_tracks();
                     self.refresh_audio_tracks();
@@ -112,24 +127,41 @@ impl eframe::App for PealayerApp {
         // Handle Keyboard Shortcuts
         if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
             let _ = self.mpv.command("cycle", &["pause"]);
+            let msg = if self.is_paused { "▶ Play" } else { "⏸ Pause" };
+            self.show_osd(msg);
         }
         if ctx.input(|i| i.key_pressed(egui::Key::F)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
         }
         if ctx.input(|i| i.key_pressed(egui::Key::M)) {
             let _ = self.mpv.command("cycle", &["mute"]);
+            let msg = if self.is_muted { "🔊 Unmuted" } else { "🔇 Muted" };
+            self.show_osd(msg);
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
             let _ = self.mpv.command("seek", &["-5", "relative"]);
+            self.show_osd("⏪ -5s");
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
             let _ = self.mpv.command("seek", &["5", "relative"]);
+            self.show_osd("⏩ +5s");
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
             let _ = self.mpv.command("add", &["volume", "5"]);
+            self.show_osd(format!("🔊 Volume: {:.0}%", (self.volume + 5.0).min(130.0)));
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
             let _ = self.mpv.command("add", &["volume", "-5"]);
+            self.show_osd(format!("🔊 Volume: {:.0}%", (self.volume - 5.0).max(0.0)));
+        }
+        // Frame-by-frame: . = step forward, , = step back (same as default mpv bindings)
+        if ctx.input(|i| i.key_pressed(egui::Key::Period)) {
+            let _ = self.mpv.command("frame-step", &[]);
+            self.show_osd("⏭ Frame +1");
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Comma)) {
+            let _ = self.mpv.command("frame-back-step", &[]);
+            self.show_osd("⏮ Frame -1");
         }
 
         let mut frame = egui::Frame::central_panel(&ui.style());
@@ -139,15 +171,21 @@ impl eframe::App for PealayerApp {
             .frame(frame)
             .show_inside(ui, |ui| {
                 crate::ui::video::draw(self, ui);
-            crate::ui::controls::draw(self, ui);
-            crate::ui::error::draw(self, ui);
-            crate::ui::subtitles::draw_settings_dialog(self, ui);
-            crate::ui::audio::draw_settings_dialog(self, ui);
-        });
+                crate::ui::controls::draw(self, ui);
+                crate::ui::osd::draw(self, ui);
+                crate::ui::error::draw(self, ui);
+                crate::ui::subtitles::draw_settings_dialog(self, ui);
+                crate::ui::audio::draw_settings_dialog(self, ui);
+                crate::ui::menu::draw_url_dialog(self, ui);
+            });
     }
 }
 
 impl PealayerApp {
+    pub(crate) fn show_osd(&mut self, msg: impl Into<String>) {
+        self.osd_message = Some((msg.into(), std::time::Instant::now()));
+    }
+
     pub(crate) fn refresh_sub_tracks(&mut self) {
         self.sub_tracks.clear();
         if let Ok(count) = self.mpv.get_property::<i64>("track-list/count") {
