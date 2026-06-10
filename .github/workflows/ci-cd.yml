@@ -18,6 +18,10 @@ on:
 permissions:
   contents: read
 
+env:
+  SOURCEFORGE_LIBMPV_URL: https://sourceforge.net/projects/mpv-player-windows/files/libmpv/
+  ARTIFACT_RETENTION_DAYS: "30"
+
 jobs:
   build:
     name: Build (${{ matrix.platform }})
@@ -53,8 +57,9 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $listUrl = 'https://sourceforge.net/projects/mpv-player-windows/files/libmpv/'
+          $listUrl = '${{ env.SOURCEFORGE_LIBMPV_URL }}'
           $page = Invoke-WebRequest -Uri $listUrl -UseBasicParsing
+          # Expected filenames: mpv-dev-x86_64-YYYYMMDD-git-<short_sha>.7z
           $match = [regex]::Match($page.Content, 'https://sourceforge\.net/projects/mpv-player-windows/files/libmpv/(mpv-dev-x86_64-[0-9]{8}-git-[a-f0-9]+\.7z)/download')
           if (-not $match.Success) {
             throw 'Could not find latest mpv-dev-x86_64 package in SourceForge listing.'
@@ -143,7 +148,7 @@ jobs:
           name: ${{ matrix.platform }}-${{ steps.package.outputs.safe_ref }}-${{ github.sha }}
           path: ${{ steps.package.outputs.archive_path }}
           if-no-files-found: error
-          retention-days: 30
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
 
   release:
     name: Publish release
