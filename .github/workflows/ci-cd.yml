@@ -131,8 +131,8 @@ jobs:
           $size = (Get-Item $archive).Length
 
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Build summary (${{ matrix.platform }})"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Ref: \`$env:GITHUB_REF\`"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Commit: \`$env:GITHUB_SHA\`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Ref: \`${{ github.ref }}\`"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Commit: \`${{ github.sha }}\`"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Archive: \`${{ steps.package.outputs.archive_name }}\`"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Size (bytes): $size"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- SHA256: \`$hash\`"
@@ -163,8 +163,8 @@ jobs:
         run: |
           {
             echo "### Release assets"
-            echo "- Trigger: \\`${{ github.event_name }}\\`"
-            echo "- Source ref: \\`${{ github.ref }}\\`"
+            echo "- Trigger: \`${{ github.event_name }}\`"
+            echo "- Source ref: \`${{ github.ref }}\`"
             echo "- Files:"
             find release-assets -type f -printf '  - `%P`\n'
           } >> "$GITHUB_STEP_SUMMARY"
