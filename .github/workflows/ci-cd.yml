@@ -81,7 +81,7 @@ jobs:
             $headers.Authorization = ('token ' + $env:GITHUB_TOKEN)
           }
           $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers
-          $assets = @($release.assets) | Where-Object { $_.name -match '^mpv-dev-x86_64(-v3)?-.*\.7z$' }
+          $assets = @($release.assets) | Where-Object { $_.name -match '^mpv-dev-x86_64(?:-v3)?-.*\.7z$' }
           if (-not $assets) {
             throw 'Could not find latest x86_64 mpv-dev .7z asset in the GitHub release.'
           }
