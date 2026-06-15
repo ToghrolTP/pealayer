@@ -97,13 +97,18 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     ui.end_row();
 
                     for template in &app.timeline.templates {
+                        // Declutter: hide auto-generated recorded templates from this list
+                        if template.name.starts_with("Recorded Relay") {
+                            continue;
+                        }
+
                         ui.label(&template.icon);
                         ui.label(&template.name);
                         ui.label(format!("{}ms", template.duration_ms));
                         if ui.button("Add to Timeline").clicked() {
                             let new_instance = crate::four_d::models::EffectInstance::new(
                                 template.id,
-                                app.playback_time as u64 * 1000, // Add at current playback time
+                                (app.playback_time * 1000.0) as u64, // Fixed precision bug
                             );
                             app.timeline.instances.push(new_instance);
                             dirty = true;
@@ -141,8 +146,25 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             })
                         });
 
+                        // Check validity of current text on the fly
+                        let is_valid = {
+                            let parts: Vec<&str> = time_str.split(&[':', '.']).collect();
+                            if parts.len() == 4 {
+                                parts[0].parse::<u64>().is_ok() &&
+                                parts[1].parse::<u64>().is_ok() &&
+                                parts[2].parse::<u64>().is_ok() &&
+                                parts[3].parse::<u64>().is_ok()
+                            } else {
+                                false
+                            }
+                        };
+
                         ui.horizontal(|ui| {
-                            let response = ui.add(egui::TextEdit::singleline(&mut time_str).desired_width(80.0));
+                            let mut text_edit = egui::TextEdit::singleline(&mut time_str).desired_width(80.0);
+                            if !is_valid {
+                                text_edit = text_edit.text_color(egui::Color32::RED);
+                            }
+                            let mut response = ui.add(text_edit);
 
                             if response.has_focus() {
                                 ui.data_mut(|d| d.insert_temp(id, time_str.clone()));
@@ -150,9 +172,13 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 ui.data_mut(|d| d.remove::<String>(id));
                             }
 
+                            if !is_valid {
+                                response = response.on_hover_text("Invalid format. Use HH:MM:SS.cs (e.g., 00:01:23.45)");
+                            }
+
                             if response.changed() || response.lost_focus() {
-                                let parts: Vec<&str> = time_str.split(&[':', '.']).collect();
-                                if parts.len() == 4 {
+                                if is_valid {
+                                    let parts: Vec<&str> = time_str.split(&[':', '.']).collect();
                                     if let (Ok(h), Ok(m), Ok(s), Ok(cs)) = (
                                         parts[0].parse::<u64>(),
                                         parts[1].parse::<u64>(),
@@ -246,7 +272,20 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
 
                     if let Some(index) = to_remove {
-                        app.timeline.instances.remove(index);
+                        let removed_instance = app.timeline.instances.remove(index);
+                        
+                        // Clean up the template if it was a recorded template and no other instance uses it
+                        if let Some(tmpl_idx) = app.timeline.templates.iter().position(|t| t.id == removed_instance.effect_id) {
+                            let template_name = &app.timeline.templates[tmpl_idx].name;
+                            if template_name.starts_with("Recorded Relay") {
+                                // Check if any other instance references this template
+                                let is_referenced = app.timeline.instances.iter().any(|inst| inst.effect_id == removed_instance.effect_id);
+                                if !is_referenced {
+                                    app.timeline.templates.remove(tmpl_idx);
+                                }
+                            }
+                        }
+                        
                         dirty = true;
                     }
                 });
