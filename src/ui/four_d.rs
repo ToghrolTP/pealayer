@@ -122,7 +122,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 .striped(true)
                 .min_col_width(80.0)
                 .show(ui, |ui| {
-                    ui.label("Start Time (ms)");
+                    ui.label("Start Time");
                     ui.label("Effect");
                     ui.label("Actions");
                     ui.end_row();
@@ -211,13 +211,33 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             }
                         });
 
-                        let template_name = app.timeline.templates
+                        // Get template details
+                        let template = app.timeline.templates
                             .iter()
-                            .find(|t| t.id == instance.effect_id)
-                            .map(|t| t.name.clone())
-                            .unwrap_or_else(|| "Unknown".to_string());
+                            .find(|t| t.id == instance.effect_id);
+                            
+                        let (template_name, duration_ms) = match template {
+                            Some(t) => (t.name.clone(), t.duration_ms),
+                            None => ("Unknown".to_string(), 0),
+                        };
                         
-                        ui.label(template_name);
+                        // Vertical layout showing Name, Duration, and End Time
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new(template_name).strong());
+                            
+                            let end_time_ms = instance.start_time_ms + duration_ms;
+                            let format_ms = |ms: u64| {
+                                let s = ms / 1000;
+                                let cs = (ms % 1000) / 10;
+                                format!("{:02}:{:02}:{:02}.{:02}", s / 3600, (s / 60) % 60, s % 60, cs)
+                            };
+                            
+                            ui.label(egui::RichText::new(format!(
+                                "Dur: {}ms | End: {}", 
+                                duration_ms, 
+                                format_ms(end_time_ms)
+                            )).weak().size(10.0));
+                        });
 
                         if ui.button("Delete").clicked() {
                             to_remove = Some(index);
