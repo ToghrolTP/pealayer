@@ -165,13 +165,36 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 }
                             }
                             
+                            // Modifier-based nudge steps
+                            let step = if ui.input(|i| i.modifiers.shift) {
+                                100
+                            } else if ui.input(|i| i.modifiers.command || ui.input(|i| i.modifiers.ctrl)) {
+                                1000
+                            } else {
+                                10
+                            };
+                            
+                            let step_desc = if ui.input(|i| i.modifiers.shift) {
+                                "100ms"
+                            } else if ui.input(|i| i.modifiers.command || ui.input(|i| i.modifiers.ctrl)) {
+                                "1s"
+                            } else {
+                                "10ms"
+                            };
+
                             // Small nudge buttons
-                            if ui.small_button("-").clicked() {
-                                instance.start_time_ms = instance.start_time_ms.saturating_sub(10);
+                            if ui.small_button("-")
+                                .on_hover_text(format!("Nudge back by {} (Hold Shift for 100ms, Ctrl for 1s)", step_desc))
+                                .clicked() 
+                            {
+                                instance.start_time_ms = instance.start_time_ms.saturating_sub(step);
                                 dirty = true;
                             }
-                            if ui.small_button("+").clicked() {
-                                instance.start_time_ms += 10;
+                            if ui.small_button("+")
+                                .on_hover_text(format!("Nudge forward by {} (Hold Shift for 100ms, Ctrl for 1s)", step_desc))
+                                .clicked() 
+                            {
+                                instance.start_time_ms += step;
                                 dirty = true;
                             }
 
@@ -179,6 +202,12 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             if ui.button("📍").on_hover_text("Set to current playback position").clicked() {
                                 instance.start_time_ms = (app.playback_time * 1000.0) as u64;
                                 dirty = true;
+                            }
+
+                            // Seek video to this event's start time
+                            if ui.button("🔍").on_hover_text("Seek video to this event").clicked() {
+                                let seconds = instance.start_time_ms as f64 / 1000.0;
+                                let _ = app.mpv.command("seek", &[&seconds.to_string(), "absolute"]);
                             }
                         });
 
