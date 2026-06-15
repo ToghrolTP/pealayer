@@ -1,6 +1,34 @@
 use crate::app::PealayerApp;
 use eframe::egui;
 
+/// Helper function to check if a specific relay is active at the current playback time
+pub fn is_relay_active(app: &PealayerApp, relay_id: u8) -> bool {
+    let t = (app.playback_time * 1000.0) as u64;
+    // Traverse instances in reverse order (highest Z-index/last instance first)
+    for inst in app.timeline.instances.iter().rev() {
+        if let Some(effect) = app.timeline.templates.iter().find(|tmpl| tmpl.id == inst.effect_id) {
+            let end_time = inst.start_time_ms + effect.duration_ms;
+            if t >= inst.start_time_ms && t < end_time {
+                let offset_t = t - inst.start_time_ms;
+                let mut latest_state = None;
+                let mut max_offset = 0;
+                for action in &effect.actions {
+                    if action.relay_id == relay_id && action.offset_ms <= offset_t {
+                        if latest_state.is_none() || action.offset_ms >= max_offset {
+                            max_offset = action.offset_ms;
+                            latest_state = Some(action.state);
+                        }
+                    }
+                }
+                if let Some(state) = latest_state {
+                    return state;
+                }
+            }
+        }
+    }
+    false
+}
+
 pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if !app.show_four_d_editor {
         return;
@@ -23,6 +51,39 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     crate::four_d::patterns::generate_blink(1, 200, 2000),
                 ));
             }
+
+            // --- Section 1: Active Relay Status LEDs ---
+            ui.heading("Active Relay Status");
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                for relay_id in 1..=8 {
+                    let active = is_relay_active(app, relay_id);
+                    let color = if active {
+                        egui::Color32::from_rgb(46, 204, 113) // Vibrant emerald green
+                    } else {
+                        egui::Color32::from_rgb(127, 140, 141) // Flat gray
+                    };
+                    
+                    ui.vertical(|ui| {
+                        let size = egui::vec2(20.0, 20.0);
+                        let (rect, _response) = ui.allocate_exact_size(size, egui::Sense::hover());
+                        
+                        if active {
+                            // Subtle outer glow
+                            ui.painter().circle_filled(rect.center(), 10.0, egui::Color32::from_rgba_unmultiplied(46, 204, 113, 80));
+                            ui.painter().circle_filled(rect.center(), 7.0, color);
+                        } else {
+                            ui.painter().circle_filled(rect.center(), 7.0, color);
+                        }
+                        
+                        ui.label(egui::RichText::new(format!("R{}", relay_id)).size(10.0));
+                    });
+                    ui.add_space(8.0);
+                }
+            });
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(10.0);
 
             ui.heading("Effect Templates");
             egui::Grid::new("templates_grid")
