@@ -40,7 +40,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
     egui::Window::new("4D Cinema Editor")
         .open(&mut open)
         .vscroll(true)
-        .default_width(400.0)
+        .default_width(420.0)
         .show(ui.ctx(), |ui| {
             // Setup some dummy data if empty for MVP purposes
             if app.timeline.templates.is_empty() {
@@ -85,6 +85,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
             ui.separator();
             ui.add_space(10.0);
 
+            // --- Section 2: Effect Templates ---
             ui.heading("Effect Templates");
             egui::Grid::new("templates_grid")
                 .striped(true)
@@ -117,7 +118,66 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
                 });
 
+            ui.add_space(10.0);
+            
+            // --- Collapsible Custom Template Creator ---
+            ui.collapsing("Create Custom Template", |ui| {
+                let name_id = ui.make_persistent_id("new_tmpl_name");
+                let icon_id = ui.make_persistent_id("new_tmpl_icon");
+                let duration_id = ui.make_persistent_id("new_tmpl_duration");
+                let relay_id_id = ui.make_persistent_id("new_tmpl_relay");
+                
+                let mut name = ui.data_mut(|d| d.get_temp::<String>(name_id).unwrap_or_default());
+                let mut icon = ui.data_mut(|d| d.get_temp::<String>(icon_id).unwrap_or_else(|| "⚡".to_string()));
+                let mut duration_ms = ui.data_mut(|d| d.get_temp::<u64>(duration_id).unwrap_or(1000));
+                let mut target_relay = ui.data_mut(|d| d.get_temp::<u8>(relay_id_id).unwrap_or(1));
+                
+                egui::Grid::new("create_template_grid").show(ui, |ui| {
+                    ui.label("Name:");
+                    ui.text_edit_singleline(&mut name);
+                    ui.end_row();
+                    
+                    ui.label("Icon:");
+                    ui.text_edit_singleline(&mut icon);
+                    ui.end_row();
+                    
+                    ui.label("Duration (ms):");
+                    ui.add(egui::Slider::new(&mut duration_ms, 50..=10000).suffix("ms"));
+                    ui.end_row();
+                    
+                    ui.label("Relay:");
+                    ui.add(egui::Slider::new(&mut target_relay, 1..=8).prefix("Relay "));
+                    ui.end_row();
+                });
+                
+                ui.horizontal(|ui| {
+                    if ui.button("Create").clicked() && !name.trim().is_empty() {
+                        let actions = crate::four_d::patterns::generate_constant(target_relay, true, duration_ms);
+                        let new_effect = crate::four_d::models::Effect::new(
+                            name.clone(),
+                            icon.clone(),
+                            duration_ms,
+                            actions,
+                        );
+                        app.timeline.templates.push(new_effect);
+                        
+                        // Clear the temp name field
+                        name.clear();
+                        dirty = true;
+                    }
+                });
+                
+                ui.data_mut(|d| {
+                    d.insert_temp(name_id, name);
+                    d.insert_temp(icon_id, icon);
+                    d.insert_temp(duration_id, duration_ms);
+                    d.insert_temp(relay_id_id, target_relay);
+                });
+            });
+
             ui.add_space(20.0);
+            
+            // --- Section 3: Timeline Instances ---
             ui.heading("Timeline Instances");
             
             // Sort instances by start time for display
@@ -194,7 +254,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             // Modifier-based nudge steps
                             let step = if ui.input(|i| i.modifiers.shift) {
                                 100
-                            } else if ui.input(|i| i.modifiers.command || ui.input(|i| i.modifiers.ctrl)) {
+                            } else if ui.input(|i| i.modifiers.command || i.modifiers.ctrl) {
                                 1000
                             } else {
                                 10
@@ -202,7 +262,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             
                             let step_desc = if ui.input(|i| i.modifiers.shift) {
                                 "100ms"
-                            } else if ui.input(|i| i.modifiers.command || ui.input(|i| i.modifiers.ctrl)) {
+                            } else if ui.input(|i| i.modifiers.command || i.modifiers.ctrl) {
                                 "1s"
                             } else {
                                 "10ms"
