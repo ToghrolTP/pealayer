@@ -76,25 +76,54 @@ Dropping an effect must provide immediate visual confirmation and prevent user e
 
 ## Phase 7: Advanced Timeline Editing (Direct Manipulation)
 
-**Goal:** Allow the operator to modify cues directly on the timeline by dragging them, rather than relying solely on the Effect Controls parameter sliders.
+**Goal:** Transform the timeline from a read-only visualizer into a tactile, interactive canvas. The operator must be able to move, trim, slice, and snap cues directly on the grid, matching the fluid UX of professional NLEs like Premiere Pro or Resolve.
 
-### 1. Horizontal Dragging (Move Cue)
-Users expect to be able to click and drag a clip left or right to change its timing.
-- **Hit Detection:** When the user clicks on a cue rectangle, check if they are initiating a drag (`response.dragged()`).
-- **Translation:** Calculate the horizontal mouse delta in screen space, convert that delta into seconds (based on your timeline's zoom/scale factor), and apply it to the cue's `start_time`.
-- **Constraint:** Ensure the `start_time` cannot go below `0.0`.
+### 1. Interaction Foundation (`egui::Sense`)
+To handle complex mouse interactions without conflicting with the global scrolling of the timeline, use `egui::Sense` on each cue.
+- **Click and Drag:** When allocating the `Rect` for a cue on the timeline, interact with it using `ui.interact(rect, id, egui::Sense::click_and_drag())`. 
+- **Z-Ordering & Ghosting (UX Detail):** When `response.dragged()` is true, the active cue must appear to "lift" off the canvas. 
+  - Render the actively dragged cue *last* (so it appears on top of all other clips).
+  - Add a subtle drop-shadow (using `ui.painter().rect_filled` with a soft blurred color offset) and slightly increase its brightness so it visually detaches from the grid.
 
-### 2. Edge Dragging (Resize Cue)
-Users expect to hover over the left or right edge of a clip to change its duration.
-- **Edge Hitboxes:** Instead of a single bounding box for the whole cue, define three interaction zones: the left edge (e.g., 5 pixels wide), the main body, and the right edge.
-- **Cursor Icon:** When hovering over an edge, change the mouse cursor (`ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal)`) to indicate it can be resized.
-- **Duration Mutation:** If the user drags the right edge, modify the cue's `duration`. If they drag the left edge, modify both the `start_time` and `duration` simultaneously so the right edge remains visually anchored.
+### 2. Time Translation (Moving Cues)
+Users expect to click the center body of a cue and drag it horizontally to change timing, or vertically to change tracks.
+- **Horizontal Translation (Time):** Calculate the delta (`response.drag_delta().x`) in screen-space pixels. Convert this delta back into "seconds" based on your timeline's current zoom scale (e.g., `pixels_per_second`). Apply this delta to the cue's `start_time`.
+- **Vertical Translation (Track Switching):** If the user drags a cue far enough up or down (beyond the Y-bounds of its current track row), snap the cue to the adjacent track. 
+  - *UX Detail (Visual Feedback):* While holding the clip over a new track, highlight the destination row background slightly so the user knows exactly where it will land upon release.
+- **Bounds Constraint:** Implement a strict `f32::max(0.0, new_start_time)` constraint so the operator can never drag a cue into "negative time" (before `00:00:00:00`).
 
-### 3. Track Controls (Mute/Solo/Lock)
-Update the Track Headers (the fixed left column of the timeline).
-- Add small toggle buttons for Mute (M), Solo (S), and Lock (L) on each track.
-- **Locking:** If a track is locked, disable drag interactions and drop events for that specific row.
-- **Muting:** If muted, instruct the backend hardware engine to ignore cues on this track during playback.
+### 3. Edge Trimming (Resizing Cues)
+Trimming is the most frequent action in an NLE. Instead of a single bounding box, you must subdivide the cue's `Rect` into three invisible interaction zones.
+- **Hitbox Zones:** 
+  - **Left Edge (In-Point):** The first 4-6 pixels of the cue.
+  - **Right Edge (Out-Point):** The last 4-6 pixels of the cue.
+  - **Body:** The remaining center area.
+- **Cursor Affordances:** When `ui.rect_contains_pointer(left_edge_rect)`, instantly change the mouse cursor using `ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal)`. This tells the operator they are in the trim zone.
+- **Trim Logic:**
+  - **Right Edge Drag:** Only modifies the `duration` of the cue. (e.g., `duration += delta_x_in_seconds`).
+  - **Left Edge Drag:** Modifies *both* `start_time` and `duration` inversely. If the user drags the left edge 1 second to the right, `start_time` increases by 1, and `duration` decreases by 1. This ensures the right edge stays visually anchored in place.
+- **Minimum Duration Limit:** Enforce a hard minimum duration (e.g., `0.1` seconds) during trimming so a cue cannot be inverted or crushed out of existence.
+
+### 4. Magnetic Snapping (Precision UX)
+Free-dragging is chaotic. Professional operators rely on "snapping" to align cues perfectly.
+- **Snap Targets:** Build a temporary array of all potential snap points: the current playhead position, the start/end edges of all other cues on the timeline, and the 0.0 origin.
+- **Proximity Detection:** As the user drags a cue (or trims its edge), compare its new timestamp against the snap array. If the timestamp comes within a threshold (e.g., `10 pixels` converted to time), override the dragged value and lock it precisely to the snap target.
+- **Snap Feedback:** 
+  - *Visual:* Briefly draw a vertical, bright-colored "snap line" that intersects the snapped points, proving to the user that alignment was successful.
+  - *Tactile:* Allow the user to hold the `Shift` or `Alt` key while dragging to temporarily bypass/disable snapping for fine-tuning.
+
+### 5. Multi-Selection & Bulk Edits
+Live-show programming requires moving groups of effects together.
+- **Box Selection (Lasso):** If the user clicks and drags on an *empty* space in the timeline grid, initiate a selection box. 
+  - Draw a semi-transparent blue rectangle (`ui.painter().rect()`) tracking the drag.
+  - Any cue whose bounding box intersects with the lasso rectangle is added to a `HashSet` of selected IDs.
+- **Modifier Keys:** Support `Ctrl+Click` (Windows/Linux) or `Cmd+Click` (macOS) to add/remove individual cues from the active selection.
+- **Bulk Translation:** If multiple cues are selected, dragging any *one* of them must apply the identical time delta to *all* of them.
+
+### 6. Track Header Overrides (Mute & Lock)
+The track headers (the static left column) need functional controls to protect programmed work.
+- **Lock (L):** Add a padlock icon button. If toggled, the track row darkens slightly. In your interaction logic, if `track.is_locked == true`, ignore all `egui::Sense::click_and_drag()` checks for cues on this row.
+- **Mute (M) / Solo (S):** Add mute toggles. If muted, the hardware execution engine completely ignores cues on this track during playback, and the cues are rendered with a 50% opacity multiplier on the timeline to signify their inactive state.
 
 ---
 
