@@ -3,6 +3,37 @@ use eframe::egui;
 use libmpv2::Mpv;
 use std::sync::{Arc, Mutex};
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DragMode {
+    Move,
+    ResizeLeft,
+    ResizeRight,
+}
+
+#[derive(Clone, Debug)]
+pub struct ActiveDragState {
+    pub instance_id: uuid::Uuid,
+    pub mode: DragMode,
+    pub initial_start_time_ms: u64,
+    pub initial_duration_ms: u64,
+    pub drag_start_x: f32,
+    pub initial_positions: Vec<(uuid::Uuid, u64)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EffectPreset {
+    pub category: String,
+    pub effect: crate::four_d::models::Effect,
+}
+
+#[derive(Debug, Clone)]
+pub struct EffectDragPayload {
+    pub name: String,
+    pub icon: String,
+    pub duration_ms: u64,
+    pub actions: Vec<crate::four_d::models::AtomicAction>,
+}
+
 pub struct RttState {
     pub video_texture: Option<eframe::glow::Texture>,
     pub video_fbo: Option<eframe::glow::Framebuffer>,
@@ -41,16 +72,28 @@ pub struct PealayerApp {
 
     // 4D Cinema state
     pub(crate) show_four_d_editor: bool,
+    pub(crate) dock_state: egui_dock::DockState<crate::ui::layout::PealayerTab>,
     pub(crate) timeline: crate::four_d::models::Timeline,
     pub(crate) engine_handle: crate::four_d::engine::EngineHandle,
-    pub(crate) recording_keys: std::collections::HashMap<eframe::egui::Key, (uuid::Uuid, std::time::Instant)>,
-    pub(crate) dock_state: egui_dock::DockState<crate::ui::layout::PealayerTab>,
-
-    pub(crate) rtt_state: Arc<Mutex<RttState>>,
     
     // Phase 4 & 5 Selection/Override state
-    pub(crate) selected_instance_id: Option<uuid::Uuid>,
+    pub(crate) selected_instance_ids: std::collections::HashSet<uuid::Uuid>,
+    pub(crate) recording_keys: std::collections::HashMap<eframe::egui::Key, (uuid::Uuid, std::time::Instant)>,
     pub(crate) relay_overrides: [Option<bool>; 9],
+
+    // Phase 6 Preset Library state
+    pub(crate) preset_library: Vec<EffectPreset>,
+    pub(crate) effects_search_query: String,
+    pub(crate) track_muted: [bool; 9],
+    pub(crate) track_soloed: [bool; 9],
+    pub(crate) track_locked: [bool; 9],
+    pub(crate) active_drag: Option<ActiveDragState>,
+    pub(crate) estop_active: bool,
+    pub(crate) serial_port: String,
+    pub(crate) is_connected: bool,
+    pub(crate) lasso_origin: Option<egui::Pos2>,
+    pub(crate) lasso_rect: Option<egui::Rect>,
+    pub(crate) rtt_state: Arc<Mutex<RttState>>,
 }
 
 
@@ -293,7 +336,7 @@ impl eframe::App for PealayerApp {
         }
         
         if timeline_dirty {
-            let compiled = crate::four_d::engine::compile_timeline(&self.timeline);
+            let compiled = crate::four_d::engine::compile_timeline(&self.timeline, &self.track_muted, &self.track_soloed);
             let _ = self.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
         }
 

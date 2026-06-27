@@ -42,6 +42,33 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 ui.label("System Ready");
             });
 
+            ui.separator();
+
+            // Hardware Connection Status
+            ui.horizontal(|ui| {
+                let dot_color = if app.is_connected {
+                    egui::Color32::from_rgb(46, 204, 113) // Green
+                } else {
+                    egui::Color32::from_rgb(231, 76, 60) // Red
+                };
+                
+                let size = egui::vec2(12.0, 12.0);
+                let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                ui.painter().circle_filled(rect.center(), 4.0, dot_color);
+                
+                let label_text = if app.is_connected {
+                    format!("Hardware: {} Connected", app.serial_port)
+                } else {
+                    "Hardware: Disconnected".to_string()
+                };
+                ui.label(label_text);
+            });
+
+            if app.estop_active {
+                ui.separator();
+                ui.colored_label(egui::Color32::from_rgb(231, 76, 60), "⚠️ E-STOP ACTIVE");
+            }
+
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if app.show_four_d_editor {
                     ui.label("Workspace: NLE Layout");

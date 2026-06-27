@@ -99,6 +99,92 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     ui.close();
                 }
             });
+            
+            // Add right-aligned E-STOP and Serial controls
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(8.0);
+                
+                // 1. E-STOP Kill Switch Button
+                let estop_text = if app.estop_active {
+                    "🔴 RESET E-STOP"
+                } else {
+                    "🛑 E-STOP"
+                };
+                
+                let estop_color = if app.estop_active {
+                    egui::Color32::from_rgb(231, 76, 60) // Bright red
+                } else {
+                    egui::Color32::from_rgb(192, 57, 43) // Dark red
+                };
+                
+                let btn = ui.add(
+                    egui::Button::new(
+                        egui::RichText::new(estop_text)
+                            .color(egui::Color32::WHITE)
+                            .strong()
+                            .size(11.0)
+                    )
+                    .fill(estop_color)
+                );
+                
+                if btn.clicked() {
+                    app.estop_active = !app.estop_active;
+                    app.engine_handle.estop_active.store(app.estop_active, std::sync::atomic::Ordering::Relaxed);
+                    
+                    if app.estop_active {
+                        // Pause video playback immediately
+                        let _ = app.mpv.set_property("pause", true);
+                    }
+                }
+                
+                ui.separator();
+                
+                // 2. Serial connection toggle & dropdown
+                let conn_text = if app.is_connected { "Disconnect" } else { "Connect" };
+                let conn_btn = ui.selectable_label(app.is_connected, conn_text);
+                if conn_btn.clicked() {
+                    app.is_connected = !app.is_connected;
+                    app.engine_handle.is_connected.store(app.is_connected, std::sync::atomic::Ordering::Relaxed);
+                    
+                    {
+                        let mut port_guard = app.engine_handle.serial_port.lock().unwrap();
+                        *port_guard = app.serial_port.clone();
+                    }
+                }
+                
+                // Serial Port Dropdown
+                ui.allocate_ui(egui::vec2(100.0, 20.0), |ui| {
+                    egui::ComboBox::from_id_salt("serial_port_select")
+                        .selected_text(&app.serial_port)
+                        .show_ui(ui, |ui| {
+                            let ports = ["COM1", "COM2", "COM3", "COM4", "/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyACM0"];
+                            for p in ports {
+                                let res = ui.selectable_value(&mut app.serial_port, p.to_string(), p);
+                                if res.changed() && app.is_connected {
+                                    let mut port_guard = app.engine_handle.serial_port.lock().unwrap();
+                                    *port_guard = app.serial_port.clone();
+                                }
+                            }
+                        });
+                });
+                
+                // Connection visual indicator dot
+                let dot_color = if app.is_connected {
+                    egui::Color32::from_rgb(46, 204, 113) // Green
+                } else {
+                    egui::Color32::from_rgb(231, 76, 60) // Red
+                };
+                
+                let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                ui.painter().circle_filled(dot_rect.center(), 4.0, dot_color);
+                
+                let status_lbl = if app.is_connected {
+                    format!("{} Connected", app.serial_port)
+                } else {
+                    "Hardware Disconnected".to_string()
+                };
+                ui.label(egui::RichText::new(status_lbl).size(10.0).weak());
+            });
         });
     });
 }

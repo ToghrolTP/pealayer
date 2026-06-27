@@ -152,8 +152,113 @@ fn main() -> eframe::Result {
                     video_fbo: None,
                     video_texture_id: None,
                 })),
-                selected_instance_id: None,
+                selected_instance_ids: std::collections::HashSet::new(),
                 relay_overrides: [None; 9],
+                preset_library: vec![
+                    // Atmospherics
+                    crate::app::EffectPreset {
+                        category: "Atmospherics".to_string(),
+                        effect: crate::four_d::models::Effect::new(
+                            "Water Splash".to_string(),
+                            "💧".to_string(),
+                            1500,
+                            crate::four_d::patterns::generate_constant(1, true, 1500),
+                        ),
+                    },
+                    crate::app::EffectPreset {
+                        category: "Atmospherics".to_string(),
+                        effect: crate::four_d::models::Effect::new(
+                            "Mist Spray".to_string(),
+                            "🌫".to_string(),
+                            3000,
+                            crate::four_d::patterns::generate_constant(1, true, 3000),
+                        ),
+                    },
+                    crate::app::EffectPreset {
+                        category: "Atmospherics".to_string(),
+                        effect: crate::four_d::models::Effect::new(
+                            "Wind Blast".to_string(),
+                            "💨".to_string(),
+                            2000,
+                            crate::four_d::patterns::generate_constant(2, true, 2000),
+                        ),
+                    },
+                    crate::app::EffectPreset {
+                        category: "Atmospherics".to_string(),
+                        effect: crate::four_d::models::Effect::new(
+                            "Wind Gale".to_string(),
+                            "🌀".to_string(),
+                            5000,
+                            crate::four_d::patterns::generate_constant(2, true, 5000),
+                        ),
+                    },
+                    // Physical Effects
+                    crate::app::EffectPreset {
+                        category: "Physical Effects".to_string(),
+                        effect: crate::four_d::models::Effect::new(
+                            "Seat Rumble".to_string(),
+                            "📳".to_string(),
+                            1000,
+                            crate::four_d::patterns::generate_constant(3, true, 1000),
+                        ),
+                    },
+                    crate::app::EffectPreset {
+                        category: "Physical Effects".to_string(),
+                        effect: crate::four_d::models::Effect::new(
+                            "Seat Shake".to_string(),
+                            "🫨".to_string(),
+                            2500,
+                            crate::four_d::patterns::generate_constant(3, true, 2500),
+                        ),
+                    },
+                    crate::app::EffectPreset {
+                        category: "Physical Effects".to_string(),
+                        effect: crate::four_d::models::Effect::new(
+                            "Smoke Blast".to_string(),
+                            "💨".to_string(),
+                            1800,
+                            crate::four_d::patterns::generate_constant(4, true, 1800),
+                        ),
+                    },
+                    crate::app::EffectPreset {
+                        category: "Physical Effects".to_string(),
+                        effect: crate::four_d::models::Effect::new(
+                            "Fog Screen".to_string(),
+                            "🌫".to_string(),
+                            4000,
+                            crate::four_d::patterns::generate_constant(4, true, 4000),
+                        ),
+                    },
+                    // Auxiliary Controls
+                    crate::app::EffectPreset {
+                        category: "Auxiliary Controls".to_string(),
+                        effect: crate::four_d::models::Effect::new(
+                            "Aux Trigger A".to_string(),
+                            "🔌".to_string(),
+                            1200,
+                            crate::four_d::patterns::generate_constant(5, true, 1200),
+                        ),
+                    },
+                    crate::app::EffectPreset {
+                        category: "Auxiliary Controls".to_string(),
+                        effect: crate::four_d::models::Effect::new(
+                            "Aux Trigger B".to_string(),
+                            "🔌".to_string(),
+                            2400,
+                            crate::four_d::patterns::generate_constant(6, true, 2400),
+                        ),
+                    },
+                ],
+                effects_search_query: String::new(),
+                track_muted: [false; 9],
+                track_soloed: [false; 9],
+                track_locked: [false; 9],
+                active_drag: None,
+                estop_active: false,
+                serial_port: "COM3".to_string(),
+                is_connected: false,
+                lasso_origin: None,
+                lasso_rect: None,
             }))
 
         }),

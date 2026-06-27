@@ -352,7 +352,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
         });
         
     if dirty {
-        let compiled = crate::four_d::engine::compile_timeline(&app.timeline);
+        let compiled = crate::four_d::engine::compile_timeline(&app.timeline, &app.track_muted, &app.track_soloed);
         let _ = app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
     }
         
