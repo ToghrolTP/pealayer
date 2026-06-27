@@ -26,10 +26,24 @@ fn main() -> eframe::Result {
         "Pealayer",
         options,
         Box::new(|cc| {
+            let mut visuals = egui::Visuals::dark();
+            visuals.panel_fill = egui::Color32::from_rgb(33, 33, 33); // #212121
+            visuals.window_fill = egui::Color32::from_rgb(26, 26, 26); // #1a1a1a
+            cc.egui_ctx.set_visuals(visuals);
+
+            let mut style = (*cc.egui_ctx.global_style()).clone();
+            for font_id in style.text_styles.values_mut() {
+                if font_id.size > 12.0 {
+                    font_id.size = 12.0;
+                }
+            }
+            cc.egui_ctx.set_global_style(style);
+
             let get_proc = cc
                 .get_proc_address
                 .clone()
                 .expect("Glow backend must provide get_proc_address");
+
 
             let mpv = Mpv::with_initializer(|init| {
                 init.set_property("vo", "libmpv")?;
@@ -127,11 +141,21 @@ fn main() -> eframe::Result {
                 seek_pos: None,
                 last_mouse_activity: std::time::Instant::now(),
                 show_error: None,
-                show_four_d_editor: false,
+                show_four_d_editor: true,
+
                 timeline: crate::four_d::models::Timeline::new(),
                 engine_handle: crate::four_d::engine::spawn_engine(),
                 recording_keys: std::collections::HashMap::new(),
+                dock_state: crate::ui::layout::create_initial_layout(),
+                rtt_state: Arc::new(Mutex::new(crate::app::RttState {
+                    video_texture: None,
+                    video_fbo: None,
+                    video_texture_id: None,
+                })),
+                selected_instance_id: None,
+                relay_overrides: [None; 9],
             }))
+
         }),
     )
 }

@@ -3,6 +3,12 @@ use eframe::egui;
 use libmpv2::Mpv;
 use std::sync::{Arc, Mutex};
 
+pub struct RttState {
+    pub video_texture: Option<eframe::glow::Texture>,
+    pub video_fbo: Option<eframe::glow::Framebuffer>,
+    pub video_texture_id: Option<eframe::egui::TextureId>,
+}
+
 pub struct PealayerApp {
     pub(crate) mpv: &'static Mpv,
     pub(crate) mpv_client: libmpv2::Mpv,
@@ -38,7 +44,16 @@ pub struct PealayerApp {
     pub(crate) timeline: crate::four_d::models::Timeline,
     pub(crate) engine_handle: crate::four_d::engine::EngineHandle,
     pub(crate) recording_keys: std::collections::HashMap<eframe::egui::Key, (uuid::Uuid, std::time::Instant)>,
+    pub(crate) dock_state: egui_dock::DockState<crate::ui::layout::PealayerTab>,
+
+    pub(crate) rtt_state: Arc<Mutex<RttState>>,
+    
+    // Phase 4 & 5 Selection/Override state
+    pub(crate) selected_instance_id: Option<uuid::Uuid>,
+    pub(crate) relay_overrides: [Option<bool>; 9],
 }
+
+
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SubtitleTrack {
@@ -56,6 +71,73 @@ pub struct AudioTrack {
 
 impl eframe::App for PealayerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Initialize RTT texture once if not done yet
+        let mut init_rtt = false;
+        let mut rtt_data = None;
+        
+        {
+            let rtt = self.rtt_state.lock().unwrap();
+            if rtt.video_texture.is_none() {
+                init_rtt = true;
+            }
+        }
+        
+        if init_rtt {
+            if let Some(gl) = _frame.gl() {
+                unsafe {
+                    use eframe::glow::HasContext;
+                    
+                    let tex = gl.create_texture().unwrap();
+                    gl.bind_texture(eframe::glow::TEXTURE_2D, Some(tex));
+                    gl.tex_image_2d(
+                        eframe::glow::TEXTURE_2D,
+                        0,
+                        eframe::glow::RGBA8 as i32,
+                        1920,
+                        1080,
+                        0,
+                        eframe::glow::RGBA,
+                        eframe::glow::UNSIGNED_BYTE,
+                        eframe::glow::PixelUnpackData::Slice(None),
+                    );
+                    gl.tex_parameter_i32(
+                        eframe::glow::TEXTURE_2D,
+                        eframe::glow::TEXTURE_MIN_FILTER,
+                        eframe::glow::LINEAR as i32,
+                    );
+                    gl.tex_parameter_i32(
+                        eframe::glow::TEXTURE_2D,
+                        eframe::glow::TEXTURE_MAG_FILTER,
+                        eframe::glow::LINEAR as i32,
+                    );
+                    
+                    let fbo = gl.create_framebuffer().unwrap();
+                    gl.bind_framebuffer(eframe::glow::FRAMEBUFFER, Some(fbo));
+                    gl.framebuffer_texture_2d(
+                        eframe::glow::FRAMEBUFFER,
+                        eframe::glow::COLOR_ATTACHMENT0,
+                        eframe::glow::TEXTURE_2D,
+                        Some(tex),
+                        0,
+                    );
+                    
+                    gl.bind_framebuffer(eframe::glow::FRAMEBUFFER, None);
+                    
+                    // Register the texture with eframe/egui
+                    let texture_id = _frame.register_native_glow_texture(tex);
+                    
+                    rtt_data = Some((tex, fbo, texture_id));
+                }
+            }
+        }
+        
+        if let Some((tex, fbo, texture_id)) = rtt_data {
+            let mut rtt = self.rtt_state.lock().unwrap();
+            rtt.video_texture = Some(tex);
+            rtt.video_fbo = Some(fbo);
+            rtt.video_texture_id = Some(texture_id);
+        }
+
         use libmpv2::events::{Event, PropertyData};
 
         let ctx = ui.ctx().clone();
@@ -121,6 +203,7 @@ impl eframe::App for PealayerApp {
         let is_fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
         if !is_fullscreen {
             crate::ui::menu::draw(self, ui);
+            crate::ui::status_bar::draw(self, ui);
         }
 
         // Track mouse movement
@@ -220,12 +303,20 @@ impl eframe::App for PealayerApp {
         egui::CentralPanel::default()
             .frame(frame)
             .show_inside(ui, |ui| {
-                crate::ui::video::draw(self, ui);
-                crate::ui::controls::draw(self, ui);
+                if self.show_four_d_editor {
+                    let mut dock_state = std::mem::replace(&mut self.dock_state, egui_dock::DockState::new(vec![]));
+                    let mut tab_viewer = crate::ui::layout::PealayerTabViewer { app: self };
+                    egui_dock::DockArea::new(&mut dock_state)
+                        .show_inside(ui, &mut tab_viewer);
+                    self.dock_state = dock_state;
+                } else {
+                    crate::ui::video::draw(self, ui);
+                    crate::ui::controls::draw(self, ui);
+                    crate::ui::four_d::draw_editor(self, ui);
+                }
                 crate::ui::error::draw(self, ui);
                 crate::ui::subtitles::draw_settings_dialog(self, ui);
                 crate::ui::audio::draw_settings_dialog(self, ui);
-                crate::ui::four_d::draw_editor(self, ui);
             });
     }
 }
