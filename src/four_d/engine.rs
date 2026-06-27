@@ -163,3 +163,38 @@ pub fn compile_timeline(timeline: &Timeline) -> Vec<CompiledAction> {
     
     compiled
 }
+
+pub fn evaluate_relay_state(timeline: &Timeline, relay_id: u8, t_ms: u64) -> bool {
+    let mut desired_state = false;
+    
+    // Reverse order = highest Z-index first
+    for instance in timeline.instances.iter().rev() {
+        if let Some(effect) = timeline.templates.iter().find(|tmpl| tmpl.id == instance.effect_id) {
+            let end_time = instance.start_time_ms + effect.duration_ms;
+            
+            if t_ms >= instance.start_time_ms && t_ms < end_time {
+                let offset_t = t_ms - instance.start_time_ms;
+                
+                let mut latest_action_state = None;
+                let mut max_offset = 0;
+                
+                for action in &effect.actions {
+                    if action.relay_id == relay_id && action.offset_ms <= offset_t {
+                        if latest_action_state.is_none() || action.offset_ms >= max_offset {
+                            max_offset = action.offset_ms;
+                            latest_action_state = Some(action.state);
+                        }
+                    }
+                }
+                
+                if let Some(state) = latest_action_state {
+                    desired_state = state;
+                    break; // Stop looking at lower layers
+                }
+            }
+        }
+    }
+    
+    desired_state
+}
+
