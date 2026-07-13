@@ -259,8 +259,8 @@ fn main() -> eframe::Result {
                 is_connected: false,
                 lasso_origin: None,
                 lasso_rect: None,
+                current_video_path: None,
             }))
-
         }),
     )
 }

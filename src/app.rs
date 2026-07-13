@@ -94,6 +94,7 @@ pub struct PealayerApp {
     pub(crate) lasso_origin: Option<egui::Pos2>,
     pub(crate) lasso_rect: Option<egui::Rect>,
     pub(crate) rtt_state: Arc<Mutex<RttState>>,
+    pub(crate) current_video_path: Option<std::path::PathBuf>,
 }
 
 
@@ -242,6 +243,14 @@ impl eframe::App for PealayerApp {
                 _ => break,
             }
         }
+
+        // Sync connection state and check for errors from background thread
+        if let Ok(mut err_guard) = self.engine_handle.connection_error.try_lock() {
+            if let Some(err) = err_guard.take() {
+                self.show_error = Some(err);
+            }
+        }
+        self.is_connected = self.engine_handle.is_connected.load(std::sync::atomic::Ordering::Relaxed);
 
         let is_fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
         if !is_fullscreen {
