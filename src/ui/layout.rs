@@ -366,7 +366,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         if is_dragged {
                                                             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                                                             
-                                                            // Semi-transparent ghost tooltip carrying payload details
+                                                            #[allow(deprecated)]
                                                             egui::show_tooltip_at_pointer(
                                                                 ui.ctx(),
                                                                 ui.layer_id(),

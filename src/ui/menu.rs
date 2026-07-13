@@ -7,7 +7,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     egui::Panel::top("menu_bar").show_inside(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
-                if ui.button("Open File...").clicked() {
+                if ui.button("Open Video File...").clicked() {
                     ui.close();
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Video Files", &["mp4", "mkv", "avi", "webm", "mov", "flv"])
@@ -16,9 +16,71 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         let path_str = path.to_str().unwrap_or("");
                         if !path_str.is_empty() {
                             let _ = app.mpv.command("loadfile", &[path_str, "replace"]);
+                            app.current_video_path = Some(path.clone());
+                            
+                            // Auto-load matching sidecar timeline
+                            let mut sidecar = path.clone();
+                            sidecar.set_extension("4d.json");
+                            if !sidecar.exists() {
+                                sidecar.set_extension("json");
+                            }
+                            if sidecar.exists() {
+                                if let Ok(timeline) = crate::four_d::models::Timeline::load_from_file(&sidecar) {
+                                    app.timeline = timeline;
+                                    let compiled = crate::four_d::engine::compile_timeline(&app.timeline, &app.track_muted, &app.track_soloed);
+                                    let _ = app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                                }
+                            }
                         }
                     }
                 }
+
+                if ui.button("Open Timeline Project...").clicked() {
+                    ui.close();
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Pealayer Timeline", &["json"])
+                        .pick_file()
+                    {
+                        match crate::four_d::models::Timeline::load_from_file(&path) {
+                            Ok(timeline) => {
+                                app.timeline = timeline;
+                                let compiled = crate::four_d::engine::compile_timeline(&app.timeline, &app.track_muted, &app.track_soloed);
+                                let _ = app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                            }
+                            Err(e) => {
+                                app.show_error = Some(format!("Failed to load timeline: {}", e));
+                            }
+                        }
+                    }
+                }
+
+                ui.separator();
+
+                let save_enabled = app.current_video_path.is_some();
+                let save_btn = egui::Button::new("Save Timeline (Sidecar)");
+                if ui.add_enabled(save_enabled, save_btn).clicked() {
+                    ui.close();
+                    if let Some(ref video_path) = app.current_video_path {
+                        let mut sidecar = video_path.clone();
+                        sidecar.set_extension("4d.json");
+                        if let Err(e) = app.timeline.save_to_file(&sidecar) {
+                            app.show_error = Some(format!("Failed to save timeline: {}", e));
+                        }
+                    }
+                }
+
+                if ui.button("Save Timeline As...").clicked() {
+                    ui.close();
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Pealayer Timeline", &["json"])
+                        .save_file()
+                    {
+                        if let Err(e) = app.timeline.save_to_file(&path) {
+                            app.show_error = Some(format!("Failed to save timeline: {}", e));
+                        }
+                    }
+                }
+
                 ui.separator();
                 if ui.button("Quit").clicked() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
