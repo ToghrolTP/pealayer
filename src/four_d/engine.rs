@@ -23,6 +23,7 @@ pub struct EngineHandle {
     pub estop_active: Arc<AtomicBool>,
     pub is_connected: Arc<AtomicBool>,
     pub serial_port: Arc<Mutex<String>>,
+    pub connection_error: Arc<Mutex<Option<String>>>,
     pub sender: mpsc::Sender<EngineMessage>,
 }
 
@@ -32,6 +33,7 @@ pub fn spawn_engine() -> EngineHandle {
     let estop_active = Arc::new(AtomicBool::new(false));
     let is_connected = Arc::new(AtomicBool::new(false));
     let serial_port = Arc::new(Mutex::new("COM3".to_string()));
+    let connection_error = Arc::new(Mutex::new(None));
     
     let (tx, rx) = mpsc::channel();
     
@@ -40,6 +42,7 @@ pub fn spawn_engine() -> EngineHandle {
     let engine_estop = Arc::clone(&estop_active);
     let engine_connected = Arc::clone(&is_connected);
     let engine_port = Arc::clone(&serial_port);
+    let engine_conn_error = Arc::clone(&connection_error);
     
     thread::spawn(move || {
         let mut queue: Vec<CompiledAction> = Vec::new();
@@ -47,9 +50,44 @@ pub fn spawn_engine() -> EngineHandle {
         let mut was_playing = false;
         let mut was_estop = false;
         
+        let mut active_port: Option<Box<dyn serialport::SerialPort>> = None;
+        
         loop {
             let estop_now = engine_estop.load(Ordering::Relaxed);
             let connected = engine_connected.load(Ordering::Relaxed);
+            
+            // Handle connection/disconnection transitions
+            if connected && active_port.is_none() {
+                let port_name = {
+                    let guard = engine_port.lock().unwrap();
+                    guard.clone()
+                };
+                match serialport::new(&port_name, 9600)
+                    .timeout(Duration::from_millis(15))
+                    .open()
+                {
+                    Ok(p) => {
+                        active_port = Some(p);
+                        println!("[Engine] Connected to serial port: {}", port_name);
+                    }
+                    Err(e) => {
+                        let err_msg = format!("Failed to open port {}: {}", port_name, e);
+                        if let Ok(mut guard) = engine_conn_error.lock() {
+                            *guard = Some(err_msg);
+                        }
+                        engine_connected.store(false, Ordering::Relaxed);
+                    }
+                }
+            } else if !connected && active_port.is_some() {
+                // Graceful disconnect: turn off relays
+                if let Some(ref mut port) = active_port {
+                    for i in 1..=8 {
+                        let _ = port.write_all(format!("R{}:0\n", i).as_bytes());
+                    }
+                }
+                active_port = None;
+                println!("[Engine] Disconnected from serial port");
+            }
             
             // Check for new messages (non-blocking)
             while let Ok(msg) = rx.try_recv() {
@@ -61,12 +99,17 @@ pub fn spawn_engine() -> EngineHandle {
                     }
                     EngineMessage::Seek(time) => {
                         if connected {
-                            let port = {
+                            if let Some(ref mut port) = active_port {
+                                for i in 1..=8 {
+                                    let _ = port.write_all(format!("R{}:0\n", i).as_bytes());
+                                }
+                            }
+                            let port_name = {
                                 let guard = engine_port.lock().unwrap();
                                 guard.clone()
                             };
                             for i in 1..=8 {
-                                println!("[{}] {}:OFF", port, i);
+                                println!("[{}] {}:OFF", port_name, i);
                             }
                         }
                         current_queue_index = queue.partition_point(|x| x.time_ms < time);
@@ -76,12 +119,17 @@ pub fn spawn_engine() -> EngineHandle {
             
             if estop_now && !was_estop {
                 if connected {
-                    let port = {
+                    if let Some(ref mut port) = active_port {
+                        for i in 1..=8 {
+                            let _ = port.write_all(format!("R{}:0\n", i).as_bytes());
+                        }
+                    }
+                    let port_name = {
                         let guard = engine_port.lock().unwrap();
                         guard.clone()
                     };
                     for i in 1..=8 {
-                        println!("[{}] {}:OFF (E-STOP)", port, i);
+                        println!("[{}] {}:OFF (E-STOP)", port_name, i);
                     }
                 }
             }
@@ -92,12 +140,17 @@ pub fn spawn_engine() -> EngineHandle {
             // Handle pause state transition
             if was_playing && !is_playing_now {
                 if connected {
-                    let port = {
+                    if let Some(ref mut port) = active_port {
+                        for i in 1..=8 {
+                            let _ = port.write_all(format!("R{}:0\n", i).as_bytes());
+                        }
+                    }
+                    let port_name = {
                         let guard = engine_port.lock().unwrap();
                         guard.clone()
                     };
                     for i in 1..=8 {
-                        println!("[{}] {}:OFF", port, i);
+                        println!("[{}] {}:OFF", port_name, i);
                     }
                 }
             }
@@ -111,12 +164,23 @@ pub fn spawn_engine() -> EngineHandle {
                     let action = &queue[current_queue_index];
                     if action.time_ms <= current_time {
                         if connected {
-                            let port = {
+                            let port_name = {
                                 let guard = engine_port.lock().unwrap();
                                 guard.clone()
                             };
                             let state_str = if action.state { "ON" } else { "OFF" };
-                            println!("[{}] {}:{}", port, action.relay_id, state_str);
+                            println!("[{}] {}:{}", port_name, action.relay_id, state_str);
+                            
+                            if let Some(ref mut port) = active_port {
+                                let cmd = format!("R{}:{}\n", action.relay_id, if action.state { 1 } else { 0 });
+                                if let Err(e) = port.write_all(cmd.as_bytes()) {
+                                    let err_msg = format!("Serial write error: {}", e);
+                                    if let Ok(mut guard) = engine_conn_error.lock() {
+                                        *guard = Some(err_msg);
+                                    }
+                                    engine_connected.store(false, Ordering::Relaxed);
+                                }
+                            }
                         }
                         current_queue_index += 1;
                     } else {
@@ -135,6 +199,7 @@ pub fn spawn_engine() -> EngineHandle {
         estop_active,
         is_connected,
         serial_port,
+        connection_error,
         sender: tx,
     }
 }
@@ -253,4 +318,133 @@ pub fn evaluate_relay_state(timeline: &Timeline, relay_id: u8, t_ms: u64, muted:
     
     desired_state
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::four_d::models::{Timeline, Effect, EffectInstance, AtomicAction};
+
+    #[test]
+    fn test_compile_timeline_basic() {
+        let mut timeline = Timeline::new();
+        let effect = Effect::new(
+            "Test Constant".to_string(),
+            "🧪".to_string(),
+            1000,
+            vec![
+                AtomicAction { relay_id: 1, state: true, offset_ms: 0 },
+                AtomicAction { relay_id: 1, state: false, offset_ms: 1000 },
+            ],
+        );
+        let effect_id = effect.id;
+        timeline.templates.push(effect);
+        
+        let instance = EffectInstance::new(effect_id, 500);
+        timeline.instances.push(instance);
+        
+        let muted = [false; 9];
+        let soloed = [false; 9];
+        let compiled = compile_timeline(&timeline, &muted, &soloed);
+        
+        assert_eq!(compiled.len(), 2);
+        assert_eq!(compiled[0].time_ms, 500);
+        assert_eq!(compiled[0].relay_id, 1);
+        assert_eq!(compiled[0].state, true);
+        
+        assert_eq!(compiled[1].time_ms, 1500);
+        assert_eq!(compiled[1].relay_id, 1);
+        assert_eq!(compiled[1].state, false);
+    }
+
+    #[test]
+    fn test_compile_timeline_overlap() {
+        let mut timeline = Timeline::new();
+        
+        // Effect A: relay 1 ON at 0, OFF at 1000
+        let effect_a = Effect::new(
+            "Effect A".to_string(),
+            "A".to_string(),
+            1000,
+            vec![
+                AtomicAction { relay_id: 1, state: true, offset_ms: 0 },
+                AtomicAction { relay_id: 1, state: false, offset_ms: 1000 },
+            ],
+        );
+        let id_a = effect_a.id;
+        timeline.templates.push(effect_a);
+        
+        // Effect B: relay 1 OFF at 0, ON at 500, OFF at 1000 (effectively starts OFF then turns ON)
+        let effect_b = Effect::new(
+            "Effect B".to_string(),
+            "B".to_string(),
+            1000,
+            vec![
+                AtomicAction { relay_id: 1, state: false, offset_ms: 0 },
+                AtomicAction { relay_id: 1, state: true, offset_ms: 500 },
+                AtomicAction { relay_id: 1, state: false, offset_ms: 1000 },
+            ],
+        );
+        let id_b = effect_b.id;
+        timeline.templates.push(effect_b);
+        
+        // Instance A placed at 0ms.
+        timeline.instances.push(EffectInstance::new(id_a, 0));
+        // Instance B placed at 200ms. Since it is pushed later, it has higher Z-index.
+        timeline.instances.push(EffectInstance::new(id_b, 200));
+        
+        let muted = [false; 9];
+        let soloed = [false; 9];
+        
+        // Let's verify state at 300ms.
+        // For Instance A (offset 300): it should be ON.
+        // For Instance B (offset 100): it should be OFF.
+        // Since Instance B has higher Z-index, the state at 300ms should be OFF.
+        let state_300 = evaluate_relay_state(&timeline, 1, 300, &muted, &soloed);
+        assert_eq!(state_300, false);
+        
+        // At 800ms:
+        // Instance A (offset 800): ON
+        // Instance B (offset 600): ON
+        let state_800 = evaluate_relay_state(&timeline, 1, 800, &muted, &soloed);
+        assert_eq!(state_800, true);
+    }
+
+    #[test]
+    fn test_compile_timeline_muted_soloed() {
+        let mut timeline = Timeline::new();
+        let effect = Effect::new(
+            "Test Constant".to_string(),
+            "🧪".to_string(),
+            1000,
+            vec![
+                AtomicAction { relay_id: 1, state: true, offset_ms: 0 },
+                AtomicAction { relay_id: 2, state: true, offset_ms: 0 },
+            ],
+        );
+        let effect_id = effect.id;
+        timeline.templates.push(effect);
+        timeline.instances.push(EffectInstance::new(effect_id, 500));
+        
+        // Mute Relay 1
+        let mut muted = [false; 9];
+        muted[1] = true;
+        let soloed = [false; 9];
+        
+        let compiled = compile_timeline(&timeline, &muted, &soloed);
+        // Only Relay 2 should produce compiled actions
+        assert!(compiled.iter().all(|act| act.relay_id != 1));
+        assert!(compiled.iter().any(|act| act.relay_id == 2));
+        
+        // Solo Relay 1
+        let muted = [false; 9];
+        let mut soloed = [false; 9];
+        soloed[1] = true;
+        
+        let compiled = compile_timeline(&timeline, &muted, &soloed);
+        // Only Relay 1 should produce compiled actions since it is soloed
+        assert!(compiled.iter().any(|act| act.relay_id == 1));
+        assert!(compiled.iter().all(|act| act.relay_id != 2));
+    }
+}
+
 
