@@ -1,4 +1,4 @@
-# Pealayer 🎬⚡
+# Pealayer
 
 Pealayer is a lightweight, hardware-accelerated 4D media player built in Rust. It integrates **egui** (via `eframe` & `glow`) with **mpv** (via `libmpv2`) to provide a seamless video rendering context directly inside a modern, Premiere-inspired multi-tab NLE interface. 
 
@@ -8,18 +8,18 @@ With Pealayer, you can program physical sensory effects—like seat rumbles, fan
 
 ---
 
-## ✨ Core Features
+## Core Features
 
-*   **📺 OpenGL RTT Video Rendering**: Renders video frames with hardware acceleration directly into an offscreen framebuffer texture inside egui, maintaining a locked 16:9 aspect ratio container.
-*   **⏱️ NLE Timeline Editor**: A responsive, multi-track layout (Video, Audio, Relays R1-R8) with drag-and-drop, multi-select, playhead snapping, and click-and-drag cue resizing.
-*   **🔌 Live USB Serial Connection**: Real-time communication with physical microcontrollers (e.g. Arduino, ESP32) using an ASCII command protocol over configurable serial ports.
-*   **🔴 Live Macro Recording**: Hold keyboard hotkeys `F1-F8` during playback to record sensory cue activations in real-time onto corresponding relay tracks.
-*   **⚠️ Hardware Monitor & Safety**: Live status LEDs, manual "Force ON" overrides, and a global Emergency Stop (**E-STOP**) lock switch.
-*   **💾 Automatic Sidecar Pairing**: Opens `movie.mp4` and automatically finds and loads a matching `movie.4d.json` timeline sidecar file in the same folder.
+*   **OpenGL RTT Video Rendering**: Renders video frames with hardware acceleration directly into an offscreen framebuffer texture inside egui, maintaining a locked 16:9 aspect ratio container.
+*   **NLE Timeline Editor**: A responsive, multi-track layout (Video, Audio, Relays R1-R8) with drag-and-drop, multi-select, playhead snapping, and click-and-drag cue resizing.
+*   **Live USB Serial Connection**: Real-time communication with physical microcontrollers (e.g. Arduino, ESP32) using an ASCII command protocol over configurable serial ports.
+*   **Live Macro Recording**: Hold keyboard hotkeys `F1-F8` during playback to record sensory cue activations in real-time onto corresponding relay tracks.
+*   **Hardware Monitor & Safety**: Live status LEDs, manual "Force ON" overrides, and a global Emergency Stop (**E-STOP**) lock switch.
+*   **Automatic Sidecar Pairing**: Opens `movie.mp4` and automatically finds and loads a matching `movie.4d.json` timeline sidecar file in the same folder.
 
 ---
 
-## 🛠️ Feature Walkthrough
+## Feature Walkthrough
 
 ### Timeline Editing & Transport Controls
 Drag effects (Mist Spray, Seat Shake, Wind Gale) from the **Effects Library** directly onto the timeline tracks. Drag, select, resize, and scrub the playhead with ease.
@@ -33,7 +33,7 @@ Observe relay status LEDs in the **Hardware Monitor** tab. Toggle manual overrid
 
 ---
 
-## 🔌 Hardware Serial Protocol
+## Hardware Serial Protocol
 
 Pealayer communicates with microcontrollers (Arduino, ESP32, USB Relay Boards) over a standard serial connection (9600 baud rate by default). 
 
@@ -50,7 +50,7 @@ Whenever a relay state changes or a seek/pause occurs, Pealayer transmits a newl
 
 ---
 
-## ⌨️ Shortcut Keybindings
+## Shortcut Keybindings
 
 | Keybinding | Action |
 | :--- | :--- |
@@ -63,7 +63,7 @@ Whenever a relay state changes or a seek/pause occurs, Pealayer transmits a newl
 
 ---
 
-## ⚙️ Prerequisites
+## Prerequisites
 
 Because Pealayer relies on `mpv` libraries, compilation requires host development dependencies:
 
@@ -83,7 +83,7 @@ sudo apt install libmpv-dev pkg-config libasound2-dev libx11-dev libxcb-shape0-d
 
 ---
 
-## 🚀 Installation & Running
+## Installation & Running
 
 1. **Clone the repository**:
    ```bash
@@ -103,7 +103,7 @@ sudo apt install libmpv-dev pkg-config libasound2-dev libx11-dev libxcb-shape0-d
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 - `src/main.rs`: Entry point initializing `eframe`, GL context, and observers.
 - `src/app.rs`: Main `PealayerApp` struct containing playback states, delays, and sidecar loaders.
@@ -113,6 +113,6 @@ sudo apt install libmpv-dev pkg-config libasound2-dev libx11-dev libxcb-shape0-d
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
