@@ -19,50 +19,75 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .interactable(true)
             .frame(egui::Frame::window(ui.style()).multiply_with_opacity(alpha))
             .show(&ctx, |ui| {
+                multiply_style_opacity(ui.style_mut(), alpha);
                 ui.horizontal(|ui| {
-                    let play_icon = if app.is_paused { "▶" } else { "⏸" };
-                    if ui.button(play_icon).clicked() {
-                        let _ = app.mpv.command("cycle", &["pause"]);
-                    }
+                    let has_video = app.current_video_path.is_some();
+
+                    ui.add_enabled_ui(has_video, |ui| {
+                        let play_icon = if app.is_paused { "▶" } else { "⏸" };
+                        if ui.add_sized([30.0, 20.0], egui::Button::new(play_icon)).clicked() {
+                            let _ = app.mpv.command("cycle", &["pause"]);
+                        }
+                    });
+
+                    let elapsed_time = app.playback_time;
+                    let display_total = if app.show_remaining_time {
+                        -(app.duration - elapsed_time)
+                    } else {
+                        app.duration
+                    };
 
                     let format_time = |t: f64| {
-                        let s = t as i64;
-                        if app.duration >= 3600.0 {
+                        let is_negative = t < 0.0;
+                        let s = t.abs() as i64;
+                        let formatted = if app.duration >= 3600.0 {
                             format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
                         } else {
                             format!("{:02}:{:02}", (s / 60) % 60, s % 60)
+                        };
+                        if is_negative {
+                            format!("-{}", formatted)
+                        } else {
+                            formatted
                         }
                     };
 
-                    ui.label(format!(
+                    let time_label = format!(
                         "{} / {}",
-                        format_time(app.playback_time),
-                        format_time(app.duration)
-                    ));
+                        format_time(elapsed_time),
+                        format_time(display_total)
+                    );
+
+                    let time_resp = ui.add_enabled(has_video, egui::Label::new(time_label).sense(egui::Sense::click()));
+                    if has_video && time_resp.clicked() {
+                        app.show_remaining_time = !app.show_remaining_time;
+                    }
 
                     // Calculate available width for the seekbar, leaving space for the right controls
-                    let right_controls_width = 250.0;
+                    let right_controls_width = 285.0;
                     let seekbar_width = ui.available_width() - right_controls_width;
 
-                    let mut current_pos = app.seek_pos.unwrap_or(app.playback_time);
-                    let slider = egui::Slider::new(&mut current_pos, 0.0..=app.duration)
-                        .show_value(false)
-                        .trailing_fill(true);
+                    ui.add_enabled_ui(has_video, |ui| {
+                        let mut current_pos = app.seek_pos.unwrap_or(app.playback_time);
+                        let slider = egui::Slider::new(&mut current_pos, 0.0..=app.duration)
+                            .show_value(false)
+                            .trailing_fill(true);
 
-                    let old_width = ui.spacing().slider_width;
-                    ui.spacing_mut().slider_width = seekbar_width.max(50.0);
-                    let response = ui.add(slider);
-                    ui.spacing_mut().slider_width = old_width;
+                        let old_width = ui.spacing().slider_width;
+                        ui.spacing_mut().slider_width = seekbar_width.max(50.0);
+                        let response = ui.add(slider);
+                        ui.spacing_mut().slider_width = old_width;
 
-                    if response.dragged() {
-                        app.seek_pos = Some(current_pos);
-                    }
-                    if response.drag_stopped() {
-                        let _ = app
-                            .mpv
-                            .command("seek", &[&current_pos.to_string(), "absolute"]);
-                        app.seek_pos = None;
-                    }
+                        if response.dragged() {
+                            app.seek_pos = Some(current_pos);
+                        }
+                        if response.drag_stopped() {
+                            let _ = app
+                                .mpv
+                                .command("seek", &[&current_pos.to_string(), "absolute"]);
+                            app.seek_pos = None;
+                        }
+                    });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("⛶").clicked() {
@@ -85,15 +110,28 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             app.show_sub_settings = !app.show_sub_settings;
                         }
 
-                        let mut vol = app.volume;
-                        let vol_slider = egui::Slider::new(&mut vol, 0.0..=130.0).show_value(false);
-                        if ui.add_sized([80.0, 15.0], vol_slider).changed() {
-                            let _ = app.mpv.set_property("volume", vol);
-                        }
-                        let mute_icon = if app.is_muted { "🔇" } else { "🔊" };
-                        if ui.add(egui::Button::new(mute_icon).frame(false)).clicked() {
-                            let _ = app.mpv.command("cycle", &["mute"]);
-                        }
+                        let has_video = app.current_video_path.is_some();
+                        ui.add_enabled_ui(has_video, |ui| {
+                            let mut vol = app.volume;
+                            let vol_slider = egui::Slider::new(&mut vol, 0.0..=130.0).show_value(false);
+                            let vol_resp = ui.add_sized([80.0, 15.0], vol_slider);
+                            if vol_resp.changed() {
+                                let _ = app.mpv.set_property("volume", vol);
+                            }
+                            if vol_resp.hovered() {
+                                let scroll = ui.input(|i| i.smooth_scroll_delta);
+                                if scroll.y != 0.0 {
+                                    let vol_change = if scroll.y > 0.0 { 2.0 } else { -2.0 };
+                                    let new_vol = (app.volume + vol_change).clamp(0.0, 130.0);
+                                    let _ = app.mpv.set_property("volume", new_vol);
+                                    app.volume = new_vol;
+                                }
+                            }
+                            let mute_icon = if app.is_muted { "🔇" } else { "🔊" };
+                            if ui.add(egui::Button::new(mute_icon).frame(false)).clicked() {
+                                let _ = app.mpv.command("cycle", &["mute"]);
+                            }
+                        });
                     });
                 });
             });
@@ -102,4 +140,34 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             ctx.request_repaint();
         }
     }
+}
+
+fn multiply_style_opacity(style: &mut egui::Style, alpha: f32) {
+    let fade_color = |color: &mut egui::Color32| {
+        *color = color.linear_multiply(alpha);
+    };
+
+    if let Some(ref mut c) = style.visuals.override_text_color {
+        fade_color(c);
+    }
+    fade_color(&mut style.visuals.hyperlink_color);
+    fade_color(&mut style.visuals.extreme_bg_color);
+    fade_color(&mut style.visuals.faint_bg_color);
+    fade_color(&mut style.visuals.code_bg_color);
+
+    let widgets = &mut style.visuals.widgets;
+    for state in [
+        &mut widgets.noninteractive,
+        &mut widgets.inactive,
+        &mut widgets.hovered,
+        &mut widgets.active,
+        &mut widgets.open,
+    ] {
+        fade_color(&mut state.bg_fill);
+        fade_color(&mut state.fg_stroke.color);
+        fade_color(&mut state.bg_stroke.color);
+    }
+
+    fade_color(&mut style.visuals.selection.bg_fill);
+    fade_color(&mut style.visuals.selection.stroke.color);
 }

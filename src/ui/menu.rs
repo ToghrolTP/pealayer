@@ -13,25 +13,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         .add_filter("Video Files", &["mp4", "mkv", "avi", "webm", "mov", "flv"])
                         .pick_file()
                     {
-                        let path_str = path.to_str().unwrap_or("");
-                        if !path_str.is_empty() {
-                            let _ = app.mpv.command("loadfile", &[path_str, "replace"]);
-                            app.current_video_path = Some(path.clone());
-                            
-                            // Auto-load matching sidecar timeline
-                            let mut sidecar = path.clone();
-                            sidecar.set_extension("4d.json");
-                            if !sidecar.exists() {
-                                sidecar.set_extension("json");
-                            }
-                            if sidecar.exists() {
-                                if let Ok(timeline) = crate::four_d::models::Timeline::load_from_file(&sidecar) {
-                                    app.timeline = timeline;
-                                    let compiled = crate::four_d::engine::compile_timeline(&app.timeline, &app.track_muted, &app.track_soloed);
-                                    let _ = app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
-                                }
-                            }
-                        }
+                        app.load_video_file(path);
                     }
                 }
 

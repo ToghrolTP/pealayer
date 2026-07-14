@@ -95,6 +95,8 @@ pub struct PealayerApp {
     pub(crate) lasso_rect: Option<egui::Rect>,
     pub(crate) rtt_state: Arc<Mutex<RttState>>,
     pub(crate) current_video_path: Option<std::path::PathBuf>,
+    pub(crate) show_remaining_time: bool,
+    pub(crate) osd_message: Option<(String, std::time::Instant)>,
 }
 
 
@@ -115,6 +117,14 @@ pub struct AudioTrack {
 
 impl eframe::App for PealayerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Process drag and dropped files
+        let dropped_file_path = ui.input(|i| {
+            i.raw.dropped_files.first().and_then(|f| f.path.clone())
+        });
+        if let Some(path) = dropped_file_path {
+            self.load_video_file(path);
+        }
+
         // Initialize RTT texture once if not done yet
         let mut init_rtt = false;
         let mut rtt_data = None;
@@ -202,13 +212,29 @@ impl eframe::App for PealayerApp {
                     }
                     (2, PropertyData::Double(v)) => self.duration = v,
                     (3, PropertyData::Flag(v)) => {
+                        let prev_paused = self.is_paused;
                         self.is_paused = v;
                         self.engine_handle
                             .is_playing
                             .store(!v, std::sync::atomic::Ordering::Relaxed);
+                        if self.current_video_path.is_some() && prev_paused != v {
+                            self.set_osd(if v { "Pause".to_string() } else { "Play".to_string() });
+                        }
                     }
-                    (4, PropertyData::Double(v)) => self.volume = v,
-                    (5, PropertyData::Flag(v)) => self.is_muted = v,
+                    (4, PropertyData::Double(v)) => {
+                        let prev_vol = self.volume;
+                        self.volume = v;
+                        if self.current_video_path.is_some() && (prev_vol - v).abs() > 0.01 {
+                            self.set_osd(format!("Volume: {}%", v as i32));
+                        }
+                    }
+                    (5, PropertyData::Flag(v)) => {
+                        let prev_muted = self.is_muted;
+                        self.is_muted = v;
+                        if self.current_video_path.is_some() && prev_muted != v {
+                            self.set_osd(if v { "Mute: On".to_string() } else { "Mute: Off".to_string() });
+                        }
+                    }
                     (6, PropertyData::Flag(v)) => self.sub_visibility = v,
                     (7, PropertyData::Double(v)) => self.sub_font_size = v,
                     (8, PropertyData::Double(v)) => self.sub_delay = v,
@@ -280,9 +306,27 @@ impl eframe::App for PealayerApp {
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
             let _ = self.mpv.command("seek", &["-5", "relative"]);
+            if self.current_video_path.is_some() {
+                self.set_osd("Seek: -5s".to_string());
+            }
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
             let _ = self.mpv.command("seek", &["5", "relative"]);
+            if self.current_video_path.is_some() {
+                self.set_osd("Seek: +5s".to_string());
+            }
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Period)) {
+            let _ = self.mpv.command("frame-step", &[]);
+            if self.current_video_path.is_some() {
+                self.set_osd("Frame Step".to_string());
+            }
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Comma)) {
+            let _ = self.mpv.command("frame-back-step", &[]);
+            if self.current_video_path.is_some() {
+                self.set_osd("Frame Back".to_string());
+            }
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
             let _ = self.mpv.command("add", &["volume", "5"]);
@@ -418,5 +462,31 @@ impl PealayerApp {
                 }
             }
         }
+    }
+
+    pub fn load_video_file(&mut self, path: std::path::PathBuf) {
+        let path_str = path.to_str().unwrap_or("");
+        if !path_str.is_empty() {
+            let _ = self.mpv.command("loadfile", &[path_str, "replace"]);
+            self.current_video_path = Some(path.clone());
+            
+            // Auto-load matching sidecar timeline
+            let mut sidecar = path.clone();
+            sidecar.set_extension("4d.json");
+            if !sidecar.exists() {
+                sidecar.set_extension("json");
+            }
+            if sidecar.exists() {
+                if let Ok(timeline) = crate::four_d::models::Timeline::load_from_file(&sidecar) {
+                    self.timeline = timeline;
+                    let compiled = crate::four_d::engine::compile_timeline(&self.timeline, &self.track_muted, &self.track_soloed);
+                    let _ = self.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                }
+            }
+        }
+    }
+
+    pub fn set_osd(&mut self, msg: String) {
+        self.osd_message = Some((msg, std::time::Instant::now()));
     }
 }

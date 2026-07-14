@@ -260,6 +260,8 @@ fn main() -> eframe::Result {
                 lasso_origin: None,
                 lasso_rect: None,
                 current_video_path: None,
+                show_remaining_time: false,
+                osd_message: None,
             }))
         }),
     )
