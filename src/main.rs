@@ -130,7 +130,7 @@ fn main() -> eframe::Result {
             let _ = mpv_static.set_property("volume", loaded_config.volume);
             let _ = mpv_static.set_property("mute", loaded_config.is_muted);
 
-            let (web_state_tx, web_cmd_rx) = crate::server::spawn_web_server(8080);
+            let (web_state_tx, web_cmd_rx) = crate::server::spawn_web_server(8080, 8081);
 
             Ok(Box::new(PealayerApp {
                 mpv: mpv_static,

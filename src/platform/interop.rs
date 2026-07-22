@@ -12,6 +12,7 @@ pub enum InteropCommand {
     Pause,
     TogglePause,
     Seek { seconds: f64 },
+    SeekAbs { percentage: f64 },
     SetVolume { value: f64 },
     Open { target: String },
     GetStatus,

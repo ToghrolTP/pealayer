@@ -161,7 +161,13 @@ impl eframe::App for PealayerApp {
                 }
                 InteropCommand::Seek { seconds } => {
                     let _ = self.mpv.command("seek", &[&seconds.to_string(), "relative"]);
-                    self.set_osd(format!("IPC: Seek {:+.1}s", seconds));
+                    self.set_osd(format!("Seek: {:+.1}s", seconds));
+                }
+                InteropCommand::SeekAbs { percentage } => {
+                    let clamped = percentage.clamp(0.0, 100.0);
+                    let target_sec = self.duration * (clamped / 100.0);
+                    let _ = self.mpv.command("seek", &[&target_sec.to_string(), "absolute"]);
+                    self.set_osd(format!("Seek: {:.0}%", clamped));
                 }
                 InteropCommand::SetVolume { value } => {
                     let clamped = value.clamp(0.0, 130.0);
@@ -206,6 +212,12 @@ impl eframe::App for PealayerApp {
                 InteropCommand::Seek { seconds } => {
                     let _ = self.mpv.command("seek", &[&seconds.to_string(), "relative"]);
                     self.set_osd(format!("Web-UI: Seek {:+.1}s", seconds));
+                }
+                InteropCommand::SeekAbs { percentage } => {
+                    let clamped = percentage.clamp(0.0, 100.0);
+                    let target_sec = self.duration * (clamped / 100.0);
+                    let _ = self.mpv.command("seek", &[&target_sec.to_string(), "absolute"]);
+                    self.set_osd(format!("Web-UI: Seek {:.0}%", clamped));
                 }
                 InteropCommand::SetVolume { value } => {
                     let clamped = value.clamp(0.0, 130.0);

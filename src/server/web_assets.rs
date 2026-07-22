@@ -185,31 +185,56 @@ pub const INDEX_HTML: &str = r#"<!DOCTYPE html>
 
     function initWS() {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      ws = new WebSocket(`${proto}//${location.host}/ws/control`);
+      const wsUrl = `${proto}//${location.hostname}:8081`;
       
-      ws.onopen = () => {
-        document.getElementById('net-status').classList.remove('offline');
-        document.getElementById('net-status').innerHTML = '<span>●</span> Connected';
-      };
-      
-      ws.onclose = () => {
-        document.getElementById('net-status').classList.add('offline');
-        document.getElementById('net-status').innerHTML = '<span>●</span> Offline';
-        setTimeout(initWS, 2000);
-      };
+      try {
+        ws = new WebSocket(wsUrl);
+        
+        ws.onopen = () => {
+          document.getElementById('net-status').classList.remove('offline');
+          document.getElementById('net-status').innerHTML = '<span>●</span> WS Connected';
+        };
+        
+        ws.onclose = () => {
+          document.getElementById('net-status').classList.add('offline');
+          document.getElementById('net-status').innerHTML = '<span>●</span> HTTP Polling';
+          setTimeout(initWS, 3000);
+        };
 
-      ws.onmessage = (ev) => {
+        ws.onmessage = (ev) => {
+          try {
+            const state = JSON.parse(ev.data);
+            updateRemoteUI(state);
+          } catch(e) {}
+        };
+      } catch(e) {}
+
+      // REST Polling Fallback (ensures video detection even if WebSockets are blocked)
+      setInterval(async () => {
         try {
-          const state = JSON.parse(ev.data);
-          updateRemoteUI(state);
+          const res = await fetch('/api/player/status');
+          if (res.ok) {
+            const state = await res.json();
+            updateRemoteUI(state);
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+              document.getElementById('net-status').classList.remove('offline');
+              document.getElementById('net-status').innerHTML = '<span>●</span> Online (REST)';
+            }
+          }
         } catch(e) {}
-      };
+      }, 500);
     }
 
     function sendCmd(cmd, payload = {}) {
+      const msg = JSON.stringify({ command: cmd, ...payload });
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ command: cmd, ...payload }));
+        ws.send(msg);
       }
+      fetch('/api/player/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: msg
+      }).catch(() => {});
     }
 
     function updateRemoteUI(s) {
@@ -242,8 +267,7 @@ pub const INDEX_HTML: &str = r#"<!DOCTYPE html>
     }
 
     function onSeek(val) {
-      const stateDur = 100; // seeks relatively
-      sendCmd('seek', { seconds: 5 });
+      sendCmd('seek_abs', { percentage: parseFloat(val) });
     }
 
     function onVol(val) {
