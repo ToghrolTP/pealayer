@@ -22,23 +22,109 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 .pick_file()
             {
                 app.load_video_file(path);
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
             }
         }
     }
 
-    if app.current_video_path.is_some() && response.hovered() {
-        let scroll = ui.input(|i| i.smooth_scroll_delta);
-        if scroll.y != 0.0 {
+    if response.hovered() {
+        let scroll = ui.input(|i| {
+            let mut d = i.smooth_scroll_delta;
+            if d.x == 0.0 && d.y == 0.0 {
+                for ev in &i.events {
+                    if let egui::Event::MouseWheel { delta, .. } = ev {
+                        d += *delta;
+                    }
+                }
+            }
+            d
+        });
+        let is_shift = ui.input(|i| i.modifiers.shift);
+
+        if is_shift || scroll.x != 0.0 {
+            let delta = if scroll.x != 0.0 { scroll.x } else { scroll.y };
+            if delta != 0.0 && app.current_video_path.is_some() {
+                let seek_change = if delta > 0.0 { 5.0 } else { -5.0 };
+                let _ = app.mpv.command("seek", &[&seek_change.to_string(), "relative"]);
+                app.set_osd(format!("Seek: {}s", if seek_change > 0.0 { "+5" } else { "-5" }));
+            }
+        } else if scroll.y != 0.0 {
             let vol_change = if scroll.y > 0.0 { 2.0 } else { -2.0 };
             let new_vol = (app.volume + vol_change).clamp(0.0, 130.0);
             let _ = app.mpv.set_property("volume", new_vol);
             app.volume = new_vol;
-        }
-        if scroll.x != 0.0 {
-            let seek_change = if scroll.x > 0.0 { 5.0 } else { -5.0 };
-            let _ = app.mpv.command("seek", &[&seek_change.to_string(), "relative"]);
+            app.set_osd(format!("Volume: {:.0}%", new_vol));
         }
     }
+
+    response.context_menu(|ui| {
+        if ui.button("📂 Open Video File...").clicked() {
+            ui.close();
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Video Files", &["mp4", "mkv", "avi", "webm", "mov", "flv"])
+                .pick_file()
+            {
+                app.load_video_file(path);
+            }
+        }
+
+        let has_video = app.current_video_path.is_some();
+        if ui.add_enabled(has_video, egui::Button::new("❌ Close Video")).clicked() {
+            ui.close();
+            app.close_video();
+        }
+
+        ui.separator();
+
+        let play_title = if app.is_paused { "▶ Play" } else { "⏸ Pause" };
+        if ui.add_enabled(has_video, egui::Button::new(play_title)).clicked() {
+            ui.close();
+            let _ = app.mpv.command("cycle", &["pause"]);
+        }
+
+        let is_fullscreen = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
+        let fs_title = if is_fullscreen { "🗗 Exit Fullscreen" } else { "⛶ Fullscreen" };
+        if ui.button(fs_title).clicked() {
+            ui.close();
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
+        }
+
+        let mute_title = if app.is_muted { "🔊 Unmute" } else { "🔇 Mute" };
+        if ui.add_enabled(has_video, egui::Button::new(mute_title)).clicked() {
+            ui.close();
+            let _ = app.mpv.command("cycle", &["mute"]);
+        }
+
+        ui.separator();
+
+        ui.menu_button("🕒 Open Recent", |ui| {
+            if app.recent_media.is_empty() {
+                ui.label("No recent media");
+            } else {
+                for path in app.recent_media.clone() {
+                    let file_name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("Unknown");
+                    if ui.button(file_name).on_hover_text(path.display().to_string()).clicked() {
+                        ui.close();
+                        app.load_video_file(path);
+                    }
+                }
+                ui.separator();
+                if ui.button("Clear Recent").clicked() {
+                    ui.close();
+                    app.clear_recent_media();
+                }
+            }
+        });
+
+        let pin_title = if app.pin_controls { "📌 Unpin Controls" } else { "📍 Pin Controls" };
+        if ui.button(pin_title).clicked() {
+            ui.close();
+            app.pin_controls = !app.pin_controls;
+        }
+    });
 
     // 1. Calculate destination rect maintaining 16:9 aspect ratio
     let aspect_ratio = 16.0 / 9.0;

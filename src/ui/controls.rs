@@ -41,10 +41,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         app.duration
                     };
 
-                    let format_time = |t: f64| {
+                    let is_long_video = app.duration >= 3600.0;
+                    let format_time = move |t: f64| {
                         let is_negative = t < 0.0;
                         let s = t.abs() as i64;
-                        let formatted = if app.duration >= 3600.0 {
+                        let formatted = if is_long_video {
                             format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
                         } else {
                             format!("{:02}:{:02}", (s / 60) % 60, s % 60)
@@ -123,12 +124,23 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 let _ = app.mpv.set_property("volume", vol);
                             }
                             if vol_resp.hovered() {
-                                let scroll = ui.input(|i| i.smooth_scroll_delta);
+                                let scroll = ui.input(|i| {
+                                    let mut d = i.smooth_scroll_delta;
+                                    if d.x == 0.0 && d.y == 0.0 {
+                                        for ev in &i.events {
+                                            if let egui::Event::MouseWheel { delta, .. } = ev {
+                                                d += *delta;
+                                            }
+                                        }
+                                    }
+                                    d
+                                });
                                 if scroll.y != 0.0 {
                                     let vol_change = if scroll.y > 0.0 { 2.0 } else { -2.0 };
                                     let new_vol = (app.volume + vol_change).clamp(0.0, 130.0);
                                     let _ = app.mpv.set_property("volume", new_vol);
                                     app.volume = new_vol;
+                                    app.set_osd(format!("Volume: {:.0}%", new_vol));
                                 }
                             }
                             let mute_icon = if app.is_muted { "🔇" } else { "🔊" };

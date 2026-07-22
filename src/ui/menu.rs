@@ -17,6 +17,34 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
                 }
 
+                ui.menu_button("Open Recent", |ui| {
+                    if app.recent_media.is_empty() {
+                        ui.label("No recent media");
+                    } else {
+                        for path in app.recent_media.clone() {
+                            let file_name = path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("Unknown");
+                            if ui.button(file_name).on_hover_text(path.display().to_string()).clicked() {
+                                ui.close();
+                                app.load_video_file(path);
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Clear Recent").clicked() {
+                            ui.close();
+                            app.clear_recent_media();
+                        }
+                    }
+                });
+
+                let has_video = app.current_video_path.is_some();
+                if ui.add_enabled(has_video, egui::Button::new("Close Video")).clicked() {
+                    ui.close();
+                    app.close_video();
+                }
+
                 if ui.button("Open Timeline Project...").clicked() {
                     ui.close();
                     if let Some(path) = rfd::FileDialog::new()

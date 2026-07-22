@@ -98,6 +98,7 @@ pub struct PealayerApp {
     pub(crate) current_video_path: Option<std::path::PathBuf>,
     pub(crate) show_remaining_time: bool,
     pub(crate) osd_message: Option<(String, std::time::Instant)>,
+    pub(crate) recent_media: Vec<std::path::PathBuf>,
 }
 
 
@@ -470,6 +471,7 @@ impl PealayerApp {
         if !path_str.is_empty() {
             let _ = self.mpv.command("loadfile", &[path_str, "replace"]);
             self.current_video_path = Some(path.clone());
+            self.add_recent_media(path.clone());
             
             // Auto-load matching sidecar timeline
             let mut sidecar = path.clone();
@@ -487,7 +489,87 @@ impl PealayerApp {
         }
     }
 
+    pub fn close_video(&mut self) {
+        let _ = self.mpv.command("stop", &[]);
+        self.current_video_path = None;
+        self.playback_time = 0.0;
+        self.duration = 0.0;
+        self.set_osd("Video Closed".to_string());
+    }
+
+    pub fn add_recent_media(&mut self, path: std::path::PathBuf) {
+        self.recent_media.retain(|p| p != &path);
+        self.recent_media.insert(0, path);
+        if self.recent_media.len() > 10 {
+            self.recent_media.truncate(10);
+        }
+        self.save_recent_media();
+    }
+
+    pub fn load_recent_media_from_disk() -> Vec<std::path::PathBuf> {
+        let path = get_recent_config_path();
+        if path.exists() {
+            if let Ok(data) = std::fs::read_to_string(&path) {
+                if let Ok(list) = serde_json::from_str::<Vec<std::path::PathBuf>>(&data) {
+                    return list;
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    pub fn save_recent_media(&self) {
+        let path = get_recent_config_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(json) = serde_json::to_string_pretty(&self.recent_media) {
+            let _ = std::fs::write(&path, json);
+        }
+    }
+
+    pub fn clear_recent_media(&mut self) {
+        self.recent_media.clear();
+        self.save_recent_media();
+    }
+
     pub fn set_osd(&mut self, msg: String) {
         self.osd_message = Some((msg, std::time::Instant::now()));
+    }
+}
+
+fn get_recent_config_path() -> std::path::PathBuf {
+    let mut path = std::env::var("HOME")
+        .map(|h| std::path::PathBuf::from(h).join(".config"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    path.push("pealayer");
+    path.push("recent.json");
+    path
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_recent_media_deduplication_and_cap() {
+        let mut list: Vec<std::path::PathBuf> = Vec::new();
+        let add = |l: &mut Vec<std::path::PathBuf>, p: std::path::PathBuf| {
+            l.retain(|item| item != &p);
+            l.insert(0, p);
+            if l.len() > 10 {
+                l.truncate(10);
+            }
+        };
+
+        for i in 0..15 {
+            add(&mut list, std::path::PathBuf::from(format!("/video{}.mp4", i)));
+        }
+
+        assert_eq!(list.len(), 10);
+        assert_eq!(list[0], std::path::PathBuf::from("/video14.mp4"));
+
+        // Re-adding /video5.mp4 moves it to front
+        add(&mut list, std::path::PathBuf::from("/video5.mp4"));
+        assert_eq!(list.len(), 10);
+        assert_eq!(list[0], std::path::PathBuf::from("/video5.mp4"));
     }
 }

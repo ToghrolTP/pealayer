@@ -263,6 +263,7 @@ fn main() -> eframe::Result {
                 current_video_path: None,
                 show_remaining_time: false,
                 osd_message: None,
+                recent_media: crate::app::PealayerApp::load_recent_media_from_disk(),
             }))
         }),
     )
