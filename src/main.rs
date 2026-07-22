@@ -3,6 +3,7 @@
 pub mod app;
 pub mod config;
 pub mod mpv;
+pub mod platform;
 pub mod ui;
 pub mod four_d;
 
@@ -20,7 +21,9 @@ fn main() -> eframe::Result {
     env_logger::init();
 
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([800.0, 600.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([800.0, 600.0])
+            .with_transparent(true),
         renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
@@ -273,6 +276,8 @@ fn main() -> eframe::Result {
                 show_open_url_dialog: false,
                 url_input_buffer: String::new(),
                 is_window_operating: false,
+                show_shortcuts_dialog: false,
+                show_about_dialog: false,
             }))
         }),
     )

@@ -102,6 +102,8 @@ pub struct PealayerApp {
     pub(crate) show_open_url_dialog: bool,
     pub(crate) url_input_buffer: String,
     pub(crate) is_window_operating: bool,
+    pub(crate) show_shortcuts_dialog: bool,
+    pub(crate) show_about_dialog: bool,
 }
 
 
@@ -484,6 +486,61 @@ impl eframe::App for PealayerApp {
                     } else if close_dialog {
                         self.show_open_url_dialog = false;
                     }
+                }
+
+                if self.show_shortcuts_dialog {
+                    egui::Window::new("⌨ Keyboard Shortcuts & Controls")
+                        .collapsible(false)
+                        .resizable(true)
+                        .default_size([460.0, 360.0])
+                        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                        .open(&mut self.show_shortcuts_dialog)
+                        .show(ui.ctx(), |ui| {
+                            egui::Grid::new("shortcuts_grid")
+                                .striped(true)
+                                .spacing([20.0, 8.0])
+                                .show(ui, |ui| {
+                                    ui.label(egui::RichText::new("Shortcut").strong());
+                                    ui.label(egui::RichText::new("Action").strong());
+                                    ui.end_row();
+
+                                    ui.label("Space"); ui.label("Play / Pause video"); ui.end_row();
+                                    ui.label("F"); ui.label("Toggle Fullscreen mode"); ui.end_row();
+                                    ui.label("M"); ui.label("Toggle Audio Mute"); ui.end_row();
+                                    ui.label("Left / Right Arrows"); ui.label("Seek -5s / +5s"); ui.end_row();
+                                    ui.label("Up / Down Arrows"); ui.label("Volume -5% / +5%"); ui.end_row();
+                                    ui.label(".  or  ]"); ui.label("Frame Step Forward (+1 frame)"); ui.end_row();
+                                    ui.label(",  or  ["); ui.label("Frame Step Backward (-1 frame)"); ui.end_row();
+                                    ui.label("Mouse Wheel"); ui.label("Adjust Volume on player/bar"); ui.end_row();
+                                    ui.label("Shift + Mouse Wheel"); ui.label("Seek forward / backward"); ui.end_row();
+                                    ui.label("Double Click"); ui.label("Toggle Fullscreen / Open Video"); ui.end_row();
+                                    ui.label("Right Click"); ui.label("Open Player Context Menu"); ui.end_row();
+                                    ui.label("Drag & Drop"); ui.label("Drop media file onto window to play"); ui.end_row();
+                                });
+                        });
+                }
+
+                if self.show_about_dialog {
+                    egui::Window::new("ℹ About Pealayer")
+                        .collapsible(false)
+                        .resizable(false)
+                        .default_size([380.0, 240.0])
+                        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                        .open(&mut self.show_about_dialog)
+                        .show(ui.ctx(), |ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(8.0);
+                                ui.heading("🎬 Pealayer v0.1.0");
+                                ui.label(egui::RichText::new("Modern 4D Video & Haptic Player").italics());
+                                ui.add_space(10.0);
+                                ui.separator();
+                                ui.add_space(8.0);
+                                ui.label("High-performance media playback powered by libmpv2, glow OpenGL, and egui.");
+                                ui.label("Featuring real-time 4D haptic timeline synchronization and multi-track relay control.");
+                                ui.add_space(12.0);
+                                ui.label(egui::RichText::new("Copyright © 2026 Pealayer Team").small().weak());
+                            });
+                        });
                 }
             });
     }

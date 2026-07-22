@@ -8,10 +8,11 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
     let mut open = app.show_audio_settings;
 
-    egui::Window::new("Audio Settings")
+    egui::Window::new("🎵 Audio Settings")
         .open(&mut open)
-        .collapsible(false)
-        .resizable(false)
+        .collapsible(true)
+        .resizable(true)
+        .default_size([420.0, 320.0])
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ui.ctx(), |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);

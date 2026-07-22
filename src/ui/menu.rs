@@ -97,6 +97,15 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 }
 
                 ui.separator();
+                if ui.button("⚙ Register as Default Media Player...").clicked() {
+                    ui.close();
+                    match crate::platform::association::register_as_default_player() {
+                        Ok(msg) => app.set_osd(msg),
+                        Err(err) => app.show_error = Some(err),
+                    }
+                }
+
+                ui.separator();
                 if ui.button("Quit").clicked() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -178,6 +187,17 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             });
             
             // Add right-aligned E-STOP and Serial controls
+            ui.menu_button("Help", |ui| {
+                if ui.button("⌨ Keyboard Shortcuts...").clicked() {
+                    ui.close();
+                    app.show_shortcuts_dialog = true;
+                }
+                if ui.button("ℹ About Pealayer...").clicked() {
+                    ui.close();
+                    app.show_about_dialog = true;
+                }
+            });
+
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
                 
