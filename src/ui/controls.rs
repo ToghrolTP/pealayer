@@ -171,3 +171,40 @@ fn multiply_style_opacity(style: &mut egui::Style, alpha: f32) {
     fade_color(&mut style.visuals.selection.bg_fill);
     fade_color(&mut style.visuals.selection.stroke.color);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_multiply_style_opacity() {
+        let mut style = egui::Style::default();
+        style.visuals.override_text_color = Some(egui::Color32::from_rgba_premultiplied(200, 200, 200, 200));
+        let orig_fill = style.visuals.widgets.inactive.bg_fill;
+
+        multiply_style_opacity(&mut style, 0.5);
+
+        assert_eq!(
+            style.visuals.override_text_color,
+            Some(egui::Color32::from_rgba_premultiplied(200, 200, 200, 200).linear_multiply(0.5))
+        );
+        assert_eq!(
+            style.visuals.widgets.inactive.bg_fill,
+            orig_fill.linear_multiply(0.5)
+        );
+    }
+
+    #[test]
+    fn test_multiply_style_opacity_zero() {
+        let mut style = egui::Style::default();
+        style.visuals.override_text_color = Some(egui::Color32::from_rgba_premultiplied(200, 200, 200, 200));
+
+        multiply_style_opacity(&mut style, 0.0);
+
+        assert_eq!(
+            style.visuals.override_text_color,
+            Some(egui::Color32::from_rgba_premultiplied(200, 200, 200, 200).linear_multiply(0.0))
+        );
+    }
+}
+
