@@ -159,7 +159,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         )
     };
 
-    // 2. Draw the offscreen texture if registered
+    // 2. Calculate DPI-aware physical pixel dimensions
+    let ppi = ui.ctx().pixels_per_point();
+    let (target_phys_w, target_phys_h) = calculate_physical_bounds(dest_rect, ppi);
+
+    // Draw the offscreen texture if registered
     let texture_id_opt = app.rtt_state.try_lock().ok().and_then(|rtt| rtt.video_texture_id);
 
     if let Some(texture_id) = texture_id_opt {
@@ -195,7 +199,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         }
     }
 
-    // 3. Schedule PaintCallback to render the current frame from MPV into the FBO
+    // 3. Schedule PaintCallback to render current frame at exact physical pixel size
     let render_context = app.render_context.clone();
     let rtt_state = app.rtt_state.clone();
     let is_operating = app.is_window_operating;
@@ -207,8 +211,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 return;
             }
             let gl = painter.gl();
-            if let Ok(rtt) = rtt_state.try_lock() {
-                if let (Some(video_fbo), Ok(rc)) = (rtt.video_fbo, render_context.try_lock()) {
+            if let Ok(mut rtt) = rtt_state.try_lock() {
+                if let (Some(video_fbo), Some(tex), Ok(rc)) = (rtt.video_fbo, rtt.video_texture, render_context.try_lock()) {
                     unsafe {
                     use eframe::glow::HasContext;
 
@@ -216,19 +220,37 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     let raw_fbo = gl.get_parameter_i32(eframe::glow::FRAMEBUFFER_BINDING) as u32;
                     let target_fbo = std::num::NonZeroU32::new(raw_fbo).map(eframe::glow::NativeFramebuffer);
 
-                    // Query original viewport to restore it later (fixes high-DPI scaling rendering offset)
+                    // Query original viewport to restore it later
                     let mut original_viewport = [0; 4];
                     gl.get_parameter_i32_slice(eframe::glow::VIEWPORT, &mut original_viewport);
+
+                    // Dynamic resizing of texture if physical dimensions changed
+                    if rtt.texture_width != target_phys_w as u32 || rtt.texture_height != target_phys_h as u32 {
+                        gl.bind_texture(eframe::glow::TEXTURE_2D, Some(tex));
+                        gl.tex_image_2d(
+                            eframe::glow::TEXTURE_2D,
+                            0,
+                            eframe::glow::RGBA8 as i32,
+                            target_phys_w,
+                            target_phys_h,
+                            0,
+                            eframe::glow::RGBA,
+                            eframe::glow::UNSIGNED_BYTE,
+                            eframe::glow::PixelUnpackData::Slice(None),
+                        );
+                        rtt.texture_width = target_phys_w as u32;
+                        rtt.texture_height = target_phys_h as u32;
+                    }
 
                     // Bind our offscreen FBO
                     gl.bind_framebuffer(eframe::glow::FRAMEBUFFER, Some(video_fbo));
                     
-                    // Set viewport to the offscreen framebuffer size
-                    gl.viewport(0, 0, 1920, 1080);
+                    // Set viewport to exact physical framebuffer size
+                    gl.viewport(0, 0, target_phys_w, target_phys_h);
                     
-                    // Render MPV frame at fixed size 1920x1080
+                    // Render MPV frame at physical pixel size
                     let fbo_id = video_fbo.0.get() as i32;
-                    let _ = rc.0.render::<GetProcAddress>(fbo_id, 1920, 1080, false);
+                    let _ = rc.0.render::<GetProcAddress>(fbo_id, target_phys_w, target_phys_h, false);
 
                     // Restore original FBO binding
                     gl.bind_framebuffer(eframe::glow::FRAMEBUFFER, target_fbo);
@@ -266,6 +288,34 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             galley,
             egui::Color32::PLACEHOLDER,
         );
+    }
+}
+
+pub fn calculate_physical_bounds(rect: egui::Rect, ppi: f32) -> (i32, i32) {
+    let w = (rect.width() * ppi).round() as i32;
+    let h = (rect.height() * ppi).round() as i32;
+    (w.max(1), h.max(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calculate_physical_bounds() {
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+        
+        // 1.0x scaling (standard DPI)
+        assert_eq!(calculate_physical_bounds(rect, 1.0), (800, 600));
+        
+        // 1.25x scaling (125% High DPI)
+        assert_eq!(calculate_physical_bounds(rect, 1.25), (1000, 750));
+
+        // 1.5x scaling (150% High DPI)
+        assert_eq!(calculate_physical_bounds(rect, 1.5), (1200, 900));
+
+        // 2.0x scaling (200% Retina / 4K DPI)
+        assert_eq!(calculate_physical_bounds(rect, 2.0), (1600, 1200));
     }
 }
 

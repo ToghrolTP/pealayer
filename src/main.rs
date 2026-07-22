@@ -165,6 +165,8 @@ fn main() -> eframe::Result {
                     video_texture: None,
                     video_fbo: None,
                     video_texture_id: None,
+                    texture_width: 1920,
+                    texture_height: 1080,
                 })),
                 selected_instance_ids: std::collections::HashSet::new(),
                 relay_overrides: [None; 9],

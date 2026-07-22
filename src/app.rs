@@ -38,6 +38,8 @@ pub struct RttState {
     pub video_texture: Option<eframe::glow::Texture>,
     pub video_fbo: Option<eframe::glow::Framebuffer>,
     pub video_texture_id: Option<eframe::egui::TextureId>,
+    pub texture_width: u32,
+    pub texture_height: u32,
 }
 
 pub struct PealayerApp {
