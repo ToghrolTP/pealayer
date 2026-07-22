@@ -201,10 +201,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     // 3. Schedule PaintCallback to render the current frame from MPV into the FBO
     let render_context = app.render_context.clone();
     let rtt_state = app.rtt_state.clone();
+    let is_operating = app.is_window_operating;
 
     let callback = egui::PaintCallback {
         rect,
         callback: Arc::new(eframe::egui_glow::CallbackFn::new(move |_info, painter| {
+            if is_operating {
+                return;
+            }
             let gl = painter.gl();
             let rtt = rtt_state.lock().unwrap();
 

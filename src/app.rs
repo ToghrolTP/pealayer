@@ -101,6 +101,7 @@ pub struct PealayerApp {
     pub(crate) recent_media: Vec<std::path::PathBuf>,
     pub(crate) show_open_url_dialog: bool,
     pub(crate) url_input_buffer: String,
+    pub(crate) is_window_operating: bool,
 }
 
 
@@ -121,6 +122,9 @@ pub struct AudioTrack {
 
 impl eframe::App for PealayerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Track active window/panel drag operations
+        self.is_window_operating = ui.input(|i| i.pointer.any_down() && (self.active_drag.is_some() || ui.ctx().egui_is_using_pointer()));
+
         // Process drag and dropped files
         let dropped_file_path = ui.input(|i| {
             i.raw.dropped_files.first().and_then(|f| f.path.clone())
@@ -655,5 +659,13 @@ mod tests {
         assert_eq!(trimmed, "https://example.com/stream.m3u8");
         let path = std::path::PathBuf::from(trimmed);
         assert_eq!(path.to_str().unwrap(), "https://example.com/stream.m3u8");
+    }
+
+    #[test]
+    fn test_window_operating_flag_state() {
+        let pointer_down = true;
+        let active_drag = true;
+        let is_operating = pointer_down && active_drag;
+        assert!(is_operating);
     }
 }

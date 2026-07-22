@@ -266,6 +266,7 @@ fn main() -> eframe::Result {
                 recent_media: crate::app::PealayerApp::load_recent_media_from_disk(),
                 show_open_url_dialog: false,
                 url_input_buffer: String::new(),
+                is_window_operating: false,
             }))
         }),
     )
