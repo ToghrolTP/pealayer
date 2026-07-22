@@ -105,6 +105,8 @@ pub struct PealayerApp {
     pub(crate) show_shortcuts_dialog: bool,
     pub(crate) show_about_dialog: bool,
     pub(crate) interop_rx: std::sync::mpsc::Receiver<crate::platform::interop::InteropCommand>,
+    pub(crate) web_state_tx: std::sync::mpsc::Sender<String>,
+    pub(crate) web_cmd_rx: std::sync::mpsc::Receiver<crate::platform::interop::InteropCommand>,
 }
 
 
@@ -180,6 +182,61 @@ impl eframe::App for PealayerApp {
                     self.set_osd("IPC: Status Queried".to_string());
                 }
             }
+        }
+
+        // Process Web-UI WebSocket commands
+        while let Ok(cmd) = self.web_cmd_rx.try_recv() {
+            use crate::platform::interop::InteropCommand;
+            match cmd {
+                InteropCommand::Play => {
+                    let _ = self.mpv.set_property("pause", false);
+                    self.is_paused = false;
+                    self.set_osd("Web-UI: Play".to_string());
+                }
+                InteropCommand::Pause => {
+                    let _ = self.mpv.set_property("pause", true);
+                    self.is_paused = true;
+                    self.set_osd("Web-UI: Pause".to_string());
+                }
+                InteropCommand::TogglePause => {
+                    let _ = self.mpv.command("cycle", &["pause"]);
+                    self.is_paused = !self.is_paused;
+                    self.set_osd(if self.is_paused { "Web-UI: Pause".to_string() } else { "Web-UI: Play".to_string() });
+                }
+                InteropCommand::Seek { seconds } => {
+                    let _ = self.mpv.command("seek", &[&seconds.to_string(), "relative"]);
+                    self.set_osd(format!("Web-UI: Seek {:+.1}s", seconds));
+                }
+                InteropCommand::SetVolume { value } => {
+                    let clamped = value.clamp(0.0, 130.0);
+                    let _ = self.mpv.set_property("volume", clamped);
+                    self.volume = clamped;
+                    self.set_osd(format!("Web-UI: Volume {:.0}%", clamped));
+                    self.save_config();
+                }
+                InteropCommand::Open { target } => {
+                    if target.starts_with("http://") || target.starts_with("https://") {
+                        self.load_url(&target);
+                    } else {
+                        self.load_video_file(std::path::PathBuf::from(&target));
+                    }
+                    self.set_osd(format!("Web-UI: Opened {}", target));
+                }
+                InteropCommand::GetStatus => {}
+            }
+        }
+
+        // Broadcast state JSON to Web-UI clients
+        let status_resp = crate::platform::interop::PlayerStatusResponse {
+            status: "ok".to_string(),
+            playing: !self.is_paused && self.current_video_path.is_some(),
+            volume: self.volume,
+            playback_time: self.playback_time,
+            duration: self.duration,
+            current_video: self.current_video_path.as_ref().map(|p| p.to_string_lossy().to_string()),
+        };
+        if let Ok(json) = serde_json::to_string(&status_resp) {
+            let _ = self.web_state_tx.send(json);
         }
 
         // Initialize RTT texture once if not done yet

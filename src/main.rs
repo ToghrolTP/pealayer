@@ -4,6 +4,7 @@ pub mod app;
 pub mod config;
 pub mod mpv;
 pub mod platform;
+pub mod server;
 pub mod ui;
 pub mod four_d;
 
@@ -128,6 +129,8 @@ fn main() -> eframe::Result {
             let loaded_config = crate::config::AppConfig::load();
             let _ = mpv_static.set_property("volume", loaded_config.volume);
             let _ = mpv_static.set_property("mute", loaded_config.is_muted);
+
+            let (web_state_tx, web_cmd_rx) = crate::server::spawn_web_server(8080);
 
             Ok(Box::new(PealayerApp {
                 mpv: mpv_static,
@@ -279,6 +282,8 @@ fn main() -> eframe::Result {
                 show_shortcuts_dialog: false,
                 show_about_dialog: false,
                 interop_rx: crate::platform::interop::spawn_interop_server(),
+                web_state_tx,
+                web_cmd_rx,
             }))
         }),
     )
