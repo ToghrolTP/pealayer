@@ -50,10 +50,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                             ui.horizontal(|ui| {
                                 let play_icon = if self.app.is_paused { "▶" } else { "⏸" };
-                                if ui.button(play_icon).clicked() {
+                                if ui.add_sized([30.0, 22.0], egui::Button::new(play_icon)).clicked() {
                                     let _ = self.app.mpv.command("cycle", &["pause"]);
                                 }
-                                if ui.button("⏹").clicked() {
+                                if ui.add_sized([30.0, 22.0], egui::Button::new("⏹")).clicked() {
                                     let _ = self.app.mpv.command("seek", &["0", "absolute"]);
                                     let _ = self.app.mpv.set_property("pause", true);
                                 }

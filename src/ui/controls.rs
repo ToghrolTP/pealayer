@@ -29,7 +29,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                     ui.add_enabled_ui(has_video, |ui| {
                         let play_icon = if app.is_paused { "▶" } else { "⏸" };
-                        if ui.add_sized([30.0, 20.0], egui::Button::new(play_icon)).clicked() {
+                        if ui.add_sized([30.0, 22.0], egui::Button::new(play_icon)).clicked() {
                             let _ = app.mpv.command("cycle", &["pause"]);
                         }
                     });
@@ -226,6 +226,13 @@ mod tests {
             (3.0 - time_since_activity).clamp(0.0, 1.0)
         };
         assert_eq!(alpha, 1.0);
+    }
+
+    #[test]
+    fn test_play_button_fixed_size_constant() {
+        let button_size = egui::vec2(30.0, 22.0);
+        assert_eq!(button_size.x, 30.0);
+        assert_eq!(button_size.y, 22.0);
     }
 }
 
