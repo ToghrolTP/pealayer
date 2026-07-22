@@ -114,6 +114,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         if ui.button(pin_icon).clicked() {
                             app.pin_controls = !app.pin_controls;
                             app.set_osd(if app.pin_controls { "Controls Pinned".to_string() } else { "Controls Unpinned".to_string() });
+                            app.save_config();
                         }
 
                         if ui.button("🎵").clicked() {
@@ -135,6 +136,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             let vol_resp = ui.add_sized([80.0, 15.0], vol_slider);
                             if vol_resp.changed() {
                                 let _ = app.mpv.set_property("volume", vol);
+                                app.volume = vol;
+                                app.save_config();
                             }
                             if vol_resp.hovered() {
                                 let scroll = ui.input(|i| {
@@ -154,6 +157,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     let _ = app.mpv.set_property("volume", new_vol);
                                     app.volume = new_vol;
                                     app.set_osd(format!("Volume: {:.0}%", new_vol));
+                                    app.save_config();
                                 }
                             }
                             let mute_icon = if app.is_muted { "🔇" } else { "🔊" };
@@ -161,6 +165,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 let _ = app.mpv.command("cycle", &["mute"]);
                                 app.is_muted = !app.is_muted;
                                 app.set_osd(if app.is_muted { "Mute".to_string() } else { "Unmute".to_string() });
+                                app.save_config();
                             }
                         });
 
@@ -168,6 +173,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         let total_resp = ui.add_enabled(has_video, egui::Label::new(total_str).sense(egui::Sense::click()));
                         if has_video && total_resp.clicked() {
                             app.show_remaining_time = !app.show_remaining_time;
+                            app.save_config();
                         }
                     });
                 });

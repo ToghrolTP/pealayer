@@ -1,4 +1,5 @@
 pub mod app;
+pub mod config;
 pub mod mpv;
 pub mod ui;
 pub mod four_d;
@@ -119,6 +120,10 @@ fn main() -> eframe::Result {
                 egui_ctx2.request_repaint();
             });
 
+            let loaded_config = crate::config::AppConfig::load();
+            let _ = mpv_static.set_property("volume", loaded_config.volume);
+            let _ = mpv_static.set_property("mute", loaded_config.is_muted);
+
             Ok(Box::new(PealayerApp {
                 mpv: mpv_static,
                 mpv_client,
@@ -126,8 +131,8 @@ fn main() -> eframe::Result {
                 playback_time: 0.0,
                 duration: 0.0,
                 is_paused: false,
-                volume: 100.0,
-                is_muted: false,
+                volume: loaded_config.volume,
+                is_muted: loaded_config.is_muted,
                 show_sub_settings: false,
                 sub_visibility: true,
                 sub_font_size: 55.0,
@@ -140,7 +145,7 @@ fn main() -> eframe::Result {
                 audio_tracks: Vec::new(),
                 seek_pos: None,
                 last_mouse_activity: std::time::Instant::now(),
-                pin_controls: false,
+                pin_controls: loaded_config.pin_controls,
                 show_error: None,
                 show_four_d_editor: true,
 
@@ -230,14 +235,13 @@ fn main() -> eframe::Result {
                             crate::four_d::patterns::generate_constant(4, true, 4000),
                         ),
                     },
-                    // Auxiliary Controls
                     crate::app::EffectPreset {
                         category: "Auxiliary Controls".to_string(),
                         effect: crate::four_d::models::Effect::new(
                             "Aux Trigger A".to_string(),
-                            "🔌".to_string(),
-                            1200,
-                            crate::four_d::patterns::generate_constant(5, true, 1200),
+                            "⚡".to_string(),
+                            1500,
+                            crate::four_d::patterns::generate_constant(5, true, 1500),
                         ),
                     },
                     crate::app::EffectPreset {
@@ -261,9 +265,9 @@ fn main() -> eframe::Result {
                 lasso_origin: None,
                 lasso_rect: None,
                 current_video_path: None,
-                show_remaining_time: false,
+                show_remaining_time: loaded_config.show_remaining_time,
                 osd_message: None,
-                recent_media: crate::app::PealayerApp::load_recent_media_from_disk(),
+                recent_media: loaded_config.recent_media,
                 show_open_url_dialog: false,
                 url_input_buffer: String::new(),
                 is_window_operating: false,

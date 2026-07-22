@@ -579,54 +579,34 @@ impl PealayerApp {
         self.set_osd("Video Closed".to_string());
     }
 
+    pub fn save_config(&self) {
+        let cfg = crate::config::AppConfig {
+            volume: self.volume,
+            is_muted: self.is_muted,
+            pin_controls: self.pin_controls,
+            show_remaining_time: self.show_remaining_time,
+            recent_media: self.recent_media.clone(),
+        };
+        cfg.save();
+    }
+
     pub fn add_recent_media(&mut self, path: std::path::PathBuf) {
         self.recent_media.retain(|p| p != &path);
         self.recent_media.insert(0, path);
         if self.recent_media.len() > 10 {
             self.recent_media.truncate(10);
         }
-        self.save_recent_media();
-    }
-
-    pub fn load_recent_media_from_disk() -> Vec<std::path::PathBuf> {
-        let path = get_recent_config_path();
-        if path.exists() {
-            if let Ok(data) = std::fs::read_to_string(&path) {
-                if let Ok(list) = serde_json::from_str::<Vec<std::path::PathBuf>>(&data) {
-                    return list;
-                }
-            }
-        }
-        Vec::new()
-    }
-
-    pub fn save_recent_media(&self) {
-        let path = get_recent_config_path();
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(json) = serde_json::to_string_pretty(&self.recent_media) {
-            let _ = std::fs::write(&path, json);
-        }
+        self.save_config();
     }
 
     pub fn clear_recent_media(&mut self) {
         self.recent_media.clear();
-        self.save_recent_media();
+        self.save_config();
     }
 
     pub fn set_osd(&mut self, msg: String) {
         self.osd_message = Some((msg, std::time::Instant::now()));
     }
-}
-
-fn get_recent_config_path() -> std::path::PathBuf {
-    let mut path = std::env::var("HOME")
-        .map(|h| std::path::PathBuf::from(h).join(".config"))
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    path.push("pealayer");
-    path.push("recent.json");
-    path
 }
 
 #[cfg(test)]
