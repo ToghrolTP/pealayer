@@ -100,6 +100,34 @@ pub fn spawn_web_server(http_port: u16, ws_port: u16) -> (Sender<String>, Receiv
                         }
                     }
                     let _ = request.respond(tiny_http::Response::from_string("Bad Command").with_status_code(400));
+                } else if url.starts_with("/api/player/frame") {
+                    let mut path_opt = None;
+                    if let Some(p) = url.split("path=").nth(1) {
+                        let path_clean = p.split('&').next().unwrap_or(p);
+                        let decoded = urlencoding_decode(path_clean);
+                        if !decoded.is_empty() {
+                            path_opt = Some(std::path::PathBuf::from(decoded));
+                        }
+                    }
+                    if path_opt.is_none() {
+                        if let Ok(json) = serde_json::from_str::<crate::platform::interop::PlayerStatusResponse>(&latest_status_http.lock().unwrap()) {
+                            if let Some(v_path) = json.current_video {
+                                path_opt = Some(std::path::PathBuf::from(v_path));
+                            }
+                        }
+                    }
+                    if let Some(ref path) = path_opt {
+                        if let Some(thumb_path) = thumbnails::get_or_generate_thumbnail(path) {
+                            if let Ok(data) = std::fs::read(&thumb_path) {
+                                let response = tiny_http::Response::from_data(data)
+                                    .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"image/jpeg"[..]).unwrap());
+                                let _ = request.respond(response);
+                                continue;
+                            }
+                        }
+                    }
+                    let response = tiny_http::Response::from_string("Frame Not Found").with_status_code(404);
+                    let _ = request.respond(response);
                 } else if url.starts_with("/api/fs/browse") {
                     let path_param = url.split("path=").nth(1).map(|p| p.to_string());
                     let decoded_path = path_param.as_deref().map(|p| urlencoding_decode(p));
