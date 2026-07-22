@@ -48,40 +48,52 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                             ui.add_space(5.0);
 
-                            ui.horizontal(|ui| {
-                                let play_icon = if self.app.is_paused { "▶" } else { "⏸" };
-                                if ui.add_sized([30.0, 22.0], egui::Button::new(play_icon)).clicked() {
-                                    let _ = self.app.mpv.command("cycle", &["pause"]);
-                                }
-                                if ui.add_sized([30.0, 22.0], egui::Button::new("⏹")).clicked() {
-                                    let _ = self.app.mpv.command("seek", &["0", "absolute"]);
-                                    let _ = self.app.mpv.set_property("pause", true);
-                                }
-                                ui.separator();
+                            let has_video = self.app.current_video_path.is_some();
+                            ui.add_enabled_ui(has_video, |ui| {
+                                ui.horizontal(|ui| {
+                                    let play_icon = if self.app.is_paused { "▶" } else { "⏸" };
+                                    if ui.add_sized([30.0, 22.0], egui::Button::new(play_icon)).clicked() {
+                                        let _ = self.app.mpv.command("cycle", &["pause"]);
+                                    }
+                                    if ui.add_sized([30.0, 22.0], egui::Button::new("⏹")).clicked() {
+                                        let _ = self.app.mpv.command("seek", &["0", "absolute"]);
+                                        let _ = self.app.mpv.set_property("pause", true);
+                                    }
+                                    ui.separator();
 
-                                // timecode HH:MM:SS:FF at 24fps
-                                let tc = format_timecode(self.app.playback_time);
-                                ui.monospace(tc);
+                                    // timecode HH:MM:SS:FF at 24fps
+                                    let tc = format_timecode(if has_video { self.app.playback_time } else { 0.0 });
+                                    ui.monospace(tc);
 
-                                // seekbar
-                                let mut current_pos = self.app.seek_pos.unwrap_or(self.app.playback_time);
-                                let slider = egui::Slider::new(&mut current_pos, 0.0..=self.app.duration)
-                                    .show_value(false)
-                                    .trailing_fill(true);
+                                    // seekbar
+                                    let mut current_pos = if has_video {
+                                        self.app.seek_pos.unwrap_or(self.app.playback_time)
+                                    } else {
+                                        0.0
+                                    };
+                                    let max_dur = if has_video && self.app.duration > 0.0 {
+                                        self.app.duration
+                                    } else {
+                                        1.0
+                                    };
+                                    let slider = egui::Slider::new(&mut current_pos, 0.0..=max_dur)
+                                        .show_value(false)
+                                        .trailing_fill(true);
 
-                                let seekbar_w = (ui.available_width() - 80.0).max(50.0);
-                                let old_w = ui.spacing().slider_width;
-                                ui.spacing_mut().slider_width = seekbar_w;
-                                let response = ui.add(slider);
-                                ui.spacing_mut().slider_width = old_w;
+                                    let seekbar_w = (ui.available_width() - 80.0).max(50.0);
+                                    let old_w = ui.spacing().slider_width;
+                                    ui.spacing_mut().slider_width = seekbar_w;
+                                    let response = ui.add(slider);
+                                    ui.spacing_mut().slider_width = old_w;
 
-                                if response.dragged() {
-                                    self.app.seek_pos = Some(current_pos);
-                                }
-                                if response.drag_stopped() {
-                                    let _ = self.app.mpv.command("seek", &[&current_pos.to_string(), "absolute"]);
-                                    self.app.seek_pos = None;
-                                }
+                                    if has_video && response.dragged() {
+                                        self.app.seek_pos = Some(current_pos);
+                                    }
+                                    if has_video && response.drag_stopped() {
+                                        let _ = self.app.mpv.command("seek", &[&current_pos.to_string(), "absolute"]);
+                                        self.app.seek_pos = None;
+                                    }
+                                });
                             });
                         });
                     }

@@ -68,8 +68,17 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     let seekbar_width = ui.available_width() - right_controls_width;
 
                     ui.add_enabled_ui(has_video, |ui| {
-                        let mut current_pos = app.seek_pos.unwrap_or(app.playback_time);
-                        let slider = egui::Slider::new(&mut current_pos, 0.0..=app.duration)
+                        let mut current_pos = if has_video {
+                            app.seek_pos.unwrap_or(app.playback_time)
+                        } else {
+                            0.0
+                        };
+                        let max_dur = if has_video && app.duration > 0.0 {
+                            app.duration
+                        } else {
+                            1.0
+                        };
+                        let slider = egui::Slider::new(&mut current_pos, 0.0..=max_dur)
                             .show_value(false)
                             .trailing_fill(true);
 
@@ -78,10 +87,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         let response = ui.add(slider);
                         ui.spacing_mut().slider_width = old_width;
 
-                        if response.dragged() {
+                        if has_video && response.dragged() {
                             app.seek_pos = Some(current_pos);
                         }
-                        if response.drag_stopped() {
+                        if has_video && response.drag_stopped() {
                             let _ = app
                                 .mpv
                                 .command("seek", &[&current_pos.to_string(), "absolute"]);
@@ -260,6 +269,19 @@ mod tests {
             duration
         };
         assert_eq!(display_total, -217.0);
+    }
+
+    #[test]
+    fn test_seekbar_disabled_position_and_range() {
+        let has_video = false;
+        let playback_time = 0.0;
+        let duration = 0.0;
+
+        let current_pos = if has_video { playback_time } else { 0.0 };
+        let max_dur = if has_video && duration > 0.0 { duration } else { 1.0 };
+
+        assert_eq!(current_pos, 0.0);
+        assert_eq!(max_dur, 1.0);
     }
 }
 
