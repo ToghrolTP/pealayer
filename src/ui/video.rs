@@ -68,6 +68,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             }
         }
 
+        if ui.button("🔗 Open Location / URL...").clicked() {
+            ui.close();
+            app.show_open_url_dialog = true;
+        }
+
         let has_video = app.current_video_path.is_some();
         if ui.add_enabled(has_video, egui::Button::new("❌ Close Video")).clicked() {
             ui.close();
@@ -80,6 +85,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         if ui.add_enabled(has_video, egui::Button::new(play_title)).clicked() {
             ui.close();
             let _ = app.mpv.command("cycle", &["pause"]);
+            app.is_paused = !app.is_paused;
+            app.set_osd(if app.is_paused { "Pause".to_string() } else { "Play".to_string() });
         }
 
         let is_fullscreen = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
@@ -87,12 +94,15 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         if ui.button(fs_title).clicked() {
             ui.close();
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
+            app.set_osd("Fullscreen".to_string());
         }
 
         let mute_title = if app.is_muted { "🔊 Unmute" } else { "🔇 Mute" };
         if ui.add_enabled(has_video, egui::Button::new(mute_title)).clicked() {
             ui.close();
             let _ = app.mpv.command("cycle", &["mute"]);
+            app.is_muted = !app.is_muted;
+            app.set_osd(if app.is_muted { "Mute".to_string() } else { "Unmute".to_string() });
         }
 
         ui.separator();
@@ -236,6 +246,26 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     };
 
     ui.painter().add(callback);
+
+    let is_hovering_file = ui.input(|i| !i.raw.hovered_files.is_empty());
+    if is_hovering_file {
+        ui.painter().rect_filled(
+            rect,
+            0.0,
+            egui::Color32::from_black_alpha(180),
+        );
+        let font_id = egui::FontId::proportional(26.0);
+        let galley = ui.painter().layout_no_wrap(
+            "📁 Drop video file here to play".to_string(),
+            font_id,
+            egui::Color32::WHITE,
+        );
+        ui.painter().galley(
+            rect.center() - galley.size() / 2.0,
+            galley,
+            egui::Color32::PLACEHOLDER,
+        );
+    }
 }
 
 

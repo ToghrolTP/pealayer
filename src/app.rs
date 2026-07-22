@@ -99,6 +99,8 @@ pub struct PealayerApp {
     pub(crate) show_remaining_time: bool,
     pub(crate) osd_message: Option<(String, std::time::Instant)>,
     pub(crate) recent_media: Vec<std::path::PathBuf>,
+    pub(crate) show_open_url_dialog: bool,
+    pub(crate) url_input_buffer: String,
 }
 
 
@@ -299,12 +301,19 @@ impl eframe::App for PealayerApp {
         // Handle Keyboard Shortcuts
         if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
             let _ = self.mpv.command("cycle", &["pause"]);
+            if self.current_video_path.is_some() {
+                self.is_paused = !self.is_paused;
+                self.set_osd(if self.is_paused { "Pause".to_string() } else { "Play".to_string() });
+            }
         }
         if ctx.input(|i| i.key_pressed(egui::Key::F)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
+            self.set_osd("Fullscreen".to_string());
         }
         if ctx.input(|i| i.key_pressed(egui::Key::M)) {
             let _ = self.mpv.command("cycle", &["mute"]);
+            self.is_muted = !self.is_muted;
+            self.set_osd(if self.is_muted { "Mute".to_string() } else { "Unmute".to_string() });
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
             let _ = self.mpv.command("seek", &["-5", "relative"]);
@@ -318,23 +327,27 @@ impl eframe::App for PealayerApp {
                 self.set_osd("Seek: +5s".to_string());
             }
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Period)) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Period) || i.key_pressed(egui::Key::CloseBracket)) {
             let _ = self.mpv.command("frame-step", &[]);
             if self.current_video_path.is_some() {
-                self.set_osd("Frame Step".to_string());
+                self.set_osd("Frame Step: +1".to_string());
             }
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Comma)) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Comma) || i.key_pressed(egui::Key::OpenBracket)) {
             let _ = self.mpv.command("frame-back-step", &[]);
             if self.current_video_path.is_some() {
-                self.set_osd("Frame Back".to_string());
+                self.set_osd("Frame Step: -1".to_string());
             }
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
             let _ = self.mpv.command("add", &["volume", "5"]);
+            self.volume = (self.volume + 5.0).clamp(0.0, 130.0);
+            self.set_osd(format!("Volume: {:.0}%", self.volume));
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
             let _ = self.mpv.command("add", &["volume", "-5"]);
+            self.volume = (self.volume - 5.0).clamp(0.0, 130.0);
+            self.set_osd(format!("Volume: {:.0}%", self.volume));
         }
 
         const MACRO_KEYS: [(egui::Key, u8); 8] = [
@@ -415,6 +428,56 @@ impl eframe::App for PealayerApp {
                 crate::ui::error::draw(self, ui);
                 crate::ui::subtitles::draw_settings_dialog(self, ui);
                 crate::ui::audio::draw_settings_dialog(self, ui);
+
+                if self.show_open_url_dialog {
+                    let mut open_url = false;
+                    let mut close_dialog = false;
+
+                    egui::Window::new("🔗 Open Location / URL")
+                        .collapsible(false)
+                        .resizable(false)
+                        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                        .show(ui.ctx(), |ui| {
+                            ui.label("Enter direct video URL, HTTP/HTTPS stream, or HLS link:");
+                            ui.add_space(6.0);
+                            
+                            ui.horizontal(|ui| {
+                                let text_edit = ui.add(
+                                    egui::TextEdit::singleline(&mut self.url_input_buffer)
+                                        .desired_width(340.0)
+                                        .hint_text("https://..."),
+                                );
+                                if text_edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                    open_url = true;
+                                }
+
+                                if ui.button("📋 Paste").clicked() {
+                                    if let Some(text) = ui.input(|i| i.raw.events.iter().find_map(|e| match e { egui::Event::Paste(t) => Some(t.clone()), _ => None })) {
+                                        self.url_input_buffer = text;
+                                    }
+                                }
+                            });
+
+                            ui.add_space(10.0);
+                            ui.horizontal(|ui| {
+                                if ui.button("Open").clicked() {
+                                    open_url = true;
+                                }
+                                if ui.button("Cancel").clicked() {
+                                    close_dialog = true;
+                                }
+                            });
+                        });
+
+                    if open_url {
+                        let url = self.url_input_buffer.clone();
+                        self.load_url(&url);
+                        self.url_input_buffer.clear();
+                        self.show_open_url_dialog = false;
+                    } else if close_dialog {
+                        self.show_open_url_dialog = false;
+                    }
+                }
             });
     }
 }
@@ -472,6 +535,7 @@ impl PealayerApp {
             let _ = self.mpv.command("loadfile", &[path_str, "replace"]);
             self.current_video_path = Some(path.clone());
             self.add_recent_media(path.clone());
+            self.set_osd(format!("Loaded: {}", path.file_name().and_then(|n| n.to_str()).unwrap_or(path_str)));
             
             // Auto-load matching sidecar timeline
             let mut sidecar = path.clone();
@@ -486,6 +550,17 @@ impl PealayerApp {
                     let _ = self.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
                 }
             }
+        }
+    }
+
+    pub fn load_url(&mut self, url: &str) {
+        let trimmed = url.trim();
+        if !trimmed.is_empty() {
+            let _ = self.mpv.command("loadfile", &[trimmed, "replace"]);
+            let path = std::path::PathBuf::from(trimmed);
+            self.current_video_path = Some(path.clone());
+            self.add_recent_media(path);
+            self.set_osd(format!("Loading URL: {}", trimmed));
         }
     }
 
@@ -571,5 +646,14 @@ mod tests {
         add(&mut list, std::path::PathBuf::from("/video5.mp4"));
         assert_eq!(list.len(), 10);
         assert_eq!(list[0], std::path::PathBuf::from("/video5.mp4"));
+    }
+
+    #[test]
+    fn test_url_formatting_and_trim() {
+        let raw_url = "   https://example.com/stream.m3u8   ";
+        let trimmed = raw_url.trim();
+        assert_eq!(trimmed, "https://example.com/stream.m3u8");
+        let path = std::path::PathBuf::from(trimmed);
+        assert_eq!(path.to_str().unwrap(), "https://example.com/stream.m3u8");
     }
 }

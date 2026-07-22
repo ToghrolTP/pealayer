@@ -31,6 +31,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         let play_icon = if app.is_paused { "▶" } else { "⏸" };
                         if ui.add_sized([30.0, 22.0], egui::Button::new(play_icon)).clicked() {
                             let _ = app.mpv.command("cycle", &["pause"]);
+                            app.is_paused = !app.is_paused;
+                            app.set_osd(if app.is_paused { "Pause".to_string() } else { "Play".to_string() });
                         }
                     });
 
@@ -105,11 +107,13 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(
                                 !is_fullscreen,
                             ));
+                            app.set_osd("Fullscreen".to_string());
                         }
 
                         let pin_icon = if app.pin_controls { "📌" } else { "📍" };
                         if ui.button(pin_icon).clicked() {
                             app.pin_controls = !app.pin_controls;
+                            app.set_osd(if app.pin_controls { "Controls Pinned".to_string() } else { "Controls Unpinned".to_string() });
                         }
 
                         if ui.button("🎵").clicked() {
@@ -155,6 +159,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             let mute_icon = if app.is_muted { "🔇" } else { "🔊" };
                             if ui.add(egui::Button::new(mute_icon).frame(false)).clicked() {
                                 let _ = app.mpv.command("cycle", &["mute"]);
+                                app.is_muted = !app.is_muted;
+                                app.set_osd(if app.is_muted { "Mute".to_string() } else { "Unmute".to_string() });
                             }
                         });
 

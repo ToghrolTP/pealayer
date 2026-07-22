@@ -17,6 +17,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
                 }
 
+                if ui.button("Open Location / URL...").clicked() {
+                    ui.close();
+                    app.show_open_url_dialog = true;
+                }
+
                 ui.menu_button("Open Recent", |ui| {
                     if app.recent_media.is_empty() {
                         ui.label("No recent media");
