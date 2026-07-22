@@ -160,10 +160,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     };
 
     // 2. Draw the offscreen texture if registered
-    let texture_id_opt = {
-        let rtt = app.rtt_state.lock().unwrap();
-        rtt.video_texture_id
-    };
+    let texture_id_opt = app.rtt_state.try_lock().ok().and_then(|rtt| rtt.video_texture_id);
 
     if let Some(texture_id) = texture_id_opt {
         ui.painter().image(
@@ -210,10 +207,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 return;
             }
             let gl = painter.gl();
-            let rtt = rtt_state.lock().unwrap();
-
-            if let (Some(video_fbo), Ok(rc)) = (rtt.video_fbo, render_context.lock()) {
-                unsafe {
+            if let Ok(rtt) = rtt_state.try_lock() {
+                if let (Some(video_fbo), Ok(rc)) = (rtt.video_fbo, render_context.try_lock()) {
+                    unsafe {
                     use eframe::glow::HasContext;
 
                     // Query original FBO binding
@@ -244,6 +240,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         original_viewport[2],
                         original_viewport[3],
                     );
+                    }
                 }
             }
         })),

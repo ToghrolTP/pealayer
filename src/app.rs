@@ -194,10 +194,11 @@ impl eframe::App for PealayerApp {
         }
         
         if let Some((tex, fbo, texture_id)) = rtt_data {
-            let mut rtt = self.rtt_state.lock().unwrap();
-            rtt.video_texture = Some(tex);
-            rtt.video_fbo = Some(fbo);
-            rtt.video_texture_id = Some(texture_id);
+            if let Ok(mut rtt) = self.rtt_state.try_lock() {
+                rtt.video_texture = Some(tex);
+                rtt.video_fbo = Some(fbo);
+                rtt.video_texture_id = Some(texture_id);
+            }
         }
 
         use libmpv2::events::{Event, PropertyData};

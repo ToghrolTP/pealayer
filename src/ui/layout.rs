@@ -483,7 +483,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 }
                             });
                             
-                        ui.ctx().request_repaint();
+                        if !self.app.is_paused {
+                            ui.ctx().request_repaint();
+                        }
                     }
                     PealayerTab::Timeline => {
                         ui.horizontal(|ui| {
