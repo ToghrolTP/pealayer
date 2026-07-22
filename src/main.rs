@@ -278,6 +278,7 @@ fn main() -> eframe::Result {
                 is_window_operating: false,
                 show_shortcuts_dialog: false,
                 show_about_dialog: false,
+                interop_rx: crate::platform::interop::spawn_interop_server(),
             }))
         }),
     )

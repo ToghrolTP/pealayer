@@ -104,6 +104,7 @@ pub struct PealayerApp {
     pub(crate) is_window_operating: bool,
     pub(crate) show_shortcuts_dialog: bool,
     pub(crate) show_about_dialog: bool,
+    pub(crate) interop_rx: std::sync::mpsc::Receiver<crate::platform::interop::InteropCommand>,
 }
 
 
@@ -135,6 +136,50 @@ impl eframe::App for PealayerApp {
         });
         if let Some(path) = dropped_file_path {
             self.load_video_file(path);
+        }
+
+        // Process incoming IPC Inter-Op Commands
+        while let Ok(cmd) = self.interop_rx.try_recv() {
+            use crate::platform::interop::InteropCommand;
+            match cmd {
+                InteropCommand::Play => {
+                    let _ = self.mpv.set_property("pause", false);
+                    self.is_paused = false;
+                    self.set_osd("IPC: Play".to_string());
+                }
+                InteropCommand::Pause => {
+                    let _ = self.mpv.set_property("pause", true);
+                    self.is_paused = true;
+                    self.set_osd("IPC: Pause".to_string());
+                }
+                InteropCommand::TogglePause => {
+                    let _ = self.mpv.command("cycle", &["pause"]);
+                    self.is_paused = !self.is_paused;
+                    self.set_osd(if self.is_paused { "IPC: Pause".to_string() } else { "IPC: Play".to_string() });
+                }
+                InteropCommand::Seek { seconds } => {
+                    let _ = self.mpv.command("seek", &[&seconds.to_string(), "relative"]);
+                    self.set_osd(format!("IPC: Seek {:+.1}s", seconds));
+                }
+                InteropCommand::SetVolume { value } => {
+                    let clamped = value.clamp(0.0, 130.0);
+                    let _ = self.mpv.set_property("volume", clamped);
+                    self.volume = clamped;
+                    self.set_osd(format!("IPC: Volume {:.0}%", clamped));
+                    self.save_config();
+                }
+                InteropCommand::Open { target } => {
+                    if target.starts_with("http://") || target.starts_with("https://") {
+                        self.load_url(&target);
+                    } else {
+                        self.load_video_file(std::path::PathBuf::from(&target));
+                    }
+                    self.set_osd(format!("IPC: Opened {}", target));
+                }
+                InteropCommand::GetStatus => {
+                    self.set_osd("IPC: Status Queried".to_string());
+                }
+            }
         }
 
         // Initialize RTT texture once if not done yet
