@@ -56,19 +56,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         }
                     };
 
-                    let time_label = format!(
-                        "{} / {}",
-                        format_time(elapsed_time),
-                        format_time(display_total)
-                    );
-
-                    let time_resp = ui.add_enabled(has_video, egui::Label::new(time_label).sense(egui::Sense::click()));
-                    if has_video && time_resp.clicked() {
+                    let elapsed_str = format_time(elapsed_time);
+                    let elapsed_resp = ui.add_enabled(has_video, egui::Label::new(elapsed_str).sense(egui::Sense::click()));
+                    if has_video && elapsed_resp.clicked() {
                         app.show_remaining_time = !app.show_remaining_time;
                     }
 
-                    // Calculate available width for the seekbar, leaving space for the right controls
-                    let right_controls_width = 315.0;
+                    // Calculate available width for the seekbar, leaving space for right controls
+                    let right_controls_width = 375.0;
                     let seekbar_width = ui.available_width() - right_controls_width;
 
                     ui.add_enabled_ui(has_video, |ui| {
@@ -141,6 +136,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 let _ = app.mpv.command("cycle", &["mute"]);
                             }
                         });
+
+                        let total_str = format_time(display_total);
+                        let total_resp = ui.add_enabled(has_video, egui::Label::new(total_str).sense(egui::Sense::click()));
+                        if has_video && total_resp.clicked() {
+                            app.show_remaining_time = !app.show_remaining_time;
+                        }
                     });
                 });
             });
@@ -233,6 +234,20 @@ mod tests {
         let button_size = egui::vec2(30.0, 22.0);
         assert_eq!(button_size.x, 30.0);
         assert_eq!(button_size.y, 22.0);
+    }
+
+    #[test]
+    fn test_display_total_time_calculation() {
+        let playback_time = 83.0;
+        let duration = 300.0;
+        let show_remaining_time = true;
+
+        let display_total = if show_remaining_time {
+            -(duration - playback_time)
+        } else {
+            duration
+        };
+        assert_eq!(display_total, -217.0);
     }
 }
 
