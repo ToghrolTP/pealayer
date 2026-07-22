@@ -5,3 +5,4 @@ scratch/
 .idea/
 .DS_Store
 *.log
+graphify-out/

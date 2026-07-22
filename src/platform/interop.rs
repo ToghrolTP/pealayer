@@ -36,7 +36,7 @@ pub fn get_socket_path() -> PathBuf {
     }
 }
 
-pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<InteropCommand> {
+pub fn spawn_interop_server() -> Receiver<InteropCommand> {
     let (tx, rx) = channel::<InteropCommand>();
 
     thread::spawn(move || {
@@ -49,14 +49,12 @@ pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<Interop
             for stream in listener.incoming() {
                 if let Ok(mut stream) = stream {
                     let tx_clone = tx.clone();
-                    let ctx_clone = egui_ctx.clone();
                     thread::spawn(move || {
                         let mut reader = BufReader::new(stream.try_clone().unwrap());
                         let mut line = String::new();
                         if reader.read_line(&mut line).is_ok() {
                             if let Ok(cmd) = serde_json::from_str::<InteropCommand>(line.trim()) {
                                 let _ = tx_clone.send(cmd);
-                                ctx_clone.request_repaint();
                                 let _ = stream.write_all(b"{\"status\":\"ok\"}\n");
                             } else {
                                 let _ = stream.write_all(b"{\"status\":\"error\",\"message\":\"Invalid JSON command\"}\n");

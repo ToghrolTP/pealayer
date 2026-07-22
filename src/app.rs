@@ -147,19 +147,17 @@ impl eframe::App for PealayerApp {
                 InteropCommand::Play => {
                     let _ = self.mpv.set_property("pause", false);
                     self.is_paused = false;
-                    self.set_osd("Play".to_string());
+                    self.set_osd("IPC: Play".to_string());
                 }
                 InteropCommand::Pause => {
                     let _ = self.mpv.set_property("pause", true);
                     self.is_paused = true;
-                    self.set_osd("Pause".to_string());
+                    self.set_osd("IPC: Pause".to_string());
                 }
                 InteropCommand::TogglePause => {
-                    let current_paused: bool = self.mpv.get_property("pause").unwrap_or(self.is_paused);
-                    let new_paused = !current_paused;
-                    let _ = self.mpv.set_property("pause", new_paused);
-                    self.is_paused = new_paused;
-                    self.set_osd(if new_paused { "Pause".to_string() } else { "Play".to_string() });
+                    let _ = self.mpv.command("cycle", &["pause"]);
+                    self.is_paused = !self.is_paused;
+                    self.set_osd(if self.is_paused { "IPC: Pause".to_string() } else { "IPC: Play".to_string() });
                 }
                 InteropCommand::Seek { seconds } => {
                     let _ = self.mpv.command("seek", &[&seconds.to_string(), "relative"]);
@@ -207,11 +205,9 @@ impl eframe::App for PealayerApp {
                     self.set_osd("Web-UI: Pause".to_string());
                 }
                 InteropCommand::TogglePause => {
-                    let current_paused: bool = self.mpv.get_property("pause").unwrap_or(self.is_paused);
-                    let new_paused = !current_paused;
-                    let _ = self.mpv.set_property("pause", new_paused);
-                    self.is_paused = new_paused;
-                    self.set_osd(if new_paused { "Web-UI: Pause".to_string() } else { "Web-UI: Play".to_string() });
+                    let _ = self.mpv.command("cycle", &["pause"]);
+                    self.is_paused = !self.is_paused;
+                    self.set_osd(if self.is_paused { "Web-UI: Pause".to_string() } else { "Web-UI: Play".to_string() });
                 }
                 InteropCommand::Seek { seconds } => {
                     let _ = self.mpv.command("seek", &[&seconds.to_string(), "relative"]);
