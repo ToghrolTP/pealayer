@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 pub mod app;
 pub mod config;
 pub mod mpv;
