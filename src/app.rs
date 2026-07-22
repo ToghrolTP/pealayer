@@ -122,8 +122,10 @@ pub struct AudioTrack {
 
 impl eframe::App for PealayerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Track active window/panel drag operations
-        self.is_window_operating = ui.input(|i| i.pointer.any_down() && (self.active_drag.is_some() || ui.ctx().egui_is_using_pointer()));
+        // Track active window/panel drag operations safely without lock nesting
+        let is_pointer_down = ui.input(|i| i.pointer.any_down());
+        let is_using_pointer = ui.ctx().egui_is_using_pointer();
+        self.is_window_operating = is_pointer_down && (self.active_drag.is_some() || is_using_pointer);
 
         // Process drag and dropped files
         let dropped_file_path = ui.input(|i| {
