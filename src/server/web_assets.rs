@@ -30,7 +30,7 @@ pub const INDEX_HTML: &str = r#"<!DOCTYPE html>
     .now-playing { text-align: center; }
     
     .video-frame-wrap { width: 100%; aspect-ratio: 16/9; background: #080810; border-radius: 0.85rem; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; overflow: hidden; margin-bottom: 1.25rem; position: relative; }
-    .video-frame-img { width: 100%; height: 100%; object-fit: cover; }
+    .video-frame-img { width: 100%; height: 100%; object-fit: cover; transition: opacity 0.15s ease-in-out; }
     .frame-placeholder { color: var(--text-muted); font-size: 0.95rem; display: flex; flex-direction: column; align-items: center; gap: 0.5rem; }
     
     .now-title { font-size: 1.15rem; font-weight: 700; margin-bottom: 0.35rem; word-break: break-all; color: var(--text-main); }
@@ -66,7 +66,8 @@ pub const INDEX_HTML: &str = r#"<!DOCTYPE html>
     <div class="remote-card">
       <div class="now-playing">
         <div class="video-frame-wrap" id="frame-box">
-          <div class="frame-placeholder">
+          <img id="video-frame-img" class="video-frame-img" style="display:none;" alt="Video Frame">
+          <div class="frame-placeholder" id="frame-placeholder">
             <svg viewBox="0 0 24 24" style="width: 48px; height: 48px; opacity: 0.5;"><path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14zM8 15c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1zm4 0c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1zm4 0c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1z"/></svg>
             No Video Loaded
           </div>
@@ -83,7 +84,7 @@ pub const INDEX_HTML: &str = r#"<!DOCTYPE html>
         <button class="ctrl-btn" title="Seek -10s" onclick="sendCmd('seek', {seconds: -10})">
           <svg viewBox="0 0 24 24"><path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/></svg>
         </button>
-        <button class="ctrl-btn play-btn" id="btn-play" title="Play / Pause" onclick="sendCmd('toggle_pause')">
+        <button class="ctrl-btn play-btn" id="btn-play" title="Play / Pause" onclick="togglePlayPause()">
           <svg id="icon-play" viewBox="0 0 24 24" style="width: 28px; height: 28px;"><path d="M8 5v14l11-7z"/></svg>
         </button>
         <button class="ctrl-btn" title="Seek +10s" onclick="sendCmd('seek', {seconds: 10})">
@@ -102,6 +103,7 @@ pub const INDEX_HTML: &str = r#"<!DOCTYPE html>
   <script>
     let ws;
     let isPlayingState = false;
+    let currentVideoPath = '';
     let lastFrameUpdate = 0;
 
     function initWS() {
@@ -145,10 +147,14 @@ pub const INDEX_HTML: &str = r#"<!DOCTYPE html>
         } catch(e) {}
       }, 500);
 
-      // Auto-refresh video frame snapshot during active playback
+      // Smoothly refresh video frame snapshot during active playback
       setInterval(() => {
-        if (isPlayingState) {
-          refreshVideoFrame();
+        if (isPlayingState && currentVideoPath) {
+          const now = Date.now();
+          if (now - lastFrameUpdate > 1000) {
+            refreshVideoFrame(currentVideoPath);
+            lastFrameUpdate = now;
+          }
         }
       }, 1000);
     }
@@ -165,9 +171,26 @@ pub const INDEX_HTML: &str = r#"<!DOCTYPE html>
       }).catch(() => {});
     }
 
+    function togglePlayPause() {
+      // Optimistic UI toggle for instant feedback
+      isPlayingState = !isPlayingState;
+      renderPlayIcon(isPlayingState);
+      sendCmd('toggle_pause');
+    }
+
+    function renderPlayIcon(playing) {
+      const playIcon = document.getElementById('icon-play');
+      if (playing) {
+        playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
+      } else {
+        playIcon.innerHTML = '<path d="M8 5v14l11-7z"/>';
+      }
+    }
+
     function updateRemoteUI(s) {
       if (!s) return;
       isPlayingState = s.playing;
+      currentVideoPath = s.current_video || '';
 
       document.getElementById('lbl-title').innerText = s.current_video ? s.current_video.split('/').pop().split('\\').pop() : 'Idle';
       
@@ -186,34 +209,34 @@ pub const INDEX_HTML: &str = r#"<!DOCTYPE html>
       document.getElementById('vol-slider').value = s.volume || 100;
       document.getElementById('lbl-vol').innerText = `${Math.round(s.volume || 100)}%`;
 
-      const playIcon = document.getElementById('icon-play');
-      if (s.playing) {
-        playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
-      } else {
-        playIcon.innerHTML = '<path d="M8 5v14l11-7z"/>';
-      }
+      renderPlayIcon(s.playing);
 
       if (s.current_video) {
         const now = Date.now();
-        if (now - lastFrameUpdate > 1000) {
+        if (now - lastFrameUpdate > 1200) {
           refreshVideoFrame(s.current_video);
           lastFrameUpdate = now;
         }
       } else {
-        document.getElementById('frame-box').innerHTML = `
-          <div class="frame-placeholder">
-            <svg viewBox="0 0 24 24" style="width: 48px; height: 48px; opacity: 0.5;"><path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14zM8 15c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1zm4 0c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1zm4 0c.55 0 1-.45 1-1s-.45-1-1-1-1 .45-1 1 .45 1 1 1z"/></svg>
-            No Video Loaded
-          </div>
-        `;
+        document.getElementById('video-frame-img').style.display = 'none';
+        document.getElementById('frame-placeholder').style.display = 'flex';
       }
     }
 
-    function refreshVideoFrame(videoPath = '') {
-      const frameBox = document.getElementById('frame-box');
+    function refreshVideoFrame(videoPath) {
+      const frameImg = document.getElementById('video-frame-img');
+      const placeholder = document.getElementById('frame-placeholder');
       const timestamp = Date.now();
-      const frameUrl = videoPath ? `/api/player/frame?path=${encodeURIComponent(videoPath)}&t=${timestamp}` : `/api/player/frame?t=${timestamp}`;
-      frameBox.innerHTML = `<img class="video-frame-img" src="${frameUrl}" onerror="this.style.display='none'">`;
+      const frameUrl = `/api/player/frame?path=${encodeURIComponent(videoPath)}&t=${timestamp}`;
+      
+      // Preload offscreen to eliminate DOM flickering
+      const preload = new Image();
+      preload.onload = () => {
+        frameImg.src = preload.src;
+        frameImg.style.display = 'block';
+        placeholder.style.display = 'none';
+      };
+      preload.src = frameUrl;
     }
 
     function onSeek(val) {
