@@ -6,7 +6,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-pub fn spawn_web_server(http_port: u16, ws_port: u16) -> (Sender<String>, Receiver<crate::platform::interop::InteropCommand>) {
+pub fn spawn_web_server(http_port: u16, ws_port: u16, egui_ctx: eframe::egui::Context) -> (Sender<String>, Receiver<crate::platform::interop::InteropCommand>) {
     let (cmd_tx, cmd_rx) = channel::<crate::platform::interop::InteropCommand>();
     let (state_tx, state_rx) = channel::<String>();
 
@@ -30,12 +30,14 @@ pub fn spawn_web_server(http_port: u16, ws_port: u16) -> (Sender<String>, Receiv
     // 2. Dedicated WebSocket Server Thread on ws_port (8081)
     let cmd_tx_ws = cmd_tx.clone();
     let ws_clients_register = ws_clients.clone();
+    let ctx_ws = egui_ctx.clone();
     thread::spawn(move || {
         let ws_addr = format!("0.0.0.0:{}", ws_port);
         if let Ok(listener) = std::net::TcpListener::bind(&ws_addr) {
             for stream in listener.incoming().flatten() {
                 let cmd_tx_conn = cmd_tx_ws.clone();
                 let ws_clients_conn = ws_clients_register.clone();
+                let ctx_conn = ctx_ws.clone();
 
                 thread::spawn(move || {
                     if let Ok(mut websocket) = tungstenite::accept(stream) {
@@ -57,6 +59,7 @@ pub fn spawn_web_server(http_port: u16, ws_port: u16) -> (Sender<String>, Receiv
                                 Ok(tungstenite::Message::Text(text)) => {
                                     if let Ok(cmd) = serde_json::from_str::<crate::platform::interop::InteropCommand>(&text) {
                                         let _ = cmd_tx_conn.send(cmd);
+                                        ctx_conn.request_repaint();
                                     }
                                 }
                                 Ok(tungstenite::Message::Close(_)) => break,
@@ -76,6 +79,7 @@ pub fn spawn_web_server(http_port: u16, ws_port: u16) -> (Sender<String>, Receiv
     // 3. HTTP Web & REST Server Thread on http_port (8080)
     let latest_status_http = latest_status.clone();
     let cmd_tx_http = cmd_tx.clone();
+    let ctx_http = egui_ctx.clone();
     thread::spawn(move || {
         let server_addr = format!("0.0.0.0:{}", http_port);
         if let Ok(server) = tiny_http::Server::http(&server_addr) {
@@ -93,6 +97,7 @@ pub fn spawn_web_server(http_port: u16, ws_port: u16) -> (Sender<String>, Receiv
                     if reader.read_to_string(&mut body).is_ok() {
                         if let Ok(cmd) = serde_json::from_str::<crate::platform::interop::InteropCommand>(&body) {
                             let _ = cmd_tx_http.send(cmd);
+                            ctx_http.request_repaint();
                             let response = tiny_http::Response::from_string("{\"status\":\"ok\"}")
                                 .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
                             let _ = request.respond(response);

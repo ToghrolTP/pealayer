@@ -130,7 +130,7 @@ fn main() -> eframe::Result {
             let _ = mpv_static.set_property("volume", loaded_config.volume);
             let _ = mpv_static.set_property("mute", loaded_config.is_muted);
 
-            let (web_state_tx, web_cmd_rx) = crate::server::spawn_web_server(8080, 8081);
+            let (web_state_tx, web_cmd_rx) = crate::server::spawn_web_server(8080, 8081, cc.egui_ctx.clone());
 
             Ok(Box::new(PealayerApp {
                 mpv: mpv_static,
@@ -281,7 +281,7 @@ fn main() -> eframe::Result {
                 is_window_operating: false,
                 show_shortcuts_dialog: false,
                 show_about_dialog: false,
-                interop_rx: crate::platform::interop::spawn_interop_server(),
+                interop_rx: crate::platform::interop::spawn_interop_server(cc.egui_ctx.clone()),
                 web_state_tx,
                 web_cmd_rx,
             }))
