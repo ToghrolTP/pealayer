@@ -4,7 +4,11 @@ use eframe::egui;
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let time_since_activity = app.last_mouse_activity.elapsed().as_secs_f32();
-    let alpha = (3.0 - time_since_activity).clamp(0.0, 1.0);
+    let alpha = if app.pin_controls {
+        1.0
+    } else {
+        (3.0 - time_since_activity).clamp(0.0, 1.0)
+    };
 
     if alpha > 0.0 {
         let window_width = ui.available_width() - 20.0;
@@ -64,7 +68,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
 
                     // Calculate available width for the seekbar, leaving space for the right controls
-                    let right_controls_width = 285.0;
+                    let right_controls_width = 315.0;
                     let seekbar_width = ui.available_width() - right_controls_width;
 
                     ui.add_enabled_ui(has_video, |ui| {
@@ -96,6 +100,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(
                                 !is_fullscreen,
                             ));
+                        }
+
+                        let pin_icon = if app.pin_controls { "📌" } else { "📍" };
+                        if ui.button(pin_icon).clicked() {
+                            app.pin_controls = !app.pin_controls;
                         }
 
                         if ui.button("🎵").clicked() {
@@ -136,7 +145,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 });
             });
 
-        if time_since_activity < 3.0 {
+        if time_since_activity < 3.0 && !app.pin_controls {
             ctx.request_repaint();
         }
     }
@@ -205,6 +214,18 @@ mod tests {
             style.visuals.override_text_color,
             Some(egui::Color32::from_rgba_premultiplied(200, 200, 200, 200).linear_multiply(0.0))
         );
+    }
+
+    #[test]
+    fn test_pin_controls_alpha_calculation() {
+        let pin_controls = true;
+        let time_since_activity: f32 = 10.0;
+        let alpha = if pin_controls {
+            1.0
+        } else {
+            (3.0 - time_since_activity).clamp(0.0, 1.0)
+        };
+        assert_eq!(alpha, 1.0);
     }
 }
 

@@ -140,6 +140,7 @@ fn main() -> eframe::Result {
                 audio_tracks: Vec::new(),
                 seek_pos: None,
                 last_mouse_activity: std::time::Instant::now(),
+                pin_controls: false,
                 show_error: None,
                 show_four_d_editor: true,
 

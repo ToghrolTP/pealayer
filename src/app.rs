@@ -53,6 +53,7 @@ pub struct PealayerApp {
 
     pub(crate) seek_pos: Option<f64>,
     pub(crate) last_mouse_activity: std::time::Instant,
+    pub(crate) pin_controls: bool,
 
     pub(crate) show_error: Option<String>,
 
@@ -289,7 +290,7 @@ impl eframe::App for PealayerApp {
             i.pointer.delta().length() > 0.0 || i.pointer.any_click() || i.pointer.any_pressed()
         }) {
             self.last_mouse_activity = std::time::Instant::now();
-        } else if self.last_mouse_activity.elapsed().as_secs_f32() > 3.0 {
+        } else if self.last_mouse_activity.elapsed().as_secs_f32() > 3.0 && !self.pin_controls {
             // Hide mouse cursor when inactive
             ctx.set_cursor_icon(egui::CursorIcon::None);
         }
