@@ -29,8 +29,8 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
     <Header
       style={{
         padding: '0 24px',
-        background: '#11151c',
-        borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+        background: '#0a2239',
+        borderBottom: '1px solid rgba(23, 96, 135, 0.4)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -45,10 +45,10 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
           type="text"
           icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
           onClick={onToggleCollapse}
-          style={{ fontSize: 18, color: '#94a3b8' }}
+          style={{ fontSize: 18, color: '#53a2be' }}
         />
         <Space size="middle">
-          <VideoCameraOutlined style={{ fontSize: 24, color: '#e11d48' }} />
+          <VideoCameraOutlined style={{ fontSize: 24, color: '#1d84b5' }} />
           <Title level={4} style={{ margin: 0, color: '#f8fafc', fontWeight: 700 }}>
             Pealayer Control Center
           </Title>

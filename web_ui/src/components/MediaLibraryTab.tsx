@@ -107,16 +107,16 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
       render: (_: any, record: FileEntry) => (
         <Space size="middle">
           {record.is_dir ? (
-            <Avatar shape="square" icon={<FolderOutlined />} style={{ backgroundColor: '#1e293b', color: '#f59e0b' }} />
+            <Avatar shape="square" icon={<FolderOutlined />} style={{ backgroundColor: '#0a2239', color: '#53a2be' }} />
           ) : record.has_thumbnail ? (
             <Avatar
               shape="square"
               src={`/api/fs/thumbnail?path=${encodeURIComponent(record.path)}`}
               icon={<VideoCameraOutlined />}
-              style={{ backgroundColor: '#0f172a' }}
+              style={{ backgroundColor: '#0a2239' }}
             />
           ) : (
-            <Avatar shape="square" icon={<VideoCameraOutlined />} style={{ backgroundColor: '#1e293b', color: '#e11d48' }} />
+            <Avatar shape="square" icon={<VideoCameraOutlined />} style={{ backgroundColor: '#0a2239', color: '#1d84b5' }} />
           )}
 
           {record.is_dir ? (
@@ -143,7 +143,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
         record.is_dir ? (
           <Tag color="warning">Folder</Tag>
         ) : record.is_media ? (
-          <Tag color="volcano">Media Video</Tag>
+          <Tag color="processing">Media Video</Tag>
         ) : (
           <Tag color="default">File</Tag>
         ),
@@ -168,7 +168,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
               size="small"
               icon={<PlayCircleOutlined />}
               onClick={() => handlePlayMedia(record.path, record.name)}
-              style={{ borderRadius: 6, backgroundColor: '#e11d48' }}
+              style={{ borderRadius: 6, backgroundColor: '#1d84b5' }}
             >
               Play
             </Button>
@@ -216,9 +216,9 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
     <Card
       bordered={false}
       style={{
-        background: '#161b26',
+        background: '#132e32',
         borderRadius: 16,
-        border: '1px solid rgba(255, 255, 255, 0.08)',
+        border: '1px solid rgba(23, 96, 135, 0.3)',
         boxShadow: '0 20px 40px rgba(0, 0, 0, 0.4)',
       }}
       bodyStyle={{ padding: 20 }}
@@ -242,17 +242,17 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
           </Space>
 
           <Input
-            prefix={<SearchOutlined style={{ color: '#94a3b8' }} />}
+            prefix={<SearchOutlined style={{ color: '#53a2be' }} />}
             placeholder="Search media files..."
             allowClear
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            style={{ width: 260, borderRadius: 8 }}
+            style={{ width: 260, borderRadius: 8, background: '#0a2239', borderColor: '#176087' }}
           />
         </div>
 
         {/* Current Path Breadcrumbs */}
-        <Breadcrumb items={breadcrumbItems} style={{ background: '#0e121b', padding: '8px 14px', borderRadius: 8, fontSize: 13 }} />
+        <Breadcrumb items={breadcrumbItems} style={{ background: '#0a2239', padding: '8px 14px', borderRadius: 8, fontSize: 13, border: '1px solid rgba(23, 96, 135, 0.3)' }} />
 
         {/* File Table */}
         <Spin spinning={loading}>

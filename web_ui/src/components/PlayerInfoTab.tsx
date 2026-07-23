@@ -28,38 +28,38 @@ export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionM
       {/* System Statistics */}
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} md={6}>
-          <Card bordered={false} style={{ background: '#161b26', borderRadius: 12 }}>
+          <Card bordered={false} style={{ background: '#0a2239', border: '1px solid rgba(23, 96, 135, 0.2)', borderRadius: 12 }}>
             <Statistic
               title={<Text type="secondary">Connection Type</Text>}
               value={connectionMode.toUpperCase()}
-              prefix={<ApiOutlined style={{ color: '#38bdf8' }} />}
-              valueStyle={{ color: '#38bdf8', fontSize: 18, fontWeight: 700 }}
+              prefix={<ApiOutlined style={{ color: '#53a2be' }} />}
+              valueStyle={{ color: '#53a2be', fontSize: 18, fontWeight: 700 }}
             />
           </Card>
         </Col>
         <Col xs={24} sm={12} md={6}>
-          <Card bordered={false} style={{ background: '#161b26', borderRadius: 12 }}>
+          <Card bordered={false} style={{ background: '#0a2239', border: '1px solid rgba(23, 96, 135, 0.2)', borderRadius: 12 }}>
             <Statistic
               title={<Text type="secondary">Playback Duration</Text>}
               value={formatTime(state.duration)}
-              prefix={<DesktopOutlined style={{ color: '#e11d48' }} />}
+              prefix={<DesktopOutlined style={{ color: '#1d84b5' }} />}
               valueStyle={{ color: '#f8fafc', fontSize: 18, fontFamily: 'monospace' }}
             />
           </Card>
         </Col>
         <Col xs={24} sm={12} md={6}>
-          <Card bordered={false} style={{ background: '#161b26', borderRadius: 12 }}>
+          <Card bordered={false} style={{ background: '#0a2239', border: '1px solid rgba(23, 96, 135, 0.2)', borderRadius: 12 }}>
             <Statistic
               title={<Text type="secondary">Volume Level</Text>}
               value={Math.round(state.volume || 100)}
               suffix="%"
-              prefix={<SoundOutlined style={{ color: '#f59e0b' }} />}
+              prefix={<SoundOutlined style={{ color: '#53a2be' }} />}
               valueStyle={{ color: '#f8fafc', fontSize: 18, fontFamily: 'monospace' }}
             />
           </Card>
         </Col>
         <Col xs={24} sm={12} md={6}>
-          <Card bordered={false} style={{ background: '#161b26', borderRadius: 12 }}>
+          <Card bordered={false} style={{ background: '#0a2239', border: '1px solid rgba(23, 96, 135, 0.2)', borderRadius: 12 }}>
             <Statistic
               title={<Text type="secondary">Player Engine</Text>}
               value="MPV Core"
@@ -75,16 +75,16 @@ export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionM
         bordered={false}
         title={
           <Space>
-            <InfoCircleOutlined style={{ color: '#e11d48' }} />
+            <InfoCircleOutlined style={{ color: '#1d84b5' }} />
             <Title level={4} style={{ margin: 0, color: '#f8fafc' }}>
               System & Media Metadata
             </Title>
           </Space>
         }
         style={{
-          background: '#161b26',
+          background: '#132e32',
           borderRadius: 16,
-          border: '1px solid rgba(255, 255, 255, 0.08)',
+          border: '1px solid rgba(23, 96, 135, 0.3)',
         }}
       >
         <Descriptions bordered column={{ xs: 1, sm: 1, md: 2 }} size="middle">

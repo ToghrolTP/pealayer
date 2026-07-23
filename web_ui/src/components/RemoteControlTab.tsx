@@ -103,10 +103,10 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
         <Card
           bordered={false}
           style={{
-            background: '#161b26',
+            background: '#132e32',
             borderRadius: 16,
             boxShadow: '0 20px 40px rgba(0, 0, 0, 0.5)',
-            border: '1px solid rgba(255, 255, 255, 0.08)',
+            border: '1px solid rgba(23, 96, 135, 0.3)',
           }}
           bodyStyle={{ padding: 24 }}
         >
@@ -115,10 +115,10 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
             style={{
               width: '100%',
               aspectRatio: '16/9',
-              background: '#090d16',
+              background: '#0a2239',
               borderRadius: 12,
               overflow: 'hidden',
-              border: '1px solid rgba(255, 255, 255, 0.08)',
+              border: '1px solid rgba(23, 96, 135, 0.3)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -137,12 +137,12 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
               />
             ) : (
               <Space direction="vertical" align="center">
-                <VideoCameraOutlined style={{ fontSize: 48, color: '#475569' }} />
+                <VideoCameraOutlined style={{ fontSize: 48, color: '#53a2be' }} />
                 <Text type="secondary" style={{ fontSize: 14 }}>
                   No Media Active
                 </Text>
                 {onOpenLibraryTab && (
-                  <Button type="primary" size="small" onClick={onOpenLibraryTab} style={{ marginTop: 8 }}>
+                  <Button type="primary" size="small" onClick={onOpenLibraryTab} style={{ marginTop: 8, backgroundColor: '#1d84b5' }}>
                     Browse Media Library
                   </Button>
                 )}
@@ -163,17 +163,17 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
           {/* Quick Statistics Row */}
           <Row gutter={16} style={{ marginBottom: 24, textAlign: 'center' }}>
             <Col span={8}>
-              <Card size="small" style={{ background: '#0e121b', border: '1px solid rgba(255,255,255,0.05)' }}>
+              <Card size="small" style={{ background: '#0a2239', border: '1px solid rgba(23, 96, 135, 0.2)' }}>
                 <Statistic
                   title={<Text type="secondary" style={{ fontSize: 12 }}>Time</Text>}
                   value={formatTime(state.playback_time)}
-                  prefix={<FieldTimeOutlined style={{ color: '#e11d48' }} />}
+                  prefix={<FieldTimeOutlined style={{ color: '#53a2be' }} />}
                   valueStyle={{ fontSize: 16, color: '#f8fafc', fontFamily: 'monospace' }}
                 />
               </Card>
             </Col>
             <Col span={8}>
-              <Card size="small" style={{ background: '#0e121b', border: '1px solid rgba(255,255,255,0.05)' }}>
+              <Card size="small" style={{ background: '#0a2239', border: '1px solid rgba(23, 96, 135, 0.2)' }}>
                 <Statistic
                   title={<Text type="secondary" style={{ fontSize: 12 }}>Status</Text>}
                   value={state.playing ? 'Playing' : 'Paused'}
@@ -182,12 +182,12 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
               </Card>
             </Col>
             <Col span={8}>
-              <Card size="small" style={{ background: '#0e121b', border: '1px solid rgba(255,255,255,0.05)' }}>
+              <Card size="small" style={{ background: '#0a2239', border: '1px solid rgba(23, 96, 135, 0.2)' }}>
                 <Statistic
                   title={<Text type="secondary" style={{ fontSize: 12 }}>Volume</Text>}
                   value={Math.round(state.volume || 100)}
                   suffix="%"
-                  prefix={<SoundOutlined style={{ color: '#e11d48' }} />}
+                  prefix={<SoundOutlined style={{ color: '#1d84b5' }} />}
                   valueStyle={{ fontSize: 16, color: '#f8fafc', fontFamily: 'monospace' }}
                 />
               </Card>
@@ -201,8 +201,8 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
               onChange={handleSeekChange}
               onAfterChange={handleSeekAfterChange}
               tooltip={{ formatter: (val) => `${val?.toFixed(0)}%` }}
-              trackStyle={{ backgroundColor: '#e11d48' }}
-              handleStyle={{ borderColor: '#e11d48', backgroundColor: '#e11d48' }}
+              trackStyle={{ backgroundColor: '#1d84b5' }}
+              handleStyle={{ borderColor: '#53a2be', backgroundColor: '#1d84b5' }}
             />
           </div>
 
@@ -218,7 +218,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
                     sendCmd('seek', { seconds: -10 });
                     message.info('Seeked -10 seconds');
                   }}
-                  style={{ background: '#1e293b', borderColor: '#334155', color: '#f8fafc' }}
+                  style={{ background: '#0a2239', borderColor: '#176087', color: '#f8fafc' }}
                 />
               </Tooltip>
             </Col>
@@ -229,10 +229,10 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
                   style={{
                     width: 64,
                     height: 64,
-                    background: '#e11d48',
-                    borderColor: '#e11d48',
+                    background: '#1d84b5',
+                    borderColor: '#1d84b5',
                     color: '#fff',
-                    boxShadow: '0 8px 24px rgba(225, 29, 72, 0.4)',
+                    boxShadow: '0 8px 24px rgba(29, 132, 181, 0.4)',
                   }}
                   icon={
                     state.playing ? (
@@ -258,7 +258,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
                     sendCmd('seek', { seconds: 10 });
                     message.info('Seeked +10 seconds');
                   }}
-                  style={{ background: '#1e293b', borderColor: '#334155', color: '#f8fafc' }}
+                  style={{ background: '#0a2239', borderColor: '#176087', color: '#f8fafc' }}
                 />
               </Tooltip>
             </Col>
@@ -267,10 +267,10 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
           {/* Volume Control */}
           <div
             style={{
-              background: 'rgba(255, 255, 255, 0.03)',
+              background: '#0a2239',
               padding: '12px 18px',
               borderRadius: 12,
-              border: '1px solid rgba(255, 255, 255, 0.08)',
+              border: '1px solid rgba(23, 96, 135, 0.3)',
             }}
           >
             <Row align="middle" gutter={16}>

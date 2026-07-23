@@ -145,12 +145,11 @@ export const RemoteControl: React.FC = () => {
       : 0;
 
   return (
-    <Layout style={{ minHeight: '100vh', background: '#0b0c10' }}>
+    <Layout style={{ minHeight: '100vh', background: '#0a2239' }}>
       <Header
         style={{
-          background: 'rgba(15, 23, 42, 0.8)',
-          backdropFilter: 'blur(12px)',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+          background: '#0a2239',
+          borderBottom: '1px solid rgba(23, 96, 135, 0.4)',
           padding: '0 24px',
           display: 'flex',
           justifyContent: 'space-between',
@@ -161,7 +160,7 @@ export const RemoteControl: React.FC = () => {
         }}
       >
         <Space size="middle">
-          <VideoCameraOutlined style={{ fontSize: 24, color: '#e11d48' }} />
+          <VideoCameraOutlined style={{ fontSize: 24, color: '#1d84b5' }} />
           <Title level={4} style={{ margin: 0, color: '#f8fafc', fontWeight: 700 }}>
             Pealayer Control Center
           </Title>
@@ -186,8 +185,8 @@ export const RemoteControl: React.FC = () => {
           style={{
             width: '100%',
             maxWidth: 620,
-            background: '#151922',
-            borderColor: 'rgba(255, 255, 255, 0.12)',
+            background: '#132e32',
+            borderColor: 'rgba(23, 96, 135, 0.3)',
             borderRadius: 16,
             boxShadow: '0 20px 40px rgba(0, 0, 0, 0.6)',
           }}
@@ -198,10 +197,10 @@ export const RemoteControl: React.FC = () => {
             style={{
               width: '100%',
               aspectRatio: '16/9',
-              background: '#07090e',
+              background: '#0a2239',
               borderRadius: 12,
               overflow: 'hidden',
-              border: '1px solid rgba(255,255,255,0.08)',
+              border: '1px solid rgba(23, 96, 135, 0.3)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -220,7 +219,7 @@ export const RemoteControl: React.FC = () => {
               />
             ) : (
               <Space direction="vertical" align="center">
-                <VideoCameraOutlined style={{ fontSize: 48, color: '#475569' }} />
+                <VideoCameraOutlined style={{ fontSize: 48, color: '#53a2be' }} />
                 <Text type="secondary">No Video File Loaded</Text>
               </Space>
             )}
@@ -243,8 +242,8 @@ export const RemoteControl: React.FC = () => {
               onChange={handleSeekChange}
               onAfterChange={handleSeekAfterChange}
               tooltip={{ formatter: (val) => `${val?.toFixed(0)}%` }}
-              trackStyle={{ backgroundColor: '#e11d48' }}
-              handleStyle={{ borderColor: '#e11d48', backgroundColor: '#e11d48' }}
+              trackStyle={{ backgroundColor: '#1d84b5' }}
+              handleStyle={{ borderColor: '#53a2be', backgroundColor: '#1d84b5' }}
             />
           </div>
 
@@ -256,7 +255,7 @@ export const RemoteControl: React.FC = () => {
                 size="large"
                 icon={<FastBackwardOutlined />}
                 onClick={() => sendCmd('seek', { seconds: -10 })}
-                style={{ background: '#1e293b', borderColor: '#334155', color: '#f8fafc' }}
+                style={{ background: '#0a2239', borderColor: '#176087', color: '#f8fafc' }}
                 title="Seek -10s"
               />
             </Col>
@@ -266,10 +265,10 @@ export const RemoteControl: React.FC = () => {
                 style={{
                   width: 64,
                   height: 64,
-                  background: '#e11d48',
-                  borderColor: '#e11d48',
+                  background: '#1d84b5',
+                  borderColor: '#1d84b5',
                   color: '#fff',
-                  boxShadow: '0 8px 24px rgba(225, 29, 72, 0.4)',
+                  boxShadow: '0 8px 24px rgba(29, 132, 181, 0.4)',
                 }}
                 icon={
                   state.playing ? (
@@ -288,7 +287,7 @@ export const RemoteControl: React.FC = () => {
                 size="large"
                 icon={<FastForwardOutlined />}
                 onClick={() => sendCmd('seek', { seconds: 10 })}
-                style={{ background: '#1e293b', borderColor: '#334155', color: '#f8fafc' }}
+                style={{ background: '#0a2239', borderColor: '#176087', color: '#f8fafc' }}
                 title="Seek +10s"
               />
             </Col>
@@ -297,10 +296,10 @@ export const RemoteControl: React.FC = () => {
           {/* Volume Control */}
           <div
             style={{
-              background: 'rgba(255, 255, 255, 0.03)',
+              background: '#0a2239',
               padding: '12px 18px',
               borderRadius: 12,
-              border: '1px solid rgba(255, 255, 255, 0.08)',
+              border: '1px solid rgba(23, 96, 135, 0.3)',
             }}
           >
             <Row align="middle" gutter={16}>

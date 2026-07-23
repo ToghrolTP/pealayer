@@ -118,15 +118,16 @@ const App: React.FC = () => {
       theme={{
         algorithm: theme.darkAlgorithm,
         token: {
-          colorPrimary: '#e11d48',
-          colorBgContainer: '#161b26',
-          colorBgBase: '#0b0c10',
+          colorPrimary: '#1d84b5',
+          colorBgContainer: '#132e32',
+          colorBgBase: '#0a2239',
+          colorBorder: 'rgba(23, 96, 135, 0.3)',
           borderRadius: 12,
           fontFamily: `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif`,
         },
       }}
     >
-      <Layout style={{ minHeight: '100vh', background: '#0b0c10' }}>
+      <Layout style={{ minHeight: '100vh', background: '#0a2239' }}>
         <HeaderBar
           collapsed={collapsed}
           onToggleCollapse={() => setCollapsed(!collapsed)}
@@ -134,7 +135,7 @@ const App: React.FC = () => {
           connectionMode={connectionMode}
         />
 
-        <Layout>
+        <Layout style={{ background: '#0a2239' }}>
           <Sider
             trigger={null}
             collapsible
@@ -142,8 +143,8 @@ const App: React.FC = () => {
             breakpoint="lg"
             onBreakpoint={(broken) => setCollapsed(broken)}
             style={{
-              background: '#11151c',
-              borderRight: '1px solid rgba(255, 255, 255, 0.08)',
+              background: '#132e32',
+              borderRight: '1px solid rgba(23, 96, 135, 0.3)',
             }}
             width={220}
           >
