@@ -74,6 +74,9 @@ const App: React.FC = () => {
     connectWS();
 
     const httpInterval = setInterval(async () => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        return; // Skip HTTP polling when WebSocket is connected
+      }
       try {
         const res = await fetch('/api/player/status');
         if (res.ok) {

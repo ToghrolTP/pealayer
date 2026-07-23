@@ -109,6 +109,7 @@ pub struct PealayerApp {
     pub(crate) interop_rx: std::sync::mpsc::Receiver<crate::platform::interop::InteropCommand>,
     pub(crate) web_state_tx: std::sync::mpsc::Sender<String>,
     pub(crate) web_cmd_rx: std::sync::mpsc::Receiver<crate::platform::interop::InteropCommand>,
+    pub(crate) last_web_broadcast: Option<std::time::Instant>,
 }
 
 
@@ -240,17 +241,26 @@ impl eframe::App for PealayerApp {
             }
         }
 
-        // Broadcast state JSON to Web-UI clients
-        let status_resp = crate::platform::interop::PlayerStatusResponse {
-            status: "ok".to_string(),
-            playing: !self.is_paused && self.current_video_path.is_some(),
-            volume: self.volume,
-            playback_time: self.playback_time,
-            duration: self.duration,
-            current_video: self.current_video_path.as_ref().map(|p| p.to_string_lossy().to_string()),
+        // Broadcast state JSON to Web-UI clients (throttled to 10Hz to save CPU / network spam)
+        let now = std::time::Instant::now();
+        let should_broadcast = match self.last_web_broadcast {
+            Some(last) => now.duration_since(last) >= std::time::Duration::from_millis(100),
+            None => true,
         };
-        if let Ok(json) = serde_json::to_string(&status_resp) {
-            let _ = self.web_state_tx.send(json);
+
+        if should_broadcast {
+            self.last_web_broadcast = Some(now);
+            let status_resp = crate::platform::interop::PlayerStatusResponse {
+                status: "ok".to_string(),
+                playing: !self.is_paused && self.current_video_path.is_some(),
+                volume: self.volume,
+                playback_time: self.playback_time,
+                duration: self.duration,
+                current_video: self.current_video_path.as_ref().map(|p| p.to_string_lossy().to_string()),
+            };
+            if let Ok(json) = serde_json::to_string(&status_resp) {
+                let _ = self.web_state_tx.send(json);
+            }
         }
 
         // Initialize RTT texture once if not done yet
