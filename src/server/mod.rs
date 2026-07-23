@@ -183,8 +183,39 @@ pub fn spawn_web_server(http_port: u16, ws_port: u16) -> (Sender<String>, Receiv
                     }
                     let _ = request.respond(tiny_http::Response::from_string("Error").with_status_code(400));
                 } else {
-                    // Serve Embedded Web UI single page app
-                    let response = tiny_http::Response::from_string(web_assets::INDEX_HTML)
+                    // Serve Web UI single page app (Ant Design React interface from web_ui/dist)
+                    let req_path = url.split('?').next().unwrap_or(&url);
+                    let rel_path = req_path.trim_start_matches('/');
+                    let target_file = if rel_path.is_empty() {
+                        std::path::PathBuf::from("web_ui/dist/index.html")
+                    } else {
+                        std::path::PathBuf::from("web_ui/dist").join(rel_path)
+                    };
+
+                    if target_file.exists() && target_file.is_file() {
+                        if let Ok(data) = std::fs::read(&target_file) {
+                            let mime = match target_file.extension().and_then(|e| e.to_str()) {
+                                Some("html") => "text/html; charset=utf-8",
+                                Some("js") => "application/javascript; charset=utf-8",
+                                Some("css") => "text/css; charset=utf-8",
+                                Some("svg") => "image/svg+xml",
+                                Some("png") => "image/png",
+                                Some("jpg") | Some("jpeg") => "image/jpeg",
+                                Some("json") => "application/json",
+                                Some("woff2") => "font/woff2",
+                                _ => "application/octet-stream",
+                            };
+                            let response = tiny_http::Response::from_data(data)
+                                .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], mime.as_bytes()).unwrap());
+                            let _ = request.respond(response);
+                            continue;
+                        }
+                    }
+
+                    // SPA fallback: serve web_ui/dist/index.html if available, or fallback to web_assets::INDEX_HTML
+                    let fallback_html = std::fs::read_to_string("web_ui/dist/index.html")
+                        .unwrap_or_else(|_| web_assets::INDEX_HTML.to_string());
+                    let response = tiny_http::Response::from_string(fallback_html)
                         .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap());
                     let _ = request.respond(response);
                 }
