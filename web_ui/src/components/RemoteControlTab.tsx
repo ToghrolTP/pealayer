@@ -57,9 +57,9 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
     : 'No Media Playing';
 
   const handleSeek = (val: number) => {
+    sendCmd('seek_abs', { percentage: val });
     if (state.duration && state.duration > 0) {
       const targetSec = (val / 100) * state.duration;
-      sendCmd('seek', { seconds: targetSec - (state.playback_time || 0) });
       message.info(`Seeked to ${formatTime(targetSec)}`);
     }
   };

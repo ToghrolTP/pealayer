@@ -41,12 +41,13 @@ export const RemoteControl: React.FC = () => {
     const body = JSON.stringify({ command, ...payload });
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(body);
+    } else {
+      fetch('/api/player/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      }).catch(() => {});
     }
-    fetch('/api/player/command', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    }).catch(() => {});
   };
 
   useEffect(() => {
@@ -121,10 +122,7 @@ export const RemoteControl: React.FC = () => {
     : 'No Media Playing';
 
   const handleSeek = (val: number) => {
-    if (state.duration && state.duration > 0) {
-      const targetSec = (val / 100) * state.duration;
-      sendCmd('seek', { seconds: targetSec - (state.playback_time || 0) });
-    }
+    sendCmd('seek_abs', { percentage: val });
   };
 
   const handleVolumeChange = (val: number) => {

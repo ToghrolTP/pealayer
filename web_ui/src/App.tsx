@@ -31,12 +31,13 @@ const App: React.FC = () => {
     const body = JSON.stringify({ command, ...payload });
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(body);
+    } else {
+      fetch('/api/player/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      }).catch(() => {});
     }
-    fetch('/api/player/command', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    }).catch(() => {});
   };
 
   useEffect(() => {
