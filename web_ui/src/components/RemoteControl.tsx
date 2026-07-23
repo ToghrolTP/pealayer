@@ -121,7 +121,16 @@ export const RemoteControl: React.FC = () => {
     ? state.current_video.split('/').pop()?.split('\\').pop() || 'Untitled'
     : 'No Media Playing';
 
-  const handleSeek = (val: number) => {
+  const [isDraggingSeek, setIsDraggingSeek] = useState<boolean>(false);
+  const [dragSeekVal, setDragSeekVal] = useState<number>(0);
+
+  const handleSeekChange = (val: number) => {
+    setIsDraggingSeek(true);
+    setDragSeekVal(val);
+  };
+
+  const handleSeekAfterChange = (val: number) => {
+    setIsDraggingSeek(false);
     sendCmd('seek_abs', { percentage: val });
   };
 
@@ -230,8 +239,9 @@ export const RemoteControl: React.FC = () => {
           {/* Seek Slider */}
           <div style={{ marginBottom: 24, padding: '0 8px' }}>
             <Slider
-              value={seekPercent}
-              onChange={handleSeek}
+              value={isDraggingSeek ? dragSeekVal : seekPercent}
+              onChange={handleSeekChange}
+              onAfterChange={handleSeekAfterChange}
               tooltip={{ formatter: (val) => `${val?.toFixed(0)}%` }}
               trackStyle={{ backgroundColor: '#e11d48' }}
               handleStyle={{ borderColor: '#e11d48', backgroundColor: '#e11d48' }}
