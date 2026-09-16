@@ -36,6 +36,23 @@ pub fn crc8(data: &[u8]) -> u8 {
     crc
 }
 
+/// Calculates CRC-8/ATM checksum using polynomial 0x07 (initial value 0x00).
+/// Used by PCController wire contract.
+pub fn crc8_atm(data: &[u8]) -> u8 {
+    let mut crc: u8 = 0x00;
+    for &byte in data {
+        crc ^= byte;
+        for _ in 0..8 {
+            if (crc & 0x80) != 0 {
+                crc = (crc << 1) ^ 0x07;
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+    crc
+}
+
 /// Encodes a byte buffer using Consistent Overhead Byte Stuffing (COBS).
 /// The resulting slice is guaranteed to contain no `0x00` bytes.
 pub fn cobs_encode(input: &[u8]) -> Vec<u8> {
@@ -184,4 +201,74 @@ pub fn parse_frame(frame: &[u8]) -> Result<Command, ProtocolError> {
         0x04 => Ok(Command::AllOff),
         _ => Err(ProtocolError::UnknownOpcode(opcode)),
     }
+}
+
+pub const PCCONTROLLER_MAGIC: u8 = 0xA5;
+pub const PCCONTROLLER_REVISION: u8 = 0x01;
+
+impl Command {
+    /// Serializes command into PCController wire contract frame:
+    /// `[0xA5, 0x01, opcode, sequence, payload_len, ...payload, crc8_atm]`
+    /// followed by COBS encoding and delimiter `0x00`.
+    pub fn to_pccontroller_frame(&self, sequence: u8) -> Vec<u8> {
+        match self {
+            Self::Ping => encode_pccontroller_frame(0x01, sequence, &[]),
+            Self::RelaySet { id, state } => {
+                encode_pccontroller_frame(0x31, sequence, &[*id, if *state { 1 } else { 0 }])
+            }
+            Self::PwmSet { channel, value } => {
+                let pwm_12bit = ((*value as u32 * 4095) / 255) as u16;
+                let val_bytes = pwm_12bit.to_le_bytes();
+                encode_pccontroller_frame(0x11, sequence, &[*channel, val_bytes[0], val_bytes[1]])
+            }
+            Self::AllOff => encode_pccontroller_frame(0x33, sequence, &[]),
+        }
+    }
+}
+
+/// Encodes a PCController wire envelope:
+/// `[0xA5, 0x01, opcode, sequence, payload_len, ...payload, crc8_atm]`
+/// followed by COBS framing and trailing `0x00` delimiter.
+pub fn encode_pccontroller_frame(opcode: u8, sequence: u8, payload: &[u8]) -> Vec<u8> {
+    let mut raw = Vec::with_capacity(6 + payload.len());
+    raw.push(PCCONTROLLER_MAGIC);
+    raw.push(PCCONTROLLER_REVISION);
+    raw.push(opcode);
+    raw.push(sequence);
+    raw.push(payload.len() as u8);
+    raw.extend_from_slice(payload);
+    let crc = crc8_atm(&raw);
+    raw.push(crc);
+    let mut framed = cobs_encode(&raw);
+    framed.push(0x00);
+    framed
+}
+
+/// Decodes and validates a PCController wire frame.
+/// Returns `Ok((opcode, sequence, payload))` on success.
+pub fn decode_pccontroller_frame(frame: &[u8]) -> Result<(u8, u8, Vec<u8>), ProtocolError> {
+    let frame_data = if frame.last() == Some(&0x00) {
+        &frame[..frame.len() - 1]
+    } else {
+        frame
+    };
+    let decoded = cobs_decode(frame_data)?;
+    if decoded.len() < 6 {
+        return Err(ProtocolError::PacketTooShort);
+    }
+    if decoded[0] != PCCONTROLLER_MAGIC {
+        return Err(ProtocolError::InvalidCobs);
+    }
+    let payload_len = decoded[4] as usize;
+    if decoded.len() != 6 + payload_len {
+        return Err(ProtocolError::PacketTooShort);
+    }
+    let (body, crc_slice) = decoded.split_at(decoded.len() - 1);
+    if crc8_atm(body) != crc_slice[0] {
+        return Err(ProtocolError::CrcMismatch);
+    }
+    let opcode = decoded[2];
+    let sequence = decoded[3];
+    let payload = decoded[5..5 + payload_len].to_vec();
+    Ok((opcode, sequence, payload))
 }

@@ -51,11 +51,35 @@ if ! command -v socat &>/dev/null; then
 fi
 
 echo "=================================================================="
-echo "Starting PTY virtual serial bridge via socat..."
-echo "Attach one endpoint to Pealayer and the other to VirtualBoard/mock."
-echo "Press Ctrl+C to stop the bridge."
+echo "Pealayer 4D Simulation Bridge"
+echo "Modes:"
+echo "  1) PTY <-> PTY (default):      ./scripts/sim_bridge.sh"
+echo "  2) PTY <-> TCP (VirtualBoard): ./scripts/sim_bridge.sh --tcp [PORT]"
+echo "  3) Spawn VirtualBoard + Bridge: ./scripts/sim_bridge.sh --spawn [PORT]"
 echo "=================================================================="
 
-# Launch socat with two raw, non-echoing PTY endpoints
-# -d -d prints informational and warning messages showing the assigned /dev/pts/N paths
-exec socat -d -d pty,raw,echo=0 pty,raw,echo=0
+MODE="${1:-pty}"
+PORT="${2:-8765}"
+VB_BIN="scratch/PCController/Tools/VirtualBoard/.build/release/bin/virtual_board"
+
+if [ "$MODE" = "--spawn" ] || [ "$MODE" = "spawn" ]; then
+    if [ ! -f "$VB_BIN" ]; then
+        echo "Error: VirtualBoard binary not found at $VB_BIN" >&2
+        echo "Please build it with cmake/ninja first." >&2
+        exit 1
+    fi
+    echo "Spawning VirtualBoard on 127.0.0.1:$PORT..."
+    "$VB_BIN" --bind 127.0.0.1 --port "$PORT" --quiet &
+    VB_PID=$!
+    trap 'echo "Stopping VirtualBoard (PID $VB_PID)..."; kill "$VB_PID" 2>/dev/null || true' EXIT INT TERM
+    sleep 0.2
+    echo "Bridging PTY <-> TCP 127.0.0.1:$PORT..."
+    exec socat -d -d pty,raw,echo=0 tcp:127.0.0.1:"$PORT"
+elif [ "$MODE" = "--tcp" ] || [ "$MODE" = "tcp" ]; then
+    echo "Bridging PTY <-> TCP 127.0.0.1:$PORT..."
+    exec socat -d -d pty,raw,echo=0 tcp:127.0.0.1:"$PORT"
+else
+    echo "Starting raw PTY <-> PTY loopback pair..."
+    exec socat -d -d pty,raw,echo=0 pty,raw,echo=0
+fi
+
