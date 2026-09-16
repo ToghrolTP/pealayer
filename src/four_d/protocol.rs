@@ -84,6 +84,9 @@ pub fn cobs_decode(input: &[u8]) -> Result<Vec<u8>, ProtocolError> {
             if idx >= input.len() {
                 return Err(ProtocolError::InvalidCobs);
             }
+            if input[idx] == 0 {
+                return Err(ProtocolError::InvalidCobs);
+            }
             output.push(input[idx]);
             idx += 1;
         }
@@ -92,4 +95,93 @@ pub fn cobs_decode(input: &[u8]) -> Result<Vec<u8>, ProtocolError> {
         }
     }
     Ok(output)
+}
+
+/// Strongly typed commands for 4D cinema hardware control.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Command {
+    Ping,
+    RelaySet { id: u8, state: bool },
+    PwmSet { channel: u8, value: u8 },
+    AllOff,
+}
+
+impl Command {
+    /// Serializes command into raw payload bytes according to the wire specification:
+    /// - Opcode 0x01: Ping (1 byte: `[0x01]`)
+    /// - Opcode 0x02: RelaySet { id, state } (3 bytes: `[0x02, id, state: 0/1]`)
+    /// - Opcode 0x03: PwmSet { channel, value } (3 bytes: `[0x03, channel, value: 0-255]`)
+    /// - Opcode 0x04: AllOff (1 byte: `[0x04]`)
+    pub fn to_payload(&self) -> Vec<u8> {
+        match self {
+            Self::Ping => vec![0x01],
+            Self::RelaySet { id, state } => vec![0x02, *id, if *state { 1 } else { 0 }],
+            Self::PwmSet { channel, value } => vec![0x03, *channel, *value],
+            Self::AllOff => vec![0x04],
+        }
+    }
+
+    /// Serializes command into framed bytes:
+    /// 1. `payload` + `crc8(payload)`
+    /// 2. `cobs_encode(payload_with_crc)`
+    /// 3. Delimiter `0x00` appended at the end
+    pub fn to_frame(&self) -> Vec<u8> {
+        let mut data = self.to_payload();
+        let crc = crc8(&data);
+        data.push(crc);
+        let mut framed = cobs_encode(&data);
+        framed.push(0x00);
+        framed
+    }
+}
+
+/// Parses and validates a received frame into a typed `Command`:
+/// 1. Strips trailing delimiter `0x00` if present.
+/// 2. Decodes COBS framing.
+/// 3. Validates length >= 2 bytes (payload + CRC-8).
+/// 4. Verifies CRC-8 checksum against the payload.
+/// 5. Parses opcode and deserializes command fields.
+pub fn parse_frame(frame: &[u8]) -> Result<Command, ProtocolError> {
+    let frame_data = if frame.last() == Some(&0x00) {
+        &frame[..frame.len() - 1]
+    } else {
+        frame
+    };
+
+    let decoded = cobs_decode(frame_data)?;
+    if decoded.len() < 2 {
+        return Err(ProtocolError::PacketTooShort);
+    }
+
+    let payload = &decoded[..decoded.len() - 1];
+    let expected_crc = decoded[decoded.len() - 1];
+
+    if crc8(payload) != expected_crc {
+        return Err(ProtocolError::CrcMismatch);
+    }
+
+    let opcode = payload[0];
+    match opcode {
+        0x01 => Ok(Command::Ping),
+        0x02 => {
+            if payload.len() < 3 {
+                return Err(ProtocolError::PacketTooShort);
+            }
+            Ok(Command::RelaySet {
+                id: payload[1],
+                state: payload[2] != 0,
+            })
+        }
+        0x03 => {
+            if payload.len() < 3 {
+                return Err(ProtocolError::PacketTooShort);
+            }
+            Ok(Command::PwmSet {
+                channel: payload[1],
+                value: payload[2],
+            })
+        }
+        0x04 => Ok(Command::AllOff),
+        _ => Err(ProtocolError::UnknownOpcode(opcode)),
+    }
 }
