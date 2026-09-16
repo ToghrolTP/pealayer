@@ -71,7 +71,7 @@ pub fn cobs_decode(input: &[u8]) -> Result<Vec<u8>, ProtocolError> {
     if input.is_empty() {
         return Ok(Vec::new());
     }
-    let mut output = Vec::new();
+    let mut output = Vec::with_capacity(input.len());
     let mut idx = 0;
 
     while idx < input.len() {
