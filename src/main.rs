@@ -169,6 +169,7 @@ fn main() -> eframe::Result {
                     texture_height: 1080,
                 })),
                 selected_instance_ids: std::collections::HashSet::new(),
+                selected_keyframe: None,
                 relay_overrides: [None; 9],
                 preset_library: vec![
                     // Atmospherics

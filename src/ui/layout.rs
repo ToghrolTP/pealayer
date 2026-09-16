@@ -510,7 +510,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     let (rect, _response) = ui.allocate_exact_size(egui::vec2(180.0, 32.0), egui::Sense::hover());
                                     // Draw background with dark Premiere aesthetics
                                     ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(26, 26, 26));
-                                    ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 45, 45)), egui::StrokeKind::Inside);
+                                    ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(45, 45, 45)), egui::StrokeKind::Inside);
                                     
                                     // Create a nested UI at this rect to place buttons
                                     let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
@@ -552,18 +552,53 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
                                     });
                                 }
+
+                                // Analog Curve Track Headers
+                                let mut analog_tracks_changed = false;
+                                for track in self.app.timeline.analog_tracks.iter_mut() {
+                                    let (rect, _response) = ui.allocate_exact_size(egui::vec2(180.0, 40.0), egui::Sense::hover());
+                                    ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(22, 28, 32));
+                                    ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(45, 45, 45)), egui::StrokeKind::Inside);
+
+                                    let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+                                    child_ui.horizontal(|ui| {
+                                        ui.add_space(6.0);
+                                        ui.allocate_ui(egui::vec2(85.0, 20.0), |ui| {
+                                            ui.label(egui::RichText::new(format!("P{}: {}", track.channel, track.name)).size(10.5).strong().color(egui::Color32::from_rgb(0, 220, 255)));
+                                        });
+
+                                        let m_btn = ui.selectable_label(track.muted, egui::RichText::new("M").strong().size(10.0));
+                                        if m_btn.clicked() {
+                                            track.muted = !track.muted;
+                                            analog_tracks_changed = true;
+                                        }
+
+                                        let add_btn = ui.button(egui::RichText::new("+").size(10.0));
+                                        if add_btn.clicked() {
+                                            let cur_ms = (self.app.playback_time * 1000.0) as u64;
+                                            let cur_val = track.evaluate(cur_ms);
+                                            track.add_keyframe(crate::four_d::curve::Keyframe::new(cur_ms, cur_val, crate::four_d::curve::Interpolation::Linear));
+                                            analog_tracks_changed = true;
+                                        }
+                                    });
+                                }
+                                if analog_tracks_changed {
+                                    let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateAnalogTracks(self.app.timeline.analog_tracks.clone()));
+                                }
                             });
                             
                             // 2. Right column: Scrollable Timeline Grid
                             let total_seconds = if self.app.duration > 0.0 { self.app.duration } else { 60.0 };
                             let total_width = (total_seconds * 100.0) as f32;
+                            let num_analog = self.app.timeline.analog_tracks.len();
+                            let total_height = 320.0 + (num_analog as f32 * 40.0);
                             
                             // Define dropping target zone
                             let drop_res = ui.dnd_drop_zone::<EffectDragPayload, _>(egui::Frame::NONE, |ui| {
                                 egui::ScrollArea::both()
                                     .id_salt("timeline_scroll")
                                     .show(ui, |ui| {
-                                        let size = egui::vec2(total_width, 320.0);
+                                        let size = egui::vec2(total_width, total_height);
                                         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
                                         
                                         let painter = ui.painter();
@@ -578,7 +613,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             if grid_x <= rect.max.x {
                                                 painter.line_segment(
                                                     [egui::pos2(grid_x, rect.min.y), egui::pos2(grid_x, rect.max.y)],
-                                                    egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 50, 50)),
+                                                    egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(50, 50, 50)),
                                                 );
                                                 // Label time at top
                                                 painter.text(
@@ -609,7 +644,16 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             
                                             painter.line_segment(
                                                 [egui::pos2(rect.min.x, grid_y), egui::pos2(rect.max.x, grid_y)],
-                                                egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 45, 45)),
+                                                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(45, 45, 45)),
+                                            );
+                                        }
+
+                                        // Horizontal separators for Analog tracks
+                                        for (t_idx, _) in self.app.timeline.analog_tracks.iter().enumerate() {
+                                            let grid_y = rect.min.y + 320.0 + ((t_idx + 1) as f32 * 40.0);
+                                            painter.line_segment(
+                                                [egui::pos2(rect.min.x, grid_y), egui::pos2(rect.max.x, grid_y)],
+                                                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(45, 45, 45)),
                                             );
                                         }
                                         
@@ -641,7 +685,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 egui::pos2(rect.min.x + total_width, rect.min.y + 28.0),
                                             );
                                             painter.rect_filled(video_clip_rect, 4.0, egui::Color32::from_rgb(41, 128, 185)); // Blue clip
-                                            painter.rect_stroke(video_clip_rect, 4.0, egui::Stroke::new(1.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
+                                            painter.rect_stroke(video_clip_rect, 4.0, egui::Stroke::new(1.0_f32, egui::Color32::WHITE), egui::StrokeKind::Inside);
                                             painter.text(
                                                 video_clip_rect.left_center() + egui::vec2(10.0, 0.0),
                                                 egui::Align2::LEFT_CENTER,
@@ -656,7 +700,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 egui::pos2(rect.min.x + total_width, rect.min.y + 32.0 + 28.0),
                                             );
                                             painter.rect_filled(audio_clip_rect, 4.0, egui::Color32::from_rgb(39, 174, 96)); // Green clip
-                                            painter.rect_stroke(audio_clip_rect, 4.0, egui::Stroke::new(1.0, egui::Color32::WHITE), egui::StrokeKind::Inside);
+                                            painter.rect_stroke(audio_clip_rect, 4.0, egui::Stroke::new(1.0_f32, egui::Color32::WHITE), egui::StrokeKind::Inside);
                                             painter.text(
                                                 audio_clip_rect.left_center() + egui::vec2(10.0, 0.0),
                                                 egui::Align2::LEFT_CENTER,
@@ -767,7 +811,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 } else {
                                                     egui::Color32::WHITE
                                                 };
-                                                let stroke_width = if is_selected { 2.0 } else { 1.0 };
+                                                let stroke_width = if is_selected { 2.0_f32 } else { 1.0_f32 };
                                                 
                                                 let is_muted = self.app.track_muted[relay_id as usize];
                                                 let alpha = if is_muted { 128 } else { 255 };
@@ -795,7 +839,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             } else {
                                                 egui::Color32::WHITE
                                             };
-                                            let stroke_width = if is_selected { 2.0 } else { 1.0 };
+                                            let stroke_width = if is_selected { 2.0_f32 } else { 1.0_f32 };
                                             
                                             // Draw drop shadow
                                             let shadow_rect = clip_rect.translate(egui::vec2(2.0, 3.0));
@@ -967,13 +1011,160 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             ui.ctx().request_repaint();
                                         }
 
+                                        // Render Analog Curve Tracks
+                                        let mut clicked_any_keyframe = false;
+                                        let mut curve_updated = false;
+                                        let pointer_pos = ui.ctx().pointer_latest_pos();
+
+                                        for (t_idx, track) in self.app.timeline.analog_tracks.iter_mut().enumerate() {
+                                            let row_y = rect.min.y + 320.0 + (t_idx as f32 * 40.0);
+                                            let row_rect = egui::Rect::from_min_max(
+                                                egui::pos2(rect.min.x, row_y),
+                                                egui::pos2(rect.max.x, row_y + 40.0),
+                                            );
+
+                                            // Row background shading
+                                            painter.rect_filled(row_rect, 0.0, egui::Color32::from_rgb(20, 25, 29));
+
+                                            // Centerline guide (50% intensity)
+                                            painter.line_segment(
+                                                [egui::pos2(rect.min.x, row_y + 20.0), egui::pos2(rect.max.x, row_y + 20.0)],
+                                                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(34, 42, 48)),
+                                            );
+
+                                            // Sample continuous curve along timeline
+                                            let step_px = 6.0_f32;
+                                            let mut points = Vec::new();
+                                            let mut curr_x = rect.min.x;
+                                            while curr_x <= rect.max.x {
+                                                let t_ms = (((curr_x - rect.min.x) / 100.0) * 1000.0).max(0.0) as u64;
+                                                let norm_val = track.evaluate(t_ms);
+                                                let py = (row_y + 36.0) - (norm_val * 32.0);
+                                                points.push(egui::pos2(curr_x, py));
+                                                curr_x += step_px;
+                                            }
+
+                                            // Draw translucent fill under curve
+                                            let fill_col = if track.muted {
+                                                egui::Color32::from_rgba_unmultiplied(100, 100, 100, 20)
+                                            } else {
+                                                egui::Color32::from_rgba_unmultiplied(0, 200, 255, 30)
+                                            };
+                                            for window in points.windows(2) {
+                                                let p1 = window[0];
+                                                let p2 = window[1];
+                                                let b1 = egui::pos2(p1.x, row_y + 36.0);
+                                                let b2 = egui::pos2(p2.x, row_y + 36.0);
+                                                painter.add(egui::Shape::convex_polygon(
+                                                    vec![b1, p1, p2, b2],
+                                                    fill_col,
+                                                    egui::Stroke::NONE,
+                                                ));
+                                            }
+
+                                            // Draw curve line
+                                            let curve_color = if track.muted {
+                                                egui::Color32::from_rgb(110, 110, 110)
+                                            } else {
+                                                egui::Color32::from_rgb(0, 220, 255)
+                                            };
+                                            painter.add(egui::Shape::line(
+                                                points,
+                                                egui::Stroke::new(1.8_f32, curve_color),
+                                            ));
+
+                                            // Keyframe markers and interactions
+                                            let mut kf_to_remove = None;
+                                            let mut kf_to_move = None;
+
+                                            for (k_idx, kf) in track.keyframes.iter().enumerate() {
+                                                let kx = rect.min.x + (kf.time_ms as f32 / 1000.0) * 100.0;
+                                                let ky = (row_y + 36.0) - (kf.value * 32.0);
+                                                let center = egui::pos2(kx, ky);
+                                                let is_selected = self.app.selected_keyframe == Some((track.id, k_idx));
+
+                                                let diamond = vec![
+                                                    egui::pos2(center.x, center.y - 5.0),
+                                                    egui::pos2(center.x + 5.0, center.y),
+                                                    egui::pos2(center.x, center.y + 5.0),
+                                                    egui::pos2(center.x - 5.0, center.y),
+                                                ];
+                                                let fill_diamond = if is_selected {
+                                                    egui::Color32::from_rgb(255, 230, 0)
+                                                } else {
+                                                    curve_color
+                                                };
+                                                painter.add(egui::Shape::convex_polygon(
+                                                    diamond,
+                                                    fill_diamond,
+                                                    egui::Stroke::new(1.2_f32, egui::Color32::WHITE),
+                                                ));
+
+                                                if let Some(pos) = pointer_pos {
+                                                    if pos.distance(center) <= 8.0 {
+                                                        if ui.input(|i| i.pointer.primary_clicked()) {
+                                                            self.app.selected_keyframe = Some((track.id, k_idx));
+                                                            clicked_any_keyframe = true;
+                                                        } else if ui.input(|i| i.pointer.secondary_clicked()) {
+                                                            kf_to_remove = Some(k_idx);
+                                                            clicked_any_keyframe = true;
+                                                        }
+                                                    }
+                                                }
+
+                                                if is_selected && ui.input(|i| i.pointer.primary_down()) {
+                                                    if let Some(pos) = pointer_pos {
+                                                        if row_rect.contains(pos) || pos.distance(center) <= 25.0 {
+                                                            let new_t = (((pos.x - rect.min.x) / 100.0) * 1000.0).max(0.0) as u64;
+                                                            let new_v = ((row_y + 36.0 - pos.y) / 32.0).clamp(0.0, 1.0);
+                                                            kf_to_move = Some((k_idx, new_t, new_v));
+                                                            clicked_any_keyframe = true;
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            if let Some(k_idx) = kf_to_remove {
+                                                track.keyframes.remove(k_idx);
+                                                self.app.selected_keyframe = None;
+                                                curve_updated = true;
+                                            } else if let Some((k_idx, new_t, new_v)) = kf_to_move {
+                                                track.keyframes[k_idx].time_ms = new_t;
+                                                track.keyframes[k_idx].value = new_v;
+                                                track.keyframes.sort_by_key(|k| k.time_ms);
+                                                curve_updated = true;
+                                            } else if response.double_clicked() {
+                                                if let Some(pos) = response.interact_pointer_pos() {
+                                                    if row_rect.contains(pos) {
+                                                        let new_t = (((pos.x - rect.min.x) / 100.0) * 1000.0).max(0.0) as u64;
+                                                        let new_v = ((row_y + 36.0 - pos.y) / 32.0).clamp(0.0, 1.0);
+                                                        track.add_keyframe(crate::four_d::curve::Keyframe::new(
+                                                            new_t,
+                                                            new_v,
+                                                            crate::four_d::curve::Interpolation::Linear,
+                                                        ));
+                                                        curve_updated = true;
+                                                        clicked_any_keyframe = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        if curve_updated {
+                                            let _ = self.app.engine_handle.sender.send(
+                                                crate::four_d::engine::EngineMessage::UpdateAnalogTracks(
+                                                    self.app.timeline.analog_tracks.clone(),
+                                                ),
+                                            );
+                                        }
+
                                         // Draw Playhead
                                         let playhead_x = rect.min.x + (self.app.playback_time as f32 * 100.0);
                                         if playhead_x <= rect.max.x {
                                             // Vertical line
                                             painter.line_segment(
                                                 [egui::pos2(playhead_x, rect.min.y), egui::pos2(playhead_x, rect.max.y)],
-                                                egui::Stroke::new(1.5, egui::Color32::RED),
+                                                egui::Stroke::new(1.5_f32, egui::Color32::RED),
                                             );
                                             // Playhead handle (triangle at top)
                                             let points = vec![
@@ -988,7 +1179,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         if let Some(x) = snap_line_x {
                                             painter.line_segment(
                                                 [egui::pos2(x, rect.min.y), egui::pos2(x, rect.max.y)],
-                                                egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 255)), // Cyan snap line
+                                                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(0, 255, 255)), // Cyan snap line
                                             );
                                         }
                                         
@@ -1035,16 +1226,16 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 lasso_rect,
                                                 2.0,
                                                 egui::Color32::from_rgba_unmultiplied(52, 152, 219, 30),
-                                                egui::Stroke::new(1.0, egui::Color32::from_rgb(52, 152, 219)),
+                                                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(52, 152, 219)),
                                                 egui::StrokeKind::Inside,
                                             );
                                         }
                                         
-                                        ((rect, response), clicked_any_clip)
+                                        ((rect, response), clicked_any_clip, clicked_any_keyframe)
                                     })
                             });
                             
-                            let ((rect, response), clicked_any_clip) = drop_res.0.inner.inner;
+                            let ((rect, response), clicked_any_clip, clicked_any_keyframe) = drop_res.0.inner.inner;
                             
                             // Successful drop logic
                             if let Some(payload) = &drop_res.1 {
@@ -1145,13 +1336,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 self.app.lasso_rect = None;
                             }
                             
-                            if response.clicked() && !clicked_any_clip && self.app.active_drag.is_none() {
+                            if response.clicked() && !clicked_any_clip && !clicked_any_keyframe && self.app.active_drag.is_none() {
                                 if let Some(mouse_pos) = response.interact_pointer_pos() {
-                                    self.app.selected_instance_ids.clear();
-                                    let relative_x = mouse_pos.x - rect.min.x;
-                                    let seek_time = (relative_x / 100.0) as f64;
-                                    let target_time = seek_time.clamp(0.0, total_seconds);
-                                    let _ = self.app.mpv.command("seek", &[&target_time.to_string(), "absolute"]);
+                                    if mouse_pos.y < rect.min.y + 320.0 {
+                                        self.app.selected_instance_ids.clear();
+                                        let relative_x = mouse_pos.x - rect.min.x;
+                                        let seek_time = (relative_x / 100.0) as f64;
+                                        let target_time = seek_time.clamp(0.0, total_seconds);
+                                        let _ = self.app.mpv.command("seek", &[&target_time.to_string(), "absolute"]);
+                                    }
                                 }
                             }
                         });
@@ -1220,7 +1413,7 @@ fn draw_led(ui: &mut egui::Ui, active: bool) {
         center,
         outer_radius,
         egui::Color32::TRANSPARENT,
-        egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 100, 100)),
+        egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(100, 100, 100)),
     );
     
     // Emissive filled circle

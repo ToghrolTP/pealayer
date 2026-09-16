@@ -81,6 +81,7 @@ pub struct PealayerApp {
     
     // Phase 4 & 5 Selection/Override state
     pub(crate) selected_instance_ids: std::collections::HashSet<uuid::Uuid>,
+    pub(crate) selected_keyframe: Option<(uuid::Uuid, usize)>,
     pub(crate) recording_keys: std::collections::HashMap<eframe::egui::Key, (uuid::Uuid, std::time::Instant)>,
     pub(crate) relay_overrides: [Option<bool>; 9],
 

@@ -15,6 +15,7 @@ pub struct CompiledAction {
 
 pub enum EngineMessage {
     UpdateQueue(Vec<CompiledAction>),
+    UpdateAnalogTracks(Vec<crate::four_d::curve::AnalogTrack>),
     Seek(u64), // Emitted when user seeks, to clear current active queue and reset hardware
     SendCommand(Command), // Manual override or direct hardware command
 }
@@ -49,6 +50,8 @@ pub fn spawn_engine() -> EngineHandle {
     thread::spawn(move || {
         let mut queue: Vec<CompiledAction> = Vec::new();
         let mut current_queue_index = 0;
+        let mut analog_tracks: Vec<crate::four_d::curve::AnalogTrack> = Vec::new();
+        let mut last_pwm_values = [0u8; 16];
         let mut was_playing = false;
         let mut was_estop = false;
         let mut last_ping = std::time::Instant::now();
@@ -101,6 +104,10 @@ pub fn spawn_engine() -> EngineHandle {
                         let current_time = engine_time.load(Ordering::Relaxed);
                         current_queue_index = queue.partition_point(|x| x.time_ms < current_time);
                     }
+                    EngineMessage::UpdateAnalogTracks(tracks) => {
+                        analog_tracks = tracks;
+                        last_pwm_values.fill(0);
+                    }
                     EngineMessage::Seek(time) => {
                         if connected {
                             if let Some(ref mut port) = active_port {
@@ -120,6 +127,7 @@ pub fn spawn_engine() -> EngineHandle {
                             println!("[{}] ALL_OFF (Seek to {}ms)", port_name, time);
                         }
                         current_queue_index = queue.partition_point(|x| x.time_ms < time);
+                        last_pwm_values.fill(0);
                     }
                     EngineMessage::SendCommand(cmd) => {
                         if connected {
@@ -139,6 +147,7 @@ pub fn spawn_engine() -> EngineHandle {
             }
             
             if estop_now && !was_estop {
+                last_pwm_values.fill(0);
                 if connected {
                     if let Some(ref mut port) = active_port {
                         let frame = Command::AllOff.to_frame();
@@ -157,6 +166,7 @@ pub fn spawn_engine() -> EngineHandle {
             
             // Handle pause state transition
             if was_playing && !is_playing_now {
+                last_pwm_values.fill(0);
                 if connected {
                     if let Some(ref mut port) = active_port {
                         let frame = Command::AllOff.to_frame();
@@ -204,6 +214,33 @@ pub fn spawn_engine() -> EngineHandle {
                         current_queue_index += 1;
                     } else {
                         break;
+                    }
+                }
+
+                // Evaluate continuous analog curves
+                for track in &analog_tracks {
+                    if track.enabled && !track.muted && (track.channel as usize) < 16 {
+                        let ch = track.channel as usize;
+                        let val = track.evaluate_u8(current_time);
+                        if val != last_pwm_values[ch] {
+                            last_pwm_values[ch] = val;
+                            if connected {
+                                if let Some(ref mut port) = active_port {
+                                    let cmd = Command::PwmSet {
+                                        channel: track.channel,
+                                        value: val,
+                                    };
+                                    let frame = cmd.to_frame();
+                                    if let Err(e) = port.write_all(&frame) {
+                                        let err_msg = format!("Serial write error (PWM): {}", e);
+                                        if let Ok(mut guard) = engine_conn_error.lock() {
+                                            *guard = Some(err_msg);
+                                        }
+                                        engine_connected.store(false, Ordering::Relaxed);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -481,6 +518,19 @@ mod tests {
         assert!(res.is_ok());
         let res_all_off = handle.sender.send(EngineMessage::SendCommand(Command::AllOff));
         assert!(res_all_off.is_ok());
+    }
+
+    #[test]
+    fn test_engine_message_update_analog_tracks() {
+        let handle = spawn_engine();
+        let mut track = crate::four_d::curve::AnalogTrack::new("Wind Fan", 0);
+        track.add_keyframe(crate::four_d::curve::Keyframe::new(
+            0,
+            0.5,
+            crate::four_d::curve::Interpolation::Linear,
+        ));
+        let res = handle.sender.send(EngineMessage::UpdateAnalogTracks(vec![track]));
+        assert!(res.is_ok());
     }
 }
 

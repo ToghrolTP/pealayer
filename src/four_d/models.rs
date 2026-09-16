@@ -61,12 +61,28 @@ impl EffectInstance {
 }
 
 /// The entire sequence of effects programmed for a video.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Timeline {
     /// The specific instances placed on the timeline
     pub instances: Vec<EffectInstance>,
     /// Available effect templates in this project
     pub templates: Vec<Effect>,
+    /// Continuous analog curve tracks (e.g. PWM fan curves, rumblers)
+    #[serde(default)]
+    pub analog_tracks: Vec<crate::four_d::curve::AnalogTrack>,
+}
+
+impl Default for Timeline {
+    fn default() -> Self {
+        Self {
+            instances: Vec::new(),
+            templates: Vec::new(),
+            analog_tracks: vec![
+                crate::four_d::curve::AnalogTrack::new("Wind Turbine", 0),
+                crate::four_d::curve::AnalogTrack::new("Seat Rumble", 1),
+            ],
+        }
+    }
 }
 
 impl Timeline {

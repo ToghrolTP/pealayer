@@ -1,3 +1,4 @@
+pub mod curve;
 pub mod engine;
 pub mod models;
 pub mod patterns;
