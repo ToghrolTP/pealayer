@@ -4,6 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::four_d::models::Timeline;
+use crate::four_d::protocol::Command;
 
 #[derive(Debug, Clone)]
 pub struct CompiledAction {
@@ -15,6 +16,7 @@ pub struct CompiledAction {
 pub enum EngineMessage {
     UpdateQueue(Vec<CompiledAction>),
     Seek(u64), // Emitted when user seeks, to clear current active queue and reset hardware
+    SendCommand(Command), // Manual override or direct hardware command
 }
 
 pub struct EngineHandle {
@@ -49,6 +51,7 @@ pub fn spawn_engine() -> EngineHandle {
         let mut current_queue_index = 0;
         let mut was_playing = false;
         let mut was_estop = false;
+        let mut last_ping = std::time::Instant::now();
         
         let mut active_port: Option<Box<dyn serialport::SerialPort>> = None;
         
@@ -62,13 +65,15 @@ pub fn spawn_engine() -> EngineHandle {
                     let guard = engine_port.lock().unwrap();
                     guard.clone()
                 };
-                match serialport::new(&port_name, 9600)
+                let baud_rate = 115200;
+                match serialport::new(&port_name, baud_rate)
                     .timeout(Duration::from_millis(15))
                     .open()
                 {
                     Ok(p) => {
                         active_port = Some(p);
-                        println!("[Engine] Connected to serial port: {}", port_name);
+                        println!("[Engine] Connected to serial port: {} @ {} baud", port_name, baud_rate);
+                        last_ping = std::time::Instant::now();
                     }
                     Err(e) => {
                         let err_msg = format!("Failed to open port {}: {}", port_name, e);
@@ -79,11 +84,10 @@ pub fn spawn_engine() -> EngineHandle {
                     }
                 }
             } else if !connected && active_port.is_some() {
-                // Graceful disconnect: turn off relays
+                // Graceful disconnect: send AllOff
                 if let Some(ref mut port) = active_port {
-                    for i in 1..=8 {
-                        let _ = port.write_all(format!("R{}:0\n", i).as_bytes());
-                    }
+                    let frame = Command::AllOff.to_frame();
+                    let _ = port.write_all(&frame);
                 }
                 active_port = None;
                 println!("[Engine] Disconnected from serial port");
@@ -100,19 +104,36 @@ pub fn spawn_engine() -> EngineHandle {
                     EngineMessage::Seek(time) => {
                         if connected {
                             if let Some(ref mut port) = active_port {
-                                for i in 1..=8 {
-                                    let _ = port.write_all(format!("R{}:0\n", i).as_bytes());
+                                let frame = Command::AllOff.to_frame();
+                                if let Err(e) = port.write_all(&frame) {
+                                    let err_msg = format!("Serial write error on seek: {}", e);
+                                    if let Ok(mut guard) = engine_conn_error.lock() {
+                                        *guard = Some(err_msg);
+                                    }
+                                    engine_connected.store(false, Ordering::Relaxed);
                                 }
                             }
                             let port_name = {
                                 let guard = engine_port.lock().unwrap();
                                 guard.clone()
                             };
-                            for i in 1..=8 {
-                                println!("[{}] {}:OFF", port_name, i);
-                            }
+                            println!("[{}] ALL_OFF (Seek to {}ms)", port_name, time);
                         }
                         current_queue_index = queue.partition_point(|x| x.time_ms < time);
+                    }
+                    EngineMessage::SendCommand(cmd) => {
+                        if connected {
+                            if let Some(ref mut port) = active_port {
+                                let frame = cmd.to_frame();
+                                if let Err(e) = port.write_all(&frame) {
+                                    let err_msg = format!("Serial write error: {}", e);
+                                    if let Ok(mut guard) = engine_conn_error.lock() {
+                                        *guard = Some(err_msg);
+                                    }
+                                    engine_connected.store(false, Ordering::Relaxed);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -120,17 +141,14 @@ pub fn spawn_engine() -> EngineHandle {
             if estop_now && !was_estop {
                 if connected {
                     if let Some(ref mut port) = active_port {
-                        for i in 1..=8 {
-                            let _ = port.write_all(format!("R{}:0\n", i).as_bytes());
-                        }
+                        let frame = Command::AllOff.to_frame();
+                        let _ = port.write_all(&frame);
                     }
                     let port_name = {
                         let guard = engine_port.lock().unwrap();
                         guard.clone()
                     };
-                    for i in 1..=8 {
-                        println!("[{}] {}:OFF (E-STOP)", port_name, i);
-                    }
+                    println!("[{}] ALL_OFF (E-STOP)", port_name);
                 }
             }
             was_estop = estop_now;
@@ -141,17 +159,14 @@ pub fn spawn_engine() -> EngineHandle {
             if was_playing && !is_playing_now {
                 if connected {
                     if let Some(ref mut port) = active_port {
-                        for i in 1..=8 {
-                            let _ = port.write_all(format!("R{}:0\n", i).as_bytes());
-                        }
+                        let frame = Command::AllOff.to_frame();
+                        let _ = port.write_all(&frame);
                     }
                     let port_name = {
                         let guard = engine_port.lock().unwrap();
                         guard.clone()
                     };
-                    for i in 1..=8 {
-                        println!("[{}] {}:OFF", port_name, i);
-                    }
+                    println!("[{}] ALL_OFF (Pause)", port_name);
                 }
             }
             was_playing = is_playing_now;
@@ -172,8 +187,12 @@ pub fn spawn_engine() -> EngineHandle {
                             println!("[{}] {}:{}", port_name, action.relay_id, state_str);
                             
                             if let Some(ref mut port) = active_port {
-                                let cmd = format!("R{}:{}\n", action.relay_id, if action.state { 1 } else { 0 });
-                                if let Err(e) = port.write_all(cmd.as_bytes()) {
+                                let cmd = Command::RelaySet {
+                                    id: action.relay_id,
+                                    state: action.state,
+                                };
+                                let frame = cmd.to_frame();
+                                if let Err(e) = port.write_all(&frame) {
                                     let err_msg = format!("Serial write error: {}", e);
                                     if let Ok(mut guard) = engine_conn_error.lock() {
                                         *guard = Some(err_msg);
@@ -187,6 +206,15 @@ pub fn spawn_engine() -> EngineHandle {
                         break;
                     }
                 }
+            }
+            
+            // Periodic watchdog heartbeat (every 50ms when connected)
+            if connected && active_port.is_some() && last_ping.elapsed() >= Duration::from_millis(50) {
+                if let Some(ref mut port) = active_port {
+                    let frame = Command::Ping.to_frame();
+                    let _ = port.write_all(&frame);
+                }
+                last_ping = std::time::Instant::now();
             }
             
             thread::sleep(Duration::from_millis(5));
@@ -444,6 +472,15 @@ mod tests {
         // Only Relay 1 should produce compiled actions since it is soloed
         assert!(compiled.iter().any(|act| act.relay_id == 1));
         assert!(compiled.iter().all(|act| act.relay_id != 2));
+    }
+
+    #[test]
+    fn test_engine_message_send_command() {
+        let handle = spawn_engine();
+        let res = handle.sender.send(EngineMessage::SendCommand(Command::PwmSet { channel: 1, value: 200 }));
+        assert!(res.is_ok());
+        let res_all_off = handle.sender.send(EngineMessage::SendCommand(Command::AllOff));
+        assert!(res_all_off.is_ok());
     }
 }
 
