@@ -36,7 +36,7 @@ impl Drop for TestVirtualBoard {
 
 #[test]
 fn test_live_recording_to_virtual_board_stream() {
-    let port = 8793;
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let vb = TestVirtualBoard::spawn(port);
 
     let mut stream = TcpStream::connect(("127.0.0.1", vb.port))

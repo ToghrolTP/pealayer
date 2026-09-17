@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 /// Captures physical and virtual inputs (keyboard, slider, gamepad) and normalizes to 0.0 ..= 1.0.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InputCaptureState {
     pub current_throttle: f32,
     pub last_update: Instant,
@@ -24,11 +24,13 @@ impl InputCaptureState {
     }
 
     pub fn set_throttle(&mut self, value: f32) {
+        if value.is_nan() { return; }
         self.current_throttle = value.clamp(0.0, 1.0);
         self.last_update = Instant::now();
     }
 
     pub fn ramp_throttle(&mut self, delta: f32) {
+        if delta.is_nan() { return; }
         self.current_throttle = (self.current_throttle + delta).clamp(0.0, 1.0);
         self.last_update = Instant::now();
     }

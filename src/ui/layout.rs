@@ -57,24 +57,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     }
                                     if ui.add_sized([30.0, 22.0], egui::Button::new("⏹")).clicked() {
                                         // Punch out on stop
-                                        let mut changed = false;
-                                        for track in self.app.timeline.analog_tracks.iter_mut() {
-                                            if self.app.recording_session.sample_count(track.id) > 0 {
-                                                self.app.recording_session.commit_to_track(
-                                                    track,
-                                                    0.015,
-                                                    crate::four_d::curve::Interpolation::Smooth,
-                                                );
-                                                changed = true;
-                                            }
-                                        }
-                                        if changed {
-                                            let _ = self.app.engine_handle.sender.send(
-                                                crate::four_d::engine::EngineMessage::UpdateAnalogTracks(
-                                                    self.app.timeline.analog_tracks.clone(),
-                                                ),
-                                            );
-                                        }
+                                        self.app.commit_recorded_samples();
 
                                         let _ = self.app.mpv.command("seek", &["0", "absolute"]);
                                         let _ = self.app.mpv.set_property("pause", true);
@@ -111,24 +94,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     }
                                     if has_video && response.drag_stopped() {
                                         // Punch out on seek
-                                        let mut changed = false;
-                                        for track in self.app.timeline.analog_tracks.iter_mut() {
-                                            if self.app.recording_session.sample_count(track.id) > 0 {
-                                                self.app.recording_session.commit_to_track(
-                                                    track,
-                                                    0.015,
-                                                    crate::four_d::curve::Interpolation::Smooth,
-                                                );
-                                                changed = true;
-                                            }
-                                        }
-                                        if changed {
-                                            let _ = self.app.engine_handle.sender.send(
-                                                crate::four_d::engine::EngineMessage::UpdateAnalogTracks(
-                                                    self.app.timeline.analog_tracks.clone(),
-                                                ),
-                                            );
-                                        }
+                                        self.app.commit_recorded_samples();
                                         
                                         let _ = self.app.mpv.command("seek", &[&current_pos.to_string(), "absolute"]);
                                         self.app.seek_pos = None;
@@ -1122,24 +1088,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
 
                                         if was_recording && !is_playing_now {
-                                            let mut changed = false;
-                                            for track in self.app.timeline.analog_tracks.iter_mut() {
-                                                if self.app.recording_session.sample_count(track.id) > 0 {
-                                                    self.app.recording_session.commit_to_track(
-                                                        track,
-                                                        0.015,
-                                                        crate::four_d::curve::Interpolation::Smooth,
-                                                    );
-                                                    changed = true;
-                                                }
-                                            }
-                                            if changed {
-                                                let _ = self.app.engine_handle.sender.send(
-                                                    crate::four_d::engine::EngineMessage::UpdateAnalogTracks(
-                                                        self.app.timeline.analog_tracks.clone(),
-                                                    ),
-                                                );
-                                            }
+                                            self.app.commit_recorded_samples();
                                         }
                                         
                                         if self.app.is_recording || (is_playing_now && self.app.timeline.analog_tracks.iter().any(|t| t.armed)) {
@@ -1497,24 +1446,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let seek_time = (relative_x / 100.0) as f64;
                                         let target_time = seek_time.clamp(0.0, total_seconds);
                                         // Punch out on seek
-                                        let mut changed = false;
-                                        for track in self.app.timeline.analog_tracks.iter_mut() {
-                                            if self.app.recording_session.sample_count(track.id) > 0 {
-                                                self.app.recording_session.commit_to_track(
-                                                    track,
-                                                    0.015,
-                                                    crate::four_d::curve::Interpolation::Smooth,
-                                                );
-                                                changed = true;
-                                            }
-                                        }
-                                        if changed {
-                                            let _ = self.app.engine_handle.sender.send(
-                                                crate::four_d::engine::EngineMessage::UpdateAnalogTracks(
-                                                    self.app.timeline.analog_tracks.clone(),
-                                                ),
-                                            );
-                                        }
+                                        self.app.commit_recorded_samples();
                                         
                                         let _ = self.app.mpv.command("seek", &[&target_time.to_string(), "absolute"]);
                                     }

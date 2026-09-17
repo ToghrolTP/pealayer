@@ -61,7 +61,7 @@ pub fn spawn_engine() -> EngineHandle {
         
         loop {
             let estop_now = engine_estop.load(Ordering::Relaxed);
-            let connected = engine_connected.load(Ordering::Relaxed);
+            let mut connected = engine_connected.load(Ordering::Relaxed);
             
             // Handle connection/disconnection transitions
             if connected && active_port.is_none() {
@@ -117,7 +117,14 @@ pub fn spawn_engine() -> EngineHandle {
                                 if let Some(ref mut port) = active_port {
                                     let cmd = Command::PwmSet { channel, value };
                                     let frame = cmd.to_frame();
-                                    let _ = port.write_all(&frame);
+                                    if let Err(e) = port.write_all(&frame) {
+                                        if let Ok(mut err_guard) = engine_conn_error.lock() {
+                                            *err_guard = Some(format!("Serial write failed: {}", e));
+                                        }
+                                        engine_connected.store(false, std::sync::atomic::Ordering::Relaxed);
+                                        connected = false;
+                                        active_port = None;
+                                    }
                                 }
                             }
                         }

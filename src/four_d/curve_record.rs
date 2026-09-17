@@ -106,8 +106,8 @@ impl RecordingSession {
             let scaled_epsilon = epsilon * 1000.0;
             let simplified = simplify_rdp(&rdp_points, scaled_epsilon);
 
-            let min_time = samples.first().map(|s| s.0).unwrap_or(0);
-            let max_time = samples.last().map(|s| s.0).unwrap_or(0);
+            let min_time = samples.iter().map(|s| s.0).min().unwrap_or(0);
+            let max_time = samples.iter().map(|s| s.0).max().unwrap_or(0);
 
             // Remove existing keyframes within the recorded time range (punch-in replace)
             track.keyframes.retain(|k| k.time_ms < min_time || k.time_ms > max_time);

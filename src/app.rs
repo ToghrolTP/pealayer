@@ -795,6 +795,28 @@ impl PealayerApp {
     pub fn set_osd(&mut self, msg: String) {
         self.osd_message = Some((msg, std::time::Instant::now()));
     }
+
+    pub(crate) fn commit_recorded_samples(&mut self) -> bool {
+        let mut changed = false;
+        for track in self.timeline.analog_tracks.iter_mut() {
+            if self.recording_session.sample_count(track.id) > 0 {
+                self.recording_session.commit_to_track(
+                    track,
+                    0.015,
+                    crate::four_d::curve::Interpolation::Smooth,
+                );
+                changed = true;
+            }
+        }
+        if changed {
+            let _ = self.engine_handle.sender.send(
+                crate::four_d::engine::EngineMessage::UpdateAnalogTracks(
+                    self.timeline.analog_tracks.clone(),
+                ),
+            );
+        }
+        changed
+    }
 }
 
 #[cfg(test)]
