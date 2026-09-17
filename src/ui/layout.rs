@@ -56,6 +56,26 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let _ = self.app.mpv.command("cycle", &["pause"]);
                                     }
                                     if ui.add_sized([30.0, 22.0], egui::Button::new("⏹")).clicked() {
+                                        // Punch out on stop
+                                        let mut changed = false;
+                                        for track in self.app.timeline.analog_tracks.iter_mut() {
+                                            if self.app.recording_session.sample_count(track.id) > 0 {
+                                                self.app.recording_session.commit_to_track(
+                                                    track,
+                                                    0.015,
+                                                    crate::four_d::curve::Interpolation::Smooth,
+                                                );
+                                                changed = true;
+                                            }
+                                        }
+                                        if changed {
+                                            let _ = self.app.engine_handle.sender.send(
+                                                crate::four_d::engine::EngineMessage::UpdateAnalogTracks(
+                                                    self.app.timeline.analog_tracks.clone(),
+                                                ),
+                                            );
+                                        }
+
                                         let _ = self.app.mpv.command("seek", &["0", "absolute"]);
                                         let _ = self.app.mpv.set_property("pause", true);
                                     }
@@ -90,6 +110,26 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         self.app.seek_pos = Some(current_pos);
                                     }
                                     if has_video && response.drag_stopped() {
+                                        // Punch out on seek
+                                        let mut changed = false;
+                                        for track in self.app.timeline.analog_tracks.iter_mut() {
+                                            if self.app.recording_session.sample_count(track.id) > 0 {
+                                                self.app.recording_session.commit_to_track(
+                                                    track,
+                                                    0.015,
+                                                    crate::four_d::curve::Interpolation::Smooth,
+                                                );
+                                                changed = true;
+                                            }
+                                        }
+                                        if changed {
+                                            let _ = self.app.engine_handle.sender.send(
+                                                crate::four_d::engine::EngineMessage::UpdateAnalogTracks(
+                                                    self.app.timeline.analog_tracks.clone(),
+                                                ),
+                                            );
+                                        }
+                                        
                                         let _ = self.app.mpv.command("seek", &[&current_pos.to_string(), "absolute"]);
                                         self.app.seek_pos = None;
                                     }
@@ -585,13 +625,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         );
                                         if arm_btn.clicked() {
                                             track.armed = !track.armed;
+                                            analog_tracks_changed = true;
+                                            
+                                            if !track.armed && self.app.recording_session.sample_count(track.id) > 0 {
+                                                self.app.recording_session.commit_to_track(
+                                                    track,
+                                                    0.015,
+                                                    crate::four_d::curve::Interpolation::Smooth,
+                                                );
+                                            }
                                         }
                                         
                                         if track.armed {
                                             let mut val = self.app.input_capture.current_throttle;
                                             let slider = egui::Slider::new(&mut val, 0.0..=1.0)
                                                 .show_value(false)
-                                                .text("Live");
+                                                .text("");
                                             if ui.add_sized([50.0, 16.0], slider).changed() {
                                                 self.app.input_capture.set_throttle(val);
                                                 let byte_val = (val * 255.0).round() as u8;
@@ -1057,7 +1106,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             for track in self.app.timeline.analog_tracks.iter_mut() {
                                                 if track.armed {
                                                     self.app.is_recording = true;
-                                                    self.app.recording_session.record_sample(track.id, cur_time_ms, self.app.input_capture.current_throttle);
+                                                    let last_time = self.app.recording_session.get_live_samples(track.id).and_then(|s| s.last()).map(|s| s.0);
+                                                    if last_time != Some(cur_time_ms) {
+                                                        self.app.recording_session.record_sample(track.id, cur_time_ms, self.app.input_capture.current_throttle);
+                                                    }
                                                     let byte_val = (self.app.input_capture.current_throttle * 255.0).round() as u8;
                                                     let _ = self.app.engine_handle.sender.send(
                                                         crate::four_d::engine::EngineMessage::LiveActuatorOverride {
@@ -1070,20 +1122,28 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
 
                                         if was_recording && !is_playing_now {
+                                            let mut changed = false;
                                             for track in self.app.timeline.analog_tracks.iter_mut() {
-                                                if track.armed {
+                                                if self.app.recording_session.sample_count(track.id) > 0 {
                                                     self.app.recording_session.commit_to_track(
                                                         track,
                                                         0.015,
                                                         crate::four_d::curve::Interpolation::Smooth,
                                                     );
+                                                    changed = true;
                                                 }
                                             }
-                                            let _ = self.app.engine_handle.sender.send(
-                                                crate::four_d::engine::EngineMessage::UpdateAnalogTracks(
-                                                    self.app.timeline.analog_tracks.clone(),
-                                                ),
-                                            );
+                                            if changed {
+                                                let _ = self.app.engine_handle.sender.send(
+                                                    crate::four_d::engine::EngineMessage::UpdateAnalogTracks(
+                                                        self.app.timeline.analog_tracks.clone(),
+                                                    ),
+                                                );
+                                            }
+                                        }
+                                        
+                                        if self.app.is_recording || (is_playing_now && self.app.timeline.analog_tracks.iter().any(|t| t.armed)) {
+                                            ui.ctx().request_repaint();
                                         }
 
                                         // Render Analog Curve Tracks
@@ -1436,6 +1496,26 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let relative_x = mouse_pos.x - rect.min.x;
                                         let seek_time = (relative_x / 100.0) as f64;
                                         let target_time = seek_time.clamp(0.0, total_seconds);
+                                        // Punch out on seek
+                                        let mut changed = false;
+                                        for track in self.app.timeline.analog_tracks.iter_mut() {
+                                            if self.app.recording_session.sample_count(track.id) > 0 {
+                                                self.app.recording_session.commit_to_track(
+                                                    track,
+                                                    0.015,
+                                                    crate::four_d::curve::Interpolation::Smooth,
+                                                );
+                                                changed = true;
+                                            }
+                                        }
+                                        if changed {
+                                            let _ = self.app.engine_handle.sender.send(
+                                                crate::four_d::engine::EngineMessage::UpdateAnalogTracks(
+                                                    self.app.timeline.analog_tracks.clone(),
+                                                ),
+                                            );
+                                        }
+                                        
                                         let _ = self.app.mpv.command("seek", &[&target_time.to_string(), "absolute"]);
                                     }
                                 }
