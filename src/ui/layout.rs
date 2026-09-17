@@ -1159,6 +1159,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let mut curve_updated = false;
                                         let pointer_pos = ui.ctx().pointer_latest_pos();
 
+                                        let mut started_drag_info = None;
+                                        let mut kf_interp_change = None;
+                                        let mut kf_to_remove = None;
+                                        let mut pending_add_keyframe = None;
+
                                         for (t_idx, track) in self.app.timeline.analog_tracks.iter_mut().enumerate() {
                                             let row_y = rect.min.y + 320.0 + (t_idx as f32 * 40.0);
                                             let row_rect = egui::Rect::from_min_max(
@@ -1187,11 +1192,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 curr_x += step_px;
                                             }
 
-                                            // Draw translucent fill under curve
+                                            // Draw translucent fill under curve (Curve Gradient Underlay)
                                             let fill_col = if track.muted {
                                                 egui::Color32::from_rgba_unmultiplied(100, 100, 100, 20)
                                             } else {
-                                                egui::Color32::from_rgba_unmultiplied(0, 200, 255, 30)
+                                                egui::Color32::from_rgba_unmultiplied(0, 220, 255, 25)
                                             };
                                             for window in points.windows(2) {
                                                 let p1 = window[0];
@@ -1235,14 +1240,19 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
 
                                             // Keyframe markers and interactions
-                                            let mut kf_to_remove = None;
-                                            let mut kf_to_move = None;
-
                                             for (k_idx, kf) in track.keyframes.iter().enumerate() {
                                                 let kx = rect.min.x + (kf.time_ms as f32 * px_per_ms);
                                                 let ky = (row_y + 36.0) - (kf.value * 32.0);
                                                 let center = egui::pos2(kx, ky);
                                                 let is_selected = self.app.selected_keyframes.contains(&(track.id, k_idx));
+
+                                                // 16px Euclidean distance hitbox detection
+                                                let hover_dist = 16.0;
+                                                let is_hovered = pointer_pos.map_or(false, |pos| pos.distance(center) <= hover_dist);
+
+                                                if is_hovered && self.app.active_keyframe_drag.is_none() {
+                                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                                                }
 
                                                 let diamond = vec![
                                                     egui::pos2(center.x, center.y - 5.0),
@@ -1255,60 +1265,287 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 } else {
                                                     curve_color
                                                 };
+
+                                                // Outline glows bright white/yellow on hover
+                                                let stroke = if is_hovered {
+                                                    egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(255, 255, 180))
+                                                } else {
+                                                    egui::Stroke::new(1.2_f32, egui::Color32::WHITE)
+                                                };
+
+                                                if is_hovered {
+                                                    let glow_diamond = vec![
+                                                        egui::pos2(center.x, center.y - 7.5),
+                                                        egui::pos2(center.x + 7.5, center.y),
+                                                        egui::pos2(center.x, center.y + 7.5),
+                                                        egui::pos2(center.x - 7.5, center.y),
+                                                    ];
+                                                    painter.add(egui::Shape::convex_polygon(
+                                                        glow_diamond,
+                                                        egui::Color32::from_rgba_unmultiplied(255, 255, 150, 45),
+                                                        egui::Stroke::NONE,
+                                                    ));
+                                                }
+
                                                 painter.add(egui::Shape::convex_polygon(
                                                     diamond,
                                                     fill_diamond,
-                                                    egui::Stroke::new(1.2_f32, egui::Color32::WHITE),
+                                                    stroke,
                                                 ));
 
-                                                if let Some(pos) = pointer_pos {
-                                                    if pos.distance(center) <= 8.0 {
-                                                        if ui.input(|i| i.pointer.primary_clicked()) {
-                                                            self.app.selected_keyframes.clear();
-                                                            self.app.selected_keyframes.insert((track.id, k_idx));
-                                                            clicked_any_keyframe = true;
-                                                        } else if ui.input(|i| i.pointer.secondary_clicked()) {
-                                                            kf_to_remove = Some(k_idx);
-                                                            clicked_any_keyframe = true;
-                                                        }
-                                                    }
+                                                // Native tooltip on hover showing timecode, value percentage, and interpolation mode
+                                                if is_hovered && self.app.active_keyframe_drag.is_none() {
+                                                    #[allow(deprecated)]
+                                                    egui::show_tooltip_at_pointer(
+                                                        ui.ctx(),
+                                                        ui.layer_id(),
+                                                        egui::Id::new((track.id, k_idx, "kf_tooltip")),
+                                                        |ui: &mut egui::Ui| {
+                                                            let interp_name = match kf.interpolation {
+                                                                crate::four_d::curve::Interpolation::Step => "Step",
+                                                                crate::four_d::curve::Interpolation::Linear => "Linear",
+                                                                crate::four_d::curve::Interpolation::Smooth => "Smooth (Hermite)",
+                                                            };
+                                                            ui.label(format!("Time: {}", format_timecode(kf.time_ms as f64 / 1000.0)));
+                                                            ui.label(format!("Value: {:.1}%", kf.value * 100.0));
+                                                            ui.label(format!("Interpolation: {}", interp_name));
+                                                        },
+                                                    );
                                                 }
 
-                                                if is_selected && ui.input(|i| i.pointer.primary_down()) {
-                                                    if let Some(pos) = pointer_pos {
-                                                        if row_rect.contains(pos) || pos.distance(center) <= 25.0 {
-                                                            let new_t = (((pos.x - rect.min.x) / zoom) * 1000.0).max(0.0) as u64;
-                                                            let new_v = ((row_y + 36.0 - pos.y) / 32.0).clamp(0.0, 1.0);
-                                                            kf_to_move = Some((k_idx, new_t, new_v));
-                                                            clicked_any_keyframe = true;
+                                                // Keyframe interact widget for context menu and clicks
+                                                let kf_rect = egui::Rect::from_center_size(center, egui::vec2(32.0, 32.0));
+                                                let kf_id = egui::Id::new((track.id, k_idx, "kf_node"));
+                                                let kf_response = ui.interact(kf_rect, kf_id, egui::Sense::click());
+
+                                                // Right-Click Context Menu
+                                                kf_response.context_menu(|ui| {
+                                                    ui.menu_button("Interpolation", |ui| {
+                                                        if ui.button("Linear").clicked() {
+                                                            kf_interp_change = Some((track.id, k_idx, crate::four_d::curve::Interpolation::Linear));
+                                                            ui.close();
                                                         }
+                                                        if ui.button("Smooth (Hermite)").clicked() {
+                                                            kf_interp_change = Some((track.id, k_idx, crate::four_d::curve::Interpolation::Smooth));
+                                                            ui.close();
+                                                        }
+                                                        if ui.button("Step").clicked() {
+                                                            kf_interp_change = Some((track.id, k_idx, crate::four_d::curve::Interpolation::Step));
+                                                            ui.close();
+                                                        }
+                                                    });
+                                                    ui.separator();
+                                                    if ui.button("Delete Keyframe").clicked() {
+                                                        kf_to_remove = Some((track.id, k_idx));
+                                                        ui.close();
+                                                    }
+                                                });
+
+                                                if is_hovered && ui.input(|i| i.pointer.secondary_clicked()) {
+                                                    clicked_any_keyframe = true;
+                                                }
+
+                                                // Primary click: Selection & Active Drag Lock initialization
+                                                if is_hovered && ui.input(|i| i.pointer.primary_clicked()) && self.app.active_keyframe_drag.is_none() {
+                                                    if let Some(pos) = pointer_pos {
+                                                        started_drag_info = Some((track.id, k_idx, pos, kf.time_ms, kf.value));
+                                                        clicked_any_keyframe = true;
                                                     }
                                                 }
                                             }
 
-                                            if let Some(k_idx) = kf_to_remove {
-                                                track.keyframes.remove(k_idx);
-                                                self.app.selected_keyframes.clear();
-                                                curve_updated = true;
-                                            } else if let Some((k_idx, new_t, new_v)) = kf_to_move {
-                                                track.keyframes[k_idx].time_ms = new_t;
-                                                track.keyframes[k_idx].value = new_v;
-                                                track.keyframes.sort_by_key(|k| k.time_ms);
-                                                curve_updated = true;
-                                            } else if response.double_clicked() {
+                                            if response.double_clicked() && !clicked_any_keyframe {
                                                 if let Some(pos) = response.interact_pointer_pos() {
                                                     if row_rect.contains(pos) {
                                                         let new_t = (((pos.x - rect.min.x) / zoom) * 1000.0).max(0.0) as u64;
                                                         let new_v = ((row_y + 36.0 - pos.y) / 32.0).clamp(0.0, 1.0);
-                                                        track.add_keyframe(crate::four_d::curve::Keyframe::new(
-                                                            new_t,
-                                                            new_v,
-                                                            crate::four_d::curve::Interpolation::Linear,
-                                                        ));
-                                                        curve_updated = true;
+                                                        pending_add_keyframe = Some((track.id, new_t, new_v));
                                                         clicked_any_keyframe = true;
                                                     }
                                                 }
+                                            }
+                                        }
+
+                                        if let Some((tid, new_t, new_v)) = pending_add_keyframe {
+                                            let pre_snap = self.app.snapshot_timeline();
+                                            self.app.undo_stack.push(pre_snap);
+                                            if let Some(track) = self.app.timeline.analog_tracks.iter_mut().find(|t| t.id == tid) {
+                                                track.add_keyframe(crate::four_d::curve::Keyframe::new(
+                                                    new_t,
+                                                    new_v,
+                                                    crate::four_d::curve::Interpolation::Linear,
+                                                ));
+                                            }
+                                            curve_updated = true;
+                                        }
+
+                                        if let Some((tid, kid, new_interp)) = kf_interp_change {
+                                            let pre_snap = self.app.snapshot_timeline();
+                                            self.app.undo_stack.push(pre_snap);
+                                            if let Some(track) = self.app.timeline.analog_tracks.iter_mut().find(|t| t.id == tid) {
+                                                if let Some(kf) = track.keyframes.get_mut(kid) {
+                                                    kf.interpolation = new_interp;
+                                                }
+                                            }
+                                            curve_updated = true;
+                                        }
+
+                                        if let Some((tid, kid)) = kf_to_remove {
+                                            let pre_snap = self.app.snapshot_timeline();
+                                            self.app.undo_stack.push(pre_snap);
+                                            if let Some(track) = self.app.timeline.analog_tracks.iter_mut().find(|t| t.id == tid) {
+                                                if kid < track.keyframes.len() {
+                                                    track.keyframes.remove(kid);
+                                                }
+                                            }
+                                            self.app.selected_keyframes.clear();
+                                            curve_updated = true;
+                                        }
+
+                                        if let Some((track_id, k_idx, pos, orig_t, orig_v)) = started_drag_info {
+                                            if !self.app.selected_keyframes.contains(&(track_id, k_idx)) {
+                                                if !ui.input(|i| i.modifiers.shift || i.modifiers.ctrl) {
+                                                    self.app.selected_keyframes.clear();
+                                                }
+                                                self.app.selected_keyframes.insert((track_id, k_idx));
+                                            }
+                                            let mut group_originals = Vec::new();
+                                            for &(tid, kid) in &self.app.selected_keyframes {
+                                                if let Some(t) = self.app.timeline.analog_tracks.iter().find(|t| t.id == tid) {
+                                                    if let Some(k) = t.keyframes.get(kid) {
+                                                        group_originals.push((tid, kid, k.time_ms, k.value));
+                                                    }
+                                                }
+                                            }
+                                            if !group_originals.iter().any(|&(tid, kid, _, _)| tid == track_id && kid == k_idx) {
+                                                group_originals.push((track_id, k_idx, orig_t, orig_v));
+                                            }
+                                            self.app.active_keyframe_drag = Some(crate::app::KeyframeDragState {
+                                                track_id,
+                                                keyframe_index: k_idx,
+                                                start_pointer_pos: pos,
+                                                original_time_ms: orig_t,
+                                                original_value: orig_v,
+                                                group_originals,
+                                            });
+                                        }
+
+                                        // Active Keyframe Drag Processing & Drag Lock
+                                        if let Some(drag) = self.app.active_keyframe_drag.clone() {
+                                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                            ui.ctx().request_repaint();
+
+                                            let drag_ended = ui.ctx().input(|i| i.pointer.any_released());
+
+                                            if drag_ended {
+                                                // Reconstruct pre-drag snapshot
+                                                let mut pre_snap = self.app.snapshot_timeline();
+                                                for &(tid, kid, orig_t, orig_v) in &drag.group_originals {
+                                                    if let Some(t) = pre_snap.analog_tracks.iter_mut().find(|t| t.id == tid) {
+                                                        if let Some(k) = t.keyframes.get_mut(kid) {
+                                                            k.time_ms = orig_t;
+                                                            k.value = orig_v;
+                                                        }
+                                                    }
+                                                }
+                                                for t in &mut pre_snap.analog_tracks {
+                                                    t.keyframes.sort_by_key(|k| k.time_ms);
+                                                }
+                                                let any_changed = drag.group_originals.iter().any(|&(tid, kid, orig_t, orig_v)| {
+                                                    self.app.timeline.analog_tracks.iter().find(|t| t.id == tid)
+                                                        .and_then(|t| t.keyframes.get(kid))
+                                                        .map_or(false, |k| k.time_ms != orig_t || (k.value - orig_v).abs() > 1e-4)
+                                                });
+                                                if any_changed {
+                                                    self.app.undo_stack.push(pre_snap);
+                                                }
+
+                                                let mut target_keyframes = Vec::new();
+                                                for &(tid, kid) in &self.app.selected_keyframes {
+                                                    if let Some(t) = self.app.timeline.analog_tracks.iter().find(|t| t.id == tid) {
+                                                        if let Some(k) = t.keyframes.get(kid) {
+                                                            target_keyframes.push((tid, k.time_ms, (k.value * 10000.0).round() as i64));
+                                                        }
+                                                    }
+                                                }
+
+                                                // Sort keyframes on mouse release
+                                                for track in self.app.timeline.analog_tracks.iter_mut() {
+                                                    track.keyframes.sort_by_key(|k| k.time_ms);
+                                                }
+
+                                                // Restore selected_keyframes with updated indices
+                                                let mut new_selection = std::collections::HashSet::new();
+                                                for (tid, target_t, target_v) in target_keyframes {
+                                                    if let Some(t) = self.app.timeline.analog_tracks.iter().find(|t| t.id == tid) {
+                                                        if let Some(new_idx) = t.keyframes.iter().enumerate().position(|(idx, k)| {
+                                                            !new_selection.contains(&(tid, idx))
+                                                                && k.time_ms == target_t
+                                                                && ((k.value * 10000.0).round() as i64 - target_v).abs() <= 1
+                                                        }) {
+                                                            new_selection.insert((tid, new_idx));
+                                                        }
+                                                    }
+                                                }
+                                                self.app.selected_keyframes = new_selection;
+
+                                                self.app.active_keyframe_drag = None;
+                                                curve_updated = true;
+                                            } else if let Some(pos) = pointer_pos {
+                                                let delta_x = pos.x - drag.start_pointer_pos.x;
+                                                let delta_time_ms = (delta_x / px_per_ms) as i64;
+                                                let raw_new_t = (drag.original_time_ms as i64 + delta_time_ms).max(0) as u64;
+
+                                                // Magnetic Snapping (within 5px of playhead or 1s grid mark)
+                                                let playhead_ms = (self.app.playback_time * 1000.0).round() as u64;
+                                                let nearest_sec = ((raw_new_t as f64 / 1000.0).round() as u64) * 1000;
+
+                                                let play_x = rect.min.x + (playhead_ms as f32 * px_per_ms);
+                                                let grid_x = rect.min.x + (nearest_sec as f32 * px_per_ms);
+                                                let kf_x = rect.min.x + (raw_new_t as f32 * px_per_ms);
+
+                                                let snap_enabled = !ui.input(|i| i.modifiers.shift || i.modifiers.alt);
+                                                let mut new_t = raw_new_t;
+                                                if snap_enabled {
+                                                    let dist_play = (kf_x - play_x).abs();
+                                                    let dist_grid = (kf_x - grid_x).abs();
+                                                    if dist_play <= 5.0 && dist_play <= dist_grid {
+                                                        new_t = playhead_ms;
+                                                        snap_line_x = Some(play_x);
+                                                    } else if dist_grid <= 5.0 {
+                                                        new_t = nearest_sec;
+                                                        snap_line_x = Some(grid_x);
+                                                    }
+                                                }
+
+                                                let track_idx = self.app.timeline.analog_tracks.iter().position(|t| t.id == drag.track_id).unwrap_or(0);
+                                                let row_y = rect.min.y + 320.0 + (track_idx as f32 * 40.0);
+                                                let new_v = ((row_y + 36.0 - pos.y) / 32.0).clamp(0.0, 1.0);
+
+                                                let time_delta = new_t as i64 - drag.original_time_ms as i64;
+                                                let val_delta = new_v - drag.original_value;
+
+                                                for &(tid, kid, orig_t, orig_v) in &drag.group_originals {
+                                                    let k_new_t = (orig_t as i64 + time_delta).max(0) as u64;
+                                                    let k_new_v = (orig_v + val_delta).clamp(0.0, 1.0);
+                                                    if let Some(t) = self.app.timeline.analog_tracks.iter_mut().find(|t| t.id == tid) {
+                                                        if let Some(k) = t.keyframes.get_mut(kid) {
+                                                            k.time_ms = k_new_t;
+                                                            k.value = k_new_v;
+                                                        }
+                                                    }
+                                                }
+                                                curve_updated = true;
+
+                                                // Floating HUD Badge
+                                                let hud_pos = egui::pos2(pos.x, pos.y - 20.0);
+                                                let hud_text = format!("{} | {:.1}%", format_timecode(new_t as f64 / 1000.0), new_v * 100.0);
+                                                painter.rect_filled(
+                                                    egui::Rect::from_center_size(hud_pos, egui::vec2(100.0, 18.0)),
+                                                    4.0,
+                                                    egui::Color32::from_black_alpha(200),
+                                                );
+                                                painter.text(hud_pos, egui::Align2::CENTER_CENTER, hud_text, egui::FontId::monospace(10.0), egui::Color32::WHITE);
                                             }
                                         }
 
@@ -1506,7 +1743,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             // Background click, seek, or lasso selection logic
                             let ruler_bottom = rect.min.y + 26.0;
 
-                            if response.drag_started() && !clicked_any_clip && self.app.active_drag.is_none() {
+                            if response.drag_started() && !clicked_any_clip && !clicked_any_keyframe && self.app.active_drag.is_none() && self.app.active_keyframe_drag.is_none() {
                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                     if mouse_pos.y >= ruler_bottom {
                                         self.app.lasso_origin = Some(mouse_pos);
@@ -1551,7 +1788,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 self.app.lasso_rect = None;
                             }
                             
-                            if response.clicked() && !clicked_any_clip && !clicked_any_keyframe && self.app.active_drag.is_none() {
+                            if response.clicked() && !clicked_any_clip && !clicked_any_keyframe && self.app.active_drag.is_none() && self.app.active_keyframe_drag.is_none() {
                                 if let Some(mouse_pos) = response.interact_pointer_pos() {
                                     if mouse_pos.y >= ruler_bottom && mouse_pos.y < rect.min.y + 320.0 {
                                         self.app.selected_instance_ids.clear();
