@@ -573,6 +573,37 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             analog_tracks_changed = true;
                                         }
 
+                                        // Record Arm Button [●]
+                                        let arm_color = if track.armed {
+                                            egui::Color32::from_rgb(255, 60, 60)
+                                        } else {
+                                            egui::Color32::from_rgb(120, 120, 120)
+                                        };
+                                        let arm_btn = ui.selectable_label(
+                                            track.armed,
+                                            egui::RichText::new("●").size(12.0).color(arm_color),
+                                        );
+                                        if arm_btn.clicked() {
+                                            track.armed = !track.armed;
+                                        }
+                                        
+                                        if track.armed {
+                                            let mut val = self.app.input_capture.current_throttle;
+                                            let slider = egui::Slider::new(&mut val, 0.0..=1.0)
+                                                .show_value(false)
+                                                .text("Live");
+                                            if ui.add_sized([50.0, 16.0], slider).changed() {
+                                                self.app.input_capture.set_throttle(val);
+                                                let byte_val = (val * 255.0).round() as u8;
+                                                let _ = self.app.engine_handle.sender.send(
+                                                    crate::four_d::engine::EngineMessage::LiveActuatorOverride {
+                                                        channel: track.channel,
+                                                        value: byte_val,
+                                                    },
+                                                );
+                                            }
+                                        }
+
                                         let add_btn = ui.button(egui::RichText::new("+").size(10.0));
                                         if add_btn.clicked() {
                                             let cur_ms = (self.app.playback_time * 1000.0) as u64;
@@ -1011,6 +1042,50 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             ui.ctx().request_repaint();
                                         }
 
+                                        // Keyboard throttle update for Live Fader
+                                        let up = ui.input(|i| i.key_down(egui::Key::W) || i.key_down(egui::Key::ArrowUp));
+                                        let down = ui.input(|i| i.key_down(egui::Key::S) || i.key_down(egui::Key::ArrowDown));
+                                        let dt = ui.input(|i| i.unstable_dt).min(0.05);
+                                        self.app.input_capture.update_from_keyboard(up, down, dt);
+
+                                        let is_playing_now = !self.app.is_paused && self.app.duration > 0.0;
+                                        let was_recording = self.app.is_recording;
+                                        let cur_time_ms = (self.app.playback_time * 1000.0) as u64;
+                                        self.app.is_recording = false;
+
+                                        if is_playing_now {
+                                            for track in self.app.timeline.analog_tracks.iter_mut() {
+                                                if track.armed {
+                                                    self.app.is_recording = true;
+                                                    self.app.recording_session.record_sample(track.id, cur_time_ms, self.app.input_capture.current_throttle);
+                                                    let byte_val = (self.app.input_capture.current_throttle * 255.0).round() as u8;
+                                                    let _ = self.app.engine_handle.sender.send(
+                                                        crate::four_d::engine::EngineMessage::LiveActuatorOverride {
+                                                            channel: track.channel,
+                                                            value: byte_val,
+                                                        },
+                                                    );
+                                                }
+                                            }
+                                        }
+
+                                        if was_recording && !is_playing_now {
+                                            for track in self.app.timeline.analog_tracks.iter_mut() {
+                                                if track.armed {
+                                                    self.app.recording_session.commit_to_track(
+                                                        track,
+                                                        0.015,
+                                                        crate::four_d::curve::Interpolation::Smooth,
+                                                    );
+                                                }
+                                            }
+                                            let _ = self.app.engine_handle.sender.send(
+                                                crate::four_d::engine::EngineMessage::UpdateAnalogTracks(
+                                                    self.app.timeline.analog_tracks.clone(),
+                                                ),
+                                            );
+                                        }
+
                                         // Render Analog Curve Tracks
                                         let mut clicked_any_keyframe = false;
                                         let mut curve_updated = false;
@@ -1072,6 +1147,24 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 points,
                                                 egui::Stroke::new(1.8_f32, curve_color),
                                             ));
+
+                                            // Draw recording ghost trail
+                                            if track.armed {
+                                                if let Some(live_samples) = self.app.recording_session.get_live_samples(track.id) {
+                                                    if !live_samples.is_empty() {
+                                                        let mut ghost_points = Vec::with_capacity(live_samples.len());
+                                                        for s in live_samples {
+                                                            let gx = rect.min.x + (s.0 as f32 / 1000.0) * 100.0;
+                                                            let gy = (row_y + 36.0) - (s.1 * 32.0);
+                                                            ghost_points.push(egui::pos2(gx, gy));
+                                                        }
+                                                        painter.add(egui::Shape::line(
+                                                            ghost_points,
+                                                            egui::Stroke::new(2.5_f32, egui::Color32::from_rgb(255, 50, 50)),
+                                                        ));
+                                                    }
+                                                }
+                                            }
 
                                             // Keyframe markers and interactions
                                             let mut kf_to_remove = None;

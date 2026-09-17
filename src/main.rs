@@ -159,6 +159,9 @@ fn main() -> eframe::Result {
 
                 timeline: crate::four_d::models::Timeline::new(),
                 engine_handle: crate::four_d::engine::spawn_engine(),
+                recording_session: crate::four_d::curve_record::RecordingSession::new(),
+                input_capture: crate::four_d::input_capture::InputCaptureState::new(),
+                is_recording: false,
                 recording_keys: std::collections::HashMap::new(),
                 dock_state: crate::ui::layout::create_initial_layout(),
                 rtt_state: Arc::new(Mutex::new(crate::app::RttState {

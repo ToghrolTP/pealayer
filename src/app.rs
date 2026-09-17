@@ -79,6 +79,10 @@ pub struct PealayerApp {
     pub(crate) timeline: crate::four_d::models::Timeline,
     pub(crate) engine_handle: crate::four_d::engine::EngineHandle,
     
+    pub(crate) recording_session: crate::four_d::curve_record::RecordingSession,
+    pub(crate) input_capture: crate::four_d::input_capture::InputCaptureState,
+    pub(crate) is_recording: bool,
+
     // Phase 4 & 5 Selection/Override state
     pub(crate) selected_instance_ids: std::collections::HashSet<uuid::Uuid>,
     pub(crate) selected_keyframe: Option<(uuid::Uuid, usize)>,
