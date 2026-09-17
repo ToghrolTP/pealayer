@@ -212,56 +212,58 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             }
             let gl = painter.gl();
             if let Ok(mut rtt) = rtt_state.try_lock() {
-                if let (Some(video_fbo), Some(tex), Ok(rc)) = (rtt.video_fbo, rtt.video_texture, render_context.try_lock()) {
-                    unsafe {
-                    use eframe::glow::HasContext;
+                if let (Some(video_fbo), Some(tex), Ok(rc_guard)) = (rtt.video_fbo, rtt.video_texture, render_context.try_lock()) {
+                    if let Some(ref rc) = *rc_guard {
+                        unsafe {
+                        use eframe::glow::HasContext;
 
-                    // Query original FBO binding
-                    let raw_fbo = gl.get_parameter_i32(eframe::glow::FRAMEBUFFER_BINDING) as u32;
-                    let target_fbo = std::num::NonZeroU32::new(raw_fbo).map(eframe::glow::NativeFramebuffer);
+                        // Query original FBO binding
+                        let raw_fbo = gl.get_parameter_i32(eframe::glow::FRAMEBUFFER_BINDING) as u32;
+                        let target_fbo = std::num::NonZeroU32::new(raw_fbo).map(eframe::glow::NativeFramebuffer);
 
-                    // Query original viewport to restore it later
-                    let mut original_viewport = [0; 4];
-                    gl.get_parameter_i32_slice(eframe::glow::VIEWPORT, &mut original_viewport);
+                        // Query original viewport to restore it later
+                        let mut original_viewport = [0; 4];
+                        gl.get_parameter_i32_slice(eframe::glow::VIEWPORT, &mut original_viewport);
 
-                    // Dynamic resizing of texture if physical dimensions changed
-                    if rtt.texture_width != target_phys_w as u32 || rtt.texture_height != target_phys_h as u32 {
-                        gl.bind_texture(eframe::glow::TEXTURE_2D, Some(tex));
-                        gl.tex_image_2d(
-                            eframe::glow::TEXTURE_2D,
-                            0,
-                            eframe::glow::RGBA8 as i32,
-                            target_phys_w,
-                            target_phys_h,
-                            0,
-                            eframe::glow::RGBA,
-                            eframe::glow::UNSIGNED_BYTE,
-                            eframe::glow::PixelUnpackData::Slice(None),
+                        // Dynamic resizing of texture if physical dimensions changed
+                        if rtt.texture_width != target_phys_w as u32 || rtt.texture_height != target_phys_h as u32 {
+                            gl.bind_texture(eframe::glow::TEXTURE_2D, Some(tex));
+                            gl.tex_image_2d(
+                                eframe::glow::TEXTURE_2D,
+                                0,
+                                eframe::glow::RGBA8 as i32,
+                                target_phys_w,
+                                target_phys_h,
+                                0,
+                                eframe::glow::RGBA,
+                                eframe::glow::UNSIGNED_BYTE,
+                                eframe::glow::PixelUnpackData::Slice(None),
+                            );
+                            rtt.texture_width = target_phys_w as u32;
+                            rtt.texture_height = target_phys_h as u32;
+                        }
+
+                        // Bind our offscreen FBO
+                        gl.bind_framebuffer(eframe::glow::FRAMEBUFFER, Some(video_fbo));
+                        
+                        // Set viewport to exact physical framebuffer size
+                        gl.viewport(0, 0, target_phys_w, target_phys_h);
+                        
+                        // Render MPV frame at physical pixel size
+                        let fbo_id = video_fbo.0.get() as i32;
+                        let _ = rc.0.render::<GetProcAddress>(fbo_id, target_phys_w, target_phys_h, false);
+
+                        // Restore original FBO binding
+                        gl.bind_framebuffer(eframe::glow::FRAMEBUFFER, target_fbo);
+
+                        // Restore original viewport
+                        gl.viewport(
+                            original_viewport[0],
+                            original_viewport[1],
+                            original_viewport[2],
+                            original_viewport[3],
                         );
-                        rtt.texture_width = target_phys_w as u32;
-                        rtt.texture_height = target_phys_h as u32;
-                    }
-
-                    // Bind our offscreen FBO
-                    gl.bind_framebuffer(eframe::glow::FRAMEBUFFER, Some(video_fbo));
-                    
-                    // Set viewport to exact physical framebuffer size
-                    gl.viewport(0, 0, target_phys_w, target_phys_h);
-                    
-                    // Render MPV frame at physical pixel size
-                    let fbo_id = video_fbo.0.get() as i32;
-                    let _ = rc.0.render::<GetProcAddress>(fbo_id, target_phys_w, target_phys_h, false);
-
-                    // Restore original FBO binding
-                    gl.bind_framebuffer(eframe::glow::FRAMEBUFFER, target_fbo);
-
-                    // Restore original viewport
-                    gl.viewport(
-                        original_viewport[0],
-                        original_viewport[1],
-                        original_viewport[2],
-                        original_viewport[3],
-                    );
+                        }
                     }
                 }
             }

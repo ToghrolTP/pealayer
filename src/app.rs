@@ -42,10 +42,20 @@ pub struct RttState {
     pub texture_height: u32,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyframeDragState {
+    pub track_id: uuid::Uuid,
+    pub keyframe_index: usize,
+    pub start_pointer_pos: egui::Pos2,
+    pub original_time_ms: u64,
+    pub original_value: f32,
+    pub group_originals: Vec<(uuid::Uuid, usize, u64, f32)>,
+}
+
 pub struct PealayerApp {
     pub(crate) mpv: &'static Mpv,
     pub(crate) mpv_client: libmpv2::Mpv,
-    pub(crate) render_context: Arc<Mutex<RenderContextWrapper>>,
+    pub(crate) render_context: Arc<Mutex<Option<RenderContextWrapper>>>,
 
     pub(crate) playback_time: f64,
     pub(crate) duration: f64,
@@ -76,7 +86,7 @@ pub struct PealayerApp {
     // 4D Cinema state
     pub(crate) show_four_d_editor: bool,
     pub(crate) dock_state: egui_dock::DockState<crate::ui::layout::PealayerTab>,
-    pub(crate) timeline: crate::four_d::models::Timeline,
+    pub timeline: crate::four_d::models::Timeline,
     pub(crate) engine_handle: crate::four_d::engine::EngineHandle,
     
     pub(crate) recording_session: crate::four_d::curve_record::RecordingSession,
@@ -85,7 +95,10 @@ pub struct PealayerApp {
 
     // Phase 4 & 5 Selection/Override state
     pub(crate) selected_instance_ids: std::collections::HashSet<uuid::Uuid>,
-    pub(crate) selected_keyframe: Option<(uuid::Uuid, usize)>,
+    pub selected_keyframes: std::collections::HashSet<(uuid::Uuid, usize)>,
+    pub active_keyframe_drag: Option<KeyframeDragState>,
+    pub timeline_zoom: f32,
+    pub undo_stack: crate::four_d::history::UndoStack,
     pub(crate) recording_keys: std::collections::HashMap<eframe::egui::Key, (uuid::Uuid, std::time::Instant)>,
     pub(crate) relay_overrides: [Option<bool>; 9],
 
@@ -816,6 +829,108 @@ impl PealayerApp {
             );
         }
         changed
+    }
+
+    pub fn snapshot_timeline(&self) -> crate::four_d::history::TimelineSnapshot {
+        crate::four_d::history::TimelineSnapshot {
+            instances: self.timeline.instances.clone(),
+            analog_tracks: self.timeline.analog_tracks.clone(),
+        }
+    }
+
+    pub fn restore_timeline_snapshot(&mut self, snapshot: crate::four_d::history::TimelineSnapshot) {
+        self.timeline.instances = snapshot.instances;
+        self.timeline.analog_tracks = snapshot.analog_tracks;
+        let _ = self.engine_handle.sender.send(
+            crate::four_d::engine::EngineMessage::UpdateAnalogTracks(
+                self.timeline.analog_tracks.clone(),
+            ),
+        );
+    }
+}
+
+impl Default for PealayerApp {
+    fn default() -> Self {
+        let mpv = Box::leak(Box::new(libmpv2::Mpv::new().unwrap_or_else(|_| {
+            libmpv2::Mpv::with_initializer(|init| {
+                init.set_property("vo", "null")?;
+                Ok(())
+            }).expect("Failed to initialize mpv")
+        })));
+        let mpv_client = mpv.create_client(None).expect("Failed to create mpv client");
+        let (_interop_tx, interop_rx) = std::sync::mpsc::channel();
+        let (web_state_tx, _web_state_rx) = std::sync::mpsc::channel();
+        let (_web_cmd_tx, web_cmd_rx) = std::sync::mpsc::channel();
+
+        Self {
+            mpv,
+            mpv_client,
+            render_context: Arc::new(Mutex::new(None)),
+            playback_time: 0.0,
+            duration: 0.0,
+            is_paused: false,
+            volume: 100.0,
+            is_muted: false,
+            seek_pos: None,
+            last_mouse_activity: std::time::Instant::now(),
+            pin_controls: false,
+            show_error: None,
+            show_sub_settings: false,
+            sub_visibility: true,
+            sub_font_size: 55.0,
+            sub_delay: 0.0,
+            current_sid: "no".to_string(),
+            sub_tracks: Vec::new(),
+            show_audio_settings: false,
+            audio_delay: 0.0,
+            current_aid: "no".to_string(),
+            audio_tracks: Vec::new(),
+            show_four_d_editor: true,
+            dock_state: crate::ui::layout::create_initial_layout(),
+            timeline: crate::four_d::models::Timeline::new(),
+            engine_handle: crate::four_d::engine::spawn_engine(),
+            recording_session: crate::four_d::curve_record::RecordingSession::new(),
+            input_capture: crate::four_d::input_capture::InputCaptureState::new(),
+            is_recording: false,
+            selected_instance_ids: std::collections::HashSet::new(),
+            selected_keyframes: std::collections::HashSet::new(),
+            active_keyframe_drag: None,
+            timeline_zoom: 100.0,
+            undo_stack: crate::four_d::history::UndoStack::default(),
+            recording_keys: std::collections::HashMap::new(),
+            relay_overrides: [None; 9],
+            preset_library: Vec::new(),
+            effects_search_query: String::new(),
+            track_muted: [false; 9],
+            track_soloed: [false; 9],
+            track_locked: [false; 9],
+            active_drag: None,
+            estop_active: false,
+            serial_port: String::new(),
+            is_connected: false,
+            lasso_origin: None,
+            lasso_rect: None,
+            rtt_state: Arc::new(Mutex::new(RttState {
+                video_texture: None,
+                video_fbo: None,
+                video_texture_id: None,
+                texture_width: 1920,
+                texture_height: 1080,
+            })),
+            current_video_path: None,
+            show_remaining_time: false,
+            osd_message: None,
+            recent_media: Vec::new(),
+            show_open_url_dialog: false,
+            url_input_buffer: String::new(),
+            is_window_operating: false,
+            show_shortcuts_dialog: false,
+            show_about_dialog: false,
+            interop_rx,
+            web_state_tx,
+            web_cmd_rx,
+            last_web_broadcast: None,
+        }
     }
 }
 

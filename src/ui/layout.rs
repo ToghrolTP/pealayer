@@ -1183,7 +1183,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let kx = rect.min.x + (kf.time_ms as f32 / 1000.0) * 100.0;
                                                 let ky = (row_y + 36.0) - (kf.value * 32.0);
                                                 let center = egui::pos2(kx, ky);
-                                                let is_selected = self.app.selected_keyframe == Some((track.id, k_idx));
+                                                let is_selected = self.app.selected_keyframes.contains(&(track.id, k_idx));
 
                                                 let diamond = vec![
                                                     egui::pos2(center.x, center.y - 5.0),
@@ -1205,7 +1205,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 if let Some(pos) = pointer_pos {
                                                     if pos.distance(center) <= 8.0 {
                                                         if ui.input(|i| i.pointer.primary_clicked()) {
-                                                            self.app.selected_keyframe = Some((track.id, k_idx));
+                                                            self.app.selected_keyframes.clear();
+                                                            self.app.selected_keyframes.insert((track.id, k_idx));
                                                             clicked_any_keyframe = true;
                                                         } else if ui.input(|i| i.pointer.secondary_clicked()) {
                                                             kf_to_remove = Some(k_idx);
@@ -1228,7 +1229,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                             if let Some(k_idx) = kf_to_remove {
                                                 track.keyframes.remove(k_idx);
-                                                self.app.selected_keyframe = None;
+                                                self.app.selected_keyframes.clear();
                                                 curve_updated = true;
                                             } else if let Some((k_idx, new_t, new_v)) = kf_to_move {
                                                 track.keyframes[k_idx].time_ms = new_t;

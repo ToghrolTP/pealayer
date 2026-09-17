@@ -135,7 +135,7 @@ fn main() -> eframe::Result {
             Ok(Box::new(PealayerApp {
                 mpv: mpv_static,
                 mpv_client,
-                render_context: Arc::new(Mutex::new(RenderContextWrapper(render_context))),
+                render_context: Arc::new(Mutex::new(Some(RenderContextWrapper(render_context)))),
                 playback_time: 0.0,
                 duration: 0.0,
                 is_paused: false,
@@ -172,7 +172,10 @@ fn main() -> eframe::Result {
                     texture_height: 1080,
                 })),
                 selected_instance_ids: std::collections::HashSet::new(),
-                selected_keyframe: None,
+                selected_keyframes: std::collections::HashSet::new(),
+                active_keyframe_drag: None,
+                timeline_zoom: 100.0,
+                undo_stack: crate::four_d::history::UndoStack::default(),
                 relay_overrides: [None; 9],
                 preset_library: vec![
                     // Atmospherics
