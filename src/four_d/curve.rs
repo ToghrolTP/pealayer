@@ -50,6 +50,9 @@ pub struct AnalogTrack {
     /// Whether this track is temporarily muted in playback
     #[serde(default)]
     pub muted: bool,
+    /// Whether this track is armed for live motion capture recording
+    #[serde(default)]
+    pub armed: bool,
     /// Sorted list of keyframes defining the curve
     pub keyframes: Vec<Keyframe>,
 }
@@ -66,6 +69,7 @@ impl AnalogTrack {
             channel,
             enabled: true,
             muted: false,
+            armed: false,
             keyframes: Vec::new(),
         }
     }
