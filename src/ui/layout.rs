@@ -497,7 +497,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         ui.horizontal(|ui| {
                             // 1. Left column: Fixed Track Headers
                             ui.vertical(|ui| {
-                                ui.set_width(180.0);
+                                ui.set_width(250.0);
                                 
                                 let track_names = [
                                     "Video",
@@ -513,7 +513,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 ];
                                 
                                 for (idx, name) in track_names.iter().enumerate() {
-                                    let (rect, _response) = ui.allocate_exact_size(egui::vec2(180.0, 32.0), egui::Sense::hover());
+                                    let (rect, _response) = ui.allocate_exact_size(egui::vec2(250.0, 32.0), egui::Sense::hover());
                                     // Draw background with dark Premiere aesthetics
                                     ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(26, 26, 26));
                                     ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(45, 45, 45)), egui::StrokeKind::Inside);
@@ -533,7 +533,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             
                                             // Mute button (M)
                                             let muted = &mut self.app.track_muted[relay_id];
-                                            let m_btn = ui.selectable_label(*muted, egui::RichText::new("M").strong().size(10.0));
+                                            let m_btn = ui.selectable_label(*muted, egui::RichText::new("M").strong().size(10.0))
+                                                .on_hover_text("Mute Track (M)\nMutes relay physical output during playback.");
                                             if m_btn.clicked() {
                                                 *muted = !*muted;
                                                 let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
@@ -542,7 +543,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             
                                             // Solo button (S)
                                             let soloed = &mut self.app.track_soloed[relay_id];
-                                            let s_btn = ui.selectable_label(*soloed, egui::RichText::new("S").strong().size(10.0));
+                                            let s_btn = ui.selectable_label(*soloed, egui::RichText::new("S").strong().size(10.0))
+                                                .on_hover_text("Solo Track (S)\nSolos this relay track output during playback.");
                                             if s_btn.clicked() {
                                                 *soloed = !*soloed;
                                                 let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
@@ -551,7 +553,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             
                                             // Lock button (L)
                                             let locked = &mut self.app.track_locked[relay_id];
-                                            let l_btn = ui.selectable_label(*locked, egui::RichText::new("L").strong().size(10.0));
+                                            let l_btn = ui.selectable_label(*locked, egui::RichText::new("L").strong().size(10.0))
+                                                .on_hover_text("Lock Track (L)\nPrevents moving or modifying effects on this track.");
                                             if l_btn.clicked() {
                                                 *locked = !*locked;
                                             }
@@ -562,18 +565,44 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 // Analog Curve Track Headers
                                 let mut analog_tracks_changed = false;
                                 for track in self.app.timeline.analog_tracks.iter_mut() {
-                                    let (rect, _response) = ui.allocate_exact_size(egui::vec2(180.0, 40.0), egui::Sense::hover());
+                                    let (rect, _response) = ui.allocate_exact_size(egui::vec2(250.0, 40.0), egui::Sense::hover());
                                     ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(22, 28, 32));
                                     ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(45, 45, 45)), egui::StrokeKind::Inside);
+
+                                    // Amplitude Y-axis tick labels on track header right margin
+                                    let painter = ui.painter();
+                                    painter.text(
+                                        egui::pos2(rect.max.x - 3.0, rect.min.y + 5.0),
+                                        egui::Align2::RIGHT_TOP,
+                                        "100%",
+                                        egui::FontId::monospace(7.5),
+                                        egui::Color32::from_rgb(90, 90, 90),
+                                    );
+                                    painter.text(
+                                        egui::pos2(rect.max.x - 3.0, rect.center().y),
+                                        egui::Align2::RIGHT_CENTER,
+                                        "50%",
+                                        egui::FontId::monospace(7.5),
+                                        egui::Color32::from_rgb(70, 70, 70),
+                                    );
+                                    painter.text(
+                                        egui::pos2(rect.max.x - 3.0, rect.max.y - 5.0),
+                                        egui::Align2::RIGHT_BOTTOM,
+                                        "0%",
+                                        egui::FontId::monospace(7.5),
+                                        egui::Color32::from_rgb(90, 90, 90),
+                                    );
 
                                     let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
                                     child_ui.horizontal(|ui| {
                                         ui.add_space(6.0);
                                         ui.allocate_ui(egui::vec2(85.0, 20.0), |ui| {
-                                            ui.label(egui::RichText::new(format!("P{}: {}", track.channel, track.name)).size(10.5).strong().color(egui::Color32::from_rgb(0, 220, 255)));
+                                            ui.label(egui::RichText::new(format!("P{}: {}", track.channel, track.name)).size(10.5).strong().color(egui::Color32::from_rgb(0, 220, 255)))
+                                                .on_hover_text(format!("Analog Track: {}\nPort/Channel: P{}", track.name, track.channel));
                                         });
 
-                                        let m_btn = ui.selectable_label(track.muted, egui::RichText::new("M").strong().size(10.0));
+                                        let m_btn = ui.selectable_label(track.muted, egui::RichText::new("M").strong().size(10.0))
+                                            .on_hover_text("Mute Track (M)\nMutes actuator physical output during playback.");
                                         if m_btn.clicked() {
                                             track.muted = !track.muted;
                                             analog_tracks_changed = true;
@@ -588,7 +617,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let arm_btn = ui.selectable_label(
                                             track.armed,
                                             egui::RichText::new("●").size(12.0).color(arm_color),
-                                        );
+                                        )
+                                        .on_hover_text("Record Arm (R)\nArms this track for real-time motion capture gesture recording.");
                                         if arm_btn.clicked() {
                                             track.armed = !track.armed;
                                             analog_tracks_changed = true;
@@ -607,7 +637,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             let slider = egui::Slider::new(&mut val, 0.0..=1.0)
                                                 .show_value(false)
                                                 .text("");
-                                            if ui.add_sized([50.0, 16.0], slider).changed() {
+                                            if ui.add_sized([65.0, 16.0], slider)
+                                                .on_hover_text("Live Actuator Fader\nControl actuator intensity in real time (0% - 100%).")
+                                                .changed() {
                                                 self.app.input_capture.set_throttle(val);
                                                 let byte_val = (val * 255.0).round() as u8;
                                                 let _ = self.app.engine_handle.sender.send(
@@ -619,7 +651,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
                                         }
 
-                                        let add_btn = ui.button(egui::RichText::new("+").size(10.0));
+                                        let add_btn = ui.button(egui::RichText::new("+").size(10.0))
+                                            .on_hover_text("Add Keyframe\nInserts a keyframe at the current playhead position.");
                                         if add_btn.clicked() {
                                             let cur_ms = (self.app.playback_time * 1000.0) as u64;
                                             let cur_val = track.evaluate(cur_ms);
