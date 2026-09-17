@@ -1818,90 +1818,94 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 }
                             }
 
-                            let delete_pressed = ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace));
-                            let undo_pressed = ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Z) && !i.modifiers.shift);
-                            let redo_pressed = ui.input(|i| (i.modifiers.ctrl && i.key_pressed(egui::Key::Y)) || (i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(egui::Key::Z)));
-                            let select_all_pressed = ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::A));
-                            let escape_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                            let key_1_pressed = ui.input(|i| i.key_pressed(egui::Key::Num1));
-                            let key_2_pressed = ui.input(|i| i.key_pressed(egui::Key::Num2));
-                            let key_3_pressed = ui.input(|i| i.key_pressed(egui::Key::Num3));
+                            if !ui.ctx().egui_wants_keyboard_input() {
+                                let delete_pressed = ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace));
+                                let undo_pressed = ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Z) && !i.modifiers.shift);
+                                let redo_pressed = ui.input(|i| (i.modifiers.ctrl && i.key_pressed(egui::Key::Y)) || (i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(egui::Key::Z)));
+                                let select_all_pressed = ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::A));
+                                let escape_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                                
+                                let num_modifier_free = ui.input(|i| !i.modifiers.ctrl && !i.modifiers.alt && !i.modifiers.command && !i.modifiers.shift);
+                                let key_1_pressed = ui.input(|i| i.key_pressed(egui::Key::Num1)) && num_modifier_free;
+                                let key_2_pressed = ui.input(|i| i.key_pressed(egui::Key::Num2)) && num_modifier_free;
+                                let key_3_pressed = ui.input(|i| i.key_pressed(egui::Key::Num3)) && num_modifier_free;
 
-                            if undo_pressed {
-                                let current = self.app.snapshot_timeline();
-                                if let Some(prev) = self.app.undo_stack.undo(current) {
-                                    self.app.restore_timeline_snapshot(prev);
-                                }
-                                self.app.selected_instance_ids.clear();
-                                self.app.selected_keyframes.clear();
-                                let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
-                                let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
-                                let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateAnalogTracks(self.app.timeline.analog_tracks.clone()));
-                            } else if redo_pressed {
-                                let current = self.app.snapshot_timeline();
-                                if let Some(next) = self.app.undo_stack.redo(current) {
-                                    self.app.restore_timeline_snapshot(next);
-                                }
-                                self.app.selected_instance_ids.clear();
-                                self.app.selected_keyframes.clear();
-                                let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
-                                let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
-                                let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateAnalogTracks(self.app.timeline.analog_tracks.clone()));
-                            } else if select_all_pressed {
-                                self.app.selected_instance_ids = self.app.timeline.instances.iter().map(|i| i.id).collect();
-                                self.app.selected_keyframes.clear();
-                                for track in &self.app.timeline.analog_tracks {
-                                    for (k_idx, _) in track.keyframes.iter().enumerate() {
-                                        self.app.selected_keyframes.insert((track.id, k_idx));
+                                if undo_pressed {
+                                    let current = self.app.snapshot_timeline();
+                                    if let Some(prev) = self.app.undo_stack.undo(current) {
+                                        self.app.restore_timeline_snapshot(prev);
+                                        self.app.selected_instance_ids.clear();
+                                        self.app.selected_keyframes.clear();
+                                        let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
+                                        let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                                        let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateAnalogTracks(self.app.timeline.analog_tracks.clone()));
                                     }
-                                }
-                            } else if escape_pressed {
-                                self.app.selected_instance_ids.clear();
-                                self.app.selected_keyframes.clear();
-                            } else if delete_pressed {
-                                if !self.app.selected_instance_ids.is_empty() || !self.app.selected_keyframes.is_empty() {
-                                    self.app.undo_stack.push(self.app.snapshot_timeline());
-                                    
-                                    self.app.timeline.instances.retain(|inst| !self.app.selected_instance_ids.contains(&inst.id));
-                                    
-                                    for track in &mut self.app.timeline.analog_tracks {
-                                        let mut k_indices: Vec<usize> = self.app.selected_keyframes.iter()
-                                            .filter(|(t_id, _)| *t_id == track.id)
-                                            .map(|(_, k_idx)| *k_idx)
-                                            .collect();
-                                        k_indices.sort_unstable();
-                                        for idx in k_indices.into_iter().rev() {
-                                            if idx < track.keyframes.len() {
-                                                track.keyframes.remove(idx);
-                                            }
+                                } else if redo_pressed {
+                                    let current = self.app.snapshot_timeline();
+                                    if let Some(next) = self.app.undo_stack.redo(current) {
+                                        self.app.restore_timeline_snapshot(next);
+                                        self.app.selected_instance_ids.clear();
+                                        self.app.selected_keyframes.clear();
+                                        let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
+                                        let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                                        let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateAnalogTracks(self.app.timeline.analog_tracks.clone()));
+                                    }
+                                } else if select_all_pressed {
+                                    self.app.selected_instance_ids = self.app.timeline.instances.iter().map(|i| i.id).collect();
+                                    self.app.selected_keyframes.clear();
+                                    for track in &self.app.timeline.analog_tracks {
+                                        for (k_idx, _) in track.keyframes.iter().enumerate() {
+                                            self.app.selected_keyframes.insert((track.id, k_idx));
                                         }
                                     }
-                                    
+                                } else if escape_pressed {
                                     self.app.selected_instance_ids.clear();
                                     self.app.selected_keyframes.clear();
-                                    
-                                    let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
-                                    let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
-                                    let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateAnalogTracks(self.app.timeline.analog_tracks.clone()));
-                                }
-                            } else if key_1_pressed || key_2_pressed || key_3_pressed {
-                                if !self.app.selected_keyframes.is_empty() {
-                                    self.app.undo_stack.push(self.app.snapshot_timeline());
-                                    let interp = if key_1_pressed {
-                                        crate::four_d::curve::Interpolation::Step
-                                    } else if key_2_pressed {
-                                        crate::four_d::curve::Interpolation::Linear
-                                    } else {
-                                        crate::four_d::curve::Interpolation::Smooth
-                                    };
-                                    for track in &mut self.app.timeline.analog_tracks {
-                                        for (k_idx, kf) in track.keyframes.iter_mut().enumerate() {
-                                            if self.app.selected_keyframes.contains(&(track.id, k_idx)) {
-                                                kf.interpolation = interp.clone();
+                                } else if delete_pressed {
+                                    if !self.app.selected_instance_ids.is_empty() || !self.app.selected_keyframes.is_empty() {
+                                        self.app.undo_stack.push(self.app.snapshot_timeline());
+                                        
+                                        self.app.timeline.instances.retain(|inst| !self.app.selected_instance_ids.contains(&inst.id));
+                                        
+                                        for track in &mut self.app.timeline.analog_tracks {
+                                            let mut k_indices: Vec<usize> = self.app.selected_keyframes.iter()
+                                                .filter(|(t_id, _)| *t_id == track.id)
+                                                .map(|(_, k_idx)| *k_idx)
+                                                .collect();
+                                            k_indices.sort_unstable();
+                                            for idx in k_indices.into_iter().rev() {
+                                                if idx < track.keyframes.len() {
+                                                    track.keyframes.remove(idx);
+                                                }
                                             }
                                         }
+                                        
+                                        self.app.selected_instance_ids.clear();
+                                        self.app.selected_keyframes.clear();
+                                        
+                                        let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
+                                        let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                                        let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateAnalogTracks(self.app.timeline.analog_tracks.clone()));
                                     }
-                                    let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateAnalogTracks(self.app.timeline.analog_tracks.clone()));
+                                } else if key_1_pressed || key_2_pressed || key_3_pressed {
+                                    if !self.app.selected_keyframes.is_empty() {
+                                        self.app.undo_stack.push(self.app.snapshot_timeline());
+                                        let interp = if key_1_pressed {
+                                            crate::four_d::curve::Interpolation::Step
+                                        } else if key_2_pressed {
+                                            crate::four_d::curve::Interpolation::Linear
+                                        } else {
+                                            crate::four_d::curve::Interpolation::Smooth
+                                        };
+                                        for track in &mut self.app.timeline.analog_tracks {
+                                            for (k_idx, kf) in track.keyframes.iter_mut().enumerate() {
+                                                if self.app.selected_keyframes.contains(&(track.id, k_idx)) {
+                                                    kf.interpolation = interp.clone();
+                                                }
+                                            }
+                                        }
+                                        let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateAnalogTracks(self.app.timeline.analog_tracks.clone()));
+                                    }
                                 }
                             }
                         });

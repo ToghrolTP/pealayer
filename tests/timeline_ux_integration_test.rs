@@ -1,5 +1,5 @@
 use pealayer::app::PealayerApp;
-use pealayer::four_d::curve::{AnalogTrack, Interpolation, Keyframe};
+use pealayer::four_d::curve::{Interpolation, Keyframe};
 
 #[test]
 fn test_undo_redo_timeline_keyframe_deletion() {
