@@ -1293,30 +1293,24 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     stroke,
                                                 ));
 
-                                                // Native tooltip on hover showing timecode, value percentage, and interpolation mode
-                                                if is_hovered && self.app.active_keyframe_drag.is_none() {
-                                                    #[allow(deprecated)]
-                                                    egui::show_tooltip_at_pointer(
-                                                        ui.ctx(),
-                                                        ui.layer_id(),
-                                                        egui::Id::new((track.id, k_idx, "kf_tooltip")),
-                                                        |ui: &mut egui::Ui| {
-                                                            let interp_name = match kf.interpolation {
-                                                                crate::four_d::curve::Interpolation::Step => "Step",
-                                                                crate::four_d::curve::Interpolation::Linear => "Linear",
-                                                                crate::four_d::curve::Interpolation::Smooth => "Smooth (Hermite)",
-                                                            };
-                                                            ui.label(format!("Time: {}", format_timecode(kf.time_ms as f64 / 1000.0)));
-                                                            ui.label(format!("Value: {:.1}%", kf.value * 100.0));
-                                                            ui.label(format!("Interpolation: {}", interp_name));
-                                                        },
-                                                    );
-                                                }
-
                                                 // Keyframe interact widget for context menu and clicks
                                                 let kf_rect = egui::Rect::from_center_size(center, egui::vec2(32.0, 32.0));
                                                 let kf_id = egui::Id::new((track.id, k_idx, "kf_node"));
-                                                let kf_response = ui.interact(kf_rect, kf_id, egui::Sense::click());
+                                                let mut kf_response = ui.interact(kf_rect, kf_id, egui::Sense::click());
+
+                                                // Native tooltip on hover showing timecode, value percentage, and interpolation mode
+                                                if self.app.active_keyframe_drag.is_none() {
+                                                    let interp_name = match kf.interpolation {
+                                                        crate::four_d::curve::Interpolation::Step => "Step",
+                                                        crate::four_d::curve::Interpolation::Linear => "Linear",
+                                                        crate::four_d::curve::Interpolation::Smooth => "Smooth (Hermite)",
+                                                    };
+                                                    kf_response = kf_response.on_hover_ui(|ui| {
+                                                        ui.label(format!("Time: {}", format_timecode(kf.time_ms as f64 / 1000.0)));
+                                                        ui.label(format!("Value: {:.1}%", kf.value * 100.0));
+                                                        ui.label(format!("Interpolation: {}", interp_name));
+                                                    });
+                                                }
 
                                                 // Right-Click Context Menu
                                                 kf_response.context_menu(|ui| {
@@ -1345,8 +1339,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     clicked_any_keyframe = true;
                                                 }
 
-                                                // Primary click: Selection & Active Drag Lock initialization
-                                                if is_hovered && ui.input(|i| i.pointer.primary_clicked()) && self.app.active_keyframe_drag.is_none() {
+                                                // Primary click: Selection & Active Drag Lock initialization on mouse press/down
+                                                if is_hovered
+                                                    && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary) || i.pointer.primary_down())
+                                                    && self.app.active_keyframe_drag.is_none()
+                                                {
                                                     if let Some(pos) = pointer_pos {
                                                         started_drag_info = Some((track.id, k_idx, pos, kf.time_ms, kf.value));
                                                         clicked_any_keyframe = true;
@@ -1518,12 +1515,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     }
                                                 }
 
-                                                let track_idx = self.app.timeline.analog_tracks.iter().position(|t| t.id == drag.track_id).unwrap_or(0);
-                                                let row_y = rect.min.y + 320.0 + (track_idx as f32 * 40.0);
-                                                let new_v = ((row_y + 36.0 - pos.y) / 32.0).clamp(0.0, 1.0);
+                                                let delta_y = pos.y - drag.start_pointer_pos.y;
+                                                let val_delta = -delta_y / 32.0;
+                                                let new_v = (drag.original_value + val_delta).clamp(0.0, 1.0);
 
                                                 let time_delta = new_t as i64 - drag.original_time_ms as i64;
-                                                let val_delta = new_v - drag.original_value;
 
                                                 for &(tid, kid, orig_t, orig_v) in &drag.group_originals {
                                                     let k_new_t = (orig_t as i64 + time_delta).max(0) as u64;
