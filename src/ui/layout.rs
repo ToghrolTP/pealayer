@@ -499,6 +499,21 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             ui.vertical(|ui| {
                                 ui.set_width(250.0);
                                 
+                                // 26px spacer to align with the right-side ruler
+                                let (header_rect, _) = ui.allocate_exact_size(egui::vec2(250.0, 26.0), egui::Sense::hover());
+                                ui.painter().rect_filled(header_rect, 0.0, egui::Color32::from_rgb(33, 33, 33));
+                                ui.painter().line_segment(
+                                    [egui::pos2(header_rect.min.x, header_rect.max.y), egui::pos2(header_rect.max.x, header_rect.max.y)],
+                                    egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(45, 45, 45)),
+                                );
+                                ui.painter().text(
+                                    header_rect.left_center() + egui::vec2(6.0, 0.0),
+                                    egui::Align2::LEFT_CENTER,
+                                    "TRACKS",
+                                    egui::FontId::proportional(11.0),
+                                    egui::Color32::from_rgb(150, 150, 150),
+                                );
+                                
                                 let track_names = [
                                     "Video",
                                     "Audio",
@@ -668,15 +683,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             
                             // 2. Right column: Scrollable Timeline Grid
                             let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
-                            if ui.input(|i| i.modifiers.ctrl || i.modifiers.command) && scroll_delta.y != 0.0 {
-                                self.app.timeline_zoom = (self.app.timeline_zoom + scroll_delta.y * 0.2).clamp(20.0, 500.0);
-                            }
                             let zoom = self.app.timeline_zoom;
                             let px_per_ms = zoom / 1000.0;
                             let total_seconds = if self.app.duration > 0.0 { self.app.duration } else { 60.0 };
                             let total_width = (total_seconds * zoom as f64) as f32;
                             let num_analog = self.app.timeline.analog_tracks.len();
-                            let total_height = 320.0 + (num_analog as f32 * 40.0);
+                            let total_height = 26.0 + 320.0 + (num_analog as f32 * 40.0);
                             
                             // Define dropping target zone
                             let drop_res = ui.dnd_drop_zone::<EffectDragPayload, _>(egui::Frame::NONE, |ui| {
@@ -691,13 +703,21 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         // Draw timeline tracks background
                                         painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(33, 33, 33));
                                         
+                                        let tracks_top = rect.min.y + 26.0;
+
                                         // Allocate top 26px band of the timeline grid canvas as dedicated time ruler
                                         let ruler_rect = egui::Rect::from_min_max(
                                             egui::pos2(rect.min.x, rect.min.y),
-                                            egui::pos2(rect.max.x, rect.min.y + 26.0),
+                                            egui::pos2(rect.max.x, tracks_top),
                                         );
 
                                         let pointer_pos = ui.ctx().pointer_latest_pos();
+
+                                        if let Some(pos) = pointer_pos {
+                                            if rect.contains(pos) && (ui.input(|i| i.modifiers.ctrl || i.modifiers.command)) && scroll_delta.y != 0.0 {
+                                                self.app.timeline_zoom = (self.app.timeline_zoom + scroll_delta.y * 0.2).clamp(20.0, 500.0);
+                                            }
+                                        }
 
                                         let ruler_response = ui.interact(ruler_rect, egui::Id::new("timeline_ruler"), egui::Sense::click_and_drag())
                                             .on_hover_text("Timeline Ruler\nClick or drag to scrub playhead. Ctrl+Scroll to zoom time.");
@@ -733,7 +753,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         
                                         // Draw horizontal track separators and backgrounds
                                         for i in 0..=10 {
-                                            let grid_y = rect.min.y + (i as f32 * 32.0);
+                                            let grid_y = tracks_top + (i as f32 * 32.0);
                                             
                                             // Lock row background darkening
                                             if i >= 2 && i <= 9 {
@@ -755,7 +775,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         // Horizontal separators for Analog tracks
                                         for (t_idx, _) in self.app.timeline.analog_tracks.iter().enumerate() {
-                                            let grid_y = rect.min.y + 320.0 + ((t_idx + 1) as f32 * 40.0);
+                                            let grid_y = tracks_top + 320.0 + ((t_idx + 1) as f32 * 40.0);
                                             painter.line_segment(
                                                 [egui::pos2(rect.min.x, grid_y), egui::pos2(rect.max.x, grid_y)],
                                                 egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(45, 45, 45)),
@@ -766,12 +786,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         if let Some(drag) = &self.app.active_drag {
                                             if drag.mode == crate::app::DragMode::Move {
                                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
-                                                    let relative_y = mouse_pos.y - rect.min.y;
+                                                    let relative_y = mouse_pos.y - tracks_top;
                                                     let track_index = (relative_y / 32.0).floor() as i32;
                                                     if track_index >= 2 && track_index <= 9 {
                                                         let target_r = (track_index - 1) as u8;
                                                         if !self.app.track_locked[target_r as usize] {
-                                                            let row_y = rect.min.y + (track_index as f32 * 32.0);
+                                                            let row_y = tracks_top + (track_index as f32 * 32.0);
                                                             let dest_rect = egui::Rect::from_min_max(
                                                                 egui::pos2(rect.min.x, row_y),
                                                                 egui::pos2(rect.max.x, row_y + 32.0),
@@ -786,8 +806,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         // Render Video clip placeholder if active
                                         if self.app.duration > 0.0 {
                                             let video_clip_rect = egui::Rect::from_min_max(
-                                                egui::pos2(rect.min.x, rect.min.y + 4.0),
-                                                egui::pos2(rect.min.x + total_width, rect.min.y + 28.0),
+                                                egui::pos2(rect.min.x, tracks_top + 4.0),
+                                                egui::pos2(rect.min.x + total_width, tracks_top + 28.0),
                                             );
                                             painter.rect_filled(video_clip_rect, 4.0, egui::Color32::from_rgb(41, 128, 185)); // Blue clip
                                             painter.rect_stroke(video_clip_rect, 4.0, egui::Stroke::new(1.0_f32, egui::Color32::WHITE), egui::StrokeKind::Inside);
@@ -801,8 +821,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             
                                             // Audio clip placeholder
                                             let audio_clip_rect = egui::Rect::from_min_max(
-                                                egui::pos2(rect.min.x, rect.min.y + 32.0 + 4.0),
-                                                egui::pos2(rect.min.x + total_width, rect.min.y + 32.0 + 28.0),
+                                                egui::pos2(rect.min.x, tracks_top + 32.0 + 4.0),
+                                                egui::pos2(rect.min.x + total_width, tracks_top + 32.0 + 28.0),
                                             );
                                             painter.rect_filled(audio_clip_rect, 4.0, egui::Color32::from_rgb(39, 174, 96)); // Green clip
                                             painter.rect_stroke(audio_clip_rect, 4.0, egui::Stroke::new(1.0_f32, egui::Color32::WHITE), egui::StrokeKind::Inside);
@@ -829,7 +849,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 
                                                 // Determine Y range based on relay_id (1..8)
                                                 let track_index = relay_id as f32 + 1.0;
-                                                let track_y = rect.min.y + (track_index * 32.0);
+                                                let track_y = tracks_top + (track_index * 32.0);
                                                 
                                                 let start_x = rect.min.x + (instance.start_time_ms as f32 * px_per_ms);
                                                 let end_x = start_x + (effect.duration_ms as f32 * px_per_ms);
@@ -1165,7 +1185,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let mut pending_add_keyframe = None;
 
                                         for (t_idx, track) in self.app.timeline.analog_tracks.iter_mut().enumerate() {
-                                            let row_y = rect.min.y + 320.0 + (t_idx as f32 * 40.0);
+                                            let row_y = tracks_top + 320.0 + (t_idx as f32 * 40.0);
                                             let row_rect = egui::Rect::from_min_max(
                                                 egui::pos2(rect.min.x, row_y),
                                                 egui::pos2(rect.max.x, row_y + 40.0),
@@ -1570,7 +1590,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         for i in 0..=(total_seconds.ceil() as i32) {
                                             let grid_x = rect.min.x + (i as f32 * zoom);
-                                            if grid_x <= rect.max.x {
+                                            if grid_x <= rect.max.x - 8.0 {
                                                 // Major second tick
                                                 painter.line_segment(
                                                     [egui::pos2(grid_x, ruler_rect.max.y - 8.0), egui::pos2(grid_x, ruler_rect.max.y)],
@@ -1580,7 +1600,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 if zoom >= 50.0 {
                                                     for sub in 1..10 {
                                                         let sub_x = grid_x + (sub as f32 * (zoom / 10.0));
-                                                        if sub_x <= rect.max.x {
+                                                        if sub_x <= rect.max.x - 8.0 {
                                                             let notch_h = if sub == 5 { 5.0 } else { 3.0 };
                                                             painter.line_segment(
                                                                 [egui::pos2(sub_x, ruler_rect.max.y - notch_h), egui::pos2(sub_x, ruler_rect.max.y)],
@@ -1591,8 +1611,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 }
                                                 // Time label inside ruler
                                                 if i % label_step == 0 {
+                                                    let mut label_x = grid_x + 4.0;
+                                                    // Ensure label doesn't clip against right margin
+                                                    if label_x + 20.0 > rect.max.x - 8.0 {
+                                                        label_x = rect.max.x - 28.0;
+                                                    }
                                                     painter.text(
-                                                        egui::pos2(grid_x + 4.0, ruler_rect.min.y + 13.0),
+                                                        egui::pos2(label_x, ruler_rect.min.y + 13.0),
                                                         egui::Align2::LEFT_CENTER,
                                                         format!("{}s", i),
                                                         egui::FontId::monospace(9.0),
@@ -1631,12 +1656,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         if let Some(_payload) = egui::DragAndDrop::payload::<EffectDragPayload>(ui.ctx()) {
                                             if let Some(mouse_pos) = ui.ctx().pointer_hover_pos() {
                                                 if rect.contains(mouse_pos) {
-                                                    let relative_y = mouse_pos.y - rect.min.y;
+                                                    let relative_y = mouse_pos.y - tracks_top;
                                                     let track_index = (relative_y / 32.0).floor() as i32;
                                                     
                                                     if track_index >= 2 && track_index <= 9 {
                                                         let relay_id = track_index - 1;
-                                                        let row_y = rect.min.y + (track_index as f32 * 32.0);
+                                                        let row_y = tracks_top + (track_index as f32 * 32.0);
                                                         let track_rect = egui::Rect::from_min_max(
                                                             egui::pos2(rect.min.x, row_y),
                                                             egui::pos2(rect.max.x, row_y + 32.0),
@@ -1653,7 +1678,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     } else if track_index == 0 || track_index == 1 {
                                                         // Incompatible track: faint red highlight & NotAllowed cursor
                                                         ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
-                                                        let row_y = rect.min.y + (track_index as f32 * 32.0);
+                                                        let row_y = tracks_top + (track_index as f32 * 32.0);
                                                         let track_rect = egui::Rect::from_min_max(
                                                             egui::pos2(rect.min.x, row_y),
                                                             egui::pos2(rect.max.x, row_y + 32.0),
@@ -1737,7 +1762,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
                             
                             // Background click, seek, or lasso selection logic
-                            let ruler_bottom = rect.min.y + 26.0;
+                            let tracks_top = rect.min.y + 26.0;
+                            let ruler_bottom = tracks_top;
 
                             if response.drag_started() && !clicked_any_clip && !clicked_any_keyframe && self.app.active_drag.is_none() && self.app.active_keyframe_drag.is_none() {
                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
@@ -1762,7 +1788,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         if let Some(effect) = self.app.timeline.templates.iter().find(|t| t.id == instance.effect_id) {
                                             let relay_id = effect.actions.first().map(|a| a.relay_id).unwrap_or(1);
                                             let track_index = relay_id as f32 + 1.0;
-                                            let track_y = rect.min.y + (track_index * 32.0);
+                                            let track_y = tracks_top + (track_index * 32.0);
                                             let start_x = rect.min.x + (instance.start_time_ms as f32 * px_per_ms);
                                             let end_x = start_x + (effect.duration_ms as f32 * px_per_ms);
                                             let clip_rect = egui::Rect::from_min_max(
@@ -1777,7 +1803,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     
                                     // Keyframes
                                     for (t_idx, track) in self.app.timeline.analog_tracks.iter().enumerate() {
-                                        let t_y = rect.min.y + 320.0 + (t_idx as f32 * 40.0);
+                                        let t_y = tracks_top + 320.0 + (t_idx as f32 * 40.0);
                                         for (k_idx, kf) in track.keyframes.iter().enumerate() {
                                             let k_x = rect.min.x + (kf.time_ms as f32 * px_per_ms);
                                             let k_y = (t_y + 36.0) - (kf.value * 32.0);
@@ -1805,7 +1831,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             
                             if response.clicked() && !clicked_any_clip && !clicked_any_keyframe && self.app.active_drag.is_none() && self.app.active_keyframe_drag.is_none() {
                                 if let Some(mouse_pos) = response.interact_pointer_pos() {
-                                    if mouse_pos.y >= ruler_bottom && mouse_pos.y < rect.min.y + 320.0 {
+                                    if mouse_pos.y >= tracks_top && mouse_pos.y < tracks_top + 320.0 {
                                         self.app.selected_instance_ids.clear();
                                         let relative_x = mouse_pos.x - rect.min.x;
                                         let seek_time = (relative_x / zoom) as f64;

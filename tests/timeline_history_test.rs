@@ -30,15 +30,21 @@ fn test_undo_redo_stack_basic_flow() {
     stack.push(state1.clone());
     assert!(stack.can_undo());
     assert!(!stack.can_redo());
+    assert_eq!(stack.undo_len(), 2);
+    assert_eq!(stack.redo_len(), 0);
 
     // Undo from state2 back to state1
     let undone = stack.undo(state2.clone()).expect("Should undo to state1");
     assert_eq!(undone.analog_tracks.len(), 2);
     assert!(stack.can_redo());
+    assert_eq!(stack.undo_len(), 1);
+    assert_eq!(stack.redo_len(), 1);
 
     // Redo back to state2
     let redone = stack.redo(undone).expect("Should redo to state2");
     assert_eq!(redone.analog_tracks.len(), 3);
+    assert_eq!(stack.undo_len(), 2);
+    assert_eq!(stack.redo_len(), 0);
 }
 
 #[test]
