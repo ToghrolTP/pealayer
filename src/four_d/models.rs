@@ -40,7 +40,7 @@ impl Effect {
 }
 
 /// A specific placement of an Effect on the main timeline.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EffectInstance {
     /// Unique identifier for this instance on the timeline
     pub id: Uuid,
