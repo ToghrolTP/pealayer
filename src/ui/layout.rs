@@ -703,7 +703,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             .on_hover_text("Timeline Ruler\nClick or drag to scrub playhead. Ctrl+Scroll to zoom time.");
 
                                         if let Some(pos) = pointer_pos {
-                                            if ruler_rect.contains(pos) || ruler_response.dragged() {
+                                            if (ruler_rect.contains(pos) || ruler_response.dragged())
+                                                && self.app.active_drag.is_none()
+                                                && self.app.lasso_origin.is_none()
+                                                && self.app.active_keyframe_drag.is_none()
+                                            {
                                                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
                                                 if ui.input(|i| i.pointer.primary_down()) || ruler_response.dragged() {
                                                     let relative_x = (pos.x - rect.min.x).max(0.0);
@@ -1500,14 +1504,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
                             
                             // Background click, seek, or lasso selection logic
-                            let ruler_rect = egui::Rect::from_min_max(
-                                egui::pos2(rect.min.x, rect.min.y),
-                                egui::pos2(rect.max.x, rect.min.y + 26.0),
-                            );
+                            let ruler_bottom = rect.min.y + 26.0;
 
                             if response.drag_started() && !clicked_any_clip && self.app.active_drag.is_none() {
                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
-                                    if mouse_pos.y >= ruler_rect.max.y {
+                                    if mouse_pos.y >= ruler_bottom {
                                         self.app.lasso_origin = Some(mouse_pos);
                                     }
                                 }
@@ -1552,7 +1553,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             
                             if response.clicked() && !clicked_any_clip && !clicked_any_keyframe && self.app.active_drag.is_none() {
                                 if let Some(mouse_pos) = response.interact_pointer_pos() {
-                                    if mouse_pos.y >= ruler_rect.max.y && mouse_pos.y < rect.min.y + 320.0 {
+                                    if mouse_pos.y >= ruler_bottom && mouse_pos.y < rect.min.y + 320.0 {
                                         self.app.selected_instance_ids.clear();
                                         let relative_x = mouse_pos.x - rect.min.x;
                                         let seek_time = (relative_x / zoom) as f64;
