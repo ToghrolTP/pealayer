@@ -16,6 +16,7 @@ pub struct CompiledAction {
 pub enum EngineMessage {
     UpdateQueue(Vec<CompiledAction>),
     UpdateAnalogTracks(Vec<crate::four_d::curve::AnalogTrack>),
+    LiveActuatorOverride { channel: u8, value: u8 },
     Seek(u64), // Emitted when user seeks, to clear current active queue and reset hardware
     SendCommand(Command), // Manual override or direct hardware command
 }
@@ -107,6 +108,19 @@ pub fn spawn_engine() -> EngineHandle {
                     EngineMessage::UpdateAnalogTracks(tracks) => {
                         analog_tracks = tracks;
                         last_pwm_values.fill(0);
+                    }
+                    EngineMessage::LiveActuatorOverride { channel, value } => {
+                        let ch = channel as usize;
+                        if ch < 16 && value != last_pwm_values[ch] {
+                            last_pwm_values[ch] = value;
+                            if connected {
+                                if let Some(ref mut port) = active_port {
+                                    let cmd = Command::PwmSet { channel, value };
+                                    let frame = cmd.to_frame();
+                                    let _ = port.write_all(&frame);
+                                }
+                            }
+                        }
                     }
                     EngineMessage::Seek(time) => {
                         if connected {
