@@ -2158,8 +2158,12 @@ impl PealayerApp {
                 return false;
             }
             relay
+        } else if track_index == 0 || track_index == 1 {
+            // Explicitly reject drops onto video/audio tracks to match visual NotAllowed affordance
+            self.set_osd(format!("Cannot place effect '{}' on media track", payload.name));
+            return false;
         } else {
-            // Case B: Dropped on empty grid space or video/audio header -> Smart Auto-Routing
+            // Case B: Dropped on empty grid space or neutral ruler -> Smart Auto-Routing
             if let Some(primary) = payload.target.primary_relay_id() {
                 if self.track_locked[primary as usize] {
                     println!("[Timeline] Auto-routing for '{}' blocked: primary track R{} is locked", payload.name, primary);
@@ -2239,6 +2243,7 @@ impl PealayerApp {
 
     /// 1-Click Relocation: Automatically reassigns an effect's template actions to its primary relay track,
     /// pushes an undo snapshot to the undo stack, recompiles the timeline, and updates the engine queue.
+    /// Preserves internal pattern sequences (e.g. pulsing) while updating the target relay.
     /// Returns true if relocation was successfully performed.
     pub fn relocate_effect_to_primary(&mut self, effect_id: uuid::Uuid) -> bool {
         let (primary, duration_ms, display_name, effect_name) = if let Some(tmpl) = self.timeline.templates.iter().find(|t| t.id == effect_id) {
@@ -2255,7 +2260,13 @@ impl PealayerApp {
         self.undo_stack.push(self.snapshot_timeline());
 
         if let Some(t) = self.timeline.templates.iter_mut().find(|t| t.id == effect_id) {
-            t.actions = crate::four_d::patterns::generate_constant(primary, true, duration_ms);
+            if t.actions.is_empty() {
+                t.actions = crate::four_d::patterns::generate_constant(primary, true, duration_ms);
+            } else {
+                for a in &mut t.actions {
+                    a.relay_id = primary;
+                }
+            }
         }
 
         let compiled = crate::four_d::engine::compile_timeline(

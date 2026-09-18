@@ -103,9 +103,9 @@ fn test_smart_auto_routing_and_rejection_logic() {
     let tmpl2 = app.timeline.templates.iter().find(|t| t.id == inst2.effect_id).unwrap();
     assert_eq!(tmpl2.actions[0].relay_id, 5);
 
-    // 4. Smart Auto-Routing: Dropping on empty canvas / header space (track_index < 2 or track_index > 9)
-    // Dropping Water Splash on Video Header (track_index = 0) -> Auto-routed to R1
-    let routed_empty = app.handle_effect_drop(&water_payload, 0, 4.0);
+    // 4. Smart Auto-Routing: Dropping on empty canvas / ruler header space (track_index < 0 or track_index > 9)
+    // Dropping Water Splash on Timeline Ruler / empty top (track_index = -1) -> Auto-routed to R1
+    let routed_empty = app.handle_effect_drop(&water_payload, -1, 4.0);
     assert!(routed_empty, "Dropping on neutral canvas space should auto-route to primary track");
     assert_eq!(app.timeline.instances.len(), 3);
     let inst3 = &app.timeline.instances[2];
@@ -207,5 +207,64 @@ fn test_app_1_click_relocation_with_undo() {
     assert_eq!(new_relay, 1);
     assert!(fixed.target.is_compatible_with_relay(new_relay));
     assert_eq!(app.undo_stack.undo_len(), 1, "Relocation should push undo snapshot");
+}
+
+#[test]
+fn test_relocation_preserves_custom_action_patterns() {
+    let mut app = PealayerApp::default();
+    // Complex pattern: 3 pulse actions on relay 2 (wrong relay for Water)
+    let custom_actions = vec![
+        pealayer::four_d::models::Action { offset_ms: 0, relay_id: 2, state: true },
+        pealayer::four_d::models::Action { offset_ms: 200, relay_id: 2, state: false },
+        pealayer::four_d::models::Action { offset_ms: 400, relay_id: 2, state: true },
+    ];
+    let wrong_effect = Effect::with_target(
+        "Strobe Water".to_string(),
+        "💧".to_string(),
+        1000,
+        HardwareTarget::Water,
+        custom_actions,
+    );
+    let template_id = wrong_effect.id;
+    app.timeline.templates.push(wrong_effect);
+
+    let success = app.relocate_effect_to_primary(template_id);
+    assert!(success);
+
+    let fixed = &app.timeline.templates[0];
+    assert_eq!(fixed.actions.len(), 3, "Custom pattern length must be preserved");
+    assert_eq!(fixed.actions[0].relay_id, 1);
+    assert_eq!(fixed.actions[0].offset_ms, 0);
+    assert!(fixed.actions[0].state);
+    assert_eq!(fixed.actions[1].relay_id, 1);
+    assert_eq!(fixed.actions[1].offset_ms, 200);
+    assert!(!fixed.actions[1].state);
+    assert_eq!(fixed.actions[2].relay_id, 1);
+    assert_eq!(fixed.actions[2].offset_ms, 400);
+    assert!(fixed.actions[2].state);
+}
+
+#[test]
+fn test_media_track_drop_rejection() {
+    let mut app = PealayerApp::default();
+    let payload = EffectDragPayload {
+        name: "Water Splash".to_string(),
+        icon: "💧".to_string(),
+        duration_ms: 1500,
+        target: HardwareTarget::Water,
+        actions: vec![],
+    };
+
+    // Track 0 = Video Track -> must reject drop
+    let res_video = app.handle_effect_drop(&payload, 0, 5.0);
+    assert!(!res_video, "Dropping onto video track must be rejected");
+
+    // Track 1 = Audio Track -> must reject drop
+    let res_audio = app.handle_effect_drop(&payload, 1, 5.0);
+    assert!(!res_audio, "Dropping onto audio track must be rejected");
+
+    // Neutral space (e.g. track_index -1 or 15) -> auto-routes to R1
+    let res_neutral = app.handle_effect_drop(&payload, -1, 5.0);
+    assert!(res_neutral, "Dropping onto neutral space must auto-route");
 }
 
