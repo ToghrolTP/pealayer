@@ -385,18 +385,18 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         if is_dragged {
                                                             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                                                             
-                                                            #[allow(deprecated)]
-                                                            egui::show_tooltip_at_pointer(
-                                                                ui.ctx(),
+                                                            egui::Tooltip::always_open(
+                                                                ui.ctx().clone(),
                                                                 ui.layer_id(),
                                                                 egui::Id::new("dnd_tooltip"),
-                                                                |ui: &mut egui::Ui| {
-                                                                    ui.horizontal(|ui| {
-                                                                        ui.label(format!("{} {}", preset.effect.icon, preset.effect.name));
-                                                                        ui.label(egui::RichText::new(format!("({}ms)", preset.effect.duration_ms)).weak());
-                                                                    });
-                                                                }
-                                                            );
+                                                                egui::PopupAnchor::Pointer,
+                                                            )
+                                                            .show(|ui| {
+                                                                ui.horizontal(|ui| {
+                                                                    ui.label(format!("{} {}", preset.effect.icon, preset.effect.name));
+                                                                    ui.label(egui::RichText::new(format!("({}ms)", preset.effect.duration_ms)).weak());
+                                                                });
+                                                            });
                                                         }
                                                     });
                                                     ui.add_space(2.0);
@@ -1654,37 +1654,82 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
                                         
                                         // Target highlighting during active drag
-                                        if let Some(_payload) = egui::DragAndDrop::payload::<EffectDragPayload>(ui.ctx()) {
+                                        if let Some(payload) = egui::DragAndDrop::payload::<EffectDragPayload>(ui.ctx()) {
                                             if let Some(mouse_pos) = ui.ctx().pointer_hover_pos() {
                                                 if rect.contains(mouse_pos) {
                                                     let relative_y = mouse_pos.y - tracks_top;
-                                                    let track_index = (relative_y / 32.0).floor() as i32;
-                                                    
-                                                    if track_index >= 2 && track_index <= 9 {
-                                                        let relay_id = track_index - 1;
-                                                        let row_y = tracks_top + (track_index as f32 * 32.0);
+                                                    let hovered_track_index = (relative_y / 32.0).floor() as i32;
+
+                                                    // Loop through visible tracks (0..=1 video/audio, 2..=9 relays 1..=8, 10.. analog)
+                                                    // For relay tracks (2..=9):
+                                                    for i in 2..=9 {
+                                                        let relay_id = (i - 1) as u8;
+                                                        let is_compatible = payload.target.is_compatible_with_relay(relay_id);
+                                                        let is_locked = self.app.track_locked[relay_id as usize];
+                                                        let is_primary = payload.target.primary_relay_id() == Some(relay_id);
+                                                        let row_y = tracks_top + (i as f32 * 32.0);
                                                         let track_rect = egui::Rect::from_min_max(
                                                             egui::pos2(rect.min.x, row_y),
                                                             egui::pos2(rect.max.x, row_y + 32.0),
                                                         );
-                                                        
-                                                        if self.app.track_locked[relay_id as usize] {
-                                                            // Locked: incompatible highlight
-                                                            ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
-                                                            painter.rect_filled(track_rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 70, 70, 40));
-                                                        } else {
-                                                            // Valid relay track: faint green highlight
-                                                            painter.rect_filled(track_rect, 0.0, egui::Color32::from_rgba_unmultiplied(0, 255, 136, 40));
+
+                                                        if hovered_track_index == i {
+                                                            if is_locked || !is_compatible {
+                                                                ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
+                                                                painter.rect_filled(track_rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 70, 70, 45));
+                                                                painter.rect_stroke(track_rect, 0.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(255, 70, 70)), egui::StrokeKind::Inside);
+
+                                                                let reason = if is_locked {
+                                                                    "Track is locked".to_string()
+                                                                } else {
+                                                                    format!("⊘ Incompatible Track: '{}' requires {} or Aux", payload.name, payload.target.display_name())
+                                                                };
+                                                                egui::Tooltip::always_open(
+                                                                    ui.ctx().clone(),
+                                                                    ui.layer_id(),
+                                                                    egui::Id::new("drag_incompat_tip"),
+                                                                    egui::PopupAnchor::Pointer,
+                                                                )
+                                                                .show(|ui| {
+                                                                    ui.label(reason);
+                                                                });
+                                                            } else {
+                                                                ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
+                                                                painter.rect_filled(track_rect, 0.0, egui::Color32::from_rgba_unmultiplied(0, 255, 136, 45));
+                                                                painter.rect_stroke(track_rect, 0.0, egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(0, 255, 136)), egui::StrokeKind::Inside);
+
+                                                                let tooltip_text = format!("Drop to place '{}' on R{}: {}", payload.name, relay_id, payload.target.display_name());
+                                                                egui::Tooltip::always_open(
+                                                                    ui.ctx().clone(),
+                                                                    ui.layer_id(),
+                                                                    egui::Id::new("drag_compat_tip"),
+                                                                    egui::PopupAnchor::Pointer,
+                                                                )
+                                                                .show(|ui| {
+                                                                    ui.label(tooltip_text);
+                                                                });
+                                                            }
+                                                        } else if is_primary && !is_locked {
+                                                            // Subtle beacon highlight on primary track
+                                                            painter.rect_stroke(
+                                                                track_rect,
+                                                                0.0,
+                                                                egui::Stroke::new(1.0_f32, egui::Color32::from_rgba_unmultiplied(0, 255, 136, 120)),
+                                                                egui::StrokeKind::Inside,
+                                                            );
                                                         }
-                                                    } else if track_index == 0 || track_index == 1 {
-                                                        // Incompatible track: faint red highlight & NotAllowed cursor
+                                                    }
+
+                                                    // Video / Audio tracks (0 and 1) or past relays: NotAllowed
+                                                    if hovered_track_index == 0 || hovered_track_index == 1 {
                                                         ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
-                                                        let row_y = tracks_top + (track_index as f32 * 32.0);
+                                                        let row_y = tracks_top + (hovered_track_index as f32 * 32.0);
                                                         let track_rect = egui::Rect::from_min_max(
                                                             egui::pos2(rect.min.x, row_y),
                                                             egui::pos2(rect.max.x, row_y + 32.0),
                                                         );
-                                                        painter.rect_filled(track_rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 70, 70, 40));
+                                                        painter.rect_filled(track_rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 70, 70, 45));
+                                                        painter.rect_stroke(track_rect, 0.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(255, 70, 70)), egui::StrokeKind::Inside);
                                                     }
                                                 }
                                             }
@@ -1707,63 +1752,23 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             
                             let ((rect, response), clicked_any_clip, clicked_any_keyframe) = drop_res.0.inner.inner;
                             
+                            let tracks_top = rect.min.y + 26.0;
+
                             // Successful drop logic
                             if let Some(payload) = &drop_res.1 {
                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                     if rect.contains(mouse_pos) {
-                                        let relative_y = mouse_pos.y - rect.min.y;
+                                        let relative_y = mouse_pos.y - tracks_top;
                                         let track_index = (relative_y / 32.0).floor() as i32;
-                                        
-                                        if track_index >= 2 && track_index <= 9 {
-                                            let target_relay = (track_index - 1) as u8;
-                                            if !self.app.track_locked[target_relay as usize] {
-                                                let relative_x = mouse_pos.x - rect.min.x;
-                                                let mut drop_time_secs = (relative_x / zoom) as f64;
-                                                
-                                                // Playhead/grid snapping
-                                                if (drop_time_secs - self.app.playback_time).abs() < 0.15 {
-                                                    drop_time_secs = self.app.playback_time;
-                                                } else {
-                                                    drop_time_secs = (drop_time_secs * 10.0).round() / 10.0;
-                                                }
-                                                
-                                                let start_time_ms = (drop_time_secs.max(0.0) * 1000.0) as u64;
-                                            
-                                            // Check or create template
-                                            let template_id = if let Some(existing) = self.app.timeline.templates.iter().find(|t| {
-                                                t.name == payload.name && t.duration_ms == payload.duration_ms
-                                            }) {
-                                                existing.id
-                                            } else {
-                                                let new_effect = crate::four_d::models::Effect::new(
-                                                    payload.name.clone(),
-                                                    payload.icon.clone(),
-                                                    payload.duration_ms,
-                                                    crate::four_d::patterns::generate_constant(target_relay, true, payload.duration_ms),
-                                                );
-                                                let id = new_effect.id;
-                                                self.app.timeline.templates.push(new_effect);
-                                                id
-                                            };
-                                            
-                                            // Instantiate and select
-                                            let new_instance = crate::four_d::models::EffectInstance::new(template_id, start_time_ms);
-                                            let new_instance_id = new_instance.id;
-                                            self.app.timeline.instances.push(new_instance);
-                                            self.app.selected_instance_ids.clear();
-                                            self.app.selected_instance_ids.insert(new_instance_id);
-                                            
-                                            // Recompile timeline
-                                            let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
-                                            let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
-                                            }
-                                        }
+                                        let relative_x = mouse_pos.x - rect.min.x;
+                                        let drop_time_secs = (relative_x / zoom) as f64;
+
+                                        self.app.handle_effect_drop(payload, track_index, drop_time_secs);
                                     }
                                 }
                             }
                             
                             // Background click, seek, or lasso selection logic
-                            let tracks_top = rect.min.y + 26.0;
                             let ruler_bottom = tracks_top;
 
                             if response.drag_started() && !clicked_any_clip && !clicked_any_keyframe && self.app.active_drag.is_none() && self.app.active_keyframe_drag.is_none() {
@@ -2012,4 +2017,127 @@ fn draw_led(ui: &mut egui::Ui, active: bool) {
     };
     painter.circle_filled(center, inner_radius, fill_color);
 }
+
+impl PealayerApp {
+    /// Locks or unlocks a track by relay ID (1..=8).
+    pub fn lock_track(&mut self, relay_id: u8, locked: bool) {
+        if (relay_id as usize) < self.track_locked.len() {
+            self.track_locked[relay_id as usize] = locked;
+        }
+    }
+
+    /// Returns the latest OSD message text, if any.
+    pub fn last_osd_message(&self) -> Option<String> {
+        self.osd_message.as_ref().map(|(msg, _)| msg.clone())
+    }
+
+    /// Handles dropping an effect payload onto the timeline canvas.
+    ///
+    /// - Case A: Dropped on a Relay Track (track_index 2..=9):
+    ///   Validates track lock and target compatibility with `payload.target`.
+    ///   Rejects drop with warning message and OSD update if incompatible or locked.
+    /// - Case B: Dropped on Empty Grid Space or Video/Audio Header (track_index < 2 || track_index > 9):
+    ///   Smart auto-routes directly to the primary hardware track (`payload.target.primary_relay_id()`)
+    ///   if defined and unlocked.
+    ///
+    /// Returns true if a clip instance was successfully created.
+    pub fn handle_effect_drop(
+        &mut self,
+        payload: &EffectDragPayload,
+        track_index: i32,
+        drop_time_secs: f64,
+    ) -> bool {
+        let target_relay = if track_index >= 2 && track_index <= 9 {
+            let relay = (track_index - 1) as u8;
+            if self.track_locked[relay as usize] {
+                println!("[Timeline] Drop blocked: track R{} is locked", relay);
+                self.set_osd(format!("Cannot place '{}': track R{} is locked", payload.name, relay));
+                return false;
+            }
+            if !payload.target.is_compatible_with_relay(relay) {
+                println!("[Timeline] Rejected incompatible drop: '{}' on R{}", payload.name, relay);
+                self.set_osd(format!("Placement Rejected: '{}' cannot be placed on R{}", payload.name, relay));
+                return false;
+            }
+            relay
+        } else {
+            // Case B: Dropped on empty grid space or video/audio header -> Smart Auto-Routing
+            if let Some(primary) = payload.target.primary_relay_id() {
+                if self.track_locked[primary as usize] {
+                    println!("[Timeline] Auto-routing for '{}' blocked: primary track R{} is locked", payload.name, primary);
+                    self.set_osd(format!("Cannot place '{}': primary track R{} is locked", payload.name, primary));
+                    return false;
+                }
+                println!("[Timeline] Auto-routed drop of '{}' to primary track R{}", payload.name, primary);
+                self.set_osd(format!("Auto-routed '{}' to R{}: {}", payload.name, primary, payload.target.display_name()));
+                primary
+            } else {
+                return false;
+            }
+        };
+
+        let mut snapped_secs = drop_time_secs;
+        // Playhead/grid snapping
+        if (snapped_secs - self.playback_time).abs() < 0.15 {
+            snapped_secs = self.playback_time;
+        } else {
+            snapped_secs = (snapped_secs * 10.0).round() / 10.0;
+        }
+        let start_time_ms = (snapped_secs.max(0.0) * 1000.0) as u64;
+
+        // Record undo snapshot before mutating timeline
+        self.undo_stack.push(self.snapshot_timeline());
+
+        // Check or create template targeting target_relay with payload.target
+        let template_id = if let Some(existing) = self.timeline.templates.iter().find(|t| {
+            t.name == payload.name
+                && t.duration_ms == payload.duration_ms
+                && t.target == payload.target
+                && t.actions.first().map(|a| a.relay_id).unwrap_or(1) == target_relay
+        }) {
+            existing.id
+        } else {
+            let actions = if !payload.actions.is_empty() {
+                let mut acts = payload.actions.clone();
+                for a in &mut acts {
+                    a.relay_id = target_relay;
+                }
+                acts
+            } else {
+                crate::four_d::patterns::generate_constant(target_relay, true, payload.duration_ms)
+            };
+            let new_effect = crate::four_d::models::Effect::with_target(
+                payload.name.clone(),
+                payload.icon.clone(),
+                payload.duration_ms,
+                payload.target,
+                actions,
+            );
+            let id = new_effect.id;
+            self.timeline.templates.push(new_effect);
+            id
+        };
+
+        // Instantiate and select
+        let new_instance = crate::four_d::models::EffectInstance::new(template_id, start_time_ms);
+        let new_instance_id = new_instance.id;
+        self.timeline.instances.push(new_instance);
+        self.selected_instance_ids.clear();
+        self.selected_instance_ids.insert(new_instance_id);
+        self.selected_keyframes.clear();
+
+        // Recompile timeline
+        let compiled = crate::four_d::engine::compile_timeline(
+            &self.timeline,
+            &self.track_muted,
+            &self.track_soloed,
+        );
+        let _ = self.engine_handle.sender.send(
+            crate::four_d::engine::EngineMessage::UpdateQueue(compiled),
+        );
+
+        true
+    }
+}
+
 
