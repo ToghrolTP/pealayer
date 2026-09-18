@@ -12,8 +12,71 @@ pub struct AtomicAction {
     pub offset_ms: u64,
 }
 
+pub type Action = AtomicAction;
+
+/// Hardware actuator target category for an effect template.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum HardwareTarget {
+    Water,          // Relay 1 (Water Valve)
+    Wind,           // Relay 2 (Wind Fan)
+    SeatVibration,  // Relay 3 (Seat Vibration)
+    Smoke,          // Relay 4 (Smoke Machine)
+    Auxiliary,      // Relays 5..=8 (Aux Triggers)
+    Any,            // Unconstrained cues
+}
+
+impl HardwareTarget {
+    pub fn primary_relay_id(&self) -> Option<u8> {
+        match self {
+            Self::Water => Some(1),
+            Self::Wind => Some(2),
+            Self::SeatVibration => Some(3),
+            Self::Smoke => Some(4),
+            Self::Auxiliary => Some(5),
+            Self::Any => None,
+        }
+    }
+
+    pub fn is_compatible_with_relay(&self, relay_id: u8) -> bool {
+        match self {
+            Self::Water => relay_id == 1 || (5..=8).contains(&relay_id),
+            Self::Wind => relay_id == 2 || (5..=8).contains(&relay_id),
+            Self::SeatVibration => relay_id == 3 || (5..=8).contains(&relay_id),
+            Self::Smoke => relay_id == 4 || (5..=8).contains(&relay_id),
+            Self::Auxiliary => (5..=8).contains(&relay_id),
+            Self::Any => (1..=8).contains(&relay_id),
+        }
+    }
+
+    pub fn for_relay(relay_id: u8) -> Self {
+        match relay_id {
+            1 => Self::Water,
+            2 => Self::Wind,
+            3 => Self::SeatVibration,
+            4 => Self::Smoke,
+            5..=8 => Self::Auxiliary,
+            _ => Self::Any,
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Water => "Water Valve",
+            Self::Wind => "Wind Fan",
+            Self::SeatVibration => "Seat Vibration",
+            Self::Smoke => "Smoke Machine",
+            Self::Auxiliary => "Aux Relay",
+            Self::Any => "General Cue",
+        }
+    }
+}
+
+pub fn default_hardware_target() -> HardwareTarget {
+    HardwareTarget::Any
+}
+
 /// A reusable template or macro defining a sequence of actions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Effect {
     /// Unique identifier for this effect template
     pub id: Uuid,
@@ -23,6 +86,9 @@ pub struct Effect {
     pub icon: String,
     /// Total duration of the effect in milliseconds
     pub duration_ms: u64,
+    /// Hardware actuator target type for track compatibility
+    #[serde(default = "default_hardware_target")]
+    pub target: HardwareTarget,
     /// List of actions that make up this effect
     pub actions: Vec<AtomicAction>,
 }
@@ -34,6 +100,18 @@ impl Effect {
             name,
             icon,
             duration_ms,
+            target: HardwareTarget::Any,
+            actions,
+        }
+    }
+
+    pub fn with_target(name: String, icon: String, duration_ms: u64, target: HardwareTarget, actions: Vec<AtomicAction>) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name,
+            icon,
+            duration_ms,
+            target,
             actions,
         }
     }

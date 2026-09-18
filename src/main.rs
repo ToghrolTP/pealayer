@@ -181,92 +181,102 @@ fn main() -> eframe::Result {
                     // Atmospherics
                     crate::app::EffectPreset {
                         category: "Atmospherics".to_string(),
-                        effect: crate::four_d::models::Effect::new(
+                        effect: crate::four_d::models::Effect::with_target(
                             "Water Splash".to_string(),
                             "💧".to_string(),
                             1500,
+                            crate::four_d::models::HardwareTarget::Water,
                             crate::four_d::patterns::generate_constant(1, true, 1500),
                         ),
                     },
                     crate::app::EffectPreset {
                         category: "Atmospherics".to_string(),
-                        effect: crate::four_d::models::Effect::new(
+                        effect: crate::four_d::models::Effect::with_target(
                             "Mist Spray".to_string(),
                             "🌫".to_string(),
                             3000,
+                            crate::four_d::models::HardwareTarget::Water,
                             crate::four_d::patterns::generate_constant(1, true, 3000),
                         ),
                     },
                     crate::app::EffectPreset {
                         category: "Atmospherics".to_string(),
-                        effect: crate::four_d::models::Effect::new(
+                        effect: crate::four_d::models::Effect::with_target(
                             "Wind Blast".to_string(),
                             "💨".to_string(),
                             2000,
+                            crate::four_d::models::HardwareTarget::Wind,
                             crate::four_d::patterns::generate_constant(2, true, 2000),
                         ),
                     },
                     crate::app::EffectPreset {
                         category: "Atmospherics".to_string(),
-                        effect: crate::four_d::models::Effect::new(
+                        effect: crate::four_d::models::Effect::with_target(
                             "Wind Gale".to_string(),
                             "🌀".to_string(),
                             5000,
+                            crate::four_d::models::HardwareTarget::Wind,
                             crate::four_d::patterns::generate_constant(2, true, 5000),
                         ),
                     },
                     // Physical Effects
                     crate::app::EffectPreset {
                         category: "Physical Effects".to_string(),
-                        effect: crate::four_d::models::Effect::new(
+                        effect: crate::four_d::models::Effect::with_target(
                             "Seat Rumble".to_string(),
                             "📳".to_string(),
                             1000,
+                            crate::four_d::models::HardwareTarget::SeatVibration,
                             crate::four_d::patterns::generate_constant(3, true, 1000),
                         ),
                     },
                     crate::app::EffectPreset {
                         category: "Physical Effects".to_string(),
-                        effect: crate::four_d::models::Effect::new(
+                        effect: crate::four_d::models::Effect::with_target(
                             "Seat Shake".to_string(),
                             "🫨".to_string(),
                             2500,
+                            crate::four_d::models::HardwareTarget::SeatVibration,
                             crate::four_d::patterns::generate_constant(3, true, 2500),
                         ),
                     },
                     crate::app::EffectPreset {
                         category: "Physical Effects".to_string(),
-                        effect: crate::four_d::models::Effect::new(
+                        effect: crate::four_d::models::Effect::with_target(
                             "Smoke Blast".to_string(),
                             "💨".to_string(),
                             1800,
+                            crate::four_d::models::HardwareTarget::Smoke,
                             crate::four_d::patterns::generate_constant(4, true, 1800),
                         ),
                     },
                     crate::app::EffectPreset {
                         category: "Physical Effects".to_string(),
-                        effect: crate::four_d::models::Effect::new(
+                        effect: crate::four_d::models::Effect::with_target(
                             "Fog Screen".to_string(),
                             "🌫".to_string(),
                             4000,
+                            crate::four_d::models::HardwareTarget::Smoke,
                             crate::four_d::patterns::generate_constant(4, true, 4000),
                         ),
                     },
                     crate::app::EffectPreset {
                         category: "Auxiliary Controls".to_string(),
-                        effect: crate::four_d::models::Effect::new(
+                        effect: crate::four_d::models::Effect::with_target(
                             "Aux Trigger A".to_string(),
                             "⚡".to_string(),
                             1500,
+                            crate::four_d::models::HardwareTarget::Auxiliary,
                             crate::four_d::patterns::generate_constant(5, true, 1500),
                         ),
                     },
                     crate::app::EffectPreset {
                         category: "Auxiliary Controls".to_string(),
-                        effect: crate::four_d::models::Effect::new(
+                        effect: crate::four_d::models::Effect::with_target(
                             "Aux Trigger B".to_string(),
                             "🔌".to_string(),
                             2400,
+                            crate::four_d::models::HardwareTarget::Auxiliary,
                             crate::four_d::patterns::generate_constant(6, true, 2400),
                         ),
                     },

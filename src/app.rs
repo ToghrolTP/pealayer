@@ -31,6 +31,7 @@ pub struct EffectDragPayload {
     pub name: String,
     pub icon: String,
     pub duration_ms: u64,
+    pub target: crate::four_d::models::HardwareTarget,
     pub actions: Vec<crate::four_d::models::AtomicAction>,
 }
 

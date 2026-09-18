@@ -344,6 +344,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         name: preset.effect.name.clone(),
                                                         icon: preset.effect.icon.clone(),
                                                         duration_ms: preset.effect.duration_ms,
+                                                        target: preset.effect.target,
                                                         actions: preset.effect.actions.clone(),
                                                     };
                                                     
