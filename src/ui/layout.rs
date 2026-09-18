@@ -2241,9 +2241,9 @@ impl PealayerApp {
     /// pushes an undo snapshot to the undo stack, recompiles the timeline, and updates the engine queue.
     /// Returns true if relocation was successfully performed.
     pub fn relocate_effect_to_primary(&mut self, effect_id: uuid::Uuid) -> bool {
-        let (primary, duration_ms, display_name) = if let Some(tmpl) = self.timeline.templates.iter().find(|t| t.id == effect_id) {
+        let (primary, duration_ms, display_name, effect_name) = if let Some(tmpl) = self.timeline.templates.iter().find(|t| t.id == effect_id) {
             if let Some(primary) = tmpl.target.primary_relay_id() {
-                (primary, tmpl.duration_ms, tmpl.target.display_name())
+                (primary, tmpl.duration_ms, tmpl.target.display_name(), tmpl.name.clone())
             } else {
                 return false;
             }
@@ -2267,7 +2267,7 @@ impl PealayerApp {
             crate::four_d::engine::EngineMessage::UpdateQueue(compiled),
         );
 
-        self.set_osd(format!("Relocated effect to R{}: {}", primary, display_name));
+        self.set_osd(format!("Relocated '{}' to R{}: {}", effect_name, primary, display_name));
         true
     }
 }
