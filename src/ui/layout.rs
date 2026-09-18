@@ -110,6 +110,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let id = *self.app.selected_instance_ids.iter().next().unwrap();
                             let mut timeline_dirty = false;
                             let mut delete_cue = false;
+                            let mut relocate_effect_id = None;
                             
                             ui.heading("Effect Controls");
                             ui.add_space(8.0);
@@ -189,12 +190,28 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     });
                                     
                                     ui.add_space(8.0);
+
+                                    let current_relay_id = template.actions.first().map(|a| a.relay_id).unwrap_or(1);
+                                    let is_mismatched = !template.target.is_compatible_with_relay(current_relay_id);
+                                    if is_mismatched {
+                                        ui.group(|ui| {
+                                            ui.colored_label(
+                                                egui::Color32::from_rgb(245, 158, 11),
+                                                format!("⚠️ Track Mismatch: Configured for {}, but placed on R{}", template.target.display_name(), current_relay_id),
+                                            );
+                                            if let Some(primary) = template.target.primary_relay_id() {
+                                                if ui.button(format!("⚡ Relocate to R{}: {}", primary, template.target.display_name())).clicked() {
+                                                    relocate_effect_id = Some(template.id);
+                                                }
+                                            }
+                                        });
+                                        ui.add_space(8.0);
+                                    }
                                     
                                     ui.group(|ui| {
                                         ui.strong("Hardware Target");
                                         ui.add_space(4.0);
                                         
-                                        let current_relay_id = template.actions.first().map(|a| a.relay_id).unwrap_or(1);
                                         let mut selected_relay = current_relay_id;
                                         
                                         ui.horizontal(|ui| {
@@ -221,6 +238,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 }
                             }
                             
+                            if let Some(eff_id) = relocate_effect_id {
+                                self.app.relocate_effect_to_primary(eff_id);
+                                ui.ctx().request_repaint();
+                            }
+
                             if delete_cue {
                                 self.app.timeline.instances.retain(|inst| inst.id != id);
                                 self.app.selected_instance_ids.clear();
@@ -791,13 +813,26 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     let track_index = (relative_y / 32.0).floor() as i32;
                                                     if track_index >= 2 && track_index <= 9 {
                                                         let target_r = (track_index - 1) as u8;
-                                                        if !self.app.track_locked[target_r as usize] {
+                                                        let target_compatible = self.app.timeline.instances.iter()
+                                                            .find(|i| i.id == drag.instance_id)
+                                                            .and_then(|inst| self.app.timeline.templates.iter().find(|t| t.id == inst.effect_id))
+                                                            .map(|tmpl| tmpl.target.is_compatible_with_relay(target_r))
+                                                            .unwrap_or(true);
+
+                                                        if !self.app.track_locked[target_r as usize] && target_compatible {
                                                             let row_y = tracks_top + (track_index as f32 * 32.0);
                                                             let dest_rect = egui::Rect::from_min_max(
                                                                 egui::pos2(rect.min.x, row_y),
                                                                 egui::pos2(rect.max.x, row_y + 32.0),
                                                             );
                                                             painter.rect_filled(dest_rect, 0.0, egui::Color32::from_rgba_unmultiplied(46, 204, 113, 25)); // Faint green highlight
+                                                        } else if !target_compatible && !self.app.track_locked[target_r as usize] {
+                                                            let row_y = tracks_top + (track_index as f32 * 32.0);
+                                                            let dest_rect = egui::Rect::from_min_max(
+                                                                egui::pos2(rect.min.x, row_y),
+                                                                egui::pos2(rect.max.x, row_y + 32.0),
+                                                            );
+                                                            painter.rect_filled(dest_rect, 0.0, egui::Color32::from_rgba_unmultiplied(231, 76, 60, 30)); // Faint red warning highlight for incompatible track
                                                         }
                                                     }
                                                 }
@@ -838,6 +873,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         
                                         let mut clicked_any_clip = false;
                                         let mut started_drag = None;
+                                        let mut relocate_to_primary = None;
+                                        let mut delete_cue_id = None;
                                         
                                         // 1st Pass: Draw all non-dragged clips
                                         let active_drag_id = self.app.active_drag.as_ref().map(|d| d.instance_id);
@@ -847,6 +884,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             if let Some(effect) = self.app.timeline.templates.iter().find(|t| t.id == instance.effect_id) {
                                                 // Find the relay used by this template's actions
                                                 let relay_id = effect.actions.first().map(|a| a.relay_id).unwrap_or(1);
+                                                let is_mismatched = !effect.target.is_compatible_with_relay(relay_id);
                                                 
                                                 // Determine Y range based on relay_id (1..8)
                                                 let track_index = relay_id as f32 + 1.0;
@@ -863,11 +901,35 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let clip_id = egui::Id::new(instance.id);
                                                 let is_track_locked = self.app.track_locked[relay_id as usize];
                                                 
-                                                let clip_response = if is_track_locked {
+                                                let mut clip_response = if is_track_locked {
                                                     ui.interact(clip_rect, clip_id, egui::Sense::click())
                                                 } else {
                                                     ui.interact(clip_rect, clip_id, egui::Sense::click_and_drag())
                                                 };
+                                                
+                                                if is_mismatched {
+                                                    let warn_msg = format!(
+                                                        "⚠️ HARDWARE MISMATCH DETECTED\n• Effect: {}\n• Requires: {}\n• Current Track: R{}\n• Hazard: Will trigger the wrong physical actuator in live show!\nRight-click to automatically relocate.",
+                                                        effect.name, effect.target.display_name(), relay_id
+                                                    );
+                                                    clip_response = clip_response.on_hover_text(warn_msg);
+                                                }
+
+                                                clip_response.context_menu(|ui| {
+                                                    if is_mismatched {
+                                                        if let Some(primary) = effect.target.primary_relay_id() {
+                                                            if ui.button(format!("⚡ Relocate to R{}: {}", primary, effect.target.display_name())).clicked() {
+                                                                relocate_to_primary = Some(instance.effect_id);
+                                                                ui.close();
+                                                            }
+                                                            ui.separator();
+                                                        }
+                                                    }
+                                                    if ui.button(egui::RichText::new("🗑 Delete Cue").color(egui::Color32::from_rgb(231, 76, 60))).clicked() {
+                                                        delete_cue_id = Some(instance.id);
+                                                        ui.close();
+                                                    }
+                                                });
                                                 
                                                 let mut hover_mode = crate::app::DragMode::Move;
                                                 if clip_response.hovered() && !is_track_locked {
@@ -934,10 +996,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let is_selected = self.app.selected_instance_ids.contains(&instance.id);
                                                 let stroke_color = if is_selected {
                                                     egui::Color32::from_rgb(255, 235, 59) // Selection Yellow outline
+                                                } else if is_mismatched {
+                                                    egui::Color32::from_rgb(245, 158, 11) // Warning amber border
                                                 } else {
                                                     egui::Color32::WHITE
                                                 };
-                                                let stroke_width = if is_selected { 2.0_f32 } else { 1.0_f32 };
+                                                let stroke_width = if is_selected { 2.0_f32 } else if is_mismatched { 1.5_f32 } else { 1.0_f32 };
                                                 
                                                 let is_muted = self.app.track_muted[relay_id as usize];
                                                 let alpha = if is_muted { 128 } else { 255 };
@@ -947,10 +1011,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 painter.rect_stroke(clip_rect, 4.0, egui::Stroke::new(stroke_width, stroke_color), egui::StrokeKind::Inside);
                                                 
                                                 // Clip name label
+                                                let title = if is_mismatched {
+                                                    format!("⚠️ {} {}", effect.icon, effect.name)
+                                                } else {
+                                                    format!("{} {}", effect.icon, effect.name)
+                                                };
                                                 painter.text(
                                                     clip_rect.left_center() + egui::vec2(8.0, 0.0),
                                                     egui::Align2::LEFT_CENTER,
-                                                    format!("{} {}", effect.icon, effect.name),
+                                                    title,
                                                     egui::FontId::proportional(10.0),
                                                     egui::Color32::from_rgba_unmultiplied(255, 255, 255, alpha),
                                                 );
@@ -958,14 +1027,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
                                         
                                         // 2nd Pass: Draw the actively dragged clip on top with a shadow and brighter color
-                                        if let Some((clip_rect, instance_id, effect, _relay_id)) = dragged_clip_data {
+                                        if let Some((clip_rect, instance_id, effect, relay_id)) = dragged_clip_data {
+                                            let is_mismatched = !effect.target.is_compatible_with_relay(relay_id);
                                             let is_selected = self.app.selected_instance_ids.contains(&instance_id);
                                             let stroke_color = if is_selected {
                                                 egui::Color32::from_rgb(255, 235, 59)
+                                            } else if is_mismatched {
+                                                egui::Color32::from_rgb(245, 158, 11)
                                             } else {
                                                 egui::Color32::WHITE
                                             };
-                                            let stroke_width = if is_selected { 2.0_f32 } else { 1.0_f32 };
+                                            let stroke_width = if is_selected { 2.0_f32 } else if is_mismatched { 1.5_f32 } else { 1.0_f32 };
                                             
                                             // Draw drop shadow
                                             let shadow_rect = clip_rect.translate(egui::vec2(2.0, 3.0));
@@ -976,13 +1048,32 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             painter.rect_stroke(clip_rect, 4.0, egui::Stroke::new(stroke_width, stroke_color), egui::StrokeKind::Inside);
                                             
                                             // Clip name label
+                                            let title = if is_mismatched {
+                                                format!("⚠️ {} {}", effect.icon, effect.name)
+                                            } else {
+                                                format!("{} {}", effect.icon, effect.name)
+                                            };
                                             painter.text(
                                                 clip_rect.left_center() + egui::vec2(8.0, 0.0),
                                                 egui::Align2::LEFT_CENTER,
-                                                format!("{} {}", effect.icon, effect.name),
+                                                title,
                                                 egui::FontId::proportional(10.0),
                                                 egui::Color32::WHITE,
                                             );
+                                        }
+                                        
+                                        // Apply relocation or deletion from context menu outside borrow loop
+                                        if let Some(effect_id) = relocate_to_primary {
+                                            self.app.relocate_effect_to_primary(effect_id);
+                                            ui.ctx().request_repaint();
+                                        }
+                                        if let Some(cue_id) = delete_cue_id {
+                                            self.app.undo_stack.push(self.app.snapshot_timeline());
+                                            self.app.timeline.instances.retain(|inst| inst.id != cue_id);
+                                            self.app.selected_instance_ids.remove(&cue_id);
+                                            let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
+                                            let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                                            ui.ctx().request_repaint();
                                         }
                                         
                                         // Apply selection or drag start outside the borrow loop
@@ -1027,12 +1118,19 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         // Vertical track switching
                                                         let mut target_relay = None;
                                                         if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
-                                                            let relative_y = mouse_pos.y - rect.min.y;
+                                                            let relative_y = mouse_pos.y - tracks_top;
                                                             let track_index = (relative_y / 32.0).floor() as i32;
                                                             if track_index >= 2 && track_index <= 9 {
                                                                 let target_r = (track_index - 1) as u8;
                                                                 if !self.app.track_locked[target_r as usize] {
-                                                                    target_relay = Some(target_r);
+                                                                    let is_compatible = self.app.timeline.instances.iter()
+                                                                        .find(|i| i.id == drag_state.instance_id)
+                                                                        .and_then(|inst| self.app.timeline.templates.iter().find(|t| t.id == inst.effect_id))
+                                                                        .map(|tmpl| tmpl.target.is_compatible_with_relay(target_r))
+                                                                        .unwrap_or(true);
+                                                                    if is_compatible {
+                                                                        target_relay = Some(target_r);
+                                                                    }
                                                                 }
                                                             }
                                                         }
@@ -2136,6 +2234,40 @@ impl PealayerApp {
             crate::four_d::engine::EngineMessage::UpdateQueue(compiled),
         );
 
+        true
+    }
+
+    /// 1-Click Relocation: Automatically reassigns an effect's template actions to its primary relay track,
+    /// pushes an undo snapshot to the undo stack, recompiles the timeline, and updates the engine queue.
+    /// Returns true if relocation was successfully performed.
+    pub fn relocate_effect_to_primary(&mut self, effect_id: uuid::Uuid) -> bool {
+        let (primary, duration_ms, display_name) = if let Some(tmpl) = self.timeline.templates.iter().find(|t| t.id == effect_id) {
+            if let Some(primary) = tmpl.target.primary_relay_id() {
+                (primary, tmpl.duration_ms, tmpl.target.display_name())
+            } else {
+                return false;
+            }
+        } else {
+            return false;
+        };
+
+        // Record undo snapshot before mutating timeline
+        self.undo_stack.push(self.snapshot_timeline());
+
+        if let Some(t) = self.timeline.templates.iter_mut().find(|t| t.id == effect_id) {
+            t.actions = crate::four_d::patterns::generate_constant(primary, true, duration_ms);
+        }
+
+        let compiled = crate::four_d::engine::compile_timeline(
+            &self.timeline,
+            &self.track_muted,
+            &self.track_soloed,
+        );
+        let _ = self.engine_handle.sender.send(
+            crate::four_d::engine::EngineMessage::UpdateQueue(compiled),
+        );
+
+        self.set_osd(format!("Relocated effect to R{}: {}", primary, display_name));
         true
     }
 }

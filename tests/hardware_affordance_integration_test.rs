@@ -1,5 +1,5 @@
 use pealayer::app::{EffectDragPayload, PealayerApp};
-use pealayer::four_d::models::{Effect, HardwareTarget};
+use pealayer::four_d::models::{Effect, EffectInstance, HardwareTarget};
 use pealayer::four_d::patterns::generate_constant;
 
 #[test]
@@ -142,3 +142,70 @@ fn test_smart_auto_routing_and_rejection_logic() {
     // 7. Verify undo stack captured successful drops
     assert_eq!(app.undo_stack.undo_len(), 4, "4 successful drops should push 4 undo snapshots");
 }
+
+#[test]
+fn test_1_click_relocation_reassigns_relay_and_updates_queue() {
+    let mut timeline = pealayer::four_d::models::Timeline::new();
+    let wrong_effect = Effect::with_target(
+        "Water Splash".to_string(),
+        "💧".to_string(),
+        1500,
+        HardwareTarget::Water,
+        generate_constant(2, true, 1500), // In R2 (Wind)
+    );
+    let template_id = wrong_effect.id;
+    timeline.templates.push(wrong_effect);
+
+    let instance = EffectInstance::new(template_id, 2000);
+    timeline.instances.push(instance);
+
+    // Verify initially mismatched
+    let inst = &timeline.instances[0];
+    let tmpl = timeline.templates.iter().find(|t| t.id == inst.effect_id).unwrap();
+    let current_relay = tmpl.actions.first().map(|a| a.relay_id).unwrap_or(0);
+    assert_eq!(current_relay, 2);
+    assert!(!tmpl.target.is_compatible_with_relay(current_relay));
+
+    // Relocate to primary target
+    let primary_relay = tmpl.target.primary_relay_id().expect("Primary relay should exist");
+    assert_eq!(primary_relay, 1);
+
+    // Update template actions to target relay 1
+    let mut fixed_tmpl = tmpl.clone();
+    fixed_tmpl.actions = generate_constant(primary_relay, true, fixed_tmpl.duration_ms);
+    timeline.templates[0] = fixed_tmpl;
+
+    let fixed = &timeline.templates[0];
+    let new_relay = fixed.actions.first().map(|a| a.relay_id).unwrap_or(0);
+    assert_eq!(new_relay, 1);
+    assert!(fixed.target.is_compatible_with_relay(new_relay));
+}
+
+#[test]
+fn test_app_1_click_relocation_with_undo() {
+    let mut app = PealayerApp::default();
+    let wrong_effect = Effect::with_target(
+        "Water Splash".to_string(),
+        "💧".to_string(),
+        1500,
+        HardwareTarget::Water,
+        generate_constant(2, true, 1500), // In R2 (Wind)
+    );
+    let template_id = wrong_effect.id;
+    app.timeline.templates.push(wrong_effect);
+    let instance = EffectInstance::new(template_id, 2000);
+    app.timeline.instances.push(instance);
+
+    assert_eq!(app.undo_stack.undo_len(), 0);
+
+    let success = app.relocate_effect_to_primary(template_id);
+    assert!(success);
+
+    // Verify relocated to primary relay 1
+    let fixed = &app.timeline.templates[0];
+    let new_relay = fixed.actions.first().map(|a| a.relay_id).unwrap_or(0);
+    assert_eq!(new_relay, 1);
+    assert!(fixed.target.is_compatible_with_relay(new_relay));
+    assert_eq!(app.undo_stack.undo_len(), 1, "Relocation should push undo snapshot");
+}
+
