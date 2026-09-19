@@ -931,20 +931,24 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     }
                                                 });
                                                 
-                                                let mut hover_mode = crate::app::DragMode::Move;
-                                                if clip_response.hovered() && !is_track_locked {
-                                                    if let Some(mouse_pos) = ui.ctx().pointer_hover_pos() {
-                                                        let left_dist = (mouse_pos.x - clip_rect.left()).abs();
-                                                        let right_dist = (mouse_pos.x - clip_rect.right()).abs();
-                                                        
-                                                        if left_dist <= 6.0 {
-                                                            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-                                                            hover_mode = crate::app::DragMode::ResizeLeft;
-                                                        } else if right_dist <= 6.0 {
-                                                            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-                                                            hover_mode = crate::app::DragMode::ResizeRight;
-                                                        } else {
-                                                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                                                let is_hovered = clip_response.hovered() && !is_track_locked;
+                                                let mut hovered_handle = None;
+
+                                                if is_hovered && self.app.active_drag.is_none() {
+                                                    if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
+                                                        let mode = crate::app::classify_clip_drag_mode(clip_rect.left(), clip_rect.right(), mouse_pos.x);
+                                                        match mode {
+                                                            crate::app::DragMode::ResizeLeft => {
+                                                                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                                                                hovered_handle = Some(crate::app::DragMode::ResizeLeft);
+                                                            }
+                                                            crate::app::DragMode::ResizeRight => {
+                                                                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                                                                hovered_handle = Some(crate::app::DragMode::ResizeRight);
+                                                            }
+                                                            crate::app::DragMode::Move => {
+                                                                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -983,7 +987,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         .collect();
                                                     
                                                     if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
-                                                        started_drag = Some((instance.id, hover_mode, instance.start_time_ms, effect.duration_ms, mouse_pos.x, initial_positions));
+                                                        let press_x = ui.ctx().input(|i| i.pointer.press_origin())
+                                                            .or_else(|| clip_response.interact_pointer_pos())
+                                                            .map(|p| p.x)
+                                                            .unwrap_or(mouse_pos.x);
+
+                                                        let drag_mode = crate::app::classify_clip_drag_mode(clip_rect.left(), clip_rect.right(), press_x);
+                                                        started_drag = Some((instance.id, drag_mode, instance.start_time_ms, effect.duration_ms, mouse_pos.x, initial_positions));
                                                     }
                                                 }
                                                 
@@ -1010,6 +1020,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 painter.rect_filled(clip_rect, 4.0, egui::Color32::from_rgba_unmultiplied(142, 68, 173, alpha)); // Purple clip
                                                 painter.rect_stroke(clip_rect, 4.0, egui::Stroke::new(stroke_width, stroke_color), egui::StrokeKind::Inside);
                                                 
+                                                // Visual handle grips
+                                                let left_active = hovered_handle == Some(crate::app::DragMode::ResizeLeft);
+                                                let right_active = hovered_handle == Some(crate::app::DragMode::ResizeRight);
+                                                render_clip_handles(&painter, clip_rect, left_active, right_active, alpha);
+
                                                 // Clip name label
                                                 let title = if is_mismatched {
                                                     format!("⚠️ {} {}", effect.icon, effect.name)
@@ -1017,7 +1032,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     format!("{} {}", effect.icon, effect.name)
                                                 };
                                                 painter.text(
-                                                    clip_rect.left_center() + egui::vec2(8.0, 0.0),
+                                                    clip_rect.left_center() + egui::vec2(12.0, 0.0),
                                                     egui::Align2::LEFT_CENTER,
                                                     title,
                                                     egui::FontId::proportional(10.0),
@@ -1047,6 +1062,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             painter.rect_filled(clip_rect, 4.0, egui::Color32::from_rgb(172, 98, 203)); // Brighter purple
                                             painter.rect_stroke(clip_rect, 4.0, egui::Stroke::new(stroke_width, stroke_color), egui::StrokeKind::Inside);
                                             
+                                            // Visual handle grips
+                                            let left_active = self.app.active_drag.as_ref().map(|d| d.mode) == Some(crate::app::DragMode::ResizeLeft);
+                                            let right_active = self.app.active_drag.as_ref().map(|d| d.mode) == Some(crate::app::DragMode::ResizeRight);
+                                            render_clip_handles(&painter, clip_rect, left_active, right_active, 255);
+
                                             // Clip name label
                                             let title = if is_mismatched {
                                                 format!("⚠️ {} {}", effect.icon, effect.name)
@@ -1054,7 +1074,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 format!("{} {}", effect.icon, effect.name)
                                             };
                                             painter.text(
-                                                clip_rect.left_center() + egui::vec2(8.0, 0.0),
+                                                clip_rect.left_center() + egui::vec2(12.0, 0.0),
                                                 egui::Align2::LEFT_CENTER,
                                                 title,
                                                 egui::FontId::proportional(10.0),
@@ -1093,6 +1113,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let mut snap_line_x = None;
                                         
                                         if let Some(drag_state) = &self.app.active_drag {
+                                            match drag_state.mode {
+                                                crate::app::DragMode::Move => {
+                                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                                }
+                                                crate::app::DragMode::ResizeLeft | crate::app::DragMode::ResizeRight => {
+                                                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                                                }
+                                            }
+
                                             if ui.ctx().input(|i| i.pointer.any_released()) {
                                                 drag_ended = true;
                                             } else {
@@ -2282,5 +2311,105 @@ impl PealayerApp {
         true
     }
 }
+
+fn render_clip_handles(
+    painter: &egui::Painter,
+    clip_rect: egui::Rect,
+    left_active: bool,
+    right_active: bool,
+    alpha: u8,
+) {
+    if clip_rect.width() < 14.0 {
+        return;
+    }
+    let handle_w = (clip_rect.width() * 0.35).min(10.0);
+    let left_handle_rect = egui::Rect::from_min_max(
+        clip_rect.left_top(),
+        egui::pos2(clip_rect.left() + handle_w, clip_rect.bottom()),
+    );
+    let right_handle_rect = egui::Rect::from_min_max(
+        egui::pos2(clip_rect.right() - handle_w, clip_rect.top()),
+        clip_rect.right_bottom(),
+    );
+
+    let alpha_scale = alpha as f32 / 255.0;
+    let cyan = egui::Color32::from_rgb(0, 220, 255);
+
+    // Left handle highlight & edge
+    if left_active {
+        painter.rect_filled(
+            left_handle_rect,
+            egui::CornerRadius { nw: 4, sw: 4, ne: 0, se: 0 },
+            egui::Color32::from_rgba_unmultiplied(0, 220, 255, (50.0 * alpha_scale) as u8),
+        );
+        painter.line_segment(
+            [
+                clip_rect.left_top() + egui::vec2(1.0, 1.0),
+                egui::pos2(clip_rect.left() + 1.0, clip_rect.bottom() - 1.0),
+            ],
+            egui::Stroke::new(
+                2.0_f32,
+                egui::Color32::from_rgba_unmultiplied(cyan.r(), cyan.g(), cyan.b(), alpha),
+            ),
+        );
+    }
+
+    // Right handle highlight & edge
+    if right_active {
+        painter.rect_filled(
+            right_handle_rect,
+            egui::CornerRadius { nw: 0, sw: 0, ne: 4, se: 4 },
+            egui::Color32::from_rgba_unmultiplied(0, 220, 255, (50.0 * alpha_scale) as u8),
+        );
+        painter.line_segment(
+            [
+                egui::pos2(clip_rect.right() - 1.0, clip_rect.top() + 1.0),
+                egui::pos2(clip_rect.right() - 1.0, clip_rect.bottom() - 1.0),
+            ],
+            egui::Stroke::new(
+                2.0_f32,
+                egui::Color32::from_rgba_unmultiplied(cyan.r(), cyan.g(), cyan.b(), alpha),
+            ),
+        );
+    }
+
+    // Draw grip affordance notches (2 subtle vertical lines in center of each handle)
+    let notch_y_top = clip_rect.top() + 5.0;
+    let notch_y_bot = clip_rect.bottom() - 5.0;
+    if notch_y_bot > notch_y_top {
+        // Left handle grip notches
+        let left_cx = left_handle_rect.center().x;
+        let left_notch_color = if left_active {
+            egui::Color32::from_rgba_unmultiplied(cyan.r(), cyan.g(), cyan.b(), alpha)
+        } else {
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, (70.0 * alpha_scale) as u8)
+        };
+        painter.line_segment(
+            [egui::pos2(left_cx - 1.5, notch_y_top), egui::pos2(left_cx - 1.5, notch_y_bot)],
+            egui::Stroke::new(1.0_f32, left_notch_color),
+        );
+        painter.line_segment(
+            [egui::pos2(left_cx + 1.5, notch_y_top), egui::pos2(left_cx + 1.5, notch_y_bot)],
+            egui::Stroke::new(1.0_f32, left_notch_color),
+        );
+
+        // Right handle grip notches
+        let right_cx = right_handle_rect.center().x;
+        let right_notch_color = if right_active {
+            egui::Color32::from_rgba_unmultiplied(cyan.r(), cyan.g(), cyan.b(), alpha)
+        } else {
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, (70.0 * alpha_scale) as u8)
+        };
+        painter.line_segment(
+            [egui::pos2(right_cx - 1.5, notch_y_top), egui::pos2(right_cx - 1.5, notch_y_bot)],
+            egui::Stroke::new(1.0_f32, right_notch_color),
+        );
+        painter.line_segment(
+            [egui::pos2(right_cx + 1.5, notch_y_top), egui::pos2(right_cx + 1.5, notch_y_bot)],
+            egui::Stroke::new(1.0_f32, right_notch_color),
+        );
+    }
+}
+
 
 

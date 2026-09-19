@@ -160,3 +160,71 @@ fn test_pattern_rescaling_single_action() {
     assert_eq!(effect.actions.len(), 1);
     assert_eq!(effect.actions[0].offset_ms, 0);
 }
+
+#[test]
+fn test_classify_clip_drag_mode_outer_bounds_and_clamping() {
+    let clip_left = 100.0;
+    let clip_right = 200.0;
+
+    // Pointer dragged outward past the left edge
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 95.0), DragMode::ResizeLeft);
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 50.0), DragMode::ResizeLeft);
+
+    // Pointer dragged outward past the right edge
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 205.0), DragMode::ResizeRight);
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 250.0), DragMode::ResizeRight);
+
+    // Exact handle boundary transitions (handle_w = 10.0)
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 110.0), DragMode::ResizeLeft);
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 110.001), DragMode::Move);
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 189.999), DragMode::Move);
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 190.0), DragMode::ResizeRight);
+}
+
+#[test]
+fn test_press_origin_drag_mode_resolution_outward_drag() {
+    let clip_left = 200.0;
+    let clip_right = 350.0;
+
+    // Scenario 1: User presses down on the right handle (x = 348.0)
+    let press_origin_right = 348.0;
+    // Pointer drags outward past clip boundary before drag_started threshold is crossed
+    let latest_pointer_right = 365.0;
+    // Resolving from press_origin correctly determines ResizeRight
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, press_origin_right), DragMode::ResizeRight);
+    // Note: Outward position also resolves to ResizeRight
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, latest_pointer_right), DragMode::ResizeRight);
+
+    // Scenario 2: User presses down on the left handle (x = 203.0)
+    let press_origin_left = 203.0;
+    let latest_pointer_left = 185.0; // Outward past left boundary
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, press_origin_left), DragMode::ResizeLeft);
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, latest_pointer_left), DragMode::ResizeLeft);
+
+    // Scenario 3: User presses center body
+    let press_origin_center = 275.0;
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, press_origin_center), DragMode::Move);
+}
+
+#[test]
+fn test_handle_geometry_thresholds() {
+    // Width = 100.0 -> handle_w = 10.0
+    let w1 = 100.0_f32;
+    let handle_w1 = (w1 * 0.35).min(10.0);
+    assert_eq!(handle_w1, 10.0);
+    assert!(w1 >= 14.0);
+
+    // Width = 20.0 -> handle_w = 7.0
+    let w2 = 20.0_f32;
+    let handle_w2 = (w2 * 0.35).min(10.0);
+    assert_eq!(handle_w2, 7.0);
+    assert!(w2 >= 14.0);
+
+    // Width = 10.0 -> handle_w = 3.5
+    let w3 = 10.0_f32;
+    let handle_w3 = (w3 * 0.35).min(10.0);
+    assert_eq!(handle_w3, 3.5);
+    assert!(w3 < 14.0); // Below visual grip threshold
+}
+
+
