@@ -1,11 +1,12 @@
 use crate::four_d::curve::AnalogTrack;
-use crate::four_d::models::EffectInstance;
+use crate::four_d::models::{Effect, EffectInstance};
 
 /// Represents a point-in-time state of user-editable timeline elements.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TimelineSnapshot {
     pub instances: Vec<EffectInstance>,
     pub analog_tracks: Vec<AnalogTrack>,
+    pub templates: Vec<Effect>,
 }
 
 use std::collections::VecDeque;

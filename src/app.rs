@@ -836,16 +836,26 @@ impl PealayerApp {
         crate::four_d::history::TimelineSnapshot {
             instances: self.timeline.instances.clone(),
             analog_tracks: self.timeline.analog_tracks.clone(),
+            templates: self.timeline.templates.clone(),
         }
     }
 
     pub fn restore_timeline_snapshot(&mut self, snapshot: crate::four_d::history::TimelineSnapshot) {
         self.timeline.instances = snapshot.instances;
         self.timeline.analog_tracks = snapshot.analog_tracks;
+        self.timeline.templates = snapshot.templates;
         let _ = self.engine_handle.sender.send(
             crate::four_d::engine::EngineMessage::UpdateAnalogTracks(
                 self.timeline.analog_tracks.clone(),
             ),
+        );
+        let compiled = crate::four_d::engine::compile_timeline(
+            &self.timeline,
+            &self.track_muted,
+            &self.track_soloed,
+        );
+        let _ = self.engine_handle.sender.send(
+            crate::four_d::engine::EngineMessage::UpdateQueue(compiled),
         );
     }
 }
