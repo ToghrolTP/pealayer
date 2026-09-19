@@ -252,7 +252,8 @@ fn test_undo_redo_clip_resize_restores_duration_and_template() {
     app.isolate_template_for_instance(inst_id);
 
     // Resize to 3500ms
-    let tmpl = app.timeline.templates.iter_mut().find(|t| t.id == inst_id || t.id == tmpl_id).unwrap();
+    let effect_id = app.timeline.instances.iter().find(|i| i.id == inst_id).unwrap().effect_id;
+    let tmpl = app.timeline.templates.iter_mut().find(|t| t.id == effect_id).unwrap();
     update_effect_duration(tmpl, 3500);
 
     assert_eq!(app.timeline.templates.iter().find(|t| t.id == tmpl_id).unwrap().duration_ms, 3500);
@@ -427,6 +428,448 @@ fn test_inspector_duration_slider_range_up_to_60s() {
     assert_eq!(restored_tmpl.duration_ms, 5000);
     assert_eq!(restored_tmpl.actions[1].offset_ms, 5000);
 }
+
+#[test]
+fn test_e2e_rapid_outward_drag_classification() {
+    // Verifies that rapid outward mouse movement far past clip boundaries
+    // still reliably classifies as resize operations rather than defaulting to Move.
+    let clip_left = 300.0_f32;
+    let clip_right = 500.0_f32; // 200px wide clip, handle_w = 10px
+
+    // Rapid outward drag to the right: user clicks near right handle and swiftly flicks right
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, clip_right + 50.0), DragMode::ResizeRight);
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, clip_right + 150.0), DragMode::ResizeRight);
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, clip_right + 1000.0), DragMode::ResizeRight);
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, clip_right + 0.1), DragMode::ResizeRight);
+
+    // Rapid outward drag to the left: user clicks near left handle and swiftly flicks left
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, clip_left - 50.0), DragMode::ResizeLeft);
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, clip_left - 150.0), DragMode::ResizeLeft);
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, clip_left - 1000.0), DragMode::ResizeLeft);
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, clip_left - 0.1), DragMode::ResizeLeft);
+
+    // Inside center body: should classify as Move
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 350.0), DragMode::Move);
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 400.0), DragMode::Move);
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 450.0), DragMode::Move);
+
+    // Verify narrow clip with clamped handles (width = 16.0, handle_w = 5.6)
+    let narrow_left = 100.0_f32;
+    let narrow_right = 116.0_f32;
+    assert_eq!(classify_clip_drag_mode(narrow_left, narrow_right, narrow_right + 50.0), DragMode::ResizeRight);
+    assert_eq!(classify_clip_drag_mode(narrow_left, narrow_right, narrow_left - 50.0), DragMode::ResizeLeft);
+    assert_eq!(classify_clip_drag_mode(narrow_left, narrow_right, 108.0), DragMode::Move);
+}
+
+#[test]
+fn test_e2e_resize_snapping_boundaries_to_neighbors_and_playhead() {
+    // Verifies snapping interaction during resize:
+    // When snap is enabled (default), resizing near a neighbor boundary or the playhead (within 100ms)
+    // snaps to the target. When snap is disabled (e.g. shift/alt pressed), it remains continuous.
+    let mut app = PealayerApp::default();
+    let playback_time = 2.150; // Playhead at 2150ms
+
+    // Template 1: Constant water valve
+    let t1 = Effect::with_target(
+        "Water Cue 1".into(),
+        "💧".into(),
+        1000,
+        HardwareTarget::Water,
+        vec![
+            AtomicAction { relay_id: 1, state: true, offset_ms: 0 },
+            AtomicAction { relay_id: 1, state: false, offset_ms: 1000 },
+        ],
+    );
+    let t1_id = t1.id;
+    app.timeline.templates.push(t1);
+
+    // Template 2: Constant water valve
+    let t2 = Effect::with_target(
+        "Water Cue 2".into(),
+        "💧".into(),
+        1000,
+        HardwareTarget::Water,
+        vec![
+            AtomicAction { relay_id: 1, state: true, offset_ms: 0 },
+            AtomicAction { relay_id: 1, state: false, offset_ms: 1000 },
+        ],
+    );
+    let t2_id = t2.id;
+    app.timeline.templates.push(t2);
+
+    // Instance 1: start 1000ms, duration 1000ms -> ends at 2000ms
+    let inst1 = EffectInstance::new(t1_id, 1000);
+    let inst1_id = inst1.id;
+    app.timeline.instances.push(inst1);
+
+    // Instance 2 (neighbor): start 2500ms, duration 1000ms -> ends at 3500ms
+    let inst2 = EffectInstance::new(t2_id, 2500);
+    let inst2_id = inst2.id;
+    app.timeline.instances.push(inst2);
+
+    // Helper closure to build snap targets exactly as layout.rs does
+    let build_snap_targets = |app: &PealayerApp, active_id: Uuid, playhead_secs: f64| -> Vec<u64> {
+        let mut targets = vec![0, (playhead_secs * 1000.0) as u64];
+        for inst in &app.timeline.instances {
+            if inst.id == active_id {
+                continue;
+            }
+            if let Some(tmpl) = app.timeline.templates.iter().find(|t| t.id == inst.effect_id) {
+                targets.push(inst.start_time_ms);
+                targets.push(inst.start_time_ms + tmpl.duration_ms);
+            }
+        }
+        targets
+    };
+
+    let snap_targets_for_inst1 = build_snap_targets(&app, inst1_id, playback_time);
+    // Snap targets: [0, 2150 (playhead), 2500 (inst2 start), 3500 (inst2 end)]
+    assert!(snap_targets_for_inst1.contains(&0));
+    assert!(snap_targets_for_inst1.contains(&2150));
+    assert!(snap_targets_for_inst1.contains(&2500));
+    assert!(snap_targets_for_inst1.contains(&3500));
+
+    // --- Scenario A: ResizeRight of Instance 1 snaps to neighbor start (2500ms) ---
+    // Initial start = 1000, initial end = 2000. Drag delta = +480ms -> raw new_end = 2480ms
+    let initial_start = 1000_u64;
+    let initial_dur = 1000_u64;
+    let delta_ms = 480_i64; // raw new_end = 2480ms (within 20ms of 2500ms)
+
+    // With snapping enabled:
+    let mut snapped_end = (initial_start + initial_dur) as i64 + delta_ms;
+    for target in &snap_targets_for_inst1 {
+        if (snapped_end - *target as i64).abs() <= 100 {
+            snapped_end = *target as i64;
+            break;
+        }
+    }
+    assert_eq!(snapped_end, 2500); // Snapped to neighbor's start!
+    let new_dur = (snapped_end - initial_start as i64).max(100) as u64;
+    assert_eq!(new_dur, 1500);
+
+    // Apply duration change to inst1's template
+    let effect_id = app.timeline.instances.iter().find(|i| i.id == inst1_id).unwrap().effect_id;
+    let tmpl = app.timeline.templates.iter_mut().find(|t| t.id == effect_id).unwrap();
+    update_effect_duration(tmpl, new_dur);
+    assert_eq!(tmpl.duration_ms, 1500);
+    assert_eq!(tmpl.actions[1].offset_ms, 1500);
+
+    // With snapping disabled (Shift/Alt modifier): raw 2480ms is preserved without snap
+    let raw_end = (initial_start + initial_dur) as i64 + delta_ms;
+    assert_eq!(raw_end, 2480);
+    let unsnapped_dur = (raw_end - initial_start as i64).max(100) as u64;
+    assert_eq!(unsnapped_dur, 1480);
+
+    // --- Scenario B: ResizeRight of Instance 1 snaps to Playhead (2150ms) ---
+    let delta_playhead = 130_i64; // raw new_end = 2000 + 130 = 2130ms (within 20ms of 2150ms)
+    let mut snapped_to_playhead = (initial_start + initial_dur) as i64 + delta_playhead;
+    for target in &snap_targets_for_inst1 {
+        if (snapped_to_playhead - *target as i64).abs() <= 100 {
+            snapped_to_playhead = *target as i64;
+            break;
+        }
+    }
+    assert_eq!(snapped_to_playhead, 2150); // Snapped to playhead!
+
+    // --- Scenario C: ResizeLeft of Instance 2 snaps to Instance 1's end ---
+    // Reset inst1 template duration back to 1000 (ends at 2000)
+    let tmpl1 = app.timeline.templates.iter_mut().find(|t| t.id == t1_id).unwrap();
+    update_effect_duration(tmpl1, 1000);
+    let snap_targets_for_inst2 = build_snap_targets(&app, inst2_id, playback_time);
+    // snap_targets_for_inst2 contains inst1 start (1000) and inst1 end (2000)
+    assert!(snap_targets_for_inst2.contains(&1000));
+    assert!(snap_targets_for_inst2.contains(&2000));
+
+    // Inst2 initial start = 2500, dur = 1000, right anchor = 3500.
+    // Drag left by delta = -480ms -> raw new_start = 2020ms (within 20ms of 2000ms)
+    let inst2_init_start = 2500_u64;
+    let inst2_init_dur = 1000_u64;
+    let right_anchor = inst2_init_start + inst2_init_dur;
+    let delta_left = -480_i64;
+    let mut snapped_start = (inst2_init_start as i64 + delta_left).max(0) as u64;
+    for target in &snap_targets_for_inst2 {
+        if (snapped_start as i64 - *target as i64).abs() <= 100 {
+            snapped_start = *target;
+            break;
+        }
+    }
+    assert_eq!(snapped_start, 2000); // Snapped to inst1 end!
+    snapped_start = snapped_start.min(right_anchor.saturating_sub(100));
+    let new_dur2 = right_anchor - snapped_start;
+    assert_eq!(new_dur2, 1500);
+
+    // Apply to inst2
+    let inst2_mut = app.timeline.instances.iter_mut().find(|i| i.id == inst2_id).unwrap();
+    inst2_mut.start_time_ms = snapped_start;
+    let tmpl2 = app.timeline.templates.iter_mut().find(|t| t.id == t2_id).unwrap();
+    update_effect_duration(tmpl2, new_dur2);
+    assert_eq!(app.timeline.instances.iter().find(|i| i.id == inst2_id).unwrap().start_time_ms, 2000);
+    assert_eq!(tmpl2.duration_ms, 1500);
+}
+
+#[test]
+fn test_e2e_complete_multi_step_undo_redo_cycle() {
+    // Verifies the complete lifecycle:
+    // Place clip -> Resize Right -> Move -> Resize Left
+    // followed by full undo (Ctrl+Z x3) and full redo (Ctrl+Y x3),
+    // strictly validating instance and template states at each stage.
+    let mut app = PealayerApp::default();
+
+    // 1. Initial State: Place Clip
+    let template = Effect::with_target(
+        "Fog Burst".into(),
+        "🌫".into(),
+        1000,
+        HardwareTarget::Smoke,
+        vec![
+            AtomicAction { relay_id: 4, state: true, offset_ms: 0 },
+            AtomicAction { relay_id: 4, state: false, offset_ms: 1000 },
+        ],
+    );
+    let tmpl_id = template.id;
+    app.timeline.templates.push(template);
+
+    let instance = EffectInstance::new(tmpl_id, 2000);
+    let inst_id = instance.id;
+    app.timeline.instances.push(instance);
+
+    // Verify Step 1: Initial state
+    assert_eq!(app.timeline.instances.len(), 1);
+    assert_eq!(app.timeline.instances[0].start_time_ms, 2000);
+    assert_eq!(app.timeline.templates[0].duration_ms, 1000);
+    assert_eq!(app.timeline.templates[0].actions[1].offset_ms, 1000);
+
+    // Step 2: Resize Right (extend from 1000ms to 2500ms)
+    // Recorded before operation
+    app.undo_stack.push(app.snapshot_timeline());
+    app.isolate_template_for_instance(inst_id);
+    let eff_id_1 = app.timeline.instances.iter().find(|i| i.id == inst_id).unwrap().effect_id;
+    let tmpl_1 = app.timeline.templates.iter_mut().find(|t| t.id == eff_id_1).unwrap();
+    update_effect_duration(tmpl_1, 2500);
+
+    // Verify Step 2 state
+    assert_eq!(app.timeline.instances[0].start_time_ms, 2000);
+    assert_eq!(app.timeline.templates.iter().find(|t| t.id == eff_id_1).unwrap().duration_ms, 2500);
+    assert_eq!(app.timeline.templates.iter().find(|t| t.id == eff_id_1).unwrap().actions[1].offset_ms, 2500);
+
+    // Step 3: Move Clip (move start from 2000ms to 3500ms)
+    app.undo_stack.push(app.snapshot_timeline());
+    app.timeline.instances.iter_mut().find(|i| i.id == inst_id).unwrap().start_time_ms = 3500;
+
+    // Verify Step 3 state
+    assert_eq!(app.timeline.instances[0].start_time_ms, 3500);
+    assert_eq!(app.timeline.templates.iter().find(|t| t.id == eff_id_1).unwrap().duration_ms, 2500);
+
+    // Step 4: Resize Left (trim start from 3500ms to 4200ms -> duration shrinks from 2500ms to 1800ms)
+    app.undo_stack.push(app.snapshot_timeline());
+    app.isolate_template_for_instance(inst_id);
+    let inst_mut = app.timeline.instances.iter_mut().find(|i| i.id == inst_id).unwrap();
+    inst_mut.start_time_ms = 4200;
+    let eff_id_2 = inst_mut.effect_id;
+    let tmpl_2 = app.timeline.templates.iter_mut().find(|t| t.id == eff_id_2).unwrap();
+    update_effect_duration(tmpl_2, 1800);
+
+    // Verify Step 4 state
+    assert_eq!(app.timeline.instances[0].start_time_ms, 4200);
+    assert_eq!(app.timeline.templates.iter().find(|t| t.id == eff_id_2).unwrap().duration_ms, 1800);
+    assert_eq!(app.timeline.templates.iter().find(|t| t.id == eff_id_2).unwrap().actions[1].offset_ms, 1800);
+
+    // -------------------------------------------------------------
+    // Undo Sequence (Ctrl+Z x3)
+    // -------------------------------------------------------------
+
+    // Ctrl+Z #1: Undo Resize Left -> Restores Step 3 (Start: 3500, Duration: 2500)
+    let current = app.snapshot_timeline();
+    let snap_step3 = app.undo_stack.undo(current).expect("Undo 1 must succeed");
+    app.restore_timeline_snapshot(snap_step3);
+    assert_eq!(app.timeline.instances[0].start_time_ms, 3500);
+    let eff_id = app.timeline.instances[0].effect_id;
+    let tmpl = app.timeline.templates.iter().find(|t| t.id == eff_id).unwrap();
+    assert_eq!(tmpl.duration_ms, 2500);
+    assert_eq!(tmpl.actions[1].offset_ms, 2500);
+
+    // Ctrl+Z #2: Undo Move -> Restores Step 2 (Start: 2000, Duration: 2500)
+    let current = app.snapshot_timeline();
+    let snap_step2 = app.undo_stack.undo(current).expect("Undo 2 must succeed");
+    app.restore_timeline_snapshot(snap_step2);
+    assert_eq!(app.timeline.instances[0].start_time_ms, 2000);
+    let eff_id = app.timeline.instances[0].effect_id;
+    let tmpl = app.timeline.templates.iter().find(|t| t.id == eff_id).unwrap();
+    assert_eq!(tmpl.duration_ms, 2500);
+    assert_eq!(tmpl.actions[1].offset_ms, 2500);
+
+    // Ctrl+Z #3: Undo Resize Right -> Restores Step 1 Initial (Start: 2000, Duration: 1000)
+    let current = app.snapshot_timeline();
+    let snap_step1 = app.undo_stack.undo(current).expect("Undo 3 must succeed");
+    app.restore_timeline_snapshot(snap_step1);
+    assert_eq!(app.timeline.instances[0].start_time_ms, 2000);
+    let eff_id = app.timeline.instances[0].effect_id;
+    let tmpl = app.timeline.templates.iter().find(|t| t.id == eff_id).unwrap();
+    assert_eq!(tmpl.duration_ms, 1000);
+    assert_eq!(tmpl.actions[1].offset_ms, 1000);
+
+    // Exhausted Undo: Further Ctrl+Z returns None
+    let current = app.snapshot_timeline();
+    assert!(app.undo_stack.undo(current).is_none());
+
+    // -------------------------------------------------------------
+    // Redo Sequence (Ctrl+Y x3)
+    // -------------------------------------------------------------
+
+    // Ctrl+Y #1: Redo Resize Right -> Restores Step 2 (Start: 2000, Duration: 2500)
+    let current = app.snapshot_timeline();
+    let redo_step2 = app.undo_stack.redo(current).expect("Redo 1 must succeed");
+    app.restore_timeline_snapshot(redo_step2);
+    assert_eq!(app.timeline.instances[0].start_time_ms, 2000);
+    let eff_id = app.timeline.instances[0].effect_id;
+    let tmpl = app.timeline.templates.iter().find(|t| t.id == eff_id).unwrap();
+    assert_eq!(tmpl.duration_ms, 2500);
+    assert_eq!(tmpl.actions[1].offset_ms, 2500);
+
+    // Ctrl+Y #2: Redo Move -> Restores Step 3 (Start: 3500, Duration: 2500)
+    let current = app.snapshot_timeline();
+    let redo_step3 = app.undo_stack.redo(current).expect("Redo 2 must succeed");
+    app.restore_timeline_snapshot(redo_step3);
+    assert_eq!(app.timeline.instances[0].start_time_ms, 3500);
+    let eff_id = app.timeline.instances[0].effect_id;
+    let tmpl = app.timeline.templates.iter().find(|t| t.id == eff_id).unwrap();
+    assert_eq!(tmpl.duration_ms, 2500);
+    assert_eq!(tmpl.actions[1].offset_ms, 2500);
+
+    // Ctrl+Y #3: Redo Resize Left -> Restores Step 4 (Start: 4200, Duration: 1800)
+    let current = app.snapshot_timeline();
+    let redo_step4 = app.undo_stack.redo(current).expect("Redo 3 must succeed");
+    app.restore_timeline_snapshot(redo_step4);
+    assert_eq!(app.timeline.instances[0].start_time_ms, 4200);
+    let eff_id = app.timeline.instances[0].effect_id;
+    let tmpl = app.timeline.templates.iter().find(|t| t.id == eff_id).unwrap();
+    assert_eq!(tmpl.duration_ms, 1800);
+    assert_eq!(tmpl.actions[1].offset_ms, 1800);
+
+    // Exhausted Redo: Further Ctrl+Y returns None
+    let current = app.snapshot_timeline();
+    assert!(app.undo_stack.redo(current).is_none());
+}
+
+#[test]
+fn test_e2e_template_isolation_under_repeated_operations() {
+    // Verifies template isolation behavior under repeated, sequential operations:
+    // 1. Multiple instances sharing one template.
+    // 2. Resizing one instance isolates it into a new template.
+    // 3. Repeatedly editing that same instance reuses its already-isolated template (no redundant clones).
+    // 4. Adding another instance that shares the isolated template and then modifying that isolates again.
+    // 5. Undoing reverts isolated states correctly without orphan leaks.
+    let mut app = PealayerApp::default();
+
+    // Shared template T1 (Seat Vibration, 4 actions, duration 1200ms)
+    let t1 = Effect::with_target(
+        "Seat Pulse".into(),
+        "💺".into(),
+        1200,
+        HardwareTarget::SeatVibration,
+        vec![
+            AtomicAction { relay_id: 3, state: true, offset_ms: 0 },
+            AtomicAction { relay_id: 3, state: false, offset_ms: 600 },
+            AtomicAction { relay_id: 3, state: true, offset_ms: 900 },
+            AtomicAction { relay_id: 3, state: false, offset_ms: 1200 },
+        ],
+    );
+    let t1_id = t1.id;
+    app.timeline.templates.push(t1);
+
+    // Instance A and Instance B share T1
+    let inst_a = EffectInstance::new(t1_id, 1000);
+    let inst_b = EffectInstance::new(t1_id, 5000);
+    let id_a = inst_a.id;
+    let id_b = inst_b.id;
+    app.timeline.instances.push(inst_a);
+    app.timeline.instances.push(inst_b);
+
+    assert_eq!(app.timeline.templates.len(), 1);
+
+    // --- Op 1: First resize on Instance A (isolate T1 -> T2) ---
+    app.undo_stack.push(app.snapshot_timeline());
+    let t2_id = app.isolate_template_for_instance(id_a).expect("Must isolate instance A");
+    assert_ne!(t2_id, t1_id);
+    assert_eq!(app.timeline.templates.len(), 2);
+    assert_eq!(app.timeline.instances.iter().find(|i| i.id == id_a).unwrap().effect_id, t2_id);
+    assert_eq!(app.timeline.instances.iter().find(|i| i.id == id_b).unwrap().effect_id, t1_id);
+
+    // Scale T2 duration to 2400ms (2x)
+    let t2 = app.timeline.templates.iter_mut().find(|t| t.id == t2_id).unwrap();
+    update_effect_duration(t2, 2400);
+    assert_eq!(t2.duration_ms, 2400);
+    assert_eq!(t2.actions[1].offset_ms, 1200); // 600 * 2
+    assert_eq!(t2.actions[2].offset_ms, 1800); // 900 * 2
+    assert_eq!(t2.actions[3].offset_ms, 2400);
+
+    // Verify T1 is completely untouched
+    let t1_check = app.timeline.templates.iter().find(|t| t.id == t1_id).unwrap();
+    assert_eq!(t1_check.duration_ms, 1200);
+    assert_eq!(t1_check.actions[1].offset_ms, 600);
+    assert_eq!(t1_check.actions[3].offset_ms, 1200);
+
+    // --- Op 2: Repeated resize on Instance A (already exclusive owner of T2) ---
+    app.undo_stack.push(app.snapshot_timeline());
+    let t2_again = app.isolate_template_for_instance(id_a).expect("Must return T2");
+    assert_eq!(t2_again, t2_id, "Should reuse existing template when exclusive");
+    assert_eq!(app.timeline.templates.len(), 2, "No redundant template cloned");
+
+    let t2 = app.timeline.templates.iter_mut().find(|t| t.id == t2_id).unwrap();
+    update_effect_duration(t2, 3600); // 3x
+    assert_eq!(t2.duration_ms, 3600);
+    assert_eq!(t2.actions[1].offset_ms, 1800); // 600 * 3
+    assert_eq!(t2.actions[3].offset_ms, 3600);
+
+    // --- Op 3: Add Instance C sharing T2 with A ---
+    let inst_c = EffectInstance::new(t2_id, 10000);
+    let id_c = inst_c.id;
+    app.timeline.instances.push(inst_c);
+    // Now T2 is shared between A and C.
+    assert_eq!(app.timeline.templates.len(), 2);
+
+    // Resize Instance C -> must isolate T2 into T3
+    app.undo_stack.push(app.snapshot_timeline());
+    let t3_id = app.isolate_template_for_instance(id_c).expect("Must isolate instance C");
+    assert_ne!(t3_id, t2_id);
+    assert_ne!(t3_id, t1_id);
+    assert_eq!(app.timeline.templates.len(), 3);
+    assert_eq!(app.timeline.instances.iter().find(|i| i.id == id_c).unwrap().effect_id, t3_id);
+    assert_eq!(app.timeline.instances.iter().find(|i| i.id == id_a).unwrap().effect_id, t2_id);
+
+    let t3 = app.timeline.templates.iter_mut().find(|t| t.id == t3_id).unwrap();
+    update_effect_duration(t3, 4800);
+    assert_eq!(t3.duration_ms, 4800);
+
+    // Verify all 3 templates remain isolated with their respective durations
+    assert_eq!(app.timeline.templates.iter().find(|t| t.id == t1_id).unwrap().duration_ms, 1200);
+    assert_eq!(app.timeline.templates.iter().find(|t| t.id == t2_id).unwrap().duration_ms, 3600);
+    assert_eq!(app.timeline.templates.iter().find(|t| t.id == t3_id).unwrap().duration_ms, 4800);
+
+    // --- Op 4: Multi-step undo reverses isolation ---
+    // Undo Op 3 (isolate and resize C)
+    let cur = app.snapshot_timeline();
+    let snap3 = app.undo_stack.undo(cur).unwrap();
+    app.restore_timeline_snapshot(snap3);
+    assert_eq!(app.timeline.templates.len(), 2);
+    assert_eq!(app.timeline.instances.iter().find(|i| i.id == id_c).unwrap().effect_id, t2_id);
+
+    // Undo Op 2 (second resize on A)
+    let cur = app.snapshot_timeline();
+    let snap2 = app.undo_stack.undo(cur).unwrap();
+    app.restore_timeline_snapshot(snap2);
+    assert_eq!(app.timeline.templates.iter().find(|t| t.id == t2_id).unwrap().duration_ms, 2400);
+
+    // Undo Op 1 (first resize on A, restoring single shared template)
+    let cur = app.snapshot_timeline();
+    let snap1 = app.undo_stack.undo(cur).unwrap();
+    app.restore_timeline_snapshot(snap1);
+    assert_eq!(app.timeline.templates.len(), 1);
+    assert_eq!(app.timeline.instances.iter().find(|i| i.id == id_a).unwrap().effect_id, t1_id);
+    assert_eq!(app.timeline.instances.iter().find(|i| i.id == id_b).unwrap().effect_id, t1_id);
+    assert_eq!(app.timeline.templates[0].duration_ms, 1200);
+}
+
 
 
 

@@ -1334,8 +1334,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     let hud_center = egui::pos2(mouse_pos.x, mouse_pos.y - 25.0);
                                                     let half_w = badge_size.x / 2.0;
                                                     let half_h = badge_size.y / 2.0;
-                                                    let clamped_x = hud_center.x.clamp(rect.min.x + half_w + 4.0, rect.max.x - half_w - 4.0);
-                                                    let clamped_y = hud_center.y.clamp(rect.min.y + half_h + 4.0, rect.max.y - half_h - 4.0);
+                                                    let min_x = rect.min.x + half_w + 4.0;
+                                                    let max_x = rect.max.x - half_w - 4.0;
+                                                    let clamped_x = if min_x <= max_x { hud_center.x.clamp(min_x, max_x) } else { rect.center().x };
+
+                                                    let min_y = rect.min.y + half_h + 4.0;
+                                                    let max_y = rect.max.y - half_h - 4.0;
+                                                    let clamped_y = if min_y <= max_y { hud_center.y.clamp(min_y, max_y) } else { rect.center().y };
                                                     let hud_rect = egui::Rect::from_center_size(egui::pos2(clamped_x, clamped_y), badge_size);
 
                                                     painter.rect_filled(
