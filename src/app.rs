@@ -10,6 +10,37 @@ pub enum DragMode {
     ResizeRight,
 }
 
+pub fn classify_clip_drag_mode(clip_left: f32, clip_right: f32, press_x: f32) -> DragMode {
+    let width = (clip_right - clip_left).max(1.0);
+    let handle_w = (width * 0.35).min(10.0);
+    if press_x <= clip_left + handle_w {
+        DragMode::ResizeLeft
+    } else if press_x >= clip_right - handle_w {
+        DragMode::ResizeRight
+    } else {
+        DragMode::Move
+    }
+}
+
+pub fn update_effect_duration(effect: &mut crate::four_d::models::Effect, new_dur_ms: u64) {
+    if effect.actions.len() <= 2 {
+        if effect.actions.len() == 2 {
+            effect.actions[1].offset_ms = new_dur_ms;
+        }
+    } else {
+        let old_dur = effect.duration_ms.max(1) as f64;
+        let ratio = new_dur_ms as f64 / old_dur;
+        let len = effect.actions.len();
+        for a in &mut effect.actions[1..len - 1] {
+            a.offset_ms = ((a.offset_ms as f64) * ratio).round() as u64;
+        }
+        if let Some(last) = effect.actions.last_mut() {
+            last.offset_ms = new_dur_ms;
+        }
+    }
+    effect.duration_ms = new_dur_ms;
+}
+
 #[derive(Clone, Debug)]
 pub struct ActiveDragState {
     pub instance_id: uuid::Uuid,
@@ -857,6 +888,35 @@ impl PealayerApp {
         let _ = self.engine_handle.sender.send(
             crate::four_d::engine::EngineMessage::UpdateQueue(compiled),
         );
+    }
+
+    pub fn isolate_template_for_instance(&mut self, instance_id: uuid::Uuid) -> Option<uuid::Uuid> {
+        let (target_effect_id, is_shared) = {
+            let instance = self.timeline.instances.iter().find(|i| i.id == instance_id)?;
+            let effect_id = instance.effect_id;
+            let count = self.timeline.instances.iter().filter(|i| i.effect_id == effect_id).count();
+            (effect_id, count > 1)
+        };
+
+        if !is_shared {
+            return if self.timeline.templates.iter().any(|t| t.id == target_effect_id) {
+                Some(target_effect_id)
+            } else {
+                None
+            };
+        }
+
+        let template = self.timeline.templates.iter().find(|t| t.id == target_effect_id)?;
+        let mut new_template = template.clone();
+        let new_id = uuid::Uuid::new_v4();
+        new_template.id = new_id;
+        self.timeline.templates.push(new_template);
+
+        if let Some(inst) = self.timeline.instances.iter_mut().find(|i| i.id == instance_id) {
+            inst.effect_id = new_id;
+        }
+
+        Some(new_id)
     }
 }
 
