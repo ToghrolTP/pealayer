@@ -123,6 +123,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 }
                             }
                             
+                            let mut push_undo = false;
+                            let mut isolate_instance = false;
+                            let mut update_start_to = None;
+                            let mut update_duration_to = None;
+                            let mut update_relay_to = None;
+
                             if let Some(idx) = instance_idx {
                                 let instance = &mut self.app.timeline.instances[idx];
                                 
@@ -170,8 +176,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             ui.label("Start Time:");
                                             let max_secs = if self.app.duration > 0.0 { self.app.duration } else { 60.0 };
                                             let slider = ui.add(egui::Slider::new(&mut start_secs, 0.0..=max_secs).suffix("s"));
+                                            if slider.drag_started() || (slider.changed() && !slider.dragged()) {
+                                                push_undo = true;
+                                            }
                                             if slider.changed() {
-                                                instance.start_time_ms = (start_secs * 1000.0) as u64;
+                                                update_start_to = Some((start_secs * 1000.0) as u64);
                                                 timeline_dirty = true;
                                             }
                                         });
@@ -179,11 +188,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let mut duration_ms = template.duration_ms as f64;
                                         ui.horizontal(|ui| {
                                             ui.label("Duration:");
-                                            let slider = ui.add(egui::Slider::new(&mut duration_ms, 100.0..=10000.0).suffix("ms"));
+                                            let slider = ui.add(egui::Slider::new(&mut duration_ms, 50.0..=60000.0).suffix("ms"));
+                                            if slider.drag_started() || (slider.changed() && !slider.dragged()) {
+                                                push_undo = true;
+                                            }
                                             if slider.changed() {
-                                                template.duration_ms = duration_ms as u64;
-                                                let relay_id = template.actions.first().map(|a| a.relay_id).unwrap_or(1);
-                                                template.actions = crate::four_d::patterns::generate_constant(relay_id, true, template.duration_ms);
+                                                isolate_instance = true;
+                                                update_duration_to = Some(duration_ms as u64);
                                                 timeline_dirty = true;
                                             }
                                         });
@@ -226,7 +237,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         });
                                         
                                         if selected_relay != current_relay_id {
-                                            template.actions = crate::four_d::patterns::generate_constant(selected_relay, true, template.duration_ms);
+                                            push_undo = true;
+                                            isolate_instance = true;
+                                            update_relay_to = Some(selected_relay);
                                             timeline_dirty = true;
                                         }
                                     });
@@ -238,12 +251,51 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 }
                             }
                             
+                            if push_undo {
+                                self.app.undo_stack.push(self.app.snapshot_timeline());
+                            }
+
+                            if isolate_instance {
+                                self.app.isolate_template_for_instance(id);
+                            }
+
+                            if let Some(new_start) = update_start_to {
+                                if let Some(inst) = self.app.timeline.instances.iter_mut().find(|i| i.id == id) {
+                                    inst.start_time_ms = new_start;
+                                }
+                            }
+
+                            if let Some(new_dur) = update_duration_to {
+                                if let Some(inst) = self.app.timeline.instances.iter().find(|i| i.id == id) {
+                                    let eff_id = inst.effect_id;
+                                    if let Some(tmpl) = self.app.timeline.templates.iter_mut().find(|t| t.id == eff_id) {
+                                        crate::app::update_effect_duration(tmpl, new_dur);
+                                    }
+                                }
+                            }
+
+                            if let Some(new_relay) = update_relay_to {
+                                if let Some(inst) = self.app.timeline.instances.iter().find(|i| i.id == id) {
+                                    let eff_id = inst.effect_id;
+                                    if let Some(tmpl) = self.app.timeline.templates.iter_mut().find(|t| t.id == eff_id) {
+                                        if tmpl.actions.is_empty() {
+                                            tmpl.actions = crate::four_d::patterns::generate_constant(new_relay, true, tmpl.duration_ms);
+                                        } else {
+                                            for a in &mut tmpl.actions {
+                                                a.relay_id = new_relay;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             if let Some(eff_id) = relocate_effect_id {
                                 self.app.relocate_effect_to_primary(eff_id);
                                 ui.ctx().request_repaint();
                             }
 
                             if delete_cue {
+                                self.app.undo_stack.push(self.app.snapshot_timeline());
                                 self.app.timeline.instances.retain(|inst| inst.id != id);
                                 self.app.selected_instance_ids.clear();
                                 timeline_dirty = true;
@@ -252,6 +304,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             if timeline_dirty {
                                 let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
                                 let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                                ui.ctx().request_repaint();
                             }
                         } else if selected_count > 1 {
                             ui.heading("Bulk Effect Controls");
@@ -1098,6 +1151,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         
                                         // Apply selection or drag start outside the borrow loop
                                         if let Some((drag_id, mode, init_start, init_dur, start_x, init_positions)) = started_drag {
+                                            // Push undo snapshot before mutating timeline
+                                            self.app.undo_stack.push(self.app.snapshot_timeline());
+
+                                            // If resizing, isolate template if shared by multiple instances
+                                            if mode == crate::app::DragMode::ResizeLeft || mode == crate::app::DragMode::ResizeRight {
+                                                self.app.isolate_template_for_instance(drag_id);
+                                            }
+
                                             self.app.active_drag = Some(crate::app::ActiveDragState {
                                                 instance_id: drag_id,
                                                 mode,
@@ -1142,7 +1203,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     }
                                                 }
                                                 
-                                                match drag_state.mode {
+                                                let hud_text = match drag_state.mode {
                                                     crate::app::DragMode::Move => {
                                                         // Vertical track switching
                                                         let mut target_relay = None;
@@ -1204,6 +1265,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 }
                                                             }
                                                         }
+
+                                                        let start_secs = primary_new_start as f64 / 1000.0;
+                                                        let track_name = target_relay.map(|r| format!("R{}", r)).unwrap_or_else(|| "Track".to_string());
+                                                        format!("⏱ Start: {:.3}s | {}", start_secs, track_name)
                                                     }
                                                     crate::app::DragMode::ResizeRight => {
                                                         let mut new_end = (drag_state.initial_start_time_ms + drag_state.initial_duration_ms) as i64 + delta_time_ms;
@@ -1220,11 +1285,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         let instance_id = drag_state.instance_id;
                                                         if let Some(instance) = self.app.timeline.instances.iter_mut().find(|inst| inst.id == instance_id) {
                                                             if let Some(template) = self.app.timeline.templates.iter_mut().find(|t| t.id == instance.effect_id) {
-                                                                let relay_id = template.actions.first().map(|a| a.relay_id).unwrap_or(1);
-                                                                template.duration_ms = new_dur;
-                                                                template.actions = crate::four_d::patterns::generate_constant(relay_id, true, new_dur);
+                                                                crate::app::update_effect_duration(template, new_dur);
                                                             }
                                                         }
+
+                                                        let delta_ms = (new_dur as i64) - (drag_state.initial_duration_ms as i64);
+                                                        let delta_str = if delta_ms >= 0 { format!("+{}ms", delta_ms) } else { format!("{}ms", delta_ms) };
+                                                        let dur_secs = new_dur as f64 / 1000.0;
+                                                        format!("⏱ Dur: {:.2}s ({})", dur_secs, delta_str)
                                                     }
                                                     crate::app::DragMode::ResizeLeft => {
                                                         let right_anchor = drag_state.initial_start_time_ms + drag_state.initial_duration_ms;
@@ -1242,14 +1310,52 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         let new_dur = right_anchor - new_start;
                                                         let instance_id = drag_state.instance_id;
                                                         if let Some(instance) = self.app.timeline.instances.iter_mut().find(|inst| inst.id == instance_id) {
+                                                            instance.start_time_ms = new_start;
                                                             if let Some(template) = self.app.timeline.templates.iter_mut().find(|t| t.id == instance.effect_id) {
-                                                                let relay_id = template.actions.first().map(|a| a.relay_id).unwrap_or(1);
-                                                                instance.start_time_ms = new_start;
-                                                                template.duration_ms = new_dur;
-                                                                template.actions = crate::four_d::patterns::generate_constant(relay_id, true, new_dur);
+                                                                crate::app::update_effect_duration(template, new_dur);
                                                             }
                                                         }
+
+                                                        let delta_ms = (new_dur as i64) - (drag_state.initial_duration_ms as i64);
+                                                        let delta_str = if delta_ms >= 0 { format!("+{}ms", delta_ms) } else { format!("{}ms", delta_ms) };
+                                                        let dur_secs = new_dur as f64 / 1000.0;
+                                                        format!("⏱ Dur: {:.2}s ({})", dur_secs, delta_str)
                                                     }
+                                                };
+
+                                                if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
+                                                    let galley = painter.layout_no_wrap(
+                                                        hud_text.clone(),
+                                                        egui::FontId::monospace(11.0),
+                                                        egui::Color32::WHITE,
+                                                    );
+                                                    let padding = egui::vec2(8.0, 4.0);
+                                                    let badge_size = galley.size() + padding * 2.0;
+                                                    let hud_center = egui::pos2(mouse_pos.x, mouse_pos.y - 25.0);
+                                                    let half_w = badge_size.x / 2.0;
+                                                    let half_h = badge_size.y / 2.0;
+                                                    let clamped_x = hud_center.x.clamp(rect.min.x + half_w + 4.0, rect.max.x - half_w - 4.0);
+                                                    let clamped_y = hud_center.y.clamp(rect.min.y + half_h + 4.0, rect.max.y - half_h - 4.0);
+                                                    let hud_rect = egui::Rect::from_center_size(egui::pos2(clamped_x, clamped_y), badge_size);
+
+                                                    painter.rect_filled(
+                                                        hud_rect,
+                                                        4.0,
+                                                        egui::Color32::from_black_alpha(220),
+                                                    );
+                                                    painter.rect_stroke(
+                                                        hud_rect,
+                                                        4.0,
+                                                        egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(0, 220, 255)),
+                                                        egui::StrokeKind::Inside,
+                                                    );
+                                                    painter.text(
+                                                        hud_rect.center(),
+                                                        egui::Align2::CENTER_CENTER,
+                                                        hud_text,
+                                                        egui::FontId::monospace(11.0),
+                                                        egui::Color32::WHITE,
+                                                    );
                                                 }
                                             }
                                         }

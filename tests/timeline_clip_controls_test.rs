@@ -227,4 +227,206 @@ fn test_handle_geometry_thresholds() {
     assert!(w3 < 14.0); // Below visual grip threshold
 }
 
+#[test]
+fn test_undo_redo_clip_resize_restores_duration_and_template() {
+    let mut app = PealayerApp::default();
+    let template = Effect::with_target(
+        "Wind Gust".into(),
+        "💨".into(),
+        1000,
+        HardwareTarget::Wind,
+        vec![
+            AtomicAction { relay_id: 2, state: true, offset_ms: 0 },
+            AtomicAction { relay_id: 2, state: false, offset_ms: 1000 },
+        ],
+    );
+    let tmpl_id = template.id;
+    app.timeline.templates.push(template);
+
+    let instance = EffectInstance::new(tmpl_id, 500);
+    let inst_id = instance.id;
+    app.timeline.instances.push(instance);
+
+    // Simulate drag start: push undo snapshot, isolate template if shared
+    app.undo_stack.push(app.snapshot_timeline());
+    app.isolate_template_for_instance(inst_id);
+
+    // Resize to 3500ms
+    let tmpl = app.timeline.templates.iter_mut().find(|t| t.id == inst_id || t.id == tmpl_id).unwrap();
+    update_effect_duration(tmpl, 3500);
+
+    assert_eq!(app.timeline.templates.iter().find(|t| t.id == tmpl_id).unwrap().duration_ms, 3500);
+
+    // Undo resize
+    let current = app.snapshot_timeline();
+    let prev = app.undo_stack.undo(current).expect("Should undo");
+    app.restore_timeline_snapshot(prev);
+
+    assert_eq!(app.timeline.templates.iter().find(|t| t.id == tmpl_id).unwrap().duration_ms, 1000);
+    assert_eq!(app.timeline.templates.iter().find(|t| t.id == tmpl_id).unwrap().actions[1].offset_ms, 1000);
+
+    // Redo resize
+    let current = app.snapshot_timeline();
+    let next = app.undo_stack.redo(current).expect("Should redo");
+    app.restore_timeline_snapshot(next);
+
+    assert_eq!(app.timeline.templates.iter().find(|t| t.id == tmpl_id).unwrap().duration_ms, 3500);
+    assert_eq!(app.timeline.templates.iter().find(|t| t.id == tmpl_id).unwrap().actions[1].offset_ms, 3500);
+}
+
+#[test]
+fn test_undo_redo_clip_move_restores_start_time() {
+    let mut app = PealayerApp::default();
+    let template = Effect::with_target(
+        "Water Splash".into(),
+        "💧".into(),
+        1200,
+        HardwareTarget::Water,
+        vec![AtomicAction { relay_id: 1, state: true, offset_ms: 0 }],
+    );
+    let tmpl_id = template.id;
+    app.timeline.templates.push(template);
+
+    let instance = EffectInstance::new(tmpl_id, 1000);
+    let inst_id = instance.id;
+    app.timeline.instances.push(instance);
+
+    // Drag start on move
+    app.undo_stack.push(app.snapshot_timeline());
+
+    // Move to 3200ms
+    app.timeline.instances.iter_mut().find(|i| i.id == inst_id).unwrap().start_time_ms = 3200;
+    assert_eq!(app.timeline.instances[0].start_time_ms, 3200);
+
+    // Undo move
+    let current = app.snapshot_timeline();
+    let prev = app.undo_stack.undo(current).expect("Should undo");
+    app.restore_timeline_snapshot(prev);
+
+    assert_eq!(app.timeline.instances[0].start_time_ms, 1000);
+
+    // Redo move
+    let current = app.snapshot_timeline();
+    let next = app.undo_stack.redo(current).expect("Should redo");
+    app.restore_timeline_snapshot(next);
+
+    assert_eq!(app.timeline.instances[0].start_time_ms, 3200);
+}
+
+#[test]
+fn test_undo_redo_multi_action_pulse_pattern_preservation() {
+    let mut app = PealayerApp::default();
+    let template = Effect::with_target(
+        "Strobe".into(),
+        "⚡".into(),
+        1000,
+        HardwareTarget::Auxiliary,
+        vec![
+            AtomicAction { relay_id: 5, state: true, offset_ms: 0 },
+            AtomicAction { relay_id: 5, state: false, offset_ms: 250 },
+            AtomicAction { relay_id: 5, state: true, offset_ms: 500 },
+            AtomicAction { relay_id: 5, state: false, offset_ms: 1000 },
+        ],
+    );
+    let tmpl_id = template.id;
+    app.timeline.templates.push(template);
+
+    // Two instances sharing the template
+    let inst1 = EffectInstance::new(tmpl_id, 500);
+    let inst2 = EffectInstance::new(tmpl_id, 3000);
+    let inst1_id = inst1.id;
+    let inst2_id = inst2.id;
+    app.timeline.instances.push(inst1);
+    app.timeline.instances.push(inst2);
+
+    // User resizes inst1:
+    // 1. Snapshot taken on drag start
+    app.undo_stack.push(app.snapshot_timeline());
+    // 2. Template isolated
+    let isolated_tmpl_id = app.isolate_template_for_instance(inst1_id).expect("Should isolate");
+    assert_ne!(isolated_tmpl_id, tmpl_id);
+
+    // 3. Update duration of isolated template to 2000ms
+    let isolated_tmpl = app.timeline.templates.iter_mut().find(|t| t.id == isolated_tmpl_id).unwrap();
+    update_effect_duration(isolated_tmpl, 2000);
+
+    // Verify inst1's isolated template has scaled offsets
+    assert_eq!(isolated_tmpl.duration_ms, 2000);
+    assert_eq!(isolated_tmpl.actions[0].offset_ms, 0);
+    assert_eq!(isolated_tmpl.actions[1].offset_ms, 500);
+    assert_eq!(isolated_tmpl.actions[2].offset_ms, 1000);
+    assert_eq!(isolated_tmpl.actions[3].offset_ms, 2000);
+
+    // Sibling inst2's original template must be untouched
+    let original_tmpl = app.timeline.templates.iter().find(|t| t.id == tmpl_id).unwrap();
+    assert_eq!(original_tmpl.duration_ms, 1000);
+    assert_eq!(original_tmpl.actions[1].offset_ms, 250);
+    assert_eq!(original_tmpl.actions[2].offset_ms, 500);
+    assert_eq!(original_tmpl.actions[3].offset_ms, 1000);
+
+    // 4. Undo the resize operation
+    let current = app.snapshot_timeline();
+    let prev = app.undo_stack.undo(current).expect("Should undo");
+    app.restore_timeline_snapshot(prev);
+
+    // Both instances should now point to the original template, with original choreography
+    assert_eq!(app.timeline.templates.len(), 1);
+    let inst1_restored = app.timeline.instances.iter().find(|i| i.id == inst1_id).unwrap();
+    let inst2_restored = app.timeline.instances.iter().find(|i| i.id == inst2_id).unwrap();
+    assert_eq!(inst1_restored.effect_id, tmpl_id);
+    assert_eq!(inst2_restored.effect_id, tmpl_id);
+
+    let tmpl_restored = app.timeline.templates.iter().find(|t| t.id == tmpl_id).unwrap();
+    assert_eq!(tmpl_restored.duration_ms, 1000);
+    assert_eq!(tmpl_restored.actions[1].offset_ms, 250);
+    assert_eq!(tmpl_restored.actions[2].offset_ms, 500);
+    assert_eq!(tmpl_restored.actions[3].offset_ms, 1000);
+}
+
+#[test]
+fn test_inspector_duration_slider_range_up_to_60s() {
+    let mut app = PealayerApp::default();
+    let template = Effect::with_target(
+        "Long Wind".into(),
+        "💨".into(),
+        5000,
+        HardwareTarget::Wind,
+        vec![
+            AtomicAction { relay_id: 2, state: true, offset_ms: 0 },
+            AtomicAction { relay_id: 2, state: false, offset_ms: 5000 },
+        ],
+    );
+    let tmpl_id = template.id;
+    app.timeline.templates.push(template);
+
+    let instance = EffectInstance::new(tmpl_id, 0);
+    let inst_id = instance.id;
+    app.timeline.instances.push(instance);
+
+    // Snapshot before inspector change
+    app.undo_stack.push(app.snapshot_timeline());
+
+    // Isolate template if shared
+    app.isolate_template_for_instance(inst_id);
+
+    // Slider set to maximum 60,000ms (60s)
+    let new_dur = 60000_u64;
+    let tmpl = app.timeline.templates.iter_mut().find(|t| t.id == tmpl_id).unwrap();
+    update_effect_duration(tmpl, new_dur);
+
+    assert_eq!(tmpl.duration_ms, 60000);
+    assert_eq!(tmpl.actions.len(), 2);
+    assert_eq!(tmpl.actions[1].offset_ms, 60000);
+
+    // Undo reverts back to 5000ms
+    let current = app.snapshot_timeline();
+    let prev = app.undo_stack.undo(current).expect("Should undo");
+    app.restore_timeline_snapshot(prev);
+
+    let restored_tmpl = app.timeline.templates.iter().find(|t| t.id == tmpl_id).unwrap();
+    assert_eq!(restored_tmpl.duration_ms, 5000);
+    assert_eq!(restored_tmpl.actions[1].offset_ms, 5000);
+}
+
+
 
