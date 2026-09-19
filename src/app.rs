@@ -31,7 +31,7 @@ pub fn update_effect_duration(effect: &mut crate::four_d::models::Effect, new_du
         let old_dur = effect.duration_ms.max(1) as f64;
         let ratio = new_dur_ms as f64 / old_dur;
         let len = effect.actions.len();
-        for a in &mut effect.actions[1..len - 1] {
+        for a in &mut effect.actions[0..len - 1] {
             a.offset_ms = ((a.offset_ms as f64) * ratio).round() as u64;
         }
         if let Some(last) = effect.actions.last_mut() {

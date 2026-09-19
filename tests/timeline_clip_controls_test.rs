@@ -162,6 +162,36 @@ fn test_pattern_rescaling_single_action() {
 }
 
 #[test]
+fn test_pattern_rescaling_with_initial_delay() {
+    let mut effect = Effect::with_target(
+        "Delayed Pulse".into(),
+        "⚡".into(),
+        1000,
+        HardwareTarget::Auxiliary,
+        vec![
+            AtomicAction { relay_id: 5, state: true, offset_ms: 200 },
+            AtomicAction { relay_id: 5, state: false, offset_ms: 600 },
+            AtomicAction { relay_id: 5, state: false, offset_ms: 1000 },
+        ],
+    );
+
+    // Scale up: 200 * 2.5 = 500, 600 * 2.5 = 1500, end = 2500
+    update_effect_duration(&mut effect, 2500);
+    assert_eq!(effect.duration_ms, 2500);
+    assert_eq!(effect.actions.len(), 3);
+    assert_eq!(effect.actions[0].offset_ms, 500);
+    assert_eq!(effect.actions[1].offset_ms, 1500);
+    assert_eq!(effect.actions[2].offset_ms, 2500);
+
+    // Scale down: 500 * (1000 / 2500) = 200, 1500 * 0.4 = 600, end = 1000
+    update_effect_duration(&mut effect, 1000);
+    assert_eq!(effect.duration_ms, 1000);
+    assert_eq!(effect.actions[0].offset_ms, 200);
+    assert_eq!(effect.actions[1].offset_ms, 600);
+    assert_eq!(effect.actions[2].offset_ms, 1000);
+}
+
+#[test]
 fn test_classify_clip_drag_mode_outer_bounds_and_clamping() {
     let clip_left = 100.0;
     let clip_right = 200.0;
@@ -869,7 +899,3 @@ fn test_e2e_template_isolation_under_repeated_operations() {
     assert_eq!(app.timeline.instances.iter().find(|i| i.id == id_b).unwrap().effect_id, t1_id);
     assert_eq!(app.timeline.templates[0].duration_ms, 1200);
 }
-
-
-
-
