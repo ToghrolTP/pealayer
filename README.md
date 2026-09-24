@@ -77,11 +77,43 @@ sudo apt install libmpv-dev pkg-config libasound2-dev libx11-dev libxcb-shape0-d
 ```brew install mpv
 ```
 
-### Windows
-1. Download the `mpv` shared libraries (`mpv.dll` and `mpv.lib`) from a repository/build site.
-2. Put `mpv.dll` and `mpv.lib` in your system path or binary target folder so cargo can discover them.
+### Windows (Native & Cross-Compilation)
 
----
+#### 1. MPV Development & Runtime Libraries
+Because Pealayer links against `libmpv`, you must supply the Windows library and DLL:
+1. Download the 64-bit `mpv-dev` package (e.g., from [zhongfly/mpv-winbuild releases](https://github.com/zhongfly/mpv-winbuild/releases) or [shinchiro/mpv-winbuild-cmake](https://sourceforge.net/projects/mpv-player-windows/files/libmpv/)).
+2. **Build/Link Phase:**
+   - **MSVC (`x86_64-pc-windows-msvc`):** Ensure `mpv.lib` is discoverable via the `LIB` environment variable or specify the directory using `RUSTFLAGS="-L <path-to-mpv-dir>"`.
+   - **MinGW (`x86_64-pc-windows-gnu`):** Ensure `libmpv.dll.a` (symlinked/copied as `mpv.lib`) is discoverable by passing `RUSTFLAGS="-L <path-to-mpv-dir>"`.
+3. **Runtime Phase:**
+   - Place `libmpv-2.dll` (or `mpv-2.dll`) directly in the same folder as `pealayer.exe` (or in your Windows system `%PATH%`).
+
+#### 2. Building on Native Windows
+```powershell
+# Set library path for cargo linker
+$env:RUSTFLAGS="-L C:\path\to\mpv-dev"
+
+# Build and run
+cargo run --release
+```
+
+#### 3. Cross-Compiling from Linux & Running via Wine
+You can cross-compile the Windows PE binary on Linux and test it using Wine:
+```bash
+# 1. Install MinGW cross-compiler
+sudo pacman -S mingw-w64-gcc    # Arch Linux
+sudo apt install gcc-mingw-w64  # Debian/Ubuntu
+
+# 2. Add Windows target
+rustup target add x86_64-pc-windows-gnu
+
+# 3. Compile the release binary
+RUSTFLAGS="-L target/mpv-win64" cargo build --release --target x86_64-pc-windows-gnu
+
+# 4. Copy libmpv-2.dll alongside pealayer.exe and run with Wine
+cp target/mpv-win64/libmpv-2.dll target/x86_64-pc-windows-gnu/release/
+wine target/x86_64-pc-windows-gnu/release/pealayer.exe
+```
 
 ## Installation & Running
 

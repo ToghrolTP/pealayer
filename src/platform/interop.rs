@@ -1,8 +1,11 @@
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver};
+#[cfg(unix)]
 use std::thread;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +39,7 @@ pub fn get_socket_path() -> PathBuf {
     }
 }
 
+#[cfg(unix)]
 pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<InteropCommand> {
     let (tx, rx) = channel::<InteropCommand>();
 
@@ -68,6 +72,12 @@ pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<Interop
         }
     });
 
+    rx
+}
+
+#[cfg(not(unix))]
+pub fn spawn_interop_server(_egui_ctx: eframe::egui::Context) -> Receiver<InteropCommand> {
+    let (_tx, rx) = channel::<InteropCommand>();
     rx
 }
 
