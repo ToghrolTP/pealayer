@@ -115,6 +115,20 @@ cp target/mpv-win64/libmpv-2.dll target/x86_64-pc-windows-gnu/release/
 wine target/x86_64-pc-windows-gnu/release/pealayer.exe
 ```
 
+
+## CI/CD
+
+GitHub Actions builds and tests release artifacts for **Linux (Ubuntu)** and **Windows** on every push and pull request.
+
+- Runs the full test suite (`cargo test --locked`) to ensure regression-free releases.
+- Windows CI downloads the latest **x86_64 libmpv** from GitHub releases and bundles the matching runtime DLL with the built executable.
+- Bundles the binary, documentation, licenses, and Web UI remote control assets (`web_ui/dist`).
+- Each run uploads a platform-specific **Pealayer** bundle artifact (files directly, no nested ZIP archive).
+- Tag-triggered runs publish platform archives (`.tar.gz` for Linux, `.zip` for Windows) to GitHub Releases automatically.
+- You can also run the workflow manually and enable branch-based prereleases.
+
+---
+
 ## Installation & Running
 
 1. **Clone the repository**:
