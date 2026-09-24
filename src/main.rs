@@ -33,9 +33,12 @@ fn main() -> eframe::Result {
         "Pealayer",
         options,
         Box::new(|cc| {
+            cc.egui_ctx.set_theme(egui::ThemePreference::Dark);
             let mut visuals = egui::Visuals::dark();
             visuals.panel_fill = egui::Color32::from_rgb(33, 33, 33); // #212121
             visuals.window_fill = egui::Color32::from_rgb(26, 26, 26); // #1a1a1a
+            cc.egui_ctx.set_visuals_of(egui::Theme::Dark, visuals.clone());
+            cc.egui_ctx.set_visuals_of(egui::Theme::Light, visuals.clone());
             cc.egui_ctx.set_visuals(visuals);
 
             let mut style = (*cc.egui_ctx.global_style()).clone();
