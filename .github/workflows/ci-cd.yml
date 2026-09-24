@@ -15,6 +15,10 @@ on:
         default: false
         type: boolean
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
+
 permissions:
   contents: read
 
@@ -63,7 +67,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libmpv-dev pkg-config libasound2-dev libx11-dev libxcb-shape0-dev libxcb-xfixes0-dev
+          sudo apt-get install -y libmpv-dev pkg-config libasound2-dev libx11-dev libxcb-shape0-dev libxcb-xfixes0-dev libudev-dev
+
+      - name: Run tests (Linux)
+        if: runner.os == 'Linux'
+        run: cargo test --locked
 
       - name: Download latest libmpv from GitHub releases (Windows)
         if: runner.os == 'Windows'
@@ -159,6 +167,11 @@ jobs:
             cp "${dll_source}" "${DIST_DIR}/${dll_name}"
           fi
 
+          if [[ -d "web_ui/dist" ]]; then
+            mkdir -p "${DIST_DIR}/web_ui"
+            cp -r "web_ui/dist" "${DIST_DIR}/web_ui/"
+          fi
+
           SAFE_REF="${GITHUB_REF_NAME//\//-}"
           BUNDLE_BASE="Pealayer-${PLATFORM}-${SAFE_REF}-${GITHUB_SHA::7}"
           if [[ "${ARCHIVE_EXT}" == "zip" ]]; then
@@ -169,7 +182,7 @@ jobs:
             ARCHIVE_PATH="dist/${BUNDLE_BASE}.tar.gz"
           fi
 
-          BUNDLE_GLOB="dist/${PLATFORM}/*"
+          BUNDLE_GLOB="dist/${PLATFORM}/**"
           echo "archive_path=${ARCHIVE_PATH}" >> "$GITHUB_OUTPUT"
           echo "archive_name=$(basename "${ARCHIVE_PATH}")" >> "$GITHUB_OUTPUT"
           echo "bundle_glob=${BUNDLE_GLOB}" >> "$GITHUB_OUTPUT"
