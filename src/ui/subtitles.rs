@@ -96,6 +96,7 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     .add(egui::Slider::new(&mut font_size, 10.0..=100.0))
                     .changed()
                 {
+                    app.sub_font_size = font_size;
                     let _ = app.mpv.set_property("sub-font-size", font_size);
                 }
             });
@@ -111,13 +112,15 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     .add(
                         egui::DragValue::new(&mut delay)
                             .speed(0.1)
-                            .range(-10.0..=10.0),
+                            .range(MIN_SUB_DELAY..=MAX_SUB_DELAY),
                     )
                     .changed()
                 {
+                    app.sub_delay = delay;
                     let _ = app.mpv.set_property("sub-delay", delay);
                 }
                 if ui.button("Reset").clicked() {
+                    app.sub_delay = 0.0;
                     let _ = app.mpv.set_property("sub-delay", 0.0);
                 }
             });
@@ -143,4 +146,24 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
         });
 
     app.show_sub_settings = open;
+}
+
+pub const MIN_SUB_DELAY: f64 = -600.0;
+pub const MAX_SUB_DELAY: f64 = 600.0;
+
+pub fn clamp_sub_delay(delay: f64) -> f64 {
+    delay.clamp(MIN_SUB_DELAY, MAX_SUB_DELAY)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sub_delay_range_clamping() {
+        assert_eq!(clamp_sub_delay(0.0), 0.0);
+        assert_eq!(clamp_sub_delay(-750.0), -600.0);
+        assert_eq!(clamp_sub_delay(800.0), 600.0);
+        assert_eq!(clamp_sub_delay(35.5), 35.5);
+    }
 }

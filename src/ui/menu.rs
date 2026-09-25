@@ -136,19 +136,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
                     for track in &app.audio_tracks {
                         let track_id_str = track.id.to_string();
-                        let parts: Vec<&str> = vec![
-                            track.lang.as_deref().unwrap_or(""),
-                            track.title.as_deref().unwrap_or(""),
-                        ]
-                        .into_iter()
-                        .filter(|s| !s.is_empty())
-                        .collect();
-
-                        let label = if parts.is_empty() {
-                            format!("Track {}", track.id)
-                        } else {
-                            format!("Track {} ({})", track.id, parts.join(" - "))
-                        };
+                        let label = format_track_label(track.id, track.lang.as_deref(), track.title.as_deref());
 
                         if ui
                             .selectable_label(app.current_aid == track_id_str, label)
@@ -159,12 +147,49 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         }
                     }
                 });
+
+                ui.separator();
+
+                if ui.button("Audio Settings...").clicked() {
+                    app.show_audio_settings = true;
+                    ui.close();
+                }
             });
 
             // Subtitles menu
             ui.menu_button("Subtitles", |ui| {
-                if ui.checkbox(&mut app.sub_visibility, "Show Subtitles").changed() {
-                    let _ = app.mpv.set_property("sub-visibility", app.sub_visibility);
+                ui.menu_button("Subtitle Track", |ui| {
+                    if ui.selectable_label(app.current_sid == "no", "None").clicked() {
+                        let _ = app.mpv.set_property("sid", "no");
+                        ui.close();
+                    }
+                    for track in &app.sub_tracks {
+                        let track_id_str = track.id.to_string();
+                        let label = format_track_label(track.id, track.lang.as_deref(), track.title.as_deref());
+
+                        if ui
+                            .selectable_label(app.current_sid == track_id_str, label)
+                            .clicked()
+                        {
+                            let _ = app.mpv.set_property("sid", track_id_str);
+                            ui.close();
+                        }
+                    }
+                });
+
+                ui.separator();
+
+                let mut vis = app.sub_visibility;
+                if ui.checkbox(&mut vis, "Enable Subtitles").changed() {
+                    app.sub_visibility = vis;
+                    let _ = app.mpv.set_property("sub-visibility", vis);
+                }
+
+                ui.separator();
+
+                if ui.button("Subtitle Settings...").clicked() {
+                    app.show_sub_settings = true;
+                    ui.close();
                 }
             });
 
@@ -284,5 +309,35 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             });
         });
     });
+}
+
+pub fn format_track_label(id: i64, lang: Option<&str>, title: Option<&str>) -> String {
+    let parts: Vec<&str> = vec![
+        lang.unwrap_or(""),
+        title.unwrap_or(""),
+    ]
+    .into_iter()
+    .filter(|s| !s.is_empty())
+    .collect();
+
+    if parts.is_empty() {
+        format!("Track {}", id)
+    } else {
+        format!("Track {} ({})", id, parts.join(" - "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_track_label_variations() {
+        assert_eq!(format_track_label(1, None, None), "Track 1");
+        assert_eq!(format_track_label(2, Some("eng"), None), "Track 2 (eng)");
+        assert_eq!(format_track_label(3, None, Some("Commentary")), "Track 3 (Commentary)");
+        assert_eq!(format_track_label(4, Some("eng"), Some("Director's Cut")), "Track 4 (eng - Director's Cut)");
+        assert_eq!(format_track_label(5, Some(""), Some("")), "Track 5");
+    }
 }
 

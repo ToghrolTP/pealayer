@@ -88,13 +88,15 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     .add(
                         egui::DragValue::new(&mut delay)
                             .speed(0.1)
-                            .range(-10.0..=10.0),
+                            .range(MIN_AUDIO_DELAY..=MAX_AUDIO_DELAY),
                     )
                     .changed()
                 {
+                    app.audio_delay = delay;
                     let _ = app.mpv.set_property("audio-delay", delay);
                 }
                 if ui.button("Reset").clicked() {
+                    app.audio_delay = 0.0;
                     let _ = app.mpv.set_property("audio-delay", 0.0);
                 }
             });
@@ -116,4 +118,24 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
         });
 
     app.show_audio_settings = open;
+}
+
+pub const MIN_AUDIO_DELAY: f64 = -600.0;
+pub const MAX_AUDIO_DELAY: f64 = 600.0;
+
+pub fn clamp_audio_delay(delay: f64) -> f64 {
+    delay.clamp(MIN_AUDIO_DELAY, MAX_AUDIO_DELAY)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_audio_delay_range_clamping() {
+        assert_eq!(clamp_audio_delay(0.0), 0.0);
+        assert_eq!(clamp_audio_delay(-800.0), -600.0);
+        assert_eq!(clamp_audio_delay(950.0), 600.0);
+        assert_eq!(clamp_audio_delay(-12.4), -12.4);
+    }
 }

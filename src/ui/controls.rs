@@ -36,7 +36,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         }
                     });
 
-                    let elapsed_time = app.playback_time;
+                    let elapsed_time = resolve_display_time(app.seek_pos, app.playback_time);
                     let display_total = if app.show_remaining_time {
                         -(app.duration - elapsed_time)
                     } else {
@@ -215,6 +215,10 @@ fn multiply_style_opacity(style: &mut egui::Style, alpha: f32) {
     fade_color(&mut style.visuals.selection.stroke.color);
 }
 
+pub fn resolve_display_time(seek_pos: Option<f64>, playback_time: f64) -> f64 {
+    seek_pos.unwrap_or(playback_time)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,6 +285,16 @@ mod tests {
             duration
         };
         assert_eq!(display_total, -217.0);
+    }
+
+    #[test]
+    fn test_resolve_display_time_scrubbing_vs_playback() {
+        let playback_time = 45.0;
+        let seek_pos = Some(120.0);
+        assert_eq!(resolve_display_time(seek_pos, playback_time), 120.0);
+
+        let no_seek: Option<f64> = None;
+        assert_eq!(resolve_display_time(no_seek, playback_time), 45.0);
     }
 
     #[test]
