@@ -1,8 +1,8 @@
-# Pealayer
-
 <div align="center">
 
-![Pealayer Logo / Banner](docs/assets/layout_preview.gif)
+<img src="docs/assets/pealayer-icon.png" alt="Pealayer Icon" width="128" height="128" />
+
+# Pealayer
 
 ### **High-Performance, Hardware-Accelerated 4D Cinema Player & Haptic Timeline Workstation**
 
@@ -14,6 +14,10 @@
 [![Engine: mpv](https://img.shields.io/badge/Engine-mpv%20%7C%20libmpv2-purple)](https://mpv.io/)
 [![Web Remote: React 19](https://img.shields.io/badge/Web%20Remote-React%2019%20%2B%20Vite-61DAFB?logo=react)](web_ui)
 [![Platforms: Linux | Windows](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows-lightgrey)](https://github.com/ToghrolTP/pealayer)
+
+<br/>
+
+![Pealayer Layout Preview](docs/assets/layout_preview.gif)
 
 [Key Features](#key-features) • [System Architecture](#system-architecture) • [Feature Walkthrough](#feature-walkthrough) • [Hardware Protocols](#hardware-serial-protocol) • [Web Remote Control](#web-remote-control--restwebsocket-apis) • [Installation & Building](#installation--prerequisites) • [Shortcuts](#shortcut-keybindings)
 
@@ -375,6 +379,10 @@ cd ..
 pealayer/
 ├── Cargo.toml                  # Rust package manifest (2024 edition)
 ├── build.rs                    # Windows resource compiler (embeds app icon)
+├── assets/                     # Application icons (PNG, SVG, and multi-res Windows ICO)
+│   ├── pealayer-icon.png
+│   ├── pealayer-icon.svg
+│   └── icon.ico
 ├── src/
 │   ├── main.rs                 # eframe application entry point & OpenGL initialization
 │   ├── app.rs                  # Main PealayerApp state, docking layout & transport

@@ -21,10 +21,17 @@ use std::sync::{Arc, Mutex};
 fn main() -> eframe::Result {
     env_logger::init();
 
+    let icon_data = eframe::icon_data::from_png_bytes(include_bytes!("../assets/pealayer-icon.png")).ok();
+
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([800.0, 600.0])
+        .with_transparent(true);
+    if let Some(icon) = icon_data {
+        viewport = viewport.with_icon(icon);
+    }
+
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([800.0, 600.0])
-            .with_transparent(true),
+        viewport,
         renderer: eframe::Renderer::Glow,
         ..Default::default()
     };

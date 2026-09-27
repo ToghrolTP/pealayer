@@ -56,8 +56,14 @@ fn register_windows_file_associations(exe_path: &PathBuf) -> Result<(), String> 
 fn register_linux_desktop_association(exe_path: &PathBuf) -> Result<(), String> {
     let exe_str = exe_path.to_str().ok_or("Invalid executable path string")?;
     let home = std::env::var("HOME").map_err(|_| "HOME directory not set")?;
-    let apps_dir = PathBuf::from(home).join(".local").join("share").join("applications");
+    let home_path = PathBuf::from(home);
+    let apps_dir = home_path.join(".local").join("share").join("applications");
     let _ = std::fs::create_dir_all(&apps_dir);
+
+    let icons_dir = home_path.join(".local").join("share").join("icons").join("hicolor").join("512x512").join("apps");
+    let _ = std::fs::create_dir_all(&icons_dir);
+    let icon_dest = icons_dir.join("pealayer.png");
+    let _ = std::fs::write(&icon_dest, include_bytes!("../../assets/pealayer-icon.png"));
 
     let desktop_file_path = apps_dir.join("pealayer.desktop");
     let content = format!(
@@ -66,6 +72,7 @@ Type=Application\n\
 Name=Pealayer\n\
 Comment=Modern 4D Video & Haptic Player\n\
 Exec=\"{}\" %f\n\
+Icon=pealayer\n\
 Terminal=false\n\
 Categories=AudioVideo;Player;Video;\n\
 MimeType=video/mp4;video/x-matroska;video/x-msvideo;video/webm;video/quicktime;video/x-flv;\n",

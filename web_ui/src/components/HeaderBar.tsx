@@ -1,7 +1,6 @@
 import React from 'react';
 import { Layout, Typography, Space, Tag, Button } from 'antd';
 import {
-  VideoCameraOutlined,
   SyncOutlined,
   CheckCircleOutlined,
   DisconnectOutlined,
@@ -47,8 +46,12 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
           onClick={onToggleCollapse}
           style={{ fontSize: 18, color: '#53a2be' }}
         />
-        <Space size="middle">
-          <VideoCameraOutlined style={{ fontSize: 24, color: '#1d84b5' }} />
+        <Space size="middle" align="center">
+          <img
+            src="/pealayer-icon.svg"
+            alt="Pealayer Logo"
+            style={{ width: 28, height: 28, borderRadius: 6, objectFit: 'contain' }}
+          />
           <Title level={4} style={{ margin: 0, color: '#f8fafc', fontWeight: 700 }}>
             Pealayer Control Center
           </Title>
