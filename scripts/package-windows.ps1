@@ -28,6 +28,7 @@ $outputDirectory = if ((Split-Path -Leaf $sourceDirectory) -ieq 'source') {
     Join-Path $repositoryRoot 'bin'
 }
 $libmpvDirectory = if ($env:LIBMPV_DIR) { $env:LIBMPV_DIR } else { Join-Path $env:ProgramFiles 'MPV' }
+$env:Path = $libmpvDirectory + ';' + $env:Path
 $upx = Get-Command upx.exe -ErrorAction SilentlyContinue
 if (-not $upx) {
     $programFilesUpx = Join-Path $env:ProgramFiles 'UPX\upx.exe'
