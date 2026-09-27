@@ -90,14 +90,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     ui.spacing_mut().slider_width = old_w;
 
                                     if has_video && response.dragged() {
-                                        self.app.seek_pos = Some(current_pos);
+                                        self.app.scrub_to(current_pos);
                                     }
                                     if has_video && response.drag_stopped() {
-                                        // Punch out on seek
-                                        self.app.commit_recorded_samples();
-                                        
-                                        let _ = self.app.mpv.command("seek", &[&current_pos.to_string(), "absolute"]);
-                                        self.app.seek_pos = None;
+                                        self.app.finish_scrub(current_pos);
                                     }
                                 });
                             });
@@ -808,11 +804,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 if ui.input(|i| i.pointer.primary_down()) || ruler_response.dragged() {
                                                     let relative_x = (pos.x - rect.min.x).max(0.0);
                                                     let target_time = ((relative_x / zoom) as f64).clamp(0.0, total_seconds);
-                                                    self.app.playback_time = target_time;
-                                                    self.app.commit_recorded_samples();
-                                                    let _ = self.app.mpv.command("seek", &[&target_time.to_string(), "absolute"]);
+                                                    self.app.scrub_to(target_time);
                                                 }
                                             }
+                                        }
+
+                                        if self.app.is_scrubbing && (!ui.input(|i| i.pointer.primary_down()) || ruler_response.drag_stopped()) {
+                                            let current_target = self.app.seek_pos.unwrap_or(self.app.playback_time);
+                                            self.app.finish_scrub(current_target);
                                         }
 
                                         // Draw grid lines
@@ -1753,7 +1752,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let raw_new_t = (drag.original_time_ms as i64 + delta_time_ms).max(0) as u64;
 
                                                 // Magnetic Snapping (within 5px of playhead or 1s grid mark)
-                                                let playhead_ms = (self.app.playback_time * 1000.0).round() as u64;
+                                                let current_playhead_time = self.app.seek_pos.unwrap_or(self.app.playback_time);
+                                                let playhead_ms = (current_playhead_time * 1000.0).round() as u64;
                                                 let nearest_sec = ((raw_new_t as f64 / 1000.0).round() as u64) * 1000;
 
                                                 let play_x = rect.min.x + (playhead_ms as f32 * px_per_ms);
@@ -1867,7 +1867,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
 
                                         // Draw Playhead
-                                        let playhead_x = rect.min.x + (self.app.playback_time as f32 * zoom);
+                                        let current_playhead_time = self.app.seek_pos.unwrap_or(self.app.playback_time);
+                                        let playhead_x = rect.min.x + (current_playhead_time as f32 * zoom);
                                         if playhead_x <= rect.max.x {
                                             // Vertical line
                                             painter.line_segment(

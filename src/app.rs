@@ -96,6 +96,9 @@ pub struct PealayerApp {
     pub(crate) is_muted: bool,
 
     pub(crate) seek_pos: Option<f64>,
+    pub(crate) seek_controller: crate::mpv::seek::SeekController,
+    pub(crate) was_playing_before_scrub: bool,
+    pub(crate) is_scrubbing: bool,
     pub(crate) last_mouse_activity: std::time::Instant,
     pub(crate) pin_controls: bool,
 
@@ -394,10 +397,12 @@ impl eframe::App for PealayerApp {
                     ..
                 })) => match (reply_userdata, change) {
                     (1, PropertyData::Double(v)) => {
-                        self.playback_time = v;
-                        self.engine_handle
-                            .playback_time_ms
-                            .store((v * 1000.0) as u64, std::sync::atomic::Ordering::Relaxed);
+                        if !self.is_scrubbing {
+                            self.playback_time = v;
+                            self.engine_handle
+                                .playback_time_ms
+                                .store((v * 1000.0) as u64, std::sync::atomic::Ordering::Relaxed);
+                        }
                     }
                     (2, PropertyData::Double(v)) => self.duration = v,
                     (3, PropertyData::Flag(v)) => {
@@ -442,11 +447,15 @@ impl eframe::App for PealayerApp {
                     }
                 }
                 Some(Ok(Event::Seek)) => {
+                    if !self.is_scrubbing {
+                        self.seek_pos = None;
+                    }
+                    let current_pos_ms = (self.seek_pos.unwrap_or(self.playback_time) * 1000.0) as u64;
                     let _ =
                         self.engine_handle
                             .sender
                             .send(crate::four_d::engine::EngineMessage::Seek(
-                                (self.playback_time * 1000.0) as u64,
+                                current_pos_ms,
                             ));
                 }
                 Some(Ok(Event::StartFile)) => {
@@ -723,6 +732,49 @@ impl eframe::App for PealayerApp {
 }
 
 impl PealayerApp {
+    /// Begins or updates an active scrub session.
+    /// Sets seek_pos, pauses playback smoothly during drag, and dispatches a non-blocking
+    /// preview seek to the background worker thread with latest-target coalescing.
+    pub fn scrub_to(&mut self, target_time: f64) {
+        let clamped = if self.duration > 0.0 {
+            target_time.clamp(0.0, self.duration)
+        } else {
+            target_time.max(0.0)
+        };
+
+        if !self.is_scrubbing {
+            self.is_scrubbing = true;
+            self.was_playing_before_scrub = !self.is_paused && self.current_video_path.is_some();
+            if self.was_playing_before_scrub {
+                let _ = self.mpv.set_property("pause", true);
+            }
+            self.commit_recorded_samples();
+        }
+
+        self.seek_pos = Some(clamped);
+        self.seek_controller.request_scrub(clamped);
+    }
+
+    /// Ends an active scrub session. Dispatches a final exact commit seek and
+    /// restores playback if the video was playing prior to scrubbing.
+    pub fn finish_scrub(&mut self, target_time: f64) {
+        let clamped = if self.duration > 0.0 {
+            target_time.clamp(0.0, self.duration)
+        } else {
+            target_time.max(0.0)
+        };
+
+        self.seek_pos = Some(clamped);
+        self.seek_controller.request_commit(clamped);
+        self.commit_recorded_samples();
+
+        if self.was_playing_before_scrub {
+            let _ = self.mpv.set_property("pause", false);
+            self.was_playing_before_scrub = false;
+        }
+        self.is_scrubbing = false;
+    }
+
     pub(crate) fn refresh_sub_tracks(&mut self) {
         self.sub_tracks.clear();
         if let Ok(count) = self.mpv.get_property::<i64>("track-list/count") {
@@ -943,6 +995,9 @@ impl Default for PealayerApp {
             volume: 100.0,
             is_muted: false,
             seek_pos: None,
+            seek_controller: crate::mpv::seek::SeekController::new(crate::mpv::seek::MpvSeekBackend::new(mpv)),
+            was_playing_before_scrub: false,
+            is_scrubbing: false,
             last_mouse_activity: std::time::Instant::now(),
             pin_controls: false,
             show_error: None,

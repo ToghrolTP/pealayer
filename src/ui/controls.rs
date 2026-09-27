@@ -90,13 +90,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         ui.spacing_mut().slider_width = old_width;
 
                         if has_video && response.dragged() {
-                            app.seek_pos = Some(current_pos);
+                            app.scrub_to(current_pos);
                         }
                         if has_video && response.drag_stopped() {
-                            let _ = app
-                                .mpv
-                                .command("seek", &[&current_pos.to_string(), "absolute"]);
-                            app.seek_pos = None;
+                            app.finish_scrub(current_pos);
                         }
                     });
 
