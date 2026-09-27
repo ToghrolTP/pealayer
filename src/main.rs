@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 pub mod app;
+pub mod cli;
 pub mod config;
 pub mod mpv;
 pub mod platform;
@@ -21,11 +22,75 @@ use std::sync::{Arc, Mutex};
 fn main() -> eframe::Result {
     env_logger::init();
 
+    let args: Vec<String> = std::env::args().collect();
+    let cli_options = match crate::cli::parse_cli_args(args) {
+        Ok(crate::cli::CliAction::PrintHelp(msg)) => {
+            println!("{}", msg);
+            return Ok(());
+        }
+        Ok(crate::cli::CliAction::PrintVersion(ver)) => {
+            println!("{}", ver);
+            return Ok(());
+        }
+        Ok(crate::cli::CliAction::SendRemote(cmd)) => {
+            match crate::cli::send_remote_command(&cmd) {
+                Ok(resp) => {
+                    println!("{}", resp);
+                    return Ok(());
+                }
+                Err(e) => {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Ok(crate::cli::CliAction::RegisterAssociations) => {
+            match crate::platform::associations::register_file_associations(None) {
+                Ok(count) => {
+                    println!("Successfully registered Pealayer for {} media file types.", count);
+                    return Ok(());
+                }
+                Err(e) => {
+                    eprintln!("Failed to register file associations: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Ok(crate::cli::CliAction::UnregisterAssociations) => {
+            match crate::platform::associations::unregister_file_associations() {
+                Ok(count) => {
+                    println!("Successfully unregistered Pealayer media file associations ({} processed).", count);
+                    return Ok(());
+                }
+                Err(e) => {
+                    eprintln!("Failed to unregister file associations: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Ok(crate::cli::CliAction::RunGui(opts)) => {
+            if let Some(ref target) = opts.target {
+                if crate::cli::try_forward_to_existing_instance(target) {
+                    println!("Forwarded '{}' to active Pealayer instance.", target);
+                    return Ok(());
+                }
+            }
+            opts
+        }
+        Err(err) => {
+            eprintln!("Error: {}\nRun 'pealayer --help' for usage.", err);
+            std::process::exit(1);
+        }
+    };
+
     let icon_data = eframe::icon_data::from_png_bytes(include_bytes!("../assets/pealayer-icon.png")).ok();
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([800.0, 600.0])
         .with_transparent(true);
+    if cli_options.fullscreen {
+        viewport = viewport.with_fullscreen(true);
+    }
     if let Some(icon) = icon_data {
         viewport = viewport.with_icon(icon);
     }
@@ -39,7 +104,7 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Pealayer",
         options,
-        Box::new(|cc| {
+        Box::new(move |cc| {
             cc.egui_ctx.set_theme(egui::ThemePreference::Dark);
             let mut visuals = egui::Visuals::dark();
             visuals.panel_fill = egui::Color32::from_rgb(33, 33, 33); // #212121
@@ -64,6 +129,7 @@ fn main() -> eframe::Result {
 
             let mpv = Mpv::with_initializer(|init| {
                 init.set_property("vo", "libmpv")?;
+                init.set_property("keep-open", "always")?;
 
                 // Set up Arabic/Farsi Vazirmatn font for subtitles
                 let current_dir = std::env::current_dir().unwrap();
@@ -130,6 +196,9 @@ fn main() -> eframe::Result {
             mpv_client
                 .observe_property("aid", libmpv2::Format::String, 11)
                 .unwrap();
+            mpv_client
+                .observe_property("eof-reached", libmpv2::Format::Flag, 12)
+                .unwrap();
 
             let egui_ctx2 = cc.egui_ctx.clone();
             mpv_client.set_wakeup_callback(move || {
@@ -137,19 +206,25 @@ fn main() -> eframe::Result {
             });
 
             let loaded_config = crate::config::AppConfig::load();
-            let _ = mpv_static.set_property("volume", loaded_config.volume);
+            let initial_volume = cli_options.volume.unwrap_or(loaded_config.volume);
+            let _ = mpv_static.set_property("volume", initial_volume);
             let _ = mpv_static.set_property("mute", loaded_config.is_muted);
+            crate::platform::windows::sync_windows_jump_list(&loaded_config.recent_media);
+
+            let (interop_tx, interop_rx) = std::sync::mpsc::channel();
+            crate::platform::interop::spawn_interop_listener(interop_tx.clone(), cc.egui_ctx.clone());
 
             let (web_state_tx, web_cmd_rx) = crate::server::spawn_web_server(8080, 8081, cc.egui_ctx.clone());
 
-            Ok(Box::new(PealayerApp {
+            let mut app = PealayerApp {
                 mpv: mpv_static,
                 mpv_client,
                 render_context: Arc::new(Mutex::new(Some(RenderContextWrapper(render_context)))),
                 playback_time: 0.0,
                 duration: 0.0,
                 is_paused: false,
-                volume: loaded_config.volume,
+                is_eof: false,
+                volume: initial_volume,
                 is_muted: loaded_config.is_muted,
                 show_sub_settings: false,
                 sub_visibility: true,
@@ -313,11 +388,23 @@ fn main() -> eframe::Result {
                 is_window_operating: false,
                 show_shortcuts_dialog: false,
                 show_about_dialog: false,
-                interop_rx: crate::platform::interop::spawn_interop_server(cc.egui_ctx.clone()),
+                interop_rx,
                 web_state_tx,
                 web_cmd_rx,
                 last_web_broadcast: None,
-            }))
+                media_controls: None,
+                media_cmd_tx: interop_tx,
+            };
+
+            if let Some(target) = cli_options.target {
+                if target.starts_with("http://") || target.starts_with("https://") {
+                    app.load_url(&target);
+                } else {
+                    app.load_video_file(std::path::PathBuf::from(target));
+                }
+            }
+
+            Ok(Box::new(app))
         }),
     )
 }

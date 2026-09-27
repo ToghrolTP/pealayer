@@ -28,11 +28,26 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     let has_video = app.current_video_path.is_some();
 
                     ui.add_enabled_ui(has_video, |ui| {
-                        let play_icon = if app.is_paused { "▶" } else { "⏸" };
-                        if ui.add_sized([30.0, 22.0], egui::Button::new(play_icon)).clicked() {
-                            let _ = app.mpv.command("cycle", &["pause"]);
-                            app.is_paused = !app.is_paused;
-                            app.set_osd(if app.is_paused { "Pause".to_string() } else { "Play".to_string() });
+                        let play_icon = if app.is_playback_finished() {
+                            "↺"
+                        } else if app.is_paused {
+                            "▶"
+                        } else {
+                            "⏸"
+                        };
+                        let play_tooltip = if app.is_playback_finished() {
+                            "Replay"
+                        } else if app.is_paused {
+                            "Play"
+                        } else {
+                            "Pause"
+                        };
+                        if ui
+                            .add_sized([30.0, 22.0], egui::Button::new(play_icon))
+                            .on_hover_text(play_tooltip)
+                            .clicked()
+                        {
+                            app.toggle_playback();
                         }
                     });
 

@@ -51,16 +51,37 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let has_video = self.app.current_video_path.is_some();
                             ui.add_enabled_ui(has_video, |ui| {
                                 ui.horizontal(|ui| {
-                                    let play_icon = if self.app.is_paused { "▶" } else { "⏸" };
-                                    if ui.add_sized([30.0, 22.0], egui::Button::new(play_icon)).clicked() {
-                                        let _ = self.app.mpv.command("cycle", &["pause"]);
+                                    let play_icon = if self.app.is_playback_finished() {
+                                        "↺"
+                                    } else if self.app.is_paused {
+                                        "▶"
+                                    } else {
+                                        "⏸"
+                                    };
+                                    let play_tooltip = if self.app.is_playback_finished() {
+                                        "Replay"
+                                    } else if self.app.is_paused {
+                                        "Play"
+                                    } else {
+                                        "Pause"
+                                    };
+                                    if ui
+                                        .add_sized([30.0, 22.0], egui::Button::new(play_icon))
+                                        .on_hover_text(play_tooltip)
+                                        .clicked()
+                                    {
+                                        self.app.toggle_playback();
                                     }
-                                    if ui.add_sized([30.0, 22.0], egui::Button::new("⏹")).clicked() {
+                                    if ui.add_sized([30.0, 22.0], egui::Button::new("⏹")).on_hover_text("Stop").clicked() {
                                         // Punch out on stop
                                         self.app.commit_recorded_samples();
 
-                                        let _ = self.app.mpv.command("seek", &["0", "absolute"]);
+                                        let _ = self.app.mpv.command("seek", &["0", "absolute+exact"]);
                                         let _ = self.app.mpv.set_property("pause", true);
+                                        self.app.is_paused = true;
+                                        self.app.is_eof = false;
+                                        self.app.playback_time = 0.0;
+                                        self.app.seek_pos = None;
                                     }
                                     ui.separator();
 

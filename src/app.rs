@@ -89,13 +89,14 @@ pub struct PealayerApp {
     pub(crate) mpv_client: libmpv2::Mpv,
     pub(crate) render_context: Arc<Mutex<Option<RenderContextWrapper>>>,
 
-    pub(crate) playback_time: f64,
-    pub(crate) duration: f64,
-    pub(crate) is_paused: bool,
+    pub playback_time: f64,
+    pub duration: f64,
+    pub is_paused: bool,
+    pub is_eof: bool,
     pub(crate) volume: f64,
     pub(crate) is_muted: bool,
 
-    pub(crate) seek_pos: Option<f64>,
+    pub seek_pos: Option<f64>,
     pub(crate) seek_controller: crate::mpv::seek::SeekController,
     pub(crate) was_playing_before_scrub: bool,
     pub(crate) is_scrubbing: bool,
@@ -163,6 +164,8 @@ pub struct PealayerApp {
     pub(crate) web_state_tx: std::sync::mpsc::Sender<String>,
     pub(crate) web_cmd_rx: std::sync::mpsc::Receiver<crate::platform::interop::InteropCommand>,
     pub(crate) last_web_broadcast: Option<std::time::Instant>,
+    pub(crate) media_controls: Option<crate::platform::media_controls::MediaControlsManager>,
+    pub(crate) media_cmd_tx: std::sync::mpsc::Sender<crate::platform::interop::InteropCommand>,
 }
 
 
@@ -182,7 +185,28 @@ pub struct AudioTrack {
 }
 
 impl eframe::App for PealayerApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        #[cfg(target_os = "windows")]
+        {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if crate::platform::windows::get_registered_hwnd() == 0 {
+                if let Ok(handle) = frame.window_handle() {
+                    if let RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
+                        crate::platform::windows::register_window_hwnd(win32_handle.hwnd.get() as isize);
+                    }
+                }
+            }
+        }
+
+        if self.media_controls.is_none() {
+            let hwnd = crate::platform::windows::get_registered_hwnd();
+            self.media_controls = Some(crate::platform::media_controls::MediaControlsManager::new(
+                hwnd,
+                self.media_cmd_tx.clone(),
+                ui.ctx().clone(),
+            ));
+        }
+
         // Track active window/panel drag operations safely without lock nesting
         let is_pointer_down = ui.input(|i| i.pointer.any_down());
         let is_using_pointer = ui.ctx().egui_is_using_pointer();
@@ -201,28 +225,22 @@ impl eframe::App for PealayerApp {
             use crate::platform::interop::InteropCommand;
             match cmd {
                 InteropCommand::Play => {
-                    let _ = self.mpv.set_property("pause", false);
-                    self.is_paused = false;
-                    self.set_osd("IPC: Play".to_string());
+                    self.play();
                 }
                 InteropCommand::Pause => {
-                    let _ = self.mpv.set_property("pause", true);
-                    self.is_paused = true;
-                    self.set_osd("IPC: Pause".to_string());
+                    self.pause();
                 }
                 InteropCommand::TogglePause => {
-                    let _ = self.mpv.command("cycle", &["pause"]);
-                    self.is_paused = !self.is_paused;
-                    self.set_osd(if self.is_paused { "IPC: Pause".to_string() } else { "IPC: Play".to_string() });
+                    self.toggle_playback();
                 }
                 InteropCommand::Seek { seconds } => {
-                    let _ = self.mpv.command("seek", &[&seconds.to_string(), "relative"]);
-                    self.set_osd(format!("Seek: {:+.1}s", seconds));
+                    self.seek_relative(seconds);
                 }
                 InteropCommand::SeekAbs { percentage } => {
                     let clamped = percentage.clamp(0.0, 100.0);
                     let target_sec = self.duration * (clamped / 100.0);
-                    let _ = self.mpv.command("seek", &[&target_sec.to_string(), "absolute"]);
+                    self.scrub_to(target_sec);
+                    self.finish_scrub(target_sec);
                     self.set_osd(format!("Seek: {:.0}%", clamped));
                 }
                 InteropCommand::SetVolume { value } => {
@@ -251,28 +269,22 @@ impl eframe::App for PealayerApp {
             use crate::platform::interop::InteropCommand;
             match cmd {
                 InteropCommand::Play => {
-                    let _ = self.mpv.set_property("pause", false);
-                    self.is_paused = false;
-                    self.set_osd("Web-UI: Play".to_string());
+                    self.play();
                 }
                 InteropCommand::Pause => {
-                    let _ = self.mpv.set_property("pause", true);
-                    self.is_paused = true;
-                    self.set_osd("Web-UI: Pause".to_string());
+                    self.pause();
                 }
                 InteropCommand::TogglePause => {
-                    let _ = self.mpv.command("cycle", &["pause"]);
-                    self.is_paused = !self.is_paused;
-                    self.set_osd(if self.is_paused { "Web-UI: Pause".to_string() } else { "Web-UI: Play".to_string() });
+                    self.toggle_playback();
                 }
                 InteropCommand::Seek { seconds } => {
-                    let _ = self.mpv.command("seek", &[&seconds.to_string(), "relative"]);
-                    self.set_osd(format!("Web-UI: Seek {:+.1}s", seconds));
+                    self.seek_relative(seconds);
                 }
                 InteropCommand::SeekAbs { percentage } => {
                     let clamped = percentage.clamp(0.0, 100.0);
                     let target_sec = self.duration * (clamped / 100.0);
-                    let _ = self.mpv.command("seek", &[&target_sec.to_string(), "absolute"]);
+                    self.scrub_to(target_sec);
+                    self.finish_scrub(target_sec);
                     self.set_osd(format!("Web-UI: Seek {:.0}%", clamped));
                 }
                 InteropCommand::SetVolume { value } => {
@@ -311,6 +323,7 @@ impl eframe::App for PealayerApp {
                 duration: self.duration,
                 current_video: self.current_video_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             };
+            crate::platform::interop::set_live_status(status_resp.clone());
             if let Ok(json) = serde_json::to_string(&status_resp) {
                 let _ = self.web_state_tx.send(json);
             }
@@ -328,7 +341,7 @@ impl eframe::App for PealayerApp {
         }
         
         if init_rtt {
-            if let Some(gl) = _frame.gl() {
+            if let Some(gl) = frame.gl() {
                 unsafe {
                     use eframe::glow::HasContext;
                     
@@ -369,7 +382,7 @@ impl eframe::App for PealayerApp {
                     gl.bind_framebuffer(eframe::glow::FRAMEBUFFER, None);
                     
                     // Register the texture with eframe/egui
-                    let texture_id = _frame.register_native_glow_texture(tex);
+                    let texture_id = frame.register_native_glow_texture(tex);
                     
                     rtt_data = Some((tex, fbo, texture_id));
                 }
@@ -384,88 +397,12 @@ impl eframe::App for PealayerApp {
             }
         }
 
-        use libmpv2::events::{Event, PropertyData};
-
         let ctx = ui.ctx().clone();
 
-        // Read MPV events
-        loop {
-            match self.mpv_client.wait_event(0.0) {
-                Some(Ok(Event::PropertyChange {
-                    reply_userdata,
-                    change,
-                    ..
-                })) => match (reply_userdata, change) {
-                    (1, PropertyData::Double(v)) => {
-                        if !self.is_scrubbing {
-                            self.playback_time = v;
-                            self.engine_handle
-                                .playback_time_ms
-                                .store((v * 1000.0) as u64, std::sync::atomic::Ordering::Relaxed);
-                        }
-                    }
-                    (2, PropertyData::Double(v)) => self.duration = v,
-                    (3, PropertyData::Flag(v)) => {
-                        let prev_paused = self.is_paused;
-                        self.is_paused = v;
-                        self.engine_handle
-                            .is_playing
-                            .store(!v, std::sync::atomic::Ordering::Relaxed);
-                        if self.current_video_path.is_some() && prev_paused != v {
-                            self.set_osd(if v { "Pause".to_string() } else { "Play".to_string() });
-                        }
-                    }
-                    (4, PropertyData::Double(v)) => {
-                        let prev_vol = self.volume;
-                        self.volume = v;
-                        if self.current_video_path.is_some() && (prev_vol - v).abs() > 0.01 {
-                            self.set_osd(format!("Volume: {}%", v as i32));
-                        }
-                    }
-                    (5, PropertyData::Flag(v)) => {
-                        let prev_muted = self.is_muted;
-                        self.is_muted = v;
-                        if self.current_video_path.is_some() && prev_muted != v {
-                            self.set_osd(if v { "Mute: On".to_string() } else { "Mute: Off".to_string() });
-                        }
-                    }
-                    (6, PropertyData::Flag(v)) => self.sub_visibility = v,
-                    (7, PropertyData::Double(v)) => self.sub_font_size = v,
-                    (8, PropertyData::Double(v)) => self.sub_delay = v,
-                    (9, PropertyData::Str(v)) => self.current_sid = v.to_string(),
-                    (9, PropertyData::OsdStr(v)) => self.current_sid = v.to_string(),
-                    (10, PropertyData::Double(v)) => self.audio_delay = v,
-                    (11, PropertyData::Str(v)) => self.current_aid = v.to_string(),
-                    (11, PropertyData::OsdStr(v)) => self.current_aid = v.to_string(),
-                    _ => {}
-                },
-                Some(Ok(Event::EndFile(reason))) => {
-                    if reason == 4 {
-                        // MPV_END_FILE_REASON_ERROR
-                        self.show_error =
-                            Some("Error: Failed to play the selected file.".to_string());
-                    }
-                }
-                Some(Ok(Event::Seek)) => {
-                    if !self.is_scrubbing {
-                        self.seek_pos = None;
-                    }
-                    let current_pos_ms = (self.seek_pos.unwrap_or(self.playback_time) * 1000.0) as u64;
-                    let _ =
-                        self.engine_handle
-                            .sender
-                            .send(crate::four_d::engine::EngineMessage::Seek(
-                                current_pos_ms,
-                            ));
-                }
-                Some(Ok(Event::StartFile)) => {
-                    self.show_error = None;
-                    self.refresh_sub_tracks();
-                    self.refresh_audio_tracks();
-                }
-                Some(Ok(_)) => {}
-                _ => break,
-            }
+        self.process_events();
+        crate::platform::windows::update_windows_taskbar_state(self.playback_time, self.duration, self.is_paused);
+        if let Some(ref mut mc) = self.media_controls {
+            mc.update_playback(self.is_paused, self.playback_time, self.duration);
         }
 
         // Sync connection state and check for errors from background thread
@@ -494,11 +431,7 @@ impl eframe::App for PealayerApp {
 
         // Handle Keyboard Shortcuts
         if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
-            let _ = self.mpv.command("cycle", &["pause"]);
-            if self.current_video_path.is_some() {
-                self.is_paused = !self.is_paused;
-                self.set_osd(if self.is_paused { "Pause".to_string() } else { "Play".to_string() });
-            }
+            self.toggle_playback();
         }
         if ctx.input(|i| i.key_pressed(egui::Key::F)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
@@ -510,16 +443,10 @@ impl eframe::App for PealayerApp {
             self.set_osd(if self.is_muted { "Mute".to_string() } else { "Unmute".to_string() });
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
-            let _ = self.mpv.command("seek", &["-5", "relative"]);
-            if self.current_video_path.is_some() {
-                self.set_osd("Seek: -5s".to_string());
-            }
+            self.seek_relative(-5.0);
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
-            let _ = self.mpv.command("seek", &["5", "relative"]);
-            if self.current_video_path.is_some() {
-                self.set_osd("Seek: +5s".to_string());
-            }
+            self.seek_relative(5.0);
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Period) || i.key_pressed(egui::Key::CloseBracket)) {
             let _ = self.mpv.command("frame-step", &[]);
@@ -732,6 +659,185 @@ impl eframe::App for PealayerApp {
 }
 
 impl PealayerApp {
+    /// Polls and processes all pending MPV events and updates application state.
+    pub fn process_events(&mut self) {
+        use libmpv2::events::{Event, PropertyData};
+
+        loop {
+            match self.mpv_client.wait_event(0.0) {
+                Some(Ok(Event::PropertyChange {
+                    reply_userdata,
+                    change,
+                    ..
+                })) => match (reply_userdata, change) {
+                    (1, PropertyData::Double(v)) => {
+                        if !self.is_scrubbing {
+                            self.playback_time = v;
+                            self.engine_handle
+                                .playback_time_ms
+                                .store((v * 1000.0) as u64, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                    (2, PropertyData::Double(v)) => self.duration = v,
+                    (3, PropertyData::Flag(v)) => {
+                        let prev_paused = self.is_paused;
+                        self.is_paused = v;
+                        self.engine_handle
+                            .is_playing
+                            .store(!v, std::sync::atomic::Ordering::Relaxed);
+                        if self.current_video_path.is_some() && prev_paused != v {
+                            self.set_osd(if v { "Pause".to_string() } else { "Play".to_string() });
+                        }
+                    }
+                    (4, PropertyData::Double(v)) => {
+                        let prev_vol = self.volume;
+                        self.volume = v;
+                        if self.current_video_path.is_some() && (prev_vol - v).abs() > 0.01 {
+                            self.set_osd(format!("Volume: {}%", v as i32));
+                        }
+                    }
+                    (5, PropertyData::Flag(v)) => {
+                        let prev_muted = self.is_muted;
+                        self.is_muted = v;
+                        if self.current_video_path.is_some() && prev_muted != v {
+                            self.set_osd(if v { "Mute: On".to_string() } else { "Mute: Off".to_string() });
+                        }
+                    }
+                    (6, PropertyData::Flag(v)) => self.sub_visibility = v,
+                    (7, PropertyData::Double(v)) => self.sub_font_size = v,
+                    (8, PropertyData::Double(v)) => self.sub_delay = v,
+                    (9, PropertyData::Str(v)) => self.current_sid = v.to_string(),
+                    (9, PropertyData::OsdStr(v)) => self.current_sid = v.to_string(),
+                    (10, PropertyData::Double(v)) => self.audio_delay = v,
+                    (11, PropertyData::Str(v)) => self.current_aid = v.to_string(),
+                    (11, PropertyData::OsdStr(v)) => self.current_aid = v.to_string(),
+                    (12, PropertyData::Flag(v)) => {
+                        self.is_eof = v;
+                    }
+                    _ => {}
+                },
+                Some(Ok(Event::EndFile(reason))) => {
+                    if reason == 4 {
+                        // MPV_END_FILE_REASON_ERROR
+                        self.show_error =
+                            Some("Error: Failed to play the selected file.".to_string());
+                    }
+                }
+                Some(Ok(Event::Seek)) => {
+                    if !self.is_scrubbing {
+                        self.seek_pos = None;
+                    }
+                    let current_pos_ms = (self.seek_pos.unwrap_or(self.playback_time) * 1000.0) as u64;
+                    let _ =
+                        self.engine_handle
+                            .sender
+                            .send(crate::four_d::engine::EngineMessage::Seek(
+                                current_pos_ms,
+                            ));
+                }
+                Some(Ok(Event::StartFile)) => {
+                    self.show_error = None;
+                    self.is_eof = false;
+                    self.refresh_sub_tracks();
+                    self.refresh_audio_tracks();
+                }
+                Some(Ok(_)) => {}
+                _ => break,
+            }
+        }
+    }
+
+    /// Returns true if video playback has finished (at EOF or at duration limit while paused).
+    pub fn is_playback_finished(&self) -> bool {
+        self.current_video_path.is_some()
+            && (self.is_eof
+                || (self.duration > 0.0 && self.playback_time >= self.duration && self.is_paused))
+    }
+
+    /// Restarts playback of the current video from the beginning (0.0s).
+    pub fn replay(&mut self) {
+        if self.current_video_path.is_none() {
+            return;
+        }
+        let _ = self.mpv.command("seek", &["0", "absolute+exact"]);
+        let _ = self.mpv.set_property("pause", false);
+        self.is_paused = false;
+        self.is_eof = false;
+        self.playback_time = 0.0;
+        self.seek_pos = None;
+        self.engine_handle
+            .is_playing
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.engine_handle
+            .playback_time_ms
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        let _ = self
+            .engine_handle
+            .sender
+            .send(crate::four_d::engine::EngineMessage::Seek(0));
+        self.set_osd("Replay".to_string());
+    }
+
+    /// Resumes playback, or restarts if playback finished.
+    pub fn play(&mut self) {
+        if self.current_video_path.is_none() {
+            return;
+        }
+        if self.is_playback_finished() {
+            self.replay();
+        } else {
+            let _ = self.mpv.set_property("pause", false);
+            self.is_paused = false;
+            self.engine_handle
+                .is_playing
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            self.set_osd("Play".to_string());
+        }
+    }
+
+    /// Pauses playback.
+    pub fn pause(&mut self) {
+        if self.current_video_path.is_none() {
+            return;
+        }
+        let _ = self.mpv.set_property("pause", true);
+        self.is_paused = true;
+        self.engine_handle
+            .is_playing
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        self.set_osd("Pause".to_string());
+    }
+
+    /// Toggles play/pause, restarting if playback has reached the end.
+    pub fn toggle_playback(&mut self) {
+        if self.current_video_path.is_none() {
+            return;
+        }
+        if self.is_playback_finished() {
+            self.replay();
+        } else if self.is_paused {
+            self.play();
+        } else {
+            self.pause();
+        }
+    }
+
+    /// Performs an exact relative seek by the given number of seconds.
+    pub fn seek_relative(&mut self, seconds: f64) {
+        if self.current_video_path.is_none() {
+            return;
+        }
+        let sec_str = seconds.to_string();
+        let _ = self.mpv.command("seek", &[&sec_str, "relative+exact"]);
+        if seconds < 0.0 {
+            self.is_eof = false;
+        }
+        let target = (self.playback_time + seconds).clamp(0.0, self.duration.max(0.0));
+        self.seek_pos = Some(target);
+        let sign = if seconds > 0.0 { "+" } else { "" };
+        self.set_osd(format!("Seek: {}{:.0}s", sign, seconds));
+    }
+
     /// Begins or updates an active scrub session.
     /// Sets seek_pos, pauses playback smoothly during drag, and dispatches a non-blocking
     /// preview seek to the background worker thread with latest-target coalescing.
@@ -744,11 +850,15 @@ impl PealayerApp {
 
         if !self.is_scrubbing {
             self.is_scrubbing = true;
-            self.was_playing_before_scrub = !self.is_paused && self.current_video_path.is_some();
+            self.was_playing_before_scrub = !self.is_paused && self.current_video_path.is_some() && !self.is_playback_finished();
             if self.was_playing_before_scrub {
                 let _ = self.mpv.set_property("pause", true);
             }
             self.commit_recorded_samples();
+        }
+
+        if clamped < self.duration {
+            self.is_eof = false;
         }
 
         self.seek_pos = Some(clamped);
@@ -763,6 +873,10 @@ impl PealayerApp {
         } else {
             target_time.max(0.0)
         };
+
+        if clamped < self.duration {
+            self.is_eof = false;
+        }
 
         self.seek_pos = Some(clamped);
         self.seek_controller.request_commit(clamped);
@@ -824,10 +938,19 @@ impl PealayerApp {
     pub fn load_video_file(&mut self, path: std::path::PathBuf) {
         let path_str = path.to_str().unwrap_or("");
         if !path_str.is_empty() {
+            let _ = self.mpv.set_property("keep-open", "always");
             let _ = self.mpv.command("loadfile", &[path_str, "replace"]);
             self.current_video_path = Some(path.clone());
+            self.is_eof = false;
+            self.is_paused = false;
+            self.playback_time = 0.0;
+            self.seek_pos = None;
             self.add_recent_media(path.clone());
-            self.set_osd(format!("Loaded: {}", path.file_name().and_then(|n| n.to_str()).unwrap_or(path_str)));
+            let title = path.file_name().and_then(|n| n.to_str()).unwrap_or(path_str);
+            if let Some(ref mut mc) = self.media_controls {
+                mc.update_metadata(Some(title));
+            }
+            self.set_osd(format!("Loaded: {}", title));
             
             // Auto-load matching sidecar timeline
             let mut sidecar = path.clone();
@@ -848,10 +971,18 @@ impl PealayerApp {
     pub fn load_url(&mut self, url: &str) {
         let trimmed = url.trim();
         if !trimmed.is_empty() {
+            let _ = self.mpv.set_property("keep-open", "always");
             let _ = self.mpv.command("loadfile", &[trimmed, "replace"]);
             let path = std::path::PathBuf::from(trimmed);
             self.current_video_path = Some(path.clone());
+            self.is_eof = false;
+            self.is_paused = false;
+            self.playback_time = 0.0;
+            self.seek_pos = None;
             self.add_recent_media(path);
+            if let Some(ref mut mc) = self.media_controls {
+                mc.update_metadata(Some(trimmed));
+            }
             self.set_osd(format!("Loading URL: {}", trimmed));
         }
     }
@@ -861,6 +992,13 @@ impl PealayerApp {
         self.current_video_path = None;
         self.playback_time = 0.0;
         self.duration = 0.0;
+        self.is_eof = false;
+        self.is_paused = false;
+        self.seek_pos = None;
+        if let Some(ref mut mc) = self.media_controls {
+            mc.update_metadata(None);
+            mc.update_playback(false, 0.0, 0.0);
+        }
         self.set_osd("Video Closed".to_string());
     }
 
@@ -881,11 +1019,13 @@ impl PealayerApp {
         if self.recent_media.len() > 10 {
             self.recent_media.truncate(10);
         }
+        crate::platform::windows::sync_windows_jump_list(&self.recent_media);
         self.save_config();
     }
 
     pub fn clear_recent_media(&mut self) {
         self.recent_media.clear();
+        crate::platform::windows::sync_windows_jump_list(&[]);
         self.save_config();
     }
 
@@ -974,14 +1114,30 @@ impl PealayerApp {
 
 impl Default for PealayerApp {
     fn default() -> Self {
-        let mpv = Box::leak(Box::new(libmpv2::Mpv::new().unwrap_or_else(|_| {
+        let mpv = Box::leak(Box::new(
             libmpv2::Mpv::with_initializer(|init| {
                 init.set_property("vo", "null")?;
+                init.set_property("ao", "null")?;
+                init.set_property("keep-open", "always")?;
                 Ok(())
-            }).expect("Failed to initialize mpv")
-        })));
+            })
+            .expect("Failed to initialize mpv"),
+        ));
+        let _ = mpv.set_property("keep-open", "always");
         let mpv_client = mpv.create_client(None).expect("Failed to create mpv client");
-        let (_interop_tx, interop_rx) = std::sync::mpsc::channel();
+        let _ = mpv_client.observe_property("time-pos", libmpv2::Format::Double, 1);
+        let _ = mpv_client.observe_property("duration", libmpv2::Format::Double, 2);
+        let _ = mpv_client.observe_property("pause", libmpv2::Format::Flag, 3);
+        let _ = mpv_client.observe_property("volume", libmpv2::Format::Double, 4);
+        let _ = mpv_client.observe_property("mute", libmpv2::Format::Flag, 5);
+        let _ = mpv_client.observe_property("sub-visibility", libmpv2::Format::Flag, 6);
+        let _ = mpv_client.observe_property("sub-font-size", libmpv2::Format::Double, 7);
+        let _ = mpv_client.observe_property("sub-delay", libmpv2::Format::Double, 8);
+        let _ = mpv_client.observe_property("sid", libmpv2::Format::String, 9);
+        let _ = mpv_client.observe_property("audio-delay", libmpv2::Format::Double, 10);
+        let _ = mpv_client.observe_property("aid", libmpv2::Format::String, 11);
+        let _ = mpv_client.observe_property("eof-reached", libmpv2::Format::Flag, 12);
+        let (interop_tx, interop_rx) = std::sync::mpsc::channel();
         let (web_state_tx, _web_state_rx) = std::sync::mpsc::channel();
         let (_web_cmd_tx, web_cmd_rx) = std::sync::mpsc::channel();
 
@@ -992,6 +1148,7 @@ impl Default for PealayerApp {
             playback_time: 0.0,
             duration: 0.0,
             is_paused: false,
+            is_eof: false,
             volume: 100.0,
             is_muted: false,
             seek_pos: None,
@@ -1056,6 +1213,8 @@ impl Default for PealayerApp {
             web_state_tx,
             web_cmd_rx,
             last_web_broadcast: None,
+            media_controls: None,
+            media_cmd_tx: interop_tx,
         }
     }
 }
