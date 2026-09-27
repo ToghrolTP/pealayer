@@ -71,7 +71,7 @@ fn pccontroller_exact_target_action_push_ack_roundtrip() {
                 "page": "player",
                 "state": "active",
                 "lease_seconds": 45,
-                "values": {"app_actions":"app.page"},
+                "values": {"app_actions":"pealayer.play"},
             }),
         ))
         .unwrap();
@@ -93,8 +93,7 @@ fn pccontroller_exact_target_action_push_ack_roundtrip() {
         .call(
             "controller.app.action",
             json!({
-                "kind": "app.page",
-                "value": "play",
+                "kind": "pealayer.play",
                 "target": instance_id,
                 "operation_id": operation_id,
                 "timeout_ms": 5000,
@@ -109,9 +108,8 @@ fn pccontroller_exact_target_action_push_ack_roundtrip() {
             continue;
         };
         let value: Value = serde_json::from_str(&text).unwrap();
-        if value["method"] == "controller.event"
-            && value["params"]["kind"] == "app.page"
-            && value["params"]["metadata"]["page"] == "play"
+        if value["method"] == "controller.state"
+            && value["params"]["kind"] == "pealayer.play"
             && value["params"]["metadata"]["target_instance"] == instance_id
         {
             break value["params"].clone();
