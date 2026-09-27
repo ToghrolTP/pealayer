@@ -1,13 +1,26 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AppTheme {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
     pub volume: f64,
     pub is_muted: bool,
     pub pin_controls: bool,
     pub show_remaining_time: bool,
     pub recent_media: Vec<PathBuf>,
+    pub app_name: Option<String>,
+    pub app_icon: Option<PathBuf>,
+    pub theme: AppTheme,
 }
 
 impl Default for AppConfig {
@@ -18,7 +31,39 @@ impl Default for AppConfig {
             pin_controls: false,
             show_remaining_time: false,
             recent_media: Vec::new(),
+            app_name: None,
+            app_icon: None,
+            theme: AppTheme::System,
         }
+    }
+}
+
+pub fn resolved_app_name(config: &AppConfig) -> String {
+    std::env::var("APP_NAME")
+        .ok()
+        .or_else(|| config.app_name.clone())
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "Pealayer".to_string())
+}
+
+pub fn resolved_app_icon(config: &AppConfig) -> Option<PathBuf> {
+    std::env::var_os("APP_ICON")
+        .map(PathBuf::from)
+        .or_else(|| config.app_icon.clone())
+}
+
+pub fn resolved_theme(config: &AppConfig) -> AppTheme {
+    match std::env::var("APP_THEME")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "light" => AppTheme::Light,
+        "dark" => AppTheme::Dark,
+        "system" => AppTheme::System,
+        _ => config.theme,
     }
 }
 
@@ -104,6 +149,9 @@ mod tests {
         assert!(!cfg.pin_controls);
         assert!(!cfg.show_remaining_time);
         assert!(cfg.recent_media.is_empty());
+        assert!(cfg.app_name.is_none());
+        assert!(cfg.app_icon.is_none());
+        assert_eq!(cfg.theme, AppTheme::System);
     }
 
     #[test]
@@ -120,5 +168,14 @@ mod tests {
         assert!(loaded.pin_controls);
         assert_eq!(loaded.recent_media.len(), 1);
         assert_eq!(loaded.recent_media[0], PathBuf::from("/test/file.mp4"));
+    }
+
+    #[test]
+    fn empty_configured_name_uses_product_default() {
+        let mut cfg = AppConfig::default();
+        cfg.app_name = Some("   ".to_string());
+        if std::env::var_os("APP_NAME").is_none() {
+            assert_eq!(resolved_app_name(&cfg), "Pealayer");
+        }
     }
 }

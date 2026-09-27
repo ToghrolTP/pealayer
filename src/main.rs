@@ -19,6 +19,47 @@ use mpv::render::RenderContextWrapper;
 use mpv::render::mpv_get_proc_address;
 use std::sync::{Arc, Mutex};
 
+fn configure_ui_fonts(context: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+
+    // Prefer the platform UI face. Vazirmatn remains immediately behind it so
+    // Persian and Arabic text has a bundled, release-safe fallback.
+    let system_font = [
+        #[cfg(target_os = "windows")]
+        r"C:\Windows\Fonts\segoeui.ttf",
+        #[cfg(target_os = "macos")]
+        "/System/Library/Fonts/SFNS.ttf",
+        #[cfg(target_os = "linux")]
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        #[cfg(target_os = "linux")]
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    .iter()
+    .find_map(|path| std::fs::read(path).ok());
+
+    fonts.font_data.insert(
+        "pealayer-vazirmatn".to_owned(),
+        Arc::new(egui::FontData::from_static(include_bytes!(
+            "../test-data/vazirmatn/Vazirmatn-Regular.ttf"
+        ))),
+    );
+    let proportional = fonts
+        .families
+        .get_mut(&egui::FontFamily::Proportional)
+        .expect("egui provides a proportional font family");
+    proportional.insert(0, "pealayer-vazirmatn".to_owned());
+
+    if let Some(bytes) = system_font {
+        fonts.font_data.insert(
+            "pealayer-system-ui".to_owned(),
+            Arc::new(egui::FontData::from_owned(bytes)),
+        );
+        proportional.insert(0, "pealayer-system-ui".to_owned());
+    }
+
+    context.set_fonts(fonts);
+}
+
 fn main() -> eframe::Result {
     if std::env::args().any(|argument| argument == "--smoke-test") {
         match Mpv::new() {
@@ -93,7 +134,15 @@ fn main() -> eframe::Result {
         }
     };
 
-    let icon_data = eframe::icon_data::from_png_bytes(include_bytes!("../assets/pealayer-icon.png")).ok();
+    let launch_config = crate::config::AppConfig::load();
+    let app_name = crate::config::resolved_app_name(&launch_config);
+    let initial_window_title = app_name.clone();
+    let icon_data = crate::config::resolved_app_icon(&launch_config)
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| eframe::icon_data::from_png_bytes(&bytes).ok())
+        .or_else(|| {
+            eframe::icon_data::from_png_bytes(include_bytes!("../assets/pealayer-icon.png")).ok()
+        });
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([800.0, 600.0])
@@ -112,16 +161,27 @@ fn main() -> eframe::Result {
     };
 
     eframe::run_native(
-        "Pealayer",
+        &initial_window_title,
         options,
         Box::new(move |cc| {
-            cc.egui_ctx.set_theme(egui::ThemePreference::Dark);
-            let mut visuals = egui::Visuals::dark();
-            visuals.panel_fill = egui::Color32::from_rgb(33, 33, 33); // #212121
-            visuals.window_fill = egui::Color32::from_rgb(26, 26, 26); // #1a1a1a
-            cc.egui_ctx.set_visuals_of(egui::Theme::Dark, visuals.clone());
-            cc.egui_ctx.set_visuals_of(egui::Theme::Light, visuals.clone());
-            cc.egui_ctx.set_visuals(visuals);
+            let loaded_config = launch_config.clone();
+            configure_ui_fonts(&cc.egui_ctx);
+            let theme_preference = match crate::config::resolved_theme(&loaded_config) {
+                crate::config::AppTheme::System => egui::ThemePreference::System,
+                crate::config::AppTheme::Light => egui::ThemePreference::Light,
+                crate::config::AppTheme::Dark => egui::ThemePreference::Dark,
+            };
+            cc.egui_ctx.set_theme(theme_preference);
+            let mut dark_visuals = egui::Visuals::dark();
+            dark_visuals.panel_fill = egui::Color32::from_rgb(33, 33, 33);
+            dark_visuals.window_fill = egui::Color32::from_rgb(26, 26, 26);
+            cc.egui_ctx
+                .set_visuals_of(egui::Theme::Dark, dark_visuals);
+            cc.egui_ctx
+                .set_visuals_of(egui::Theme::Light, egui::Visuals::light());
+            crate::platform::windows::set_window_theme(
+                cc.egui_ctx.global_style().visuals.dark_mode,
+            );
 
             let mut style = (*cc.egui_ctx.global_style()).clone();
             for font_id in style.text_styles.values_mut() {
@@ -215,7 +275,6 @@ fn main() -> eframe::Result {
                 egui_ctx2.request_repaint();
             });
 
-            let loaded_config = crate::config::AppConfig::load();
             let initial_volume = cli_options.volume.unwrap_or(loaded_config.volume);
             let _ = mpv_static.set_property("volume", initial_volume);
             let _ = mpv_static.set_property("mute", loaded_config.is_muted);
@@ -229,6 +288,8 @@ fn main() -> eframe::Result {
                 crate::platform::interop::spawn_pccontroller_action_bridge(cc.egui_ctx.clone());
 
             let mut app = PealayerApp {
+                app_name: app_name.clone(),
+                last_window_title: String::new(),
                 mpv: mpv_static,
                 mpv_client,
                 render_context: Arc::new(Mutex::new(Some(RenderContextWrapper(render_context)))),

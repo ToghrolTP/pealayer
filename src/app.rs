@@ -84,7 +84,33 @@ pub struct KeyframeDragState {
     pub group_originals: Vec<(uuid::Uuid, usize, u64, f32)>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DroppedFileKind {
+    Media,
+    Subtitle,
+    Timeline,
+}
+
+pub fn dropped_file_kind(path: &std::path::Path) -> DroppedFileKind {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "srt" | "vtt" | "ass" | "ssa" | "sub" | "idx" | "sup" => {
+            DroppedFileKind::Subtitle
+        }
+        "json" => DroppedFileKind::Timeline,
+        // Let mpv make the final decision for its broad set of supported audio,
+        // video and playlist formats instead of maintaining a brittle allowlist.
+        _ => DroppedFileKind::Media,
+    }
+}
+
 pub struct PealayerApp {
+    pub(crate) app_name: String,
+    pub(crate) last_window_title: String,
     pub(crate) mpv: &'static Mpv,
     pub(crate) mpv_client: libmpv2::Mpv,
     pub(crate) render_context: Arc<Mutex<Option<RenderContextWrapper>>>,
@@ -215,11 +241,15 @@ impl eframe::App for PealayerApp {
         self.is_window_operating = is_pointer_down && (self.active_drag.is_some() || is_using_pointer);
 
         // Process drag and dropped files
-        let dropped_file_path = ui.input(|i| {
-            i.raw.dropped_files.first().and_then(|f| f.path.clone())
+        let dropped_file_paths = ui.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .filter_map(|file| file.path.clone())
+                .collect::<Vec<_>>()
         });
-        if let Some(path) = dropped_file_path {
-            self.load_video_file(path);
+        if !dropped_file_paths.is_empty() {
+            self.load_dropped_files(dropped_file_paths);
         }
 
         // Drain every command source before mutating player state. This keeps IPC,
@@ -345,6 +375,22 @@ impl eframe::App for PealayerApp {
             }
         }
         self.is_connected = self.engine_handle.is_connected.load(std::sync::atomic::Ordering::Relaxed);
+        let connection_requested = self
+            .engine_handle
+            .connection_requested
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let window_title = contextual_window_title(
+            &self.app_name,
+            self.current_video_path.as_deref(),
+            self.is_connected,
+            connection_requested,
+        );
+        if self.last_window_title != window_title {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Title(window_title.clone()));
+            self.last_window_title = window_title;
+        }
+        crate::platform::windows::set_window_theme(ui.style().visuals.dark_mode);
 
         let is_fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
         if !is_fullscreen {
@@ -937,6 +983,74 @@ impl PealayerApp {
         }
     }
 
+    pub fn load_dropped_files(&mut self, paths: Vec<std::path::PathBuf>) {
+        let mut first_media = true;
+        let mut subtitle_added = false;
+        let mut queued_media = 0usize;
+
+        // Load/queue media before attaching subtitles so a mixed Windows drop
+        // reliably attaches subtitle files to the newly selected item.
+        for path in paths
+            .iter()
+            .filter(|path| dropped_file_kind(path) == DroppedFileKind::Media)
+        {
+            if first_media {
+                self.load_video_file(path.clone());
+                first_media = false;
+            } else if let Some(path_str) = path.to_str() {
+                if self.mpv.command("loadfile", &[path_str, "append-play"]).is_ok() {
+                    self.add_recent_media(path.clone());
+                    queued_media += 1;
+                }
+            }
+        }
+
+        for path in paths
+            .iter()
+            .filter(|path| dropped_file_kind(path) == DroppedFileKind::Subtitle)
+        {
+            if let Some(path_str) = path.to_str() {
+                if self.mpv.command("sub-add", &[path_str]).is_ok() {
+                    subtitle_added = true;
+                }
+            }
+        }
+        if subtitle_added {
+            self.refresh_sub_tracks();
+        }
+
+        for path in paths
+            .iter()
+            .filter(|path| dropped_file_kind(path) == DroppedFileKind::Timeline)
+        {
+            match crate::four_d::models::Timeline::load_from_file(path) {
+                Ok(timeline) => {
+                    self.timeline = timeline;
+                    let compiled = crate::four_d::engine::compile_timeline(
+                        &self.timeline,
+                        &self.track_muted,
+                        &self.track_soloed,
+                    );
+                    let _ = self.engine_handle.sender.send(
+                        crate::four_d::engine::EngineMessage::UpdateQueue(compiled),
+                    );
+                }
+                Err(error) => {
+                    self.show_error = Some(format!(
+                        "Failed to load dropped timeline {}: {error}",
+                        path.display()
+                    ));
+                }
+            }
+        }
+
+        if queued_media > 0 {
+            self.set_osd(format!("Queued {queued_media} additional media file(s)"));
+        } else if subtitle_added {
+            self.set_osd("External subtitle loaded".to_string());
+        }
+    }
+
     pub fn load_url(&mut self, url: &str) {
         let trimmed = url.trim();
         if !trimmed.is_empty() {
@@ -972,13 +1086,14 @@ impl PealayerApp {
     }
 
     pub fn save_config(&self) {
-        let cfg = crate::config::AppConfig {
-            volume: self.volume,
-            is_muted: self.is_muted,
-            pin_controls: self.pin_controls,
-            show_remaining_time: self.show_remaining_time,
-            recent_media: self.recent_media.clone(),
-        };
+        // Preserve deployment-owned branding and theme settings while saving
+        // mutable player preferences.
+        let mut cfg = crate::config::AppConfig::load();
+        cfg.volume = self.volume;
+        cfg.is_muted = self.is_muted;
+        cfg.pin_controls = self.pin_controls;
+        cfg.show_remaining_time = self.show_remaining_time;
+        cfg.recent_media = self.recent_media.clone();
         cfg.save();
     }
 
@@ -1113,6 +1228,8 @@ impl Default for PealayerApp {
         let (_web_cmd_tx, web_cmd_rx) = std::sync::mpsc::channel();
 
         Self {
+            app_name: crate::config::resolved_app_name(&crate::config::AppConfig::default()),
+            last_window_title: String::new(),
             mpv,
             mpv_client,
             render_context: Arc::new(Mutex::new(None)),
@@ -1191,8 +1308,28 @@ impl Default for PealayerApp {
     }
 }
 
+pub fn contextual_window_title(
+    app_name: &str,
+    media_path: Option<&std::path::Path>,
+    connected: bool,
+    connection_requested: bool,
+) -> String {
+    if let Some(media_name) = media_path.and_then(std::path::Path::file_name) {
+        return format!("{} — {}", media_name.to_string_lossy(), app_name);
+    }
+    if connected {
+        format!("{app_name} — Hardware connected")
+    } else if connection_requested {
+        format!("{app_name} — Connecting…")
+    } else {
+        app_name.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{DroppedFileKind, contextual_window_title, dropped_file_kind};
+
     #[test]
     fn test_recent_media_deduplication_and_cap() {
         let mut list: Vec<std::path::PathBuf> = Vec::new();
@@ -1232,5 +1369,47 @@ mod tests {
         let active_drag = true;
         let is_operating = pointer_down && active_drag;
         assert!(is_operating);
+    }
+
+    #[test]
+    fn window_title_reflects_media_and_connection_context() {
+        assert_eq!(contextual_window_title("Studio", None, false, false), "Studio");
+        assert_eq!(
+            contextual_window_title("Studio", None, false, true),
+            "Studio — Connecting…"
+        );
+        assert_eq!(
+            contextual_window_title("Studio", None, true, true),
+            "Studio — Hardware connected"
+        );
+        assert_eq!(
+            contextual_window_title(
+                "Studio",
+                Some(std::path::Path::new("C:/media/demo.mp4")),
+                true,
+                true,
+            ),
+            "demo.mp4 — Studio"
+        );
+    }
+
+    #[test]
+    fn dropped_files_are_routed_by_runtime_type() {
+        assert_eq!(
+            dropped_file_kind(std::path::Path::new("movie.MKV")),
+            DroppedFileKind::Media
+        );
+        assert_eq!(
+            dropped_file_kind(std::path::Path::new("captions.SRT")),
+            DroppedFileKind::Subtitle
+        );
+        assert_eq!(
+            dropped_file_kind(std::path::Path::new("show.4d.json")),
+            DroppedFileKind::Timeline
+        );
+        assert_eq!(
+            dropped_file_kind(std::path::Path::new("stream.m3u8")),
+            DroppedFileKind::Media
+        );
     }
 }

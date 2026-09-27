@@ -1,6 +1,57 @@
 use crate::app::PealayerApp;
 use eframe::egui;
 
+fn estop_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
+    let (label, fill, help) = if active {
+        (
+            "RESET E-STOP",
+            egui::Color32::from_rgb(231, 76, 60),
+            "Reset the active emergency stop",
+        )
+    } else {
+        (
+            "E-STOP",
+            egui::Color32::from_rgb(192, 57, 43),
+            "Emergency stop: pause playback and stop hardware output",
+        )
+    };
+
+    // The stop mark is painted as a vector octagon instead of relying on an
+    // emoji glyph, whose appearance and availability vary by platform/font.
+    let response = ui.add_sized(
+        egui::vec2(if active { 132.0 } else { 104.0 }, 26.0),
+        egui::Button::new(
+            egui::RichText::new(format!("      {label}"))
+                .color(egui::Color32::WHITE)
+                .strong()
+                .size(11.0),
+        )
+        .fill(fill),
+    );
+    let center = egui::pos2(response.rect.left() + 15.0, response.rect.center().y);
+    let radius = 8.0;
+    let points = (0..8)
+        .map(|index| {
+            let angle = std::f32::consts::FRAC_PI_8
+                + index as f32 * std::f32::consts::FRAC_PI_4;
+            center + egui::vec2(angle.cos(), angle.sin()) * radius
+        })
+        .collect();
+    ui.painter().add(egui::Shape::convex_polygon(
+        points,
+        egui::Color32::WHITE,
+        egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(110, 20, 20)),
+    ));
+    ui.painter().text(
+        center,
+        egui::Align2::CENTER_CENTER,
+        "!",
+        egui::FontId::proportional(10.0),
+        fill,
+    );
+    response.on_hover_text(help)
+}
+
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
 
@@ -227,27 +278,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 ui.add_space(8.0);
                 
                 // 1. E-STOP Kill Switch Button
-                let estop_text = if app.estop_active {
-                    "🔴 RESET E-STOP"
-                } else {
-                    "🛑 E-STOP"
-                };
-                
-                let estop_color = if app.estop_active {
-                    egui::Color32::from_rgb(231, 76, 60) // Bright red
-                } else {
-                    egui::Color32::from_rgb(192, 57, 43) // Dark red
-                };
-                
-                let btn = ui.add(
-                    egui::Button::new(
-                        egui::RichText::new(estop_text)
-                            .color(egui::Color32::WHITE)
-                            .strong()
-                            .size(11.0)
-                    )
-                    .fill(estop_color)
-                );
+                let btn = estop_button(ui, app.estop_active);
                 
                 if btn.clicked() {
                     app.estop_active = !app.estop_active;

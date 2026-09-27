@@ -49,7 +49,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
             if app.estop_active {
                 ui.separator();
-                ui.colored_label(egui::Color32::from_rgb(231, 76, 60), "⚠️ E-STOP ACTIVE");
+                ui.colored_label(egui::Color32::from_rgb(231, 76, 60), "E-STOP ACTIVE");
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
