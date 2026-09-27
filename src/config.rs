@@ -10,6 +10,32 @@ pub enum AppTheme {
     Dark,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AppLanguage {
+    #[serde(rename = "system")]
+    #[default]
+    System,
+    #[serde(rename = "en")]
+    English,
+    #[serde(rename = "fa")]
+    Persian,
+}
+
+impl AppLanguage {
+    pub fn is_rtl(self) -> bool {
+        matches!(self, Self::Persian)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AppDirection {
+    #[default]
+    Auto,
+    Ltr,
+    Rtl,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -21,6 +47,8 @@ pub struct AppConfig {
     pub app_name: Option<String>,
     pub app_icon: Option<PathBuf>,
     pub theme: AppTheme,
+    pub language: AppLanguage,
+    pub direction: AppDirection,
 }
 
 impl Default for AppConfig {
@@ -34,7 +62,88 @@ impl Default for AppConfig {
             app_name: None,
             app_icon: None,
             theme: AppTheme::System,
+            language: AppLanguage::System,
+            direction: AppDirection::Auto,
         }
+    }
+}
+
+fn parse_language_tag(value: &str) -> Option<AppLanguage> {
+    let normalized = value.trim().replace('_', "-").to_ascii_lowercase();
+    match normalized.as_str() {
+        "system" | "auto" => Some(AppLanguage::System),
+        "en" | "english" => Some(AppLanguage::English),
+        "fa" | "fa-ir" | "persian" | "farsi" => Some(AppLanguage::Persian),
+        _ if normalized.starts_with("fa-") => Some(AppLanguage::Persian),
+        _ if normalized.starts_with("en-") => Some(AppLanguage::English),
+        _ => None,
+    }
+}
+
+fn system_language() -> AppLanguage {
+    for key in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+        if let Ok(value) = std::env::var(key) {
+            if let Some(language) = parse_language_tag(&value) {
+                if language != AppLanguage::System {
+                    return language;
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+        if let Ok(international) = RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey(r"Control Panel\International")
+        {
+            if let Ok(locale_name) = international.get_value::<String, _>("LocaleName") {
+                if let Some(language) = parse_language_tag(&locale_name) {
+                    if language != AppLanguage::System {
+                        return language;
+                    }
+                }
+            }
+        }
+    }
+
+    AppLanguage::English
+}
+
+pub fn resolved_language_preference(config: &AppConfig) -> AppLanguage {
+    std::env::var("APP_LOCALE")
+        .ok()
+        .and_then(|value| parse_language_tag(&value))
+        .unwrap_or(config.language)
+}
+
+pub fn resolve_language(preference: AppLanguage) -> AppLanguage {
+    match preference {
+        AppLanguage::System => system_language(),
+        language => language,
+    }
+}
+
+pub fn resolved_direction_preference(config: &AppConfig) -> AppDirection {
+    match std::env::var("APP_DIRECTION")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "ltr" => AppDirection::Ltr,
+        "rtl" => AppDirection::Rtl,
+        "auto" => AppDirection::Auto,
+        _ => config.direction,
+    }
+}
+
+pub fn resolve_rtl(preference: AppDirection, language: AppLanguage) -> bool {
+    match preference {
+        AppDirection::Auto => language.is_rtl(),
+        AppDirection::Ltr => false,
+        AppDirection::Rtl => true,
     }
 }
 
@@ -152,6 +261,8 @@ mod tests {
         assert!(cfg.app_name.is_none());
         assert!(cfg.app_icon.is_none());
         assert_eq!(cfg.theme, AppTheme::System);
+        assert_eq!(cfg.language, AppLanguage::System);
+        assert_eq!(cfg.direction, AppDirection::Auto);
     }
 
     #[test]
@@ -177,5 +288,22 @@ mod tests {
         if std::env::var_os("APP_NAME").is_none() {
             assert_eq!(resolved_app_name(&cfg), "Pealayer");
         }
+    }
+
+    #[test]
+    fn language_tags_support_web_contract_values() {
+        assert_eq!(parse_language_tag("en"), Some(AppLanguage::English));
+        assert_eq!(parse_language_tag("fa-IR"), Some(AppLanguage::Persian));
+        assert_eq!(parse_language_tag("farsi"), Some(AppLanguage::Persian));
+        assert_eq!(parse_language_tag("system"), Some(AppLanguage::System));
+        assert_eq!(parse_language_tag("de"), None);
+
+        let json = serde_json::to_string(&AppLanguage::Persian).unwrap();
+        assert_eq!(json, "\"fa\"");
+        assert_eq!(serde_json::from_str::<AppLanguage>("\"en\"").unwrap(), AppLanguage::English);
+        assert!(resolve_rtl(AppDirection::Auto, AppLanguage::Persian));
+        assert!(!resolve_rtl(AppDirection::Auto, AppLanguage::English));
+        assert!(resolve_rtl(AppDirection::Rtl, AppLanguage::English));
+        assert!(!resolve_rtl(AppDirection::Ltr, AppLanguage::Persian));
     }
 }

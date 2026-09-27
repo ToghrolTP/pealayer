@@ -1,16 +1,20 @@
 use crate::app::PealayerApp;
 use eframe::egui;
 
-fn estop_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
+fn estop_button(
+    ui: &mut egui::Ui,
+    active: bool,
+    language: crate::config::AppLanguage,
+) -> egui::Response {
     let (label, fill, help) = if active {
         (
-            "RESET E-STOP",
+            crate::ui::i18n::tr(language, "RESET E-STOP"),
             egui::Color32::from_rgb(231, 76, 60),
             "Reset the active emergency stop",
         )
     } else {
         (
-            "E-STOP",
+            crate::ui::i18n::tr(language, "E-STOP"),
             egui::Color32::from_rgb(192, 57, 43),
             "Emergency stop: pause playback and stop hardware output",
         )
@@ -54,11 +58,14 @@ fn estop_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
 
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
+    let language = app.language;
+    let rtl = app.rtl;
 
     egui::Panel::top("menu_bar").show_inside(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                if ui.button("Open Video File...").clicked() {
+          ui.with_layout(crate::ui::i18n::layout(rtl, egui::Align::Center), |ui| {
+            ui.menu_button(app.tr("File"), |ui| {
+                if ui.button(app.tr("Open Video File...")).clicked() {
                     ui.close();
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Video Files", &["mp4", "mkv", "avi", "webm", "mov", "flv"])
@@ -68,14 +75,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
                 }
 
-                if ui.button("Open Location / URL...").clicked() {
+                if ui.button(app.tr("Open Location / URL...")).clicked() {
                     ui.close();
                     app.show_open_url_dialog = true;
                 }
 
-                ui.menu_button("Open Recent", |ui| {
+                ui.menu_button(app.tr("Open Recent"), |ui| {
                     if app.recent_media.is_empty() {
-                        ui.label("No recent media");
+                        ui.label(app.tr("No recent media"));
                     } else {
                         for path in app.recent_media.clone() {
                             let file_name = path
@@ -88,7 +95,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             }
                         }
                         ui.separator();
-                        if ui.button("Clear Recent").clicked() {
+                        if ui.button(app.tr("Clear Recent")).clicked() {
                             ui.close();
                             app.clear_recent_media();
                         }
@@ -96,12 +103,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 });
 
                 let has_video = app.current_video_path.is_some();
-                if ui.add_enabled(has_video, egui::Button::new("Close Video")).clicked() {
+                if ui.add_enabled(has_video, egui::Button::new(app.tr("Close Video"))).clicked() {
                     ui.close();
                     app.close_video();
                 }
 
-                if ui.button("Open Timeline Project...").clicked() {
+                if ui.button(app.tr("Open Timeline Project...")).clicked() {
                     ui.close();
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Pealayer Timeline", &["json"])
@@ -123,7 +130,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 ui.separator();
 
                 let save_enabled = app.current_video_path.is_some();
-                let save_btn = egui::Button::new("Save Timeline (Sidecar)");
+                let save_btn = egui::Button::new(app.tr("Save Timeline (Sidecar)"));
                 if ui.add_enabled(save_enabled, save_btn).clicked() {
                     ui.close();
                     if let Some(ref video_path) = app.current_video_path {
@@ -135,7 +142,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
                 }
 
-                if ui.button("Save Timeline As...").clicked() {
+                if ui.button(app.tr("Save Timeline As...")).clicked() {
                     ui.close();
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Pealayer Timeline", &["json"])
@@ -148,7 +155,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 }
 
                 ui.separator();
-                if ui.button("⚙ Register as Default Media Player...").clicked() {
+                if ui.button(format!("⚙ {}", app.tr("Register as Default Media Player..."))).clicked() {
                     ui.close();
                     match crate::platform::association::register_as_default_player() {
                         Ok(msg) => app.set_osd(msg),
@@ -157,29 +164,29 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 }
 
                 ui.separator();
-                if ui.button("Quit").clicked() {
+                if ui.button(app.tr("Quit")).clicked() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
 
-            ui.menu_button("Edit", |ui| {
-                let mut undo_btn = egui::Button::new("Undo");
+            ui.menu_button(app.tr("Edit"), |ui| {
+                let mut undo_btn = egui::Button::new(app.tr("Undo"));
                 undo_btn = undo_btn.shortcut_text("Ctrl+Z");
                 if ui.add_enabled(false, undo_btn).clicked() {
                     ui.close();
                 }
 
-                let mut redo_btn = egui::Button::new("Redo");
+                let mut redo_btn = egui::Button::new(app.tr("Redo"));
                 redo_btn = redo_btn.shortcut_text("Ctrl+Y");
                 if ui.add_enabled(false, redo_btn).clicked() {
                     ui.close();
                 }
             });
 
-            ui.menu_button("Audio", |ui| {
-                ui.menu_button("Audio Track", |ui| {
+            ui.menu_button(app.tr("Audio"), |ui| {
+                ui.menu_button(app.tr("Audio Track"), |ui| {
                     if ui
-                        .selectable_label(app.current_aid == "no", "None")
+                        .selectable_label(app.current_aid == "no", app.tr("None"))
                         .clicked()
                     {
                         let _ = app.mpv.set_property("aid", "no");
@@ -201,16 +208,16 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                 ui.separator();
 
-                if ui.button("Audio Settings...").clicked() {
+                if ui.button(app.tr("Audio Settings...")).clicked() {
                     app.show_audio_settings = true;
                     ui.close();
                 }
             });
 
             // Subtitles menu
-            ui.menu_button("Subtitles", |ui| {
-                ui.menu_button("Subtitle Track", |ui| {
-                    if ui.selectable_label(app.current_sid == "no", "None").clicked() {
+            ui.menu_button(app.tr("Subtitles"), |ui| {
+                ui.menu_button(app.tr("Subtitle Track"), |ui| {
+                    if ui.selectable_label(app.current_sid == "no", app.tr("None")).clicked() {
                         let _ = app.mpv.set_property("sid", "no");
                         ui.close();
                     }
@@ -231,30 +238,30 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 ui.separator();
 
                 let mut vis = app.sub_visibility;
-                if ui.checkbox(&mut vis, "Enable Subtitles").changed() {
+                if ui.checkbox(&mut vis, app.tr("Enable Subtitles")).changed() {
                     app.sub_visibility = vis;
                     let _ = app.mpv.set_property("sub-visibility", vis);
                 }
 
                 ui.separator();
 
-                if ui.button("Subtitle Settings...").clicked() {
+                if ui.button(app.tr("Subtitle Settings...")).clicked() {
                     app.show_sub_settings = true;
                     ui.close();
                 }
             });
 
             // Workspace switcher
-            ui.menu_button("Workspace", |ui| {
+            ui.menu_button(app.tr("Workspace"), |ui| {
                 if ui
-                    .selectable_label(app.show_four_d_editor, "NLE Layout (Docked)")
+                    .selectable_label(app.show_four_d_editor, app.tr("NLE Layout (Docked)"))
                     .clicked()
                 {
                     app.show_four_d_editor = true;
                     ui.close();
                 }
                 if ui
-                    .selectable_label(!app.show_four_d_editor, "Simple Player")
+                    .selectable_label(!app.show_four_d_editor, app.tr("Simple Player"))
                     .clicked()
                 {
                     app.show_four_d_editor = false;
@@ -263,12 +270,37 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             });
             
             // Add right-aligned E-STOP and Serial controls
-            ui.menu_button("Help", |ui| {
-                if ui.button("⌨ Keyboard Shortcuts...").clicked() {
+            ui.menu_button(app.tr("Help"), |ui| {
+                ui.menu_button(app.tr("Language"), |ui| {
+                    for (preference, label) in [
+                        (crate::config::AppLanguage::System, app.tr("System language")),
+                        (crate::config::AppLanguage::English, app.tr("English")),
+                        (crate::config::AppLanguage::Persian, app.tr("Persian")),
+                    ] {
+                        if ui.selectable_label(app.language_preference == preference, label).clicked() {
+                            app.set_language(preference);
+                            ui.close();
+                        }
+                    }
+                });
+                ui.menu_button(app.tr("Direction"), |ui| {
+                    for (preference, label) in [
+                        (crate::config::AppDirection::Auto, app.tr("Automatic")),
+                        (crate::config::AppDirection::Ltr, app.tr("Left to right")),
+                        (crate::config::AppDirection::Rtl, app.tr("Right to left")),
+                    ] {
+                        if ui.selectable_label(app.direction_preference == preference, label).clicked() {
+                            app.set_direction(preference);
+                            ui.close();
+                        }
+                    }
+                });
+                ui.separator();
+                if ui.button(format!("⌨ {}", app.tr("Keyboard Shortcuts..."))).clicked() {
                     ui.close();
                     app.show_shortcuts_dialog = true;
                 }
-                if ui.button("ℹ About Pealayer...").clicked() {
+                if ui.button(format!("ℹ {} {}", app.tr("About"), app.app_name)).clicked() {
                     ui.close();
                     app.show_about_dialog = true;
                 }
@@ -278,7 +310,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 ui.add_space(8.0);
                 
                 // 1. E-STOP Kill Switch Button
-                let btn = estop_button(ui, app.estop_active);
+                let btn = estop_button(ui, app.estop_active, language);
                 
                 if btn.clicked() {
                     app.estop_active = !app.estop_active;
@@ -298,11 +330,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     .connection_requested
                     .load(std::sync::atomic::Ordering::Relaxed);
                 let conn_text = if app.is_connected {
-                    "Disconnect"
+                    app.tr("Disconnect")
                 } else if connection_requested {
-                    "Connecting…"
+                    app.tr("Connecting…")
                 } else {
-                    "Connect"
+                    app.tr("Connect")
                 };
                 let conn_btn = ui.add_enabled(
                     !connection_requested || app.is_connected,
@@ -350,17 +382,18 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 
                 let status_lbl = if app.is_connected {
                     if crate::four_d::controller::is_controller_endpoint(&app.serial_port) {
-                        "PCController coordinator connected".to_string()
+                        app.tr("PCController coordinator connected").to_string()
                     } else {
                         format!("{} direct diagnostic connection", app.serial_port)
                     }
                 } else if connection_requested {
                     format!("Connecting to {}…", app.serial_port)
                 } else {
-                    "Hardware Disconnected".to_string()
+                    app.tr("Hardware Disconnected").to_string()
                 };
                 ui.label(egui::RichText::new(status_lbl).size(10.0).weak());
             });
+          });
         });
     });
 }

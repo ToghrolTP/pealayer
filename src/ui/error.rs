@@ -4,7 +4,7 @@ use eframe::egui;
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let mut clear_error = false;
     if let Some(err) = app.show_error.clone() {
-        let heading = error_heading(&err);
+        let heading = app.tr(error_heading(&err));
         if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
             clear_error = true;
         }
@@ -15,7 +15,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .default_width(480.0)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ui.ctx(), |ui| {
-                ui.horizontal_top(|ui| {
+              ui.with_layout(crate::ui::i18n::vertical_layout(app.rtl), |ui| {
+                ui.with_layout(crate::ui::i18n::layout(app.rtl, egui::Align::Min), |ui| {
                     let (icon_rect, _) =
                         ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::hover());
                     let center = icon_rect.center();
@@ -33,11 +34,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     );
                     ui.vertical(|ui| {
                         ui.heading(heading);
-                        ui.label("Pealayer could not complete the requested operation.");
+                        ui.label(app.tr("Pealayer could not complete the requested operation."));
                     });
                 });
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new("Technical details").strong());
+                ui.label(egui::RichText::new(app.tr("Technical details")).strong());
                 let mut detail = err.clone();
                 ui.add(
                     egui::TextEdit::multiline(&mut detail)
@@ -47,15 +48,16 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 );
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Copy details").clicked() {
+                    if ui.button(app.tr("Copy details")).clicked() {
                         ui.ctx().copy_text(err.clone());
                     }
-                    if ui.button("Close").clicked()
+                    if ui.button(app.tr("Close")).clicked()
                         || ui.input(|input| input.key_pressed(egui::Key::Enter))
                     {
                         clear_error = true;
                     }
                 });
+              });
             });
     }
     if clear_error {

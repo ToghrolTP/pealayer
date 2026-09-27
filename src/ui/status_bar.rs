@@ -7,7 +7,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 
     egui::Panel::bottom("status_bar").show_inside(ui, |ui| {
-        ui.horizontal(|ui| {
+        ui.with_layout(crate::ui::i18n::layout(app.rtl, egui::Align::Center), |ui| {
             // FPS Counter
             let dt = ui.input(|i| i.stable_dt);
             let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
@@ -48,28 +48,39 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             .unwrap_or("board");
                         format!("Hardware: PCController + {board_name} connected")
                     } else if coordinator_endpoint {
+                    if app.language.is_rtl() {
+                        "سخت‌افزار: PCController متصل است؛ برد در دسترس نیست".to_string()
+                    } else {
                         "Hardware: PCController connected; board unavailable".to_string()
+                    }
                     } else {
                         format!("Hardware: {} direct diagnostic", app.serial_port)
                     }
                 } else if connection_requested {
                     format!("Hardware: Connecting to {}…", app.serial_port)
                 } else {
-                    "Hardware: Disconnected".to_string()
+                    if app.language.is_rtl() {
+                        "سخت‌افزار: قطع است".to_string()
+                    } else {
+                        "Hardware: Disconnected".to_string()
+                    }
                 };
                 ui.label(label_text);
             });
 
             if app.estop_active {
                 ui.separator();
-                ui.colored_label(egui::Color32::from_rgb(231, 76, 60), "E-STOP ACTIVE");
+                ui.colored_label(
+                    egui::Color32::from_rgb(231, 76, 60),
+                    app.tr("E-STOP ACTIVE"),
+                );
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if app.show_four_d_editor {
-                    ui.label("Workspace: NLE Layout");
+                    ui.label(app.tr("Workspace: NLE Layout"));
                 } else {
-                    ui.label("Workspace: Simple Player");
+                    ui.label(app.tr("Workspace: Simple Player"));
                 }
             });
         });

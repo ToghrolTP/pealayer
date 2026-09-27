@@ -136,6 +136,10 @@ fn main() -> eframe::Result {
 
     let launch_config = crate::config::AppConfig::load();
     let app_name = crate::config::resolved_app_name(&launch_config);
+    let language_preference = crate::config::resolved_language_preference(&launch_config);
+    let language = crate::config::resolve_language(language_preference);
+    let direction_preference = crate::config::resolved_direction_preference(&launch_config);
+    let rtl = crate::config::resolve_rtl(direction_preference, language);
     let initial_window_title = app_name.clone();
     let icon_data = crate::config::resolved_app_icon(&launch_config)
         .and_then(|path| std::fs::read(path).ok())
@@ -290,6 +294,10 @@ fn main() -> eframe::Result {
             let mut app = PealayerApp {
                 app_name: app_name.clone(),
                 last_window_title: String::new(),
+                language_preference,
+                language,
+                direction_preference,
+                rtl,
                 mpv: mpv_static,
                 mpv_client,
                 render_context: Arc::new(Mutex::new(Some(RenderContextWrapper(render_context)))),

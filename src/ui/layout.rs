@@ -20,11 +20,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
         match tab {
-            PealayerTab::ProgramMonitor => "Program Monitor 🎬".into(),
-            PealayerTab::EffectControls => "Effect Controls ⚙".into(),
-            PealayerTab::EffectsLibrary => "Effects Library 📚".into(),
-            PealayerTab::HardwareMonitor => "Hardware Monitor 🖥".into(),
-            PealayerTab::Timeline => "Timeline ⏱".into(),
+            PealayerTab::ProgramMonitor => format!("{} 🎬", self.app.tr("Program Monitor")).into(),
+            PealayerTab::EffectControls => format!("{} ⚙", self.app.tr("Effect Controls")).into(),
+            PealayerTab::EffectsLibrary => format!("{} 📚", self.app.tr("Effects Library")).into(),
+            PealayerTab::HardwareMonitor => format!("{} 🖥", self.app.tr("Hardware Monitor")).into(),
+            PealayerTab::Timeline => format!("{} ⏱", self.app.tr("Timeline")).into(),
         }
     }
 
@@ -35,6 +35,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
         egui::Frame::NONE
             .inner_margin(egui::Margin::same(10))
             .show(ui, |ui| {
+              ui.with_layout(crate::ui::i18n::vertical_layout(self.app.rtl), |ui| {
                 match tab {
                     PealayerTab::ProgramMonitor => {
                         ui.vertical(|ui| {
@@ -383,15 +384,16 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         }
                     }
                     PealayerTab::EffectsLibrary => {
-                        ui.heading("Effects Library");
+                        ui.heading(self.app.tr("Effects Library"));
                         ui.add_space(4.0);
                         
                         // 1. Instant search edit field
                         ui.horizontal(|ui| {
-                            ui.label("Search");
+                            ui.label(self.app.tr("Search"));
+                            let search_hint = self.app.tr("Search effects...");
                             let res = ui.add(
                                 egui::TextEdit::singleline(&mut self.app.effects_search_query)
-                                    .hint_text("Search effects...")
+                                    .hint_text(search_hint)
                             );
                             if res.changed() {
                                 // Request repaint to filter instantly
@@ -417,7 +419,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         if categorized.is_empty() {
                             ui.centered_and_justified(|ui| {
                                 ui.label(egui::RichText::new(
-                                    "No compatible relay effects are advertised by the connected PCController."
+                                    self.app.tr("No compatible relay effects are advertised by the connected PCController.")
                                 ).weak().size(12.0));
                             });
                         } else {
@@ -506,7 +508,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         }
                     }
                     PealayerTab::HardwareMonitor => {
-                        ui.heading("Hardware Monitor Dashboard");
+                        ui.heading(self.app.tr("Hardware Monitor Dashboard"));
                         ui.add_space(8.0);
                         
                         if self.app.estop_active {
@@ -531,27 +533,27 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         let capabilities = self.app.advertised_hardware();
                         if !self.app.is_connected {
                             ui.label(egui::RichText::new(
-                                "Connect to PCController to discover live board controls."
+                                self.app.tr("Connect to PCController to discover live board controls.")
                             ).weak());
                         } else if crate::four_d::controller::is_controller_endpoint(&self.app.serial_port)
                             && capabilities.is_none()
                         {
                             ui.label(egui::RichText::new(
-                                "PCController is connected; waiting for its capability catalog…"
+                                self.app.tr("PCController is connected; waiting for its capability catalog…")
                             ).weak());
                         } else if capabilities
                             .as_ref()
                             .is_some_and(|capabilities| !capabilities.board_connected)
                         {
                             ui.label(egui::RichText::new(
-                                "PCController is reachable, but no board is currently advertising live controls."
+                                self.app.tr("PCController is reachable, but no board is currently advertising live controls.")
                             ).weak());
                         } else if capabilities
                             .as_ref()
                             .is_some_and(|capabilities| capabilities.relays.is_empty())
                         {
                             ui.label(egui::RichText::new(
-                                "The connected board advertises no relay controls."
+                                self.app.tr("The connected board advertises no relay controls.")
                             ).weak());
                         }
 
@@ -559,7 +561,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             .filter(|capabilities| capabilities.board_connected && !capabilities.relays.is_empty())
                         {
                             let board_label = if capabilities.board_name.is_empty() {
-                                "Connected board".to_string()
+                                self.app.tr("Connected board").to_string()
                             } else {
                                 format!("Connected board: {}", capabilities.board_name)
                             };
@@ -584,7 +586,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 .on_hover_text(format!("{} · {}", relay.key, relay.role));
                                         });
 
-                                        let btn_text = if is_overridden { "Release" } else { "Force ON" };
+                                        let btn_text = if is_overridden {
+                                            self.app.tr("Release")
+                                        } else {
+                                            self.app.tr("Force ON")
+                                        };
                                         let btn = ui.add_enabled(
                                             !self.app.estop_active,
                                             egui::Button::new(btn_text).selected(is_overridden),
@@ -604,11 +610,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
 
                                         ui.label(if is_overridden {
-                                            "Override requested"
+                                            self.app.tr("Override requested")
                                         } else if board_active {
-                                            "Board reports ON"
+                                            self.app.tr("Board reports ON")
                                         } else {
-                                            "Board reports OFF"
+                                            self.app.tr("Board reports OFF")
                                         });
                                         ui.end_row();
                                     }
@@ -616,7 +622,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                             if !capabilities.macros.is_empty() {
                                 ui.add_space(8.0);
-                                ui.label(egui::RichText::new("PCController macro catalog").strong());
+                                ui.label(egui::RichText::new(self.app.tr("PCController macro catalog")).strong());
                                 ui.label(
                                     capabilities
                                         .macros
@@ -2252,6 +2258,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         });
                     }
                 }
+              });
             });
     }
 }

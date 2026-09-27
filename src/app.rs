@@ -111,6 +111,10 @@ pub fn dropped_file_kind(path: &std::path::Path) -> DroppedFileKind {
 pub struct PealayerApp {
     pub(crate) app_name: String,
     pub(crate) last_window_title: String,
+    pub(crate) language_preference: crate::config::AppLanguage,
+    pub(crate) language: crate::config::AppLanguage,
+    pub(crate) direction_preference: crate::config::AppDirection,
+    pub(crate) rtl: bool,
     pub(crate) mpv: &'static Mpv,
     pub(crate) mpv_client: libmpv2::Mpv,
     pub(crate) render_context: Arc<Mutex<Option<RenderContextWrapper>>>,
@@ -532,15 +536,16 @@ impl eframe::App for PealayerApp {
                     let mut open_url = false;
                     let mut close_dialog = false;
 
-                    egui::Window::new("🔗 Open Location / URL")
+                    egui::Window::new(format!("🔗 {}", self.tr("Open Location / URL")))
                         .collapsible(false)
                         .resizable(false)
                         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                         .show(ui.ctx(), |ui| {
-                            ui.label("Enter direct video URL, HTTP/HTTPS stream, or HLS link:");
+                          ui.with_layout(crate::ui::i18n::vertical_layout(self.rtl), |ui| {
+                            ui.label(self.tr("Enter direct video URL, HTTP/HTTPS stream, or HLS link:"));
                             ui.add_space(6.0);
                             
-                            ui.horizontal(|ui| {
+                            ui.with_layout(crate::ui::i18n::layout(self.rtl, egui::Align::Center), |ui| {
                                 let text_edit = ui.add(
                                     egui::TextEdit::singleline(&mut self.url_input_buffer)
                                         .desired_width(340.0)
@@ -550,7 +555,7 @@ impl eframe::App for PealayerApp {
                                     open_url = true;
                                 }
 
-                                if ui.button("📋 Paste").clicked() {
+                                if ui.button(format!("📋 {}", self.tr("Paste"))).clicked() {
                                     if let Some(text) = ui.input(|i| i.raw.events.iter().find_map(|e| match e { egui::Event::Paste(t) => Some(t.clone()), _ => None })) {
                                         self.url_input_buffer = text;
                                     }
@@ -558,14 +563,15 @@ impl eframe::App for PealayerApp {
                             });
 
                             ui.add_space(10.0);
-                            ui.horizontal(|ui| {
-                                if ui.button("Open").clicked() {
+                            ui.with_layout(crate::ui::i18n::layout(self.rtl, egui::Align::Center), |ui| {
+                                if ui.button(self.tr("Open")).clicked() {
                                     open_url = true;
                                 }
-                                if ui.button("Cancel").clicked() {
+                                if ui.button(self.tr("Cancel")).clicked() {
                                     close_dialog = true;
                                 }
                             });
+                          });
                         });
 
                     if open_url {
@@ -579,7 +585,8 @@ impl eframe::App for PealayerApp {
                 }
 
                 if self.show_shortcuts_dialog {
-                    egui::Window::new("⌨ Keyboard Shortcuts & Controls")
+                    let language = self.language;
+                    egui::Window::new(format!("⌨ {}", self.tr("Keyboard Shortcuts & Controls")))
                         .collapsible(false)
                         .resizable(true)
                         .default_size([460.0, 360.0])
@@ -590,28 +597,30 @@ impl eframe::App for PealayerApp {
                                 .striped(true)
                                 .spacing([20.0, 8.0])
                                 .show(ui, |ui| {
-                                    ui.label(egui::RichText::new("Shortcut").strong());
-                                    ui.label(egui::RichText::new("Action").strong());
+                                    ui.label(egui::RichText::new(crate::ui::i18n::tr(language, "Shortcut")).strong());
+                                    ui.label(egui::RichText::new(crate::ui::i18n::tr(language, "Action")).strong());
                                     ui.end_row();
 
-                                    ui.label("Space"); ui.label("Play / Pause video"); ui.end_row();
-                                    ui.label("F"); ui.label("Toggle Fullscreen mode"); ui.end_row();
-                                    ui.label("M"); ui.label("Toggle Audio Mute"); ui.end_row();
-                                    ui.label("Left / Right Arrows"); ui.label("Seek -5s / +5s"); ui.end_row();
-                                    ui.label("Up / Down Arrows"); ui.label("Volume -5% / +5%"); ui.end_row();
-                                    ui.label(".  or  ]"); ui.label("Frame Step Forward (+1 frame)"); ui.end_row();
-                                    ui.label(",  or  ["); ui.label("Frame Step Backward (-1 frame)"); ui.end_row();
-                                    ui.label("Mouse Wheel"); ui.label("Adjust Volume on player/bar"); ui.end_row();
-                                    ui.label("Shift + Mouse Wheel"); ui.label("Seek forward / backward"); ui.end_row();
-                                    ui.label("Double Click"); ui.label("Toggle Fullscreen / Open Video"); ui.end_row();
-                                    ui.label("Right Click"); ui.label("Open Player Context Menu"); ui.end_row();
-                                    ui.label("Drag & Drop"); ui.label("Drop media file onto window to play"); ui.end_row();
+                                    ui.label("Space"); ui.label(crate::ui::i18n::tr(language, "Play / Pause video")); ui.end_row();
+                                    ui.label("F"); ui.label(crate::ui::i18n::tr(language, "Toggle Fullscreen mode")); ui.end_row();
+                                    ui.label("M"); ui.label(crate::ui::i18n::tr(language, "Toggle Audio Mute")); ui.end_row();
+                                    ui.label("← / →"); ui.label(crate::ui::i18n::tr(language, "Seek -5s / +5s")); ui.end_row();
+                                    ui.label("↑ / ↓"); ui.label(crate::ui::i18n::tr(language, "Volume -5% / +5%")); ui.end_row();
+                                    ui.label(".  or  ]"); ui.label(crate::ui::i18n::tr(language, "Frame Step Forward (+1 frame)")); ui.end_row();
+                                    ui.label(",  or  ["); ui.label(crate::ui::i18n::tr(language, "Frame Step Backward (-1 frame)")); ui.end_row();
+                                    ui.label("Mouse Wheel"); ui.label(crate::ui::i18n::tr(language, "Adjust Volume on player/bar")); ui.end_row();
+                                    ui.label("Shift + Mouse Wheel"); ui.label(crate::ui::i18n::tr(language, "Seek forward / backward")); ui.end_row();
+                                    ui.label("Double Click"); ui.label(crate::ui::i18n::tr(language, "Toggle Fullscreen / Open Video")); ui.end_row();
+                                    ui.label("Right Click"); ui.label(crate::ui::i18n::tr(language, "Open Player Context Menu")); ui.end_row();
+                                    ui.label("Drag & Drop"); ui.label(crate::ui::i18n::tr(language, "Drop media file onto window to play")); ui.end_row();
                                 });
                         });
                 }
 
                 if self.show_about_dialog {
-                    egui::Window::new("ℹ About Pealayer")
+                    let language = self.language;
+                    let app_name = self.app_name.clone();
+                    egui::Window::new(format!("ℹ {} {}", self.tr("About"), self.app_name))
                         .collapsible(false)
                         .resizable(false)
                         .default_size([380.0, 240.0])
@@ -620,13 +629,13 @@ impl eframe::App for PealayerApp {
                         .show(ui.ctx(), |ui| {
                             ui.vertical_centered(|ui| {
                                 ui.add_space(8.0);
-                                ui.heading("🎬 Pealayer v0.1.0");
-                                ui.label(egui::RichText::new("Modern 4D Video & Haptic Player").italics());
+                                ui.heading(format!("🎬 {app_name} v0.1.0"));
+                                ui.label(egui::RichText::new(crate::ui::i18n::tr(language, "Modern 4D Video & Haptic Player")).italics());
                                 ui.add_space(10.0);
                                 ui.separator();
                                 ui.add_space(8.0);
-                                ui.label("High-performance media playback powered by libmpv2, glow OpenGL, and egui.");
-                                ui.label("Featuring real-time 4D haptic timeline synchronization and multi-track relay control.");
+                                ui.label(crate::ui::i18n::tr(language, "High-performance media playback powered by libmpv2, glow OpenGL, and egui."));
+                                ui.label(crate::ui::i18n::tr(language, "Featuring real-time 4D haptic timeline synchronization and multi-track relay control."));
                                 ui.add_space(12.0);
                                 ui.label(egui::RichText::new("Copyright © 2026 Pealayer Team").small().weak());
                             });
@@ -1118,7 +1127,26 @@ impl PealayerApp {
         cfg.pin_controls = self.pin_controls;
         cfg.show_remaining_time = self.show_remaining_time;
         cfg.recent_media = self.recent_media.clone();
+        cfg.language = self.language_preference;
+        cfg.direction = self.direction_preference;
         cfg.save();
+    }
+
+    pub(crate) fn tr(&self, english: &'static str) -> &'static str {
+        crate::ui::i18n::tr(self.language, english)
+    }
+
+    pub(crate) fn set_language(&mut self, preference: crate::config::AppLanguage) {
+        self.language_preference = preference;
+        self.language = crate::config::resolve_language(preference);
+        self.rtl = crate::config::resolve_rtl(self.direction_preference, self.language);
+        self.save_config();
+    }
+
+    pub(crate) fn set_direction(&mut self, preference: crate::config::AppDirection) {
+        self.direction_preference = preference;
+        self.rtl = crate::config::resolve_rtl(preference, self.language);
+        self.save_config();
     }
 
     pub fn add_recent_media(&mut self, path: std::path::PathBuf) {
@@ -1307,6 +1335,13 @@ impl Default for PealayerApp {
         Self {
             app_name: crate::config::resolved_app_name(&crate::config::AppConfig::default()),
             last_window_title: String::new(),
+            language_preference: crate::config::AppLanguage::System,
+            language: crate::config::resolve_language(crate::config::AppLanguage::System),
+            direction_preference: crate::config::AppDirection::Auto,
+            rtl: crate::config::resolve_rtl(
+                crate::config::AppDirection::Auto,
+                crate::config::resolve_language(crate::config::AppLanguage::System),
+            ),
             mpv,
             mpv_client,
             render_context: Arc::new(Mutex::new(None)),
