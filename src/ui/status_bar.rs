@@ -21,9 +21,15 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     .engine_handle
                     .connection_requested
                     .load(std::sync::atomic::Ordering::Relaxed);
-                let dot_color = if app.is_connected {
+                let capabilities = app.advertised_hardware();
+                let board_ready = capabilities
+                    .as_ref()
+                    .is_some_and(|capabilities| capabilities.board_connected);
+                let coordinator_endpoint =
+                    crate::four_d::controller::is_controller_endpoint(&app.serial_port);
+                let dot_color = if app.is_connected && (!coordinator_endpoint || board_ready) {
                     egui::Color32::from_rgb(46, 204, 113) // Green
-                } else if connection_requested {
+                } else if connection_requested || app.is_connected {
                     egui::Color32::from_rgb(241, 196, 15) // Amber
                 } else {
                     egui::Color32::from_rgb(231, 76, 60) // Red
@@ -34,8 +40,15 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 ui.painter().circle_filled(rect.center(), 4.0, dot_color);
                 
                 let label_text = if app.is_connected {
-                    if crate::four_d::controller::is_controller_endpoint(&app.serial_port) {
-                        "Hardware: PCController coordinator connected".to_string()
+                    if coordinator_endpoint && board_ready {
+                        let board_name = capabilities
+                            .as_ref()
+                            .map(|capabilities| capabilities.board_name.as_str())
+                            .filter(|name| !name.is_empty())
+                            .unwrap_or("board");
+                        format!("Hardware: PCController + {board_name} connected")
+                    } else if coordinator_endpoint {
+                        "Hardware: PCController connected; board unavailable".to_string()
                     } else {
                         format!("Hardware: {} direct diagnostic", app.serial_port)
                     }

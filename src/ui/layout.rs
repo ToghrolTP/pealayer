@@ -1,7 +1,6 @@
 use eframe::egui;
 use egui_dock::TabViewer;
 use crate::app::{PealayerApp, EffectDragPayload};
-use crate::four_d::engine::evaluate_relay_state;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PealayerTab {
@@ -389,7 +388,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         
                         // 1. Instant search edit field
                         ui.horizontal(|ui| {
-                            ui.label("🔍");
+                            ui.label("Search");
                             let res = ui.add(
                                 egui::TextEdit::singleline(&mut self.app.effects_search_query)
                                     .hint_text("Search effects...")
@@ -404,9 +403,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         
                         // Filter presets based on query
                         let query = self.app.effects_search_query.trim().to_lowercase();
+                        let advertised_presets = self.app.advertised_effect_presets();
                         let mut categorized: std::collections::BTreeMap<String, Vec<&crate::app::EffectPreset>> = std::collections::BTreeMap::new();
                         
-                        for preset in &self.app.preset_library {
+                        for preset in &advertised_presets {
                             if query.is_empty() || preset.effect.name.to_lowercase().contains(&query) {
                                 categorized.entry(preset.category.clone()).or_default().push(preset);
                             }
@@ -416,15 +416,16 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         
                         if categorized.is_empty() {
                             ui.centered_and_justified(|ui| {
-                                ui.label(egui::RichText::new("No effects found").weak().size(12.0));
+                                ui.label(egui::RichText::new(
+                                    "No compatible relay effects are advertised by the connected PCController."
+                                ).weak().size(12.0));
                             });
                         } else {
                             egui::ScrollArea::vertical()
                                 .id_salt("effects_scroll")
                                 .show(ui, |ui| {
                                     for (category, presets) in categorized {
-                                        let icon = if force_open { "📂" } else { "📁" };
-                                        let header = egui::CollapsingHeader::new(format!("{} {}", icon, category))
+                                        let header = egui::CollapsingHeader::new(category)
                                             .default_open(true)
                                             .open(if force_open { Some(true) } else { None });
                                             
@@ -462,10 +463,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         ui.painter().rect_filled(rect, 4.0, bg_color);
                                                         
                                                         // Render Name and Icon
+                                                        let effect_label = if preset.effect.icon.trim().is_empty() {
+                                                            preset.effect.name.clone()
+                                                        } else {
+                                                            format!("{} {}", preset.effect.icon, preset.effect.name)
+                                                        };
                                                         ui.painter().text(
                                                             rect.left_center() + egui::vec2(8.0, 0.0),
                                                             egui::Align2::LEFT_CENTER,
-                                                            format!("{} {}", preset.effect.icon, preset.effect.name),
+                                                            effect_label.clone(),
                                                             egui::FontId::proportional(11.0),
                                                             egui::Color32::WHITE,
                                                         );
@@ -485,7 +491,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                             )
                                                             .show(|ui| {
                                                                 ui.horizontal(|ui| {
-                                                                    ui.label(format!("{} {}", preset.effect.icon, preset.effect.name));
+                                                                    ui.label(effect_label);
                                                                     ui.label(egui::RichText::new(format!("({}ms)", preset.effect.duration_ms)).weak());
                                                                 });
                                                             });
@@ -522,65 +528,105 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             ui.add_space(8.0);
                         }
                         
-                        egui::Grid::new("hardware_monitor_grid")
-                            .num_columns(4)
-                            .spacing([16.0, 12.0])
-                            .striped(true)
-                            .show(ui, |ui| {
-                                let relay_names = [
-                                    (1, "R1: Water Valve"),
-                                    (2, "R2: Wind Fan"),
-                                    (3, "R3: Seat Vibration"),
-                                    (4, "R4: Smoke Machine"),
-                                    (5, "R5: Aux Relay"),
-                                    (6, "R6: Aux Relay"),
-                                    (7, "R7: Aux Relay"),
-                                    (8, "R8: Aux Relay"),
-                                ];
-                                
-                                for (id, name) in &relay_names {
-                                    let is_timeline_active = evaluate_relay_state(&self.app.timeline, *id, (self.app.playback_time * 1000.0) as u64, &self.app.track_muted, &self.app.track_soloed);
-                                    let is_forced = self.app.relay_overrides[*id as usize] == Some(true);
-                                    let active = if self.app.estop_active {
-                                        false
-                                    } else {
-                                        is_forced || (self.app.relay_overrides[*id as usize].is_none() && is_timeline_active)
-                                    };
-                                    
-                                    // Draw LED
-                                    ui.horizontal(|ui| {
-                                        draw_led(ui, active);
-                                        ui.add_space(4.0);
-                                        ui.label(egui::RichText::new(*name).monospace());
-                                    });
-                                    
-                                    // Force ON button
-                                    let is_overridden = self.app.relay_overrides[*id as usize] == Some(true);
-                                    let btn_text = if is_overridden { "🔴 FORCED" } else { "Force ON" };
-                                    let btn = ui.selectable_label(is_overridden, btn_text);
-                                    if btn.clicked() {
-                                        if is_overridden {
-                                            self.app.relay_overrides[*id as usize] = None;
-                                            println!("{}:OFF", id);
-                                        } else {
-                                            self.app.relay_overrides[*id as usize] = Some(true);
-                                            println!("{}:ON", id);
+                        let capabilities = self.app.advertised_hardware();
+                        if !self.app.is_connected {
+                            ui.label(egui::RichText::new(
+                                "Connect to PCController to discover live board controls."
+                            ).weak());
+                        } else if crate::four_d::controller::is_controller_endpoint(&self.app.serial_port)
+                            && capabilities.is_none()
+                        {
+                            ui.label(egui::RichText::new(
+                                "PCController is connected; waiting for its capability catalog…"
+                            ).weak());
+                        } else if capabilities
+                            .as_ref()
+                            .is_some_and(|capabilities| !capabilities.board_connected)
+                        {
+                            ui.label(egui::RichText::new(
+                                "PCController is reachable, but no board is currently advertising live controls."
+                            ).weak());
+                        } else if capabilities
+                            .as_ref()
+                            .is_some_and(|capabilities| capabilities.relays.is_empty())
+                        {
+                            ui.label(egui::RichText::new(
+                                "The connected board advertises no relay controls."
+                            ).weak());
+                        }
+
+                        if let Some(capabilities) = capabilities
+                            .filter(|capabilities| capabilities.board_connected && !capabilities.relays.is_empty())
+                        {
+                            let board_label = if capabilities.board_name.is_empty() {
+                                "Connected board".to_string()
+                            } else {
+                                format!("Connected board: {}", capabilities.board_name)
+                            };
+                            ui.label(board_label);
+
+                            egui::Grid::new("hardware_monitor_grid")
+                                .num_columns(3)
+                                .spacing([16.0, 12.0])
+                                .striped(true)
+                                .show(ui, |ui| {
+                                    for relay in &capabilities.relays {
+                                        let id = relay.id;
+                                        let board_active = (1..=8).contains(&id)
+                                            && capabilities.active_relays & (1 << (id - 1)) != 0;
+                                        let is_overridden =
+                                            self.app.relay_overrides[id as usize] == Some(true);
+
+                                        ui.horizontal(|ui| {
+                                            draw_led(ui, board_active);
+                                            ui.add_space(4.0);
+                                            ui.label(egui::RichText::new(&relay.name).monospace())
+                                                .on_hover_text(format!("{} · {}", relay.key, relay.role));
+                                        });
+
+                                        let btn_text = if is_overridden { "Release" } else { "Force ON" };
+                                        let btn = ui.add_enabled(
+                                            !self.app.estop_active,
+                                            egui::Button::new(btn_text).selected(is_overridden),
+                                        );
+                                        if btn.clicked() {
+                                            let state = !is_overridden;
+                                            self.app.relay_overrides[id as usize] =
+                                                state.then_some(true);
+                                            let _ = self.app.engine_handle.sender.send(
+                                                crate::four_d::engine::EngineMessage::SendCommand(
+                                                    crate::four_d::protocol::Command::RelaySet {
+                                                        id,
+                                                        state,
+                                                    },
+                                                ),
+                                            );
                                         }
+
+                                        ui.label(if is_overridden {
+                                            "Override requested"
+                                        } else if board_active {
+                                            "Board reports ON"
+                                        } else {
+                                            "Board reports OFF"
+                                        });
+                                        ui.end_row();
                                     }
-                                    
-                                    // Status text label
-                                    let status_text = if is_overridden {
-                                        "Override ON"
-                                    } else if is_timeline_active {
-                                        "Timeline ON"
-                                    } else {
-                                        "Idle (OFF)"
-                                    };
-                                    ui.label(status_text);
-                                    
-                                    ui.end_row();
-                                }
-                            });
+                                });
+
+                            if !capabilities.macros.is_empty() {
+                                ui.add_space(8.0);
+                                ui.label(egui::RichText::new("PCController macro catalog").strong());
+                                ui.label(
+                                    capabilities
+                                        .macros
+                                        .iter()
+                                        .map(|hardware_macro| hardware_macro.name.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join(" · "),
+                                );
+                            }
+                        }
                             
                         if !self.app.is_paused {
                             ui.ctx().request_repaint();
@@ -607,18 +653,21 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     egui::Color32::from_rgb(150, 150, 150),
                                 );
                                 
-                                let track_names = [
-                                    "Video",
-                                    "Audio",
-                                    "R1: Water Valve",
-                                    "R2: Wind Fan",
-                                    "R3: Seat Vib.",
-                                    "R4: Smoke Mac.",
-                                    "R5: Aux Relay",
-                                    "R6: Aux Relay",
-                                    "R7: Aux Relay",
-                                    "R8: Aux Relay",
-                                ];
+                                let advertised = self.app.advertised_hardware();
+                                let mut track_names =
+                                    vec!["Video".to_string(), "Audio".to_string()];
+                                track_names.extend((1_u8..=8).map(|relay_id| {
+                                    advertised
+                                        .as_ref()
+                                        .and_then(|capabilities| {
+                                            capabilities
+                                                .relays
+                                                .iter()
+                                                .find(|relay| relay.id == relay_id)
+                                        })
+                                        .map(|relay| relay.name.clone())
+                                        .unwrap_or_else(|| format!("Relay {relay_id}"))
+                                }));
                                 
                                 for (idx, name) in track_names.iter().enumerate() {
                                     let (rect, _response) = ui.allocate_exact_size(egui::vec2(250.0, 32.0), egui::Sense::hover());
@@ -632,7 +681,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         ui.add_space(6.0);
                                         // Limit the track name label width
                                         ui.allocate_ui(egui::vec2(85.0, 20.0), |ui| {
-                                            ui.label(egui::RichText::new(*name).size(11.0).strong());
+                                            ui.label(egui::RichText::new(name).size(11.0).strong());
                                         });
                                         
                                         // Render M, S, L buttons only for Relay tracks (idx >= 2)
@@ -2543,6 +2592,3 @@ fn render_clip_handles(
         );
     }
 }
-
-
-

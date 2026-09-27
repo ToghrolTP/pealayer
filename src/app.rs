@@ -165,7 +165,6 @@ pub struct PealayerApp {
     pub(crate) relay_overrides: [Option<bool>; 9],
 
     // Phase 6 Preset Library state
-    pub(crate) preset_library: Vec<EffectPreset>,
     pub(crate) effects_search_query: String,
     pub(crate) track_muted: [bool; 9],
     pub(crate) track_soloed: [bool; 9],
@@ -638,6 +637,31 @@ impl eframe::App for PealayerApp {
 }
 
 impl PealayerApp {
+    pub fn advertised_hardware(
+        &self,
+    ) -> Option<crate::four_d::controller::HardwareCapabilities> {
+        self.engine_handle
+            .hardware_capabilities
+            .lock()
+            .ok()
+            .and_then(|capabilities| capabilities.clone())
+    }
+
+    pub fn advertised_effect_presets(&self) -> Vec<EffectPreset> {
+        let Some(capabilities) = self
+            .advertised_hardware()
+            .filter(|capabilities| capabilities.board_connected)
+        else {
+            return Vec::new();
+        };
+
+        capabilities
+            .macros
+            .iter()
+            .filter_map(controller_macro_effect_preset)
+            .collect()
+    }
+
     fn apply_interop_command(
         &mut self,
         command: crate::platform::interop::InteropCommand,
@@ -1196,6 +1220,59 @@ impl PealayerApp {
     }
 }
 
+fn controller_macro_effect_preset(
+    hardware_macro: &crate::four_d::controller::HardwareMacro,
+) -> Option<EffectPreset> {
+    let mut actions = Vec::new();
+    let mut used_relays = std::collections::BTreeSet::new();
+    for step in &hardware_macro.steps {
+        let offset_ms = step.at_us / 1_000;
+        match step.kind.as_str() {
+            "relay" => {
+                let relay_id = step.target.filter(|relay_id| (1..=8).contains(relay_id))?;
+                used_relays.insert(relay_id);
+                actions.push(crate::four_d::models::AtomicAction {
+                    relay_id,
+                    state: step.value.unwrap_or(0) != 0,
+                    offset_ms,
+                });
+            }
+            "relays-off" => {
+                for relay_id in &used_relays {
+                    actions.push(crate::four_d::models::AtomicAction {
+                        relay_id: *relay_id,
+                        state: false,
+                        offset_ms,
+                    });
+                }
+            }
+            // Display, PWM, opcode, and other macros remain visible in the
+            // hardware catalog, but are not misrepresented as relay effects.
+            _ => return None,
+        }
+    }
+    if actions.is_empty() {
+        return None;
+    }
+    actions.sort_by_key(|action| action.offset_ms);
+    let duration_ms = actions
+        .iter()
+        .map(|action| action.offset_ms)
+        .max()
+        .unwrap_or(0)
+        .max(1);
+    Some(EffectPreset {
+        category: hardware_macro.category.clone(),
+        effect: crate::four_d::models::Effect::with_target(
+            hardware_macro.name.clone(),
+            String::new(),
+            duration_ms,
+            crate::four_d::models::HardwareTarget::Any,
+            actions,
+        ),
+    })
+}
+
 impl Default for PealayerApp {
     fn default() -> Self {
         let mpv = Box::leak(Box::new(
@@ -1270,7 +1347,6 @@ impl Default for PealayerApp {
             undo_stack: crate::four_d::history::UndoStack::default(),
             recording_keys: std::collections::HashMap::new(),
             relay_overrides: [None; 9],
-            preset_library: Vec::new(),
             effects_search_query: String::new(),
             track_muted: [false; 9],
             track_soloed: [false; 9],
@@ -1328,7 +1404,10 @@ pub fn contextual_window_title(
 
 #[cfg(test)]
 mod tests {
-    use super::{DroppedFileKind, contextual_window_title, dropped_file_kind};
+    use super::{
+        DroppedFileKind, contextual_window_title, controller_macro_effect_preset,
+        dropped_file_kind,
+    };
 
     #[test]
     fn test_recent_media_deduplication_and_cap() {
@@ -1411,5 +1490,48 @@ mod tests {
             dropped_file_kind(std::path::Path::new("stream.m3u8")),
             DroppedFileKind::Media
         );
+    }
+
+    #[test]
+    fn controller_relay_macro_becomes_effect_without_invented_mapping() {
+        let hardware_macro = crate::four_d::controller::HardwareMacro {
+            name: "Live Air Burst".to_string(),
+            category: "Cinema".to_string(),
+            steps: vec![
+                crate::four_d::controller::HardwareMacroStep {
+                    at_us: 0,
+                    kind: "relay".to_string(),
+                    target: Some(6),
+                    value: Some(1),
+                },
+                crate::four_d::controller::HardwareMacroStep {
+                    at_us: 250_000,
+                    kind: "relays-off".to_string(),
+                    target: None,
+                    value: None,
+                },
+            ],
+        };
+        let preset = controller_macro_effect_preset(&hardware_macro).unwrap();
+        assert_eq!(preset.effect.name, "Live Air Burst");
+        assert_eq!(preset.effect.actions[0].relay_id, 6);
+        assert!(preset.effect.actions[0].state);
+        assert!(!preset.effect.actions[1].state);
+        assert_eq!(preset.effect.duration_ms, 250);
+    }
+
+    #[test]
+    fn non_relay_controller_macro_is_not_misrepresented_as_effect() {
+        let hardware_macro = crate::four_d::controller::HardwareMacro {
+            name: "Display only".to_string(),
+            category: "Display".to_string(),
+            steps: vec![crate::four_d::controller::HardwareMacroStep {
+                at_us: 0,
+                kind: "display".to_string(),
+                target: None,
+                value: None,
+            }],
+        };
+        assert!(controller_macro_effect_preset(&hardware_macro).is_none());
     }
 }

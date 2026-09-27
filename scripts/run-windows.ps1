@@ -9,7 +9,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-if (-not $IsWindows) {
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw 'scripts/run-windows.ps1 is intended for native Windows builds.'
 }
 
@@ -28,8 +28,27 @@ $libmpvDirectory = if ($env:LIBMPV_DIR) {
     Join-Path $env:ProgramFiles 'MPV'
 }
 
-$libmpvImportLibrary = Join-Path $libmpvDirectory 'libmpv.dll.a'
-$libmpvRuntime = Join-Path $libmpvDirectory 'libmpv-2.dll'
+$rustHost = (& rustc -vV | Select-String '^host:' | ForEach-Object { $_.Line.Substring(5).Trim() })
+if (-not $rustHost) { throw 'Could not determine the native Rust host triple.' }
+$importLibraryNames = if ($rustHost -like '*-msvc') {
+    @('mpv.lib')
+} else {
+    @('libmpv.dll.a', 'libmpv.a')
+}
+$libmpvImportLibrary = $importLibraryNames |
+    ForEach-Object { Join-Path $libmpvDirectory $_ } |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+    Select-Object -First 1
+if (-not $libmpvImportLibrary) {
+    throw "Required libmpv import library for $rustHost is missing. Expected one of: $($importLibraryNames -join ', ') in $libmpvDirectory"
+}
+$libmpvRuntime = @('libmpv-2.dll', 'mpv-2.dll') |
+    ForEach-Object { Join-Path $libmpvDirectory $_ } |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+    Select-Object -First 1
+if (-not $libmpvRuntime) {
+    throw "Required libmpv runtime is missing. Expected libmpv-2.dll or mpv-2.dll in $libmpvDirectory"
+}
 foreach ($requiredPath in @($libmpvImportLibrary, $libmpvRuntime)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) {
         throw "Required libmpv file is missing: $requiredPath"
@@ -62,7 +81,7 @@ $binary = Join-Path $binaryDirectory 'pealayer.exe'
 if (-not (Test-Path -LiteralPath $binary)) {
     throw "Pealayer binary was not produced at $binary"
 }
-Copy-Item -LiteralPath $libmpvRuntime -Destination $binaryDirectory -Force
+Copy-Item -LiteralPath $libmpvRuntime -Destination (Join-Path $binaryDirectory 'libmpv-2.dll') -Force
 
 if (-not $BuildOnly) {
     & $binary @ApplicationArguments

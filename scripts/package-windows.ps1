@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-if (-not $IsWindows) {
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw 'scripts/package-windows.ps1 is intended for native Windows packaging.'
 }
 
@@ -28,6 +28,23 @@ $outputDirectory = if ((Split-Path -Leaf $sourceDirectory) -ieq 'source') {
     Join-Path $repositoryRoot 'bin'
 }
 $libmpvDirectory = if ($env:LIBMPV_DIR) { $env:LIBMPV_DIR } else { Join-Path $env:ProgramFiles 'MPV' }
+$rustHost = (& rustc -vV | Select-String '^host:' | ForEach-Object { $_.Line.Substring(5).Trim() })
+if (-not $rustHost) { throw 'Could not determine the native Rust host triple.' }
+$importLibraryNames = if ($rustHost -like '*-msvc') { @('mpv.lib') } else { @('libmpv.dll.a', 'libmpv.a') }
+$libmpvImportLibrary = $importLibraryNames |
+    ForEach-Object { Join-Path $libmpvDirectory $_ } |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+    Select-Object -First 1
+if (-not $libmpvImportLibrary) {
+    throw "Required libmpv import library for $rustHost is missing. Expected one of: $($importLibraryNames -join ', ') in $libmpvDirectory"
+}
+$libmpvRuntime = @('libmpv-2.dll', 'mpv-2.dll') |
+    ForEach-Object { Join-Path $libmpvDirectory $_ } |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+    Select-Object -First 1
+if (-not $libmpvRuntime) {
+    throw "Required libmpv runtime is missing. Expected libmpv-2.dll or mpv-2.dll in $libmpvDirectory"
+}
 $env:Path = $libmpvDirectory + ';' + $env:Path
 $upxCommand = Get-Command upx.exe -ErrorAction SilentlyContinue
 $upxPath = if ($upxCommand) { $upxCommand.Source } else { $null }
@@ -57,7 +74,7 @@ New-Item -ItemType Directory -Force -Path $stagingDirectory,$outputDirectory | O
 $stagedExecutable = Join-Path $stagingDirectory 'pealayer.exe'
 $stagedRuntime = Join-Path $stagingDirectory 'libmpv-2.dll'
 Copy-Item -LiteralPath (Join-Path $releaseDirectory 'pealayer.exe') -Destination $stagedExecutable -Force
-Copy-Item -LiteralPath (Join-Path $libmpvDirectory 'libmpv-2.dll') -Destination $stagedRuntime -Force
+Copy-Item -LiteralPath $libmpvRuntime -Destination $stagedRuntime -Force
 
 $resource = (Get-Item -LiteralPath $stagedExecutable).VersionInfo
 if ($resource.ProductName -ne 'Pealayer' -or $resource.OriginalFilename -ne 'pealayer.exe') {

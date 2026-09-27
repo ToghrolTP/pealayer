@@ -92,6 +92,19 @@ impl HardwareTransport {
     fn needs_watchdog_ping(&self) -> bool {
         matches!(self, Self::DirectSerial { .. })
     }
+
+    fn is_direct_serial(&self) -> bool {
+        matches!(self, Self::DirectSerial { .. })
+    }
+
+    fn refresh_capabilities(
+        &mut self,
+    ) -> Result<Option<crate::four_d::controller::HardwareCapabilities>, String> {
+        match self {
+            Self::Controller(client) => client.hardware_capabilities().map(Some),
+            Self::DirectSerial { .. } => Ok(None),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -117,7 +130,17 @@ pub struct EngineHandle {
     pub is_connected: Arc<AtomicBool>,
     pub serial_port: Arc<Mutex<String>>,
     pub connection_error: Arc<Mutex<Option<String>>>,
+    pub hardware_capabilities:
+        Arc<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
     pub sender: mpsc::Sender<EngineMessage>,
+}
+
+fn should_yield_direct_transport(
+    is_direct: bool,
+    diagnostic_override: bool,
+    coordinator_reachable: bool,
+) -> bool {
+    is_direct && !diagnostic_override && coordinator_reachable
 }
 
 pub fn spawn_engine() -> EngineHandle {
@@ -130,6 +153,7 @@ pub fn spawn_engine() -> EngineHandle {
         crate::four_d::controller::DEFAULT_ENDPOINT.to_string(),
     ));
     let connection_error = Arc::new(Mutex::new(None));
+    let hardware_capabilities = Arc::new(Mutex::new(None));
     
     let (tx, rx) = mpsc::channel();
     
@@ -140,6 +164,7 @@ pub fn spawn_engine() -> EngineHandle {
     let engine_connected = Arc::clone(&is_connected);
     let engine_port = Arc::clone(&serial_port);
     let engine_conn_error = Arc::clone(&connection_error);
+    let engine_capabilities = Arc::clone(&hardware_capabilities);
     
     thread::spawn(move || {
         let mut queue: Vec<CompiledAction> = Vec::new();
@@ -149,6 +174,8 @@ pub fn spawn_engine() -> EngineHandle {
         let mut was_playing = false;
         let mut was_estop = false;
         let mut last_ping = std::time::Instant::now();
+        let mut last_owner_check = std::time::Instant::now();
+        let mut last_capability_refresh = std::time::Instant::now();
         
         let mut active_transport: Option<HardwareTransport> = None;
         
@@ -189,9 +216,27 @@ pub fn spawn_engine() -> EngineHandle {
                     Ok(transport) => {
                         println!("[Engine] Connected hardware transport: {endpoint}");
                         active_transport = Some(transport);
+                        if let Some(ref mut transport) = active_transport {
+                            match transport.refresh_capabilities() {
+                                Ok(capabilities) => {
+                                    if let Ok(mut guard) = engine_capabilities.lock() {
+                                        *guard = capabilities;
+                                    }
+                                }
+                                Err(error) => {
+                                    if let Ok(mut guard) = engine_conn_error.lock() {
+                                        *guard = Some(format!(
+                                            "connected, but capability discovery failed: {error}"
+                                        ));
+                                    }
+                                }
+                            }
+                        }
                         engine_connected.store(true, Ordering::Relaxed);
                         connected = true;
                         last_ping = std::time::Instant::now();
+                        last_owner_check = std::time::Instant::now();
+                        last_capability_refresh = std::time::Instant::now();
                     }
                     Err(error) => {
                         if let Ok(mut guard) = engine_conn_error.lock() {
@@ -207,6 +252,9 @@ pub fn spawn_engine() -> EngineHandle {
                     let _ = transport.send(Command::AllOff);
                 }
                 active_transport = None;
+                if let Ok(mut guard) = engine_capabilities.lock() {
+                    *guard = None;
+                }
                 engine_connected.store(false, Ordering::Relaxed);
                 connected = false;
                 println!("[Engine] Disconnected hardware transport");
@@ -279,8 +327,67 @@ pub fn spawn_engine() -> EngineHandle {
 
             if !engine_connected.load(Ordering::Relaxed) && active_transport.is_some() {
                 active_transport = None;
+                if let Ok(mut guard) = engine_capabilities.lock() {
+                    *guard = None;
+                }
                 engine_connection_requested.store(false, Ordering::Relaxed);
                 connected = false;
+            }
+
+            // A non-forced direct diagnostic connection must yield as soon as
+            // PCController comes online. This continuously enforces the single
+            // UART-owner contract instead of checking only at open time.
+            if connected
+                && active_transport
+                    .as_ref()
+                    .is_some_and(HardwareTransport::is_direct_serial)
+                && std::env::var_os("PEALAYER_ALLOW_DIRECT_SERIAL").is_none()
+                && last_owner_check.elapsed() >= Duration::from_secs(1)
+            {
+                last_owner_check = std::time::Instant::now();
+                let coordinator_reachable =
+                    crate::four_d::controller::ControllerClient::is_reachable(
+                    crate::four_d::controller::DEFAULT_ENDPOINT,
+                    Duration::from_millis(200),
+                );
+                if should_yield_direct_transport(true, false, coordinator_reachable) {
+                    if let Some(ref mut transport) = active_transport {
+                        let _ = transport.send(Command::AllOff);
+                    }
+                    active_transport = None;
+                    connected = false;
+                    engine_connected.store(false, Ordering::Relaxed);
+                    engine_connection_requested.store(false, Ordering::Relaxed);
+                    if let Ok(mut guard) = engine_capabilities.lock() {
+                        *guard = None;
+                    }
+                    if let Ok(mut guard) = engine_conn_error.lock() {
+                        *guard = Some("direct diagnostic transport released because PCController became reachable and owns the UART".to_string());
+                    }
+                }
+            }
+
+            if connected
+                && last_capability_refresh.elapsed() >= Duration::from_secs(1)
+                && active_transport
+                    .as_ref()
+                    .is_some_and(|transport| !transport.is_direct_serial())
+            {
+                last_capability_refresh = std::time::Instant::now();
+                if let Some(ref mut transport) = active_transport {
+                    match transport.refresh_capabilities() {
+                        Ok(capabilities) => {
+                            if let Ok(mut guard) = engine_capabilities.lock() {
+                                *guard = capabilities;
+                            }
+                        }
+                        Err(error) => {
+                            if let Ok(mut guard) = engine_conn_error.lock() {
+                                *guard = Some(format!("refresh PCController capabilities: {error}"));
+                            }
+                        }
+                    }
+                }
             }
             
             if estop_now && !was_estop {
@@ -401,6 +508,7 @@ pub fn spawn_engine() -> EngineHandle {
         is_connected,
         serial_port,
         connection_error,
+        hardware_capabilities,
         sender: tx,
     }
 }
@@ -669,5 +777,13 @@ mod tests {
         ));
         let res = handle.sender.send(EngineMessage::UpdateAnalogTracks(vec![track]));
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn direct_transport_yields_to_coordinator_unless_explicitly_forced() {
+        assert!(should_yield_direct_transport(true, false, true));
+        assert!(!should_yield_direct_transport(true, true, true));
+        assert!(!should_yield_direct_transport(true, false, false));
+        assert!(!should_yield_direct_transport(false, false, true));
     }
 }
