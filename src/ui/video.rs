@@ -45,8 +45,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             let delta = if scroll.x != 0.0 { scroll.x } else { scroll.y };
             if delta != 0.0 && app.current_video_path.is_some() {
                 let seek_change = if delta > 0.0 { 5.0 } else { -5.0 };
-                let _ = app.mpv.command("seek", &[&seek_change.to_string(), "relative"]);
-                app.set_osd(format!("Seek: {}s", if seek_change > 0.0 { "+5" } else { "-5" }));
+                app.seek_relative(seek_change);
             }
         } else if scroll.y != 0.0 {
             let vol_change = if scroll.y > 0.0 { 2.0 } else { -2.0 };
@@ -81,12 +80,16 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
         ui.separator();
 
-        let play_title = if app.is_paused { "▶ Play" } else { "⏸ Pause" };
+        let play_title = if app.is_playback_finished() {
+            "↺ Replay"
+        } else if app.is_paused {
+            "▶ Play"
+        } else {
+            "⏸ Pause"
+        };
         if ui.add_enabled(has_video, egui::Button::new(play_title)).clicked() {
             ui.close();
-            let _ = app.mpv.command("cycle", &["pause"]);
-            app.is_paused = !app.is_paused;
-            app.set_osd(if app.is_paused { "Pause".to_string() } else { "Play".to_string() });
+            app.toggle_playback();
         }
 
         let is_fullscreen = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));

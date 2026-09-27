@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-#[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
+use std::net::TcpListener;
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
@@ -16,8 +16,16 @@ pub enum InteropCommand {
     TogglePause,
     Seek { seconds: f64 },
     SeekAbs { percentage: f64 },
-    SetVolume { value: f64 },
-    Open { target: String },
+    #[serde(alias = "volume")]
+    SetVolume {
+        #[serde(alias = "level")]
+        value: f64,
+    },
+    #[serde(alias = "open_video")]
+    Open {
+        #[serde(alias = "path")]
+        target: String,
+    },
     GetStatus,
 }
 
@@ -31,68 +39,28 @@ pub struct PlayerStatusResponse {
     pub current_video: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct JsonRpcRequest {
-    #[serde(default)]
-    pub jsonrpc: Option<String>,
-    #[serde(default)]
-    pub id: Value,
-    pub method: String,
-    #[serde(default)]
-    pub params: Value,
-}
+static LIVE_STATUS: std::sync::RwLock<Option<PlayerStatusResponse>> = std::sync::RwLock::new(None);
 
-pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropCommand>, String> {
-    if request.jsonrpc.as_deref().is_some_and(|version| version != "2.0") {
-        return Err("unsupported JSON-RPC version".to_string());
-    }
-    let number = |name: &str| {
-        request
-            .params
-            .get(name)
-            .and_then(Value::as_f64)
-            .ok_or_else(|| format!("missing numeric parameter: {name}"))
-    };
-    let string = |name: &str| {
-        request
-            .params
-            .get(name)
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .ok_or_else(|| format!("missing string parameter: {name}"))
-    };
-    match request.method.as_str() {
-        "pealayer.play" | "pealayer.player.play" => Ok(Some(InteropCommand::Play)),
-        "pealayer.pause" | "pealayer.player.pause" => Ok(Some(InteropCommand::Pause)),
-        "pealayer.toggle" | "pealayer.player.toggle" => Ok(Some(InteropCommand::TogglePause)),
-        "pealayer.seek" | "pealayer.player.seek" => Ok(Some(InteropCommand::Seek {
-            seconds: number("seconds")?,
-        })),
-        "pealayer.seek_absolute" | "pealayer.player.seek_absolute" => {
-            Ok(Some(InteropCommand::SeekAbs {
-                percentage: number("percentage")?,
-            }))
-        }
-        "pealayer.volume.set" | "pealayer.player.volume.set" => {
-            Ok(Some(InteropCommand::SetVolume {
-                value: number("value")?,
-            }))
-        }
-        "pealayer.open" | "pealayer.player.open" => Ok(Some(InteropCommand::Open {
-            target: string("target")?,
-        })),
-        "pealayer.status" | "pealayer.player.status" => Ok(None),
-        method => Err(format!("unknown Pealayer JSON-RPC method: {method}")),
+pub fn set_live_status(status: PlayerStatusResponse) {
+    if let Ok(mut lock) = LIVE_STATUS.write() {
+        *lock = Some(status);
     }
 }
 
-pub fn json_rpc_result(id: &Value, result: Value) -> String {
-    serde_json::json!({"jsonrpc":"2.0","id":id,"result":result}).to_string()
-}
-
-pub fn json_rpc_error(id: &Value, code: i32, message: &str) -> String {
-    serde_json::json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
-        .to_string()
+pub fn get_live_status() -> PlayerStatusResponse {
+    if let Ok(lock) = LIVE_STATUS.read() {
+        if let Some(ref st) = *lock {
+            return st.clone();
+        }
+    }
+    PlayerStatusResponse {
+        status: "ok".to_string(),
+        playing: false,
+        volume: 100.0,
+        playback_time: 0.0,
+        duration: 0.0,
+        current_video: None,
+    }
 }
 
 pub fn get_socket_path() -> PathBuf {
@@ -103,89 +71,172 @@ pub fn get_socket_path() -> PathBuf {
     }
 }
 
-#[cfg(unix)]
-pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<InteropCommand> {
-    let (tx, rx) = channel::<InteropCommand>();
+pub fn parse_interop_request(line: &str) -> Result<(Option<serde_json::Value>, InteropCommand), String> {
+    let val: serde_json::Value = serde_json::from_str(line).map_err(|e| e.to_string())?;
 
-    thread::spawn(move || {
-        let socket_path = get_socket_path();
-        if socket_path.exists() {
-            let _ = std::fs::remove_file(&socket_path);
+    // Check if JSON-RPC 2.0 format
+    if val.get("jsonrpc").and_then(|v| v.as_str()) == Some("2.0") || val.get("method").is_some() {
+        let id = val.get("id").cloned();
+        let method = val.get("method").and_then(|m| m.as_str()).ok_or("Missing method field")?;
+        let params = val.get("params");
+
+        let cmd = match method {
+            "play" => InteropCommand::Play,
+            "pause" => InteropCommand::Pause,
+            "toggle_pause" | "toggle" => InteropCommand::TogglePause,
+            "seek" => {
+                let seconds = params.and_then(|p| p.get("seconds")).and_then(|s| s.as_f64()).unwrap_or(0.0);
+                InteropCommand::Seek { seconds }
+            }
+            "seek_abs" => {
+                let percentage = params.and_then(|p| p.get("percentage")).and_then(|p| p.as_f64()).unwrap_or(0.0);
+                InteropCommand::SeekAbs { percentage }
+            }
+            "set_volume" | "volume" => {
+                let value = params.and_then(|p| p.get("value").or_else(|| p.get("level"))).and_then(|v| v.as_f64()).unwrap_or(100.0);
+                InteropCommand::SetVolume { value }
+            }
+            "open" | "open_video" => {
+                let target = params.and_then(|p| p.get("target").or_else(|| p.get("path"))).and_then(|t| t.as_str()).unwrap_or("").to_string();
+                InteropCommand::Open { target }
+            }
+            "get_status" | "player.status" => InteropCommand::GetStatus,
+            other => return Err(format!("Unknown RPC method: {}", other)),
+        };
+
+        return Ok((id, cmd));
+    }
+
+    // Fall back to standard InteropCommand deserialization
+    let cmd: InteropCommand = serde_json::from_value(val).map_err(|e| e.to_string())?;
+    Ok((None, cmd))
+}
+
+pub fn format_interop_response(id: Option<serde_json::Value>, result: &serde_json::Value) -> String {
+    if let Some(id_val) = id {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id_val,
+            "result": result
+        }).to_string() + "\n"
+    } else {
+        result.to_string() + "\n"
+    }
+}
+
+pub fn format_interop_error(id: Option<serde_json::Value>, code: i32, message: &str) -> String {
+    if let Some(id_val) = id {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id_val,
+            "error": {
+                "code": code,
+                "message": message
+            }
+        }).to_string() + "\n"
+    } else {
+        serde_json::json!({
+            "status": "error",
+            "message": message
+        }).to_string() + "\n"
+    }
+}
+
+fn handle_client_connection<R: std::io::Read, W: Write>(
+    mut reader: BufReader<R>,
+    mut writer: W,
+    tx: std::sync::mpsc::Sender<InteropCommand>,
+    egui_ctx: eframe::egui::Context,
+) {
+    let mut line = String::new();
+    while let Ok(n) = reader.read_line(&mut line) {
+        if n == 0 {
+            break;
         }
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            match parse_interop_request(trimmed) {
+                Ok((id, InteropCommand::GetStatus)) => {
+                    let status = get_live_status();
+                    let resp_val = serde_json::to_value(&status).unwrap_or(serde_json::json!({"status": "ok"}));
+                    let resp = format_interop_response(id, &resp_val);
+                    let _ = writer.write_all(resp.as_bytes());
+                    let _ = writer.flush();
+                }
+                Ok((id, cmd)) => {
+                    let _ = tx.send(cmd);
+                    egui_ctx.request_repaint();
+                    let resp_val = serde_json::json!({"status": "ok"});
+                    let resp = format_interop_response(id, &resp_val);
+                    let _ = writer.write_all(resp.as_bytes());
+                    let _ = writer.flush();
+                }
+                Err(err) => {
+                    let err_resp = format_interop_error(None, -32600, &err);
+                    let _ = writer.write_all(err_resp.as_bytes());
+                    let _ = writer.flush();
+                }
+            }
+        }
+        line.clear();
+    }
+}
 
-        if let Ok(listener) = UnixListener::bind(&socket_path) {
+pub fn spawn_interop_listener(tx: std::sync::mpsc::Sender<InteropCommand>, egui_ctx: eframe::egui::Context) {
+    // 1. Cross-platform loopback TCP listener on 127.0.0.1:8082
+    let tx_tcp = tx.clone();
+    let ctx_tcp = egui_ctx.clone();
+    thread::spawn(move || {
+        if let Ok(listener) = TcpListener::bind("127.0.0.1:8082") {
             for stream in listener.incoming() {
-                if let Ok(mut stream) = stream {
-                    let tx_clone = tx.clone();
-                    let egui_ctx_conn = egui_ctx.clone();
+                if let Ok(stream) = stream {
+                    let tx_conn = tx_tcp.clone();
+                    let ctx_conn = ctx_tcp.clone();
                     thread::spawn(move || {
-                        let mut reader = BufReader::new(stream.try_clone().unwrap());
-                        let mut line = String::new();
-                        if reader.read_line(&mut line).is_ok() {
-                            if let Ok(cmd) = serde_json::from_str::<InteropCommand>(line.trim()) {
-                                let _ = tx_clone.send(cmd);
-                                egui_ctx_conn.request_repaint();
-                                let _ = stream.write_all(b"{\"status\":\"ok\"}\n");
-                            } else {
-                                let _ = stream.write_all(b"{\"status\":\"error\",\"message\":\"Invalid JSON command\"}\n");
-                            }
+                        if let Ok(read_clone) = stream.try_clone() {
+                            let reader = BufReader::new(read_clone);
+                            handle_client_connection(reader, stream, tx_conn, ctx_conn);
                         }
                     });
                 }
             }
+        } else {
+            log::warn!("Could not bind loopback IPC TCP listener to 127.0.0.1:8082");
         }
     });
 
-    rx
+    // 2. Native Unix domain socket listener on Unix targets
+    #[cfg(unix)]
+    {
+        let tx_unix = tx.clone();
+        let ctx_unix = egui_ctx.clone();
+        thread::spawn(move || {
+            let socket_path = get_socket_path();
+            if socket_path.exists() {
+                let _ = std::fs::remove_file(&socket_path);
+            }
+
+            if let Ok(listener) = UnixListener::bind(&socket_path) {
+                for stream in listener.incoming() {
+                    if let Ok(stream) = stream {
+                        let tx_conn = tx_unix.clone();
+                        let ctx_conn = ctx_unix.clone();
+                        thread::spawn(move || {
+                            if let Ok(read_clone) = stream.try_clone() {
+                                let reader = BufReader::new(read_clone);
+                                handle_client_connection(reader, stream, tx_conn, ctx_conn);
+                            }
+                        });
+                    }
+                }
+            }
+        });
+    }
 }
 
-#[cfg(not(unix))]
 pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<InteropCommand> {
-    use std::io::{BufRead, BufReader, Write};
-    use std::net::TcpListener;
-
     let (tx, rx) = channel::<InteropCommand>();
-    thread::spawn(move || {
-        let Ok(listener) = TcpListener::bind("127.0.0.1:8082") else {
-            return;
-        };
-        for mut stream in listener.incoming().flatten() {
-            let Ok(clone) = stream.try_clone() else {
-                continue;
-            };
-            let tx = tx.clone();
-            let egui_ctx = egui_ctx.clone();
-            thread::spawn(move || {
-                let mut reader = BufReader::new(clone);
-                let mut line = String::new();
-                if reader.read_line(&mut line).is_err() {
-                    return;
-                }
-                let response = if let Ok(command) = serde_json::from_str::<InteropCommand>(line.trim()) {
-                    let _ = tx.send(command);
-                    egui_ctx.request_repaint();
-                    serde_json::json!({"status":"ok"}).to_string()
-                } else if let Ok(request) = serde_json::from_str::<JsonRpcRequest>(line.trim()) {
-                    match command_from_json_rpc(&request) {
-                        Ok(Some(command)) => {
-                            let _ = tx.send(command);
-                            egui_ctx.request_repaint();
-                            json_rpc_result(&request.id, serde_json::json!({"accepted":true}))
-                        }
-                        Ok(None) => json_rpc_result(
-                            &request.id,
-                            serde_json::json!({"status":"available_via_http_or_websocket"}),
-                        ),
-                        Err(error) => json_rpc_error(&request.id, -32601, &error),
-                    }
-                } else {
-                    serde_json::json!({"status":"error","message":"invalid JSON command"})
-                        .to_string()
-                };
-                let _ = writeln!(stream, "{response}");
-            });
-        }
-    });
+    spawn_interop_listener(tx, egui_ctx);
     rx
 }
 
@@ -196,6 +247,20 @@ struct ControllerAction {
     command: Option<InteropCommand>,
     acknowledgement: Value,
     receipt_key: String,
+}
+
+/// A targeted PCController action. The UI acknowledges it only after applying
+/// the command, so PCController never records queueing as successful execution.
+pub struct ControllerDelivery {
+    pub command: InteropCommand,
+    acknowledgement: Value,
+    acknowledgement_tx: std::sync::mpsc::Sender<Value>,
+}
+
+impl ControllerDelivery {
+    pub fn acknowledge_applied(self) {
+        let _ = self.acknowledgement_tx.send(self.acknowledgement);
+    }
 }
 
 fn controller_action_from_event(event: &Value, instance_id: &str) -> Option<ControllerAction> {
@@ -209,10 +274,6 @@ fn controller_action_from_event(event: &Value, instance_id: &str) -> Option<Cont
     if operation_id.is_empty() || delivery_id.is_empty() || expires_at.is_empty() {
         return None;
     }
-    let deadline = expires_at.parse::<jiff::Timestamp>().ok()?;
-    if deadline <= jiff::Timestamp::now() {
-        return None;
-    }
 
     let kind = event.get("kind")?.as_str()?.trim().to_ascii_lowercase();
     let value = metadata
@@ -220,45 +281,57 @@ fn controller_action_from_event(event: &Value, instance_id: &str) -> Option<Cont
         .and_then(Value::as_str)
         .unwrap_or_default()
         .trim();
-    let command = match kind.as_str() {
-        "pealayer.play" => Some(InteropCommand::Play),
-        "pealayer.pause" => Some(InteropCommand::Pause),
-        "pealayer.toggle" => Some(InteropCommand::TogglePause),
-        "pealayer.seek" => value
-            .parse::<f64>()
-            .ok()
-            .map(|seconds| InteropCommand::Seek { seconds }),
-        "pealayer.seek_absolute" => value
-            .parse::<f64>()
-            .ok()
-            .map(|percentage| InteropCommand::SeekAbs { percentage }),
-        "pealayer.volume.set" => value
-            .parse::<f64>()
-            .ok()
-            .map(|value| InteropCommand::SetVolume { value }),
-        "pealayer.open" if !value.is_empty() => Some(InteropCommand::Open {
-            target: value.to_string(),
-        }),
-        "app.page" => match value.to_ascii_lowercase().as_str() {
-            "play" | "player.play" => Some(InteropCommand::Play),
-            "pause" | "player.pause" => Some(InteropCommand::Pause),
-            "toggle" | "player.toggle" => Some(InteropCommand::TogglePause),
-            "back" | "previous" | "rewind" => Some(InteropCommand::Seek { seconds: -10.0 }),
-            "forward" | "next" => Some(InteropCommand::Seek { seconds: 10.0 }),
-            _ => None,
-        },
-        _ => None,
-    };
-    let (state, reason) = if command.is_some() {
-        ("applied", None)
+    let expired = expires_at
+        .parse::<jiff::Timestamp>()
+        .map(|deadline| deadline <= jiff::Timestamp::now())
+        .unwrap_or(true);
+    let command = if expired {
+        None
     } else {
-        ("rejected", Some("unsupported_or_invalid_pealayer_action"))
+        match kind.as_str() {
+            "pealayer.play" => Some(InteropCommand::Play),
+            "pealayer.pause" => Some(InteropCommand::Pause),
+            "pealayer.toggle" => Some(InteropCommand::TogglePause),
+            "pealayer.seek" => value
+                .parse::<f64>()
+                .ok()
+                .map(|seconds| InteropCommand::Seek { seconds }),
+            "pealayer.seek_absolute" => value
+                .parse::<f64>()
+                .ok()
+                .map(|percentage| InteropCommand::SeekAbs { percentage }),
+            "pealayer.volume.set" => value
+                .parse::<f64>()
+                .ok()
+                .map(|value| InteropCommand::SetVolume { value }),
+            "pealayer.open" if !value.is_empty() => Some(InteropCommand::Open {
+                target: value.to_string(),
+            }),
+            "app.page" => match value.to_ascii_lowercase().as_str() {
+                "play" | "player.play" => Some(InteropCommand::Play),
+                "pause" | "player.pause" => Some(InteropCommand::Pause),
+                "toggle" | "player.toggle" => Some(InteropCommand::TogglePause),
+                "back" | "previous" | "rewind" => {
+                    Some(InteropCommand::Seek { seconds: -10.0 })
+                }
+                "forward" | "next" => Some(InteropCommand::Seek { seconds: 10.0 }),
+                _ => None,
+            },
+            _ => None,
+        }
+    };
+    let reason = if expired {
+        Some("expired")
+    } else if command.is_none() {
+        Some("unsupported_or_invalid_pealayer_action")
+    } else {
+        None
     };
     let mut acknowledgement = serde_json::json!({
         "operation_id": operation_id,
         "delivery_id": delivery_id,
         "instance_id": instance_id,
-        "state": state,
+        "state": if command.is_some() { "applied" } else { "rejected" },
     });
     if let Some(reason) = reason {
         acknowledgement["reason"] = Value::String(reason.to_string());
@@ -319,8 +392,26 @@ fn report_controller_instance(
         .map_err(|error| format!("report Pealayer instance to PCController: {error}"))
 }
 
+fn send_action_ack(
+    socket: &mut tungstenite::WebSocket<
+        tungstenite::stream::MaybeTlsStream<std::net::TcpStream>,
+    >,
+    next_id: &mut u64,
+    acknowledgement: Value,
+) -> Result<(), String> {
+    socket
+        .send(controller_rpc(
+            *next_id,
+            "controller.app.action.ack",
+            acknowledgement,
+        ))
+        .map_err(|error| format!("acknowledge PCController action: {error}"))?;
+    *next_id = next_id.wrapping_add(1).max(1);
+    Ok(())
+}
+
 fn run_pccontroller_action_bridge(
-    tx: &std::sync::mpsc::Sender<InteropCommand>,
+    tx: &std::sync::mpsc::Sender<ControllerDelivery>,
     egui_ctx: &eframe::egui::Context,
 ) -> Result<(), String> {
     use std::collections::{HashSet, VecDeque};
@@ -349,10 +440,14 @@ fn run_pccontroller_action_bridge(
     report_controller_instance(&mut socket, next_id, &instance_id)?;
     next_id += 1;
 
+    let (acknowledgement_tx, acknowledgement_rx) = std::sync::mpsc::channel();
     let mut last_report = Instant::now();
     let mut receipts = HashSet::new();
     let mut receipt_order = VecDeque::new();
     loop {
+        while let Ok(acknowledgement) = acknowledgement_rx.try_recv() {
+            send_action_ack(&mut socket, &mut next_id, acknowledgement)?;
+        }
         if last_report.elapsed() >= Duration::from_secs(30) {
             report_controller_instance(&mut socket, next_id, &instance_id)?;
             next_id = next_id.wrapping_add(1).max(1);
@@ -363,7 +458,10 @@ fn run_pccontroller_action_bridge(
                 let Ok(message) = serde_json::from_str::<Value>(&text) else {
                     continue;
                 };
-                if message.get("method").and_then(Value::as_str) != Some("controller.state") {
+                if !matches!(
+                    message.get("method").and_then(Value::as_str),
+                    Some("controller.state" | "controller.event")
+                ) {
                     continue;
                 }
                 let Some(action) = message
@@ -381,26 +479,32 @@ fn run_pccontroller_action_bridge(
                         }
                     }
                     if let Some(command) = action.command {
-                        tx.send(command)
-                            .map_err(|error| format!("deliver PCController action to player: {error}"))?;
+                        tx.send(ControllerDelivery {
+                            command,
+                            acknowledgement: action.acknowledgement,
+                            acknowledgement_tx: acknowledgement_tx.clone(),
+                        })
+                        .map_err(|error| {
+                            format!("deliver PCController action to player: {error}")
+                        })?;
                         egui_ctx.request_repaint();
+                    } else {
+                        send_action_ack(
+                            &mut socket,
+                            &mut next_id,
+                            action.acknowledgement,
+                        )?;
                     }
                 }
-                socket
-                    .send(controller_rpc(
-                        next_id,
-                        "controller.app.action.ack",
-                        action.acknowledgement,
-                    ))
-                    .map_err(|error| format!("acknowledge PCController action: {error}"))?;
-                next_id = next_id.wrapping_add(1).max(1);
             }
             Ok(Message::Ping(payload)) => {
                 socket
                     .send(Message::Pong(payload))
                     .map_err(|error| format!("answer PCController ping: {error}"))?;
             }
-            Ok(Message::Close(_)) => return Err("PCController action WebSocket closed".to_string()),
+            Ok(Message::Close(_)) => {
+                return Err("PCController action WebSocket closed".to_string())
+            }
             Ok(_) => {}
             Err(tungstenite::Error::Io(error))
                 if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
@@ -411,11 +515,11 @@ fn run_pccontroller_action_bridge(
 
 pub fn spawn_pccontroller_action_bridge(
     egui_ctx: eframe::egui::Context,
-) -> Receiver<InteropCommand> {
+) -> Receiver<ControllerDelivery> {
     let (tx, rx) = channel();
     thread::spawn(move || loop {
         if let Err(error) = run_pccontroller_action_bridge(&tx, &egui_ctx) {
-            eprintln!("[PCController] {error}; retrying in 2 seconds");
+            log::warn!("[PCController] {error}; retrying in 2 seconds");
         }
         thread::sleep(std::time::Duration::from_secs(2));
     });
@@ -447,6 +551,22 @@ mod tests {
         } else {
             panic!("Expected Open command");
         }
+
+        let open_alias_json = r#"{"command":"open_video","path":"/video2.mp4"}"#;
+        let cmd: InteropCommand = serde_json::from_str(open_alias_json).unwrap();
+        if let InteropCommand::Open { target } = cmd {
+            assert_eq!(target, "/video2.mp4");
+        } else {
+            panic!("Expected Open command with aliases");
+        }
+
+        let vol_alias_json = r#"{"command":"volume","level":45.0}"#;
+        let cmd: InteropCommand = serde_json::from_str(vol_alias_json).unwrap();
+        if let InteropCommand::SetVolume { value } = cmd {
+            assert_eq!(value, 45.0);
+        } else {
+            panic!("Expected SetVolume command with aliases");
+        }
     }
 
     #[test]
@@ -466,21 +586,54 @@ mod tests {
     }
 
     #[test]
-    fn test_json_rpc_command_mapping() {
-        let request: JsonRpcRequest = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":7,"method":"pealayer.seek","params":{"seconds":12.5}}"#,
-        )
-        .unwrap();
-        assert!(matches!(
-            command_from_json_rpc(&request).unwrap(),
-            Some(InteropCommand::Seek { seconds: 12.5 })
-        ));
-        assert!(json_rpc_result(&request.id, serde_json::json!({"ok":true}))
-            .contains("\"id\":7"));
+    fn test_parse_dual_protocol_requests() {
+        // Standard NDJSON format
+        let raw = r#"{"command":"play"}"#;
+        let (id, cmd) = parse_interop_request(raw).unwrap();
+        assert!(id.is_none());
+        assert!(matches!(cmd, InteropCommand::Play));
+
+        // JSON-RPC 2.0 format with id and method
+        let rpc = r#"{"jsonrpc":"2.0","id":42,"method":"seek","params":{"seconds":15.0}}"#;
+        let (id, cmd) = parse_interop_request(rpc).unwrap();
+        assert_eq!(id, Some(serde_json::json!(42)));
+        if let InteropCommand::Seek { seconds } = cmd {
+            assert_eq!(seconds, 15.0);
+        } else {
+            panic!("Expected Seek command");
+        }
+
+        // JSON-RPC 2.0 set_volume
+        let vol_rpc = r#"{"jsonrpc":"2.0","id":"vol-1","method":"set_volume","params":{"value":75.0}}"#;
+        let (id, cmd) = parse_interop_request(vol_rpc).unwrap();
+        assert_eq!(id, Some(serde_json::json!("vol-1")));
+        if let InteropCommand::SetVolume { value } = cmd {
+            assert_eq!(value, 75.0);
+        } else {
+            panic!("Expected SetVolume command");
+        }
     }
 
     #[test]
-    fn maps_exact_target_pccontroller_action_and_acknowledges_delivery() {
+    fn test_live_status_snapshot() {
+        let status = PlayerStatusResponse {
+            status: "ok".to_string(),
+            playing: true,
+            volume: 92.0,
+            playback_time: 45.5,
+            duration: 120.0,
+            current_video: Some("/path/sample.mkv".to_string()),
+        };
+        set_live_status(status.clone());
+        let retrieved = get_live_status();
+        assert_eq!(retrieved.playing, true);
+        assert_eq!(retrieved.volume, 92.0);
+        assert_eq!(retrieved.playback_time, 45.5);
+        assert_eq!(retrieved.current_video, Some("/path/sample.mkv".to_string()));
+    }
+
+    #[test]
+    fn maps_exact_target_pccontroller_action() {
         let event = serde_json::json!({
             "kind": "pealayer.seek",
             "metadata": {
@@ -499,5 +652,22 @@ mod tests {
         assert_eq!(action.acknowledgement["state"], "applied");
         assert_eq!(action.acknowledgement["delivery_id"], "delivery-1");
         assert!(controller_action_from_event(&event, "pealayer:other").is_none());
+    }
+
+    #[test]
+    fn expired_targeted_action_is_rejected() {
+        let event = serde_json::json!({
+            "kind": "pealayer.play",
+            "metadata": {
+                "target_instance": "pealayer:test",
+                "operation_id": "operation-expired",
+                "operation_delivery_id": "delivery-expired",
+                "operation_expires_at": "2000-01-01T00:00:00Z",
+            },
+        });
+        let action = controller_action_from_event(&event, "pealayer:test").unwrap();
+        assert!(action.command.is_none());
+        assert_eq!(action.acknowledgement["state"], "rejected");
+        assert_eq!(action.acknowledgement["reason"], "expired");
     }
 }
