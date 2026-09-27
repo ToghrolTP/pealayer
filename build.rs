@@ -29,6 +29,22 @@ fn main() {
     }
     res.compile()
         .expect("failed to compile Pealayer Windows resources");
+
+    // This package exposes both a library and a binary.  GNU ld can discard
+    // winres' otherwise-unreferenced static archive while linking the binary
+    // through the library, so attach the COFF resource object to the executable
+    // explicitly.  (MSVC consumes winres' emitted library in the usual way.)
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu") {
+        let resource = std::path::PathBuf::from(
+            std::env::var_os("OUT_DIR").expect("Cargo did not provide OUT_DIR"),
+        )
+        .join("resource.o");
+        println!(
+            "cargo:rustc-link-arg-bin=pealayer={}",
+            resource.display()
+        );
+    }
+    println!("cargo:rerun-if-changed=assets/icon.ico");
 }
 
 #[cfg(not(target_os = "windows"))]

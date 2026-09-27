@@ -29,11 +29,12 @@ $outputDirectory = if ((Split-Path -Leaf $sourceDirectory) -ieq 'source') {
 }
 $libmpvDirectory = if ($env:LIBMPV_DIR) { $env:LIBMPV_DIR } else { Join-Path $env:ProgramFiles 'MPV' }
 $env:Path = $libmpvDirectory + ';' + $env:Path
-$upx = Get-Command upx.exe -ErrorAction SilentlyContinue
-if (-not $upx) {
+$upxCommand = Get-Command upx.exe -ErrorAction SilentlyContinue
+$upxPath = if ($upxCommand) { $upxCommand.Source } else { $null }
+if (-not $upxPath) {
     $programFilesUpx = Join-Path $env:ProgramFiles 'UPX\upx.exe'
     if (Test-Path -LiteralPath $programFilesUpx -PathType Leaf) {
-        $upx = Get-Item -LiteralPath $programFilesUpx
+        $upxPath = $programFilesUpx
     }
 }
 
@@ -66,11 +67,11 @@ if ($resource.ProductName -ne 'Pealayer' -or $resource.OriginalFilename -ne 'pea
 $unpackedBytes = (Get-Item -LiteralPath $stagedExecutable).Length
 $upxVersion = $null
 if (-not $NoUpx) {
-    if (-not $upx) { throw 'UPX is required for Windows packaging; install it system-wide or pass -NoUpx explicitly.' }
-    $upxVersion = (& $upx.FullName --version | Select-Object -First 1)
-    & $upx.FullName --best --lzma $stagedExecutable
+    if (-not $upxPath) { throw 'UPX is required for Windows packaging; install it system-wide or pass -NoUpx explicitly.' }
+    $upxVersion = (& $upxPath --version | Select-Object -First 1)
+    & $upxPath --best --lzma $stagedExecutable
     if ($LASTEXITCODE -ne 0) { throw "UPX compression failed with exit code $LASTEXITCODE" }
-    & $upx.FullName -t $stagedExecutable
+    & $upxPath -t $stagedExecutable
     if ($LASTEXITCODE -ne 0) { throw "UPX validation failed with exit code $LASTEXITCODE" }
 }
 
