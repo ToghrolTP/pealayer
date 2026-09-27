@@ -160,6 +160,7 @@ pub struct PealayerApp {
     pub(crate) show_shortcuts_dialog: bool,
     pub(crate) show_about_dialog: bool,
     pub(crate) interop_rx: std::sync::mpsc::Receiver<crate::platform::interop::InteropCommand>,
+    pub(crate) controller_cmd_rx: std::sync::mpsc::Receiver<crate::platform::interop::InteropCommand>,
     pub(crate) web_state_tx: std::sync::mpsc::Sender<String>,
     pub(crate) web_cmd_rx: std::sync::mpsc::Receiver<crate::platform::interop::InteropCommand>,
     pub(crate) last_web_broadcast: Option<std::time::Instant>,
@@ -196,102 +197,20 @@ impl eframe::App for PealayerApp {
             self.load_video_file(path);
         }
 
-        // Process incoming IPC Inter-Op Commands
-        while let Ok(cmd) = self.interop_rx.try_recv() {
-            use crate::platform::interop::InteropCommand;
-            match cmd {
-                InteropCommand::Play => {
-                    let _ = self.mpv.set_property("pause", false);
-                    self.is_paused = false;
-                    self.set_osd("IPC: Play".to_string());
-                }
-                InteropCommand::Pause => {
-                    let _ = self.mpv.set_property("pause", true);
-                    self.is_paused = true;
-                    self.set_osd("IPC: Pause".to_string());
-                }
-                InteropCommand::TogglePause => {
-                    let _ = self.mpv.command("cycle", &["pause"]);
-                    self.is_paused = !self.is_paused;
-                    self.set_osd(if self.is_paused { "IPC: Pause".to_string() } else { "IPC: Play".to_string() });
-                }
-                InteropCommand::Seek { seconds } => {
-                    let _ = self.mpv.command("seek", &[&seconds.to_string(), "relative"]);
-                    self.set_osd(format!("Seek: {:+.1}s", seconds));
-                }
-                InteropCommand::SeekAbs { percentage } => {
-                    let clamped = percentage.clamp(0.0, 100.0);
-                    let target_sec = self.duration * (clamped / 100.0);
-                    let _ = self.mpv.command("seek", &[&target_sec.to_string(), "absolute"]);
-                    self.set_osd(format!("Seek: {:.0}%", clamped));
-                }
-                InteropCommand::SetVolume { value } => {
-                    let clamped = value.clamp(0.0, 130.0);
-                    let _ = self.mpv.set_property("volume", clamped);
-                    self.volume = clamped;
-                    self.set_osd(format!("IPC: Volume {:.0}%", clamped));
-                    self.save_config();
-                }
-                InteropCommand::Open { target } => {
-                    if target.starts_with("http://") || target.starts_with("https://") {
-                        self.load_url(&target);
-                    } else {
-                        self.load_video_file(std::path::PathBuf::from(&target));
-                    }
-                    self.set_osd(format!("IPC: Opened {}", target));
-                }
-                InteropCommand::GetStatus => {
-                    self.set_osd("IPC: Status Queried".to_string());
-                }
-            }
+        // Drain all inbound surfaces first so receiver borrows do not overlap
+        // with the mutable player update below.
+        let mut inbound_commands = Vec::new();
+        while let Ok(command) = self.interop_rx.try_recv() {
+            inbound_commands.push(("IPC", command));
         }
-
-        // Process Web-UI WebSocket commands
-        while let Ok(cmd) = self.web_cmd_rx.try_recv() {
-            use crate::platform::interop::InteropCommand;
-            match cmd {
-                InteropCommand::Play => {
-                    let _ = self.mpv.set_property("pause", false);
-                    self.is_paused = false;
-                    self.set_osd("Web-UI: Play".to_string());
-                }
-                InteropCommand::Pause => {
-                    let _ = self.mpv.set_property("pause", true);
-                    self.is_paused = true;
-                    self.set_osd("Web-UI: Pause".to_string());
-                }
-                InteropCommand::TogglePause => {
-                    let _ = self.mpv.command("cycle", &["pause"]);
-                    self.is_paused = !self.is_paused;
-                    self.set_osd(if self.is_paused { "Web-UI: Pause".to_string() } else { "Web-UI: Play".to_string() });
-                }
-                InteropCommand::Seek { seconds } => {
-                    let _ = self.mpv.command("seek", &[&seconds.to_string(), "relative"]);
-                    self.set_osd(format!("Web-UI: Seek {:+.1}s", seconds));
-                }
-                InteropCommand::SeekAbs { percentage } => {
-                    let clamped = percentage.clamp(0.0, 100.0);
-                    let target_sec = self.duration * (clamped / 100.0);
-                    let _ = self.mpv.command("seek", &[&target_sec.to_string(), "absolute"]);
-                    self.set_osd(format!("Web-UI: Seek {:.0}%", clamped));
-                }
-                InteropCommand::SetVolume { value } => {
-                    let clamped = value.clamp(0.0, 130.0);
-                    let _ = self.mpv.set_property("volume", clamped);
-                    self.volume = clamped;
-                    self.set_osd(format!("Web-UI: Volume {:.0}%", clamped));
-                    self.save_config();
-                }
-                InteropCommand::Open { target } => {
-                    if target.starts_with("http://") || target.starts_with("https://") {
-                        self.load_url(&target);
-                    } else {
-                        self.load_video_file(std::path::PathBuf::from(&target));
-                    }
-                    self.set_osd(format!("Web-UI: Opened {}", target));
-                }
-                InteropCommand::GetStatus => {}
-            }
+        while let Ok(command) = self.web_cmd_rx.try_recv() {
+            inbound_commands.push(("Web-UI", command));
+        }
+        while let Ok(command) = self.controller_cmd_rx.try_recv() {
+            inbound_commands.push(("PCController", command));
+        }
+        for (source, command) in inbound_commands {
+            self.apply_interop_command(command, source);
         }
 
         // Broadcast state JSON to Web-UI clients (throttled to 10Hz to save CPU / network spam)
@@ -732,6 +651,67 @@ impl eframe::App for PealayerApp {
 }
 
 impl PealayerApp {
+    fn apply_interop_command(
+        &mut self,
+        command: crate::platform::interop::InteropCommand,
+        source: &str,
+    ) {
+        use crate::platform::interop::InteropCommand;
+
+        match command {
+            InteropCommand::Play => {
+                let _ = self.mpv.set_property("pause", false);
+                self.is_paused = false;
+                self.set_osd(format!("{source}: Play"));
+            }
+            InteropCommand::Pause => {
+                let _ = self.mpv.set_property("pause", true);
+                self.is_paused = true;
+                self.set_osd(format!("{source}: Pause"));
+            }
+            InteropCommand::TogglePause => {
+                let _ = self.mpv.command("cycle", &["pause"]);
+                self.is_paused = !self.is_paused;
+                self.set_osd(format!(
+                    "{source}: {}",
+                    if self.is_paused { "Pause" } else { "Play" }
+                ));
+            }
+            InteropCommand::Seek { seconds } => {
+                let _ = self
+                    .mpv
+                    .command("seek", &[&seconds.to_string(), "relative"]);
+                self.set_osd(format!("{source}: Seek {seconds:+.1}s"));
+            }
+            InteropCommand::SeekAbs { percentage } => {
+                let clamped = percentage.clamp(0.0, 100.0);
+                let target_sec = self.duration * (clamped / 100.0);
+                let _ = self
+                    .mpv
+                    .command("seek", &[&target_sec.to_string(), "absolute"]);
+                self.set_osd(format!("{source}: Seek {clamped:.0}%"));
+            }
+            InteropCommand::SetVolume { value } => {
+                let clamped = value.clamp(0.0, 130.0);
+                let _ = self.mpv.set_property("volume", clamped);
+                self.volume = clamped;
+                self.set_osd(format!("{source}: Volume {clamped:.0}%"));
+                self.save_config();
+            }
+            InteropCommand::Open { target } => {
+                if target.starts_with("http://") || target.starts_with("https://") {
+                    self.load_url(&target);
+                } else {
+                    self.load_video_file(std::path::PathBuf::from(&target));
+                }
+                self.set_osd(format!("{source}: Opened {target}"));
+            }
+            InteropCommand::GetStatus => {
+                self.set_osd(format!("{source}: Status queried"));
+            }
+        }
+    }
+
     /// Begins or updates an active scrub session.
     /// Sets seek_pos, pauses playback smoothly during drag, and dispatches a non-blocking
     /// preview seek to the background worker thread with latest-target coalescing.
@@ -982,6 +962,7 @@ impl Default for PealayerApp {
         })));
         let mpv_client = mpv.create_client(None).expect("Failed to create mpv client");
         let (_interop_tx, interop_rx) = std::sync::mpsc::channel();
+        let (_controller_cmd_tx, controller_cmd_rx) = std::sync::mpsc::channel();
         let (web_state_tx, _web_state_rx) = std::sync::mpsc::channel();
         let (_web_cmd_tx, web_cmd_rx) = std::sync::mpsc::channel();
 
@@ -1053,6 +1034,7 @@ impl Default for PealayerApp {
             show_shortcuts_dialog: false,
             show_about_dialog: false,
             interop_rx,
+            controller_cmd_rx,
             web_state_tx,
             web_cmd_rx,
             last_web_broadcast: None,

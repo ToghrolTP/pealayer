@@ -261,7 +261,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 
                 ui.separator();
                 
-                // 2. Serial connection toggle & dropdown
+                // 2. Coordinator/direct-diagnostic connection toggle & dropdown
                 let conn_text = if app.is_connected { "Disconnect" } else { "Connect" };
                 let conn_btn = ui.selectable_label(app.is_connected, conn_text);
                 if conn_btn.clicked() {
@@ -274,12 +274,22 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
                 }
                 
-                // Serial Port Dropdown
-                ui.allocate_ui(egui::vec2(100.0, 20.0), |ui| {
+                // PCController owns the board during normal operation. Direct serial is
+                // deliberately labelled and additionally guarded by the engine.
+                ui.allocate_ui(egui::vec2(210.0, 20.0), |ui| {
                     egui::ComboBox::from_id_salt("serial_port_select")
                         .selected_text(&app.serial_port)
                         .show_ui(ui, |ui| {
-                            let ports = ["COM1", "COM2", "COM3", "COM4", "/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyACM0"];
+                            let ports = [
+                                crate::four_d::controller::DEFAULT_ENDPOINT,
+                                "direct:COM1",
+                                "direct:COM2",
+                                "direct:COM3",
+                                "direct:COM4",
+                                "direct:/dev/ttyUSB0",
+                                "direct:/dev/ttyUSB1",
+                                "direct:/dev/ttyACM0",
+                            ];
                             for p in ports {
                                 let res = ui.selectable_value(&mut app.serial_port, p.to_string(), p);
                                 if res.changed() && app.is_connected {
@@ -301,7 +311,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 ui.painter().circle_filled(dot_rect.center(), 4.0, dot_color);
                 
                 let status_lbl = if app.is_connected {
-                    format!("{} Connected", app.serial_port)
+                    if crate::four_d::controller::is_controller_endpoint(&app.serial_port) {
+                        "PCController coordinator connected".to_string()
+                    } else {
+                        format!("{} direct diagnostic connection", app.serial_port)
+                    }
                 } else {
                     "Hardware Disconnected".to_string()
                 };

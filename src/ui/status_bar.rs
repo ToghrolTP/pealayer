@@ -57,7 +57,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 ui.painter().circle_filled(rect.center(), 4.0, dot_color);
                 
                 let label_text = if app.is_connected {
-                    format!("Hardware: {} Connected", app.serial_port)
+                    if crate::four_d::controller::is_controller_endpoint(&app.serial_port) {
+                        "Hardware: PCController coordinator connected".to_string()
+                    } else {
+                        format!("Hardware: {} direct diagnostic", app.serial_port)
+                    }
                 } else {
                     "Hardware: Disconnected".to_string()
                 };

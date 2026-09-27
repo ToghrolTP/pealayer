@@ -1,0 +1,155 @@
+use pealayer::four_d::controller::{ControllerClient, DEFAULT_ENDPOINT};
+use serde_json::json;
+use serde_json::Value;
+
+fn live_test_enabled() -> bool {
+    std::env::var_os("PEALAYER_PCCONTROLLER_LIVE_TEST").is_some()
+}
+
+#[test]
+fn pccontroller_json_rpc_and_board_cobs_roundtrip() {
+    if !live_test_enabled() {
+        eprintln!("set PEALAYER_PCCONTROLLER_LIVE_TEST=1 to exercise the installed coordinator and board");
+        return;
+    }
+
+    let endpoint = std::env::var("PEALAYER_PCCONTROLLER_ENDPOINT")
+        .unwrap_or_else(|_| DEFAULT_ENDPOINT.to_string());
+    let mut client = ControllerClient::connect(&endpoint)
+        .unwrap_or_else(|error| panic!("connect to installed PCController: {error}"));
+
+    let snapshot = client
+        .call("controller.snapshot", json!({}))
+        .unwrap_or_else(|error| panic!("PCController snapshot over JSON-RPC: {error}"));
+    assert!(snapshot.is_object(), "snapshot must be a JSON object: {snapshot}");
+
+    // controller.status crosses the high-level JSON-RPC boundary, is serialized by
+    // PCController as its native COBS/CRC request, and completes only after the
+    // board response is decoded and correlated back to this client.
+    let status = client
+        .call("controller.status", json!({}))
+        .unwrap_or_else(|error| panic!("PCController/board status roundtrip: {error}"));
+    assert!(status.is_object(), "board status must be a JSON object: {status}");
+}
+
+#[test]
+fn pccontroller_exact_target_action_push_ack_roundtrip() {
+    if !live_test_enabled() {
+        eprintln!("set PEALAYER_PCCONTROLLER_LIVE_TEST=1 to exercise app-action delivery");
+        return;
+    }
+
+    let (mut socket, _) = tungstenite::connect("ws://127.0.0.1:8787/ipc")
+        .expect("connect to PCController WebSocket");
+    if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_mut() {
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .unwrap();
+    }
+    let instance_id = format!("pealayer:integration-test-{}", std::process::id());
+    let rpc = |id, method: &str, params: Value| {
+        tungstenite::Message::Text(
+            json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})
+                .to_string()
+                .into(),
+        )
+    };
+    socket
+        .send(rpc(
+            1,
+            "controller.subscribe",
+            json!({"topics":["state","events"],"after_id":0}),
+        ))
+        .unwrap();
+    socket
+        .send(rpc(
+            2,
+            "controller.app.instance.report",
+            json!({
+                "id": instance_id,
+                "surface": "pealayer",
+                "page": "player",
+                "state": "active",
+                "lease_seconds": 45,
+                "values": {"app_actions":"app.page"},
+            }),
+        ))
+        .unwrap();
+    loop {
+        let tungstenite::Message::Text(text) = socket.read().expect("confirm Pealayer instance report")
+        else {
+            continue;
+        };
+        let value: Value = serde_json::from_str(&text).unwrap();
+        if value["id"] == 2 {
+            assert!(value.get("error").is_none(), "instance report failed: {value}");
+            break;
+        }
+    }
+
+    let mut controller = ControllerClient::connect(DEFAULT_ENDPOINT).unwrap();
+    let operation_id = format!("pealayer-integration-{}", std::process::id());
+    let queued = controller
+        .call(
+            "controller.app.action",
+            json!({
+                "kind": "app.page",
+                "value": "play",
+                "target": instance_id,
+                "operation_id": operation_id,
+                "timeout_ms": 5000,
+            }),
+        )
+        .expect("queue exact-target Pealayer action");
+    assert_eq!(queued["operation"]["operation_id"], operation_id);
+
+    let pushed = loop {
+        let message = socket.read().expect("read PCController action push");
+        let tungstenite::Message::Text(text) = message else {
+            continue;
+        };
+        let value: Value = serde_json::from_str(&text).unwrap();
+        if value["method"] == "controller.event"
+            && value["params"]["kind"] == "app.page"
+            && value["params"]["metadata"]["page"] == "play"
+            && value["params"]["metadata"]["target_instance"] == instance_id
+        {
+            break value["params"].clone();
+        }
+    };
+    let metadata = &pushed["metadata"];
+    socket
+        .send(rpc(
+            3,
+            "controller.app.action.ack",
+            json!({
+                "operation_id": operation_id,
+                "delivery_id": metadata["operation_delivery_id"],
+                "instance_id": instance_id,
+                "state": "applied",
+            }),
+        ))
+        .unwrap();
+
+    loop {
+        let tungstenite::Message::Text(text) = socket.read().expect("read action ACK response")
+        else {
+            continue;
+        };
+        let value: Value = serde_json::from_str(&text).unwrap();
+        if value["id"] == 3 {
+            assert!(value.get("error").is_none(), "ACK failed: {value}");
+            break;
+        }
+    }
+    let outcome = controller
+        .call(
+            "controller.app.action.outcome",
+            json!({"operation_id": operation_id}),
+        )
+        .expect("read exact-target Pealayer action outcome");
+    assert!(
+        outcome.to_string().contains("applied"),
+        "action outcome must be applied: {outcome}"
+    );
+}

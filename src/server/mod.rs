@@ -2,9 +2,45 @@ pub mod fs_api;
 pub mod thumbnails;
 pub mod web_assets;
 
+use std::io::Read;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+
+fn web_dist_root() -> std::path::PathBuf {
+    let working_tree = std::path::PathBuf::from("web_ui/dist");
+    if working_tree.join("index.html").is_file() {
+        return working_tree;
+    }
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(binary_directory) = executable.parent() {
+            let packaged = binary_directory.join("web_ui/dist");
+            if packaged.join("index.html").is_file() {
+                return packaged;
+            }
+            let canonical_source = binary_directory.join("../source/Pealayer/web_ui/dist");
+            if canonical_source.join("index.html").is_file() {
+                return canonical_source;
+            }
+        }
+    }
+    working_tree
+}
+
+fn web_asset_path(root: &std::path::Path, request_path: &str) -> Option<std::path::PathBuf> {
+    let mut result = root.to_path_buf();
+    let relative = request_path.trim_start_matches('/');
+    if relative.is_empty() {
+        return Some(result.join("index.html"));
+    }
+    for component in std::path::Path::new(relative).components() {
+        match component {
+            std::path::Component::Normal(value) => result.push(value),
+            _ => return None,
+        }
+    }
+    Some(result)
+}
 
 pub fn spawn_web_server(http_port: u16, ws_port: u16, egui_ctx: eframe::egui::Context) -> (Sender<String>, Receiver<crate::platform::interop::InteropCommand>) {
     let (cmd_tx, cmd_rx) = channel::<crate::platform::interop::InteropCommand>();
@@ -30,6 +66,7 @@ pub fn spawn_web_server(http_port: u16, ws_port: u16, egui_ctx: eframe::egui::Co
     // 2. Dedicated WebSocket Server Thread on ws_port (8081)
     let cmd_tx_ws = cmd_tx.clone();
     let ws_clients_register = ws_clients.clone();
+    let latest_status_ws = latest_status.clone();
     let egui_ctx_ws = egui_ctx.clone();
     thread::spawn(move || {
         let ws_addr = format!("0.0.0.0:{}", ws_port);
@@ -37,6 +74,7 @@ pub fn spawn_web_server(http_port: u16, ws_port: u16, egui_ctx: eframe::egui::Co
             for stream in listener.incoming().flatten() {
                 let cmd_tx_conn = cmd_tx_ws.clone();
                 let ws_clients_conn = ws_clients_register.clone();
+                let latest_status_conn = latest_status_ws.clone();
                 let egui_ctx_conn = egui_ctx_ws.clone();
 
                 thread::spawn(move || {
@@ -60,6 +98,29 @@ pub fn spawn_web_server(http_port: u16, ws_port: u16, egui_ctx: eframe::egui::Co
                                     if let Ok(cmd) = serde_json::from_str::<crate::platform::interop::InteropCommand>(&text) {
                                         let _ = cmd_tx_conn.send(cmd);
                                         egui_ctx_conn.request_repaint();
+                                    } else if let Ok(request) = serde_json::from_str::<crate::platform::interop::JsonRpcRequest>(&text) {
+                                        let response = match crate::platform::interop::command_from_json_rpc(&request) {
+                                            Ok(Some(command)) => {
+                                                let _ = cmd_tx_conn.send(command);
+                                                egui_ctx_conn.request_repaint();
+                                                crate::platform::interop::json_rpc_result(
+                                                    &request.id,
+                                                    serde_json::json!({"accepted":true}),
+                                                )
+                                            }
+                                            Ok(None) => {
+                                                let status = latest_status_conn.lock().unwrap().clone();
+                                                let value = serde_json::from_str(&status)
+                                                    .unwrap_or_else(|_| serde_json::json!({"status":"unavailable"}));
+                                                crate::platform::interop::json_rpc_result(&request.id, value)
+                                            }
+                                            Err(error) => crate::platform::interop::json_rpc_error(
+                                                &request.id,
+                                                -32601,
+                                                &error,
+                                            ),
+                                        };
+                                        let _ = websocket.send(tungstenite::Message::Text(response.into()));
                                     }
                                 }
                                 Ok(tungstenite::Message::Close(_)) => break,
@@ -80,15 +141,56 @@ pub fn spawn_web_server(http_port: u16, ws_port: u16, egui_ctx: eframe::egui::Co
     let latest_status_http = latest_status.clone();
     let cmd_tx_http = cmd_tx.clone();
     let egui_ctx_http = egui_ctx.clone();
+    let web_dist_http = web_dist_root();
     thread::spawn(move || {
         let server_addr = format!("0.0.0.0:{}", http_port);
         if let Ok(server) = tiny_http::Server::http(&server_addr) {
             for mut request in server.incoming_requests() {
                 let url = request.url().to_string();
 
-                if url.starts_with("/api/player/status") {
+                if url == "/healthz" {
+                    let response = tiny_http::Response::from_string(
+                        "{\"status\":\"ok\",\"service\":\"pealayer\",\"rpc\":\"2.0\"}",
+                    )
+                    .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                    let _ = request.respond(response);
+                } else if url.starts_with("/api/player/status") {
                     let json = latest_status_http.lock().unwrap().clone();
                     let response = tiny_http::Response::from_string(json)
+                        .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                    let _ = request.respond(response);
+                } else if url.starts_with("/api/rpc") && request.method() == &tiny_http::Method::Post {
+                    let mut body = String::new();
+                    let _ = request.as_reader().take(1024 * 1024).read_to_string(&mut body);
+                    let response_body = match serde_json::from_str::<crate::platform::interop::JsonRpcRequest>(&body) {
+                        Ok(rpc) => match crate::platform::interop::command_from_json_rpc(&rpc) {
+                            Ok(Some(command)) => {
+                                let _ = cmd_tx_http.send(command);
+                                egui_ctx_http.request_repaint();
+                                crate::platform::interop::json_rpc_result(
+                                    &rpc.id,
+                                    serde_json::json!({"accepted":true}),
+                                )
+                            }
+                            Ok(None) => {
+                                let status = latest_status_http.lock().unwrap().clone();
+                                let value = serde_json::from_str(&status)
+                                    .unwrap_or_else(|_| serde_json::json!({"status":"unavailable"}));
+                                crate::platform::interop::json_rpc_result(&rpc.id, value)
+                            }
+                            Err(error) => crate::platform::interop::json_rpc_error(
+                                &rpc.id,
+                                -32601,
+                                &error,
+                            ),
+                        },
+                        Err(error) => crate::platform::interop::json_rpc_error(
+                            &serde_json::Value::Null,
+                            -32700,
+                            &format!("invalid JSON-RPC request: {error}"),
+                        ),
+                    };
+                    let response = tiny_http::Response::from_string(response_body)
                         .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
                     let _ = request.respond(response);
                 } else if url.starts_with("/api/player/command") && request.method() == &tiny_http::Method::Post {
@@ -190,12 +292,8 @@ pub fn spawn_web_server(http_port: u16, ws_port: u16, egui_ctx: eframe::egui::Co
                 } else {
                     // Serve Web UI single page app (Ant Design React interface from web_ui/dist)
                     let req_path = url.split('?').next().unwrap_or(&url);
-                    let rel_path = req_path.trim_start_matches('/');
-                    let target_file = if rel_path.is_empty() {
-                        std::path::PathBuf::from("web_ui/dist/index.html")
-                    } else {
-                        std::path::PathBuf::from("web_ui/dist").join(rel_path)
-                    };
+                    let target_file = web_asset_path(&web_dist_http, req_path)
+                        .unwrap_or_else(|| web_dist_http.join("__invalid_request_path__"));
 
                     if target_file.exists() && target_file.is_file() {
                         if let Ok(data) = std::fs::read(&target_file) {
@@ -218,7 +316,7 @@ pub fn spawn_web_server(http_port: u16, ws_port: u16, egui_ctx: eframe::egui::Co
                     }
 
                     // SPA fallback: serve web_ui/dist/index.html if available, or fallback to web_assets::INDEX_HTML
-                    let fallback_html = std::fs::read_to_string("web_ui/dist/index.html")
+                    let fallback_html = std::fs::read_to_string(web_dist_http.join("index.html"))
                         .unwrap_or_else(|_| web_assets::INDEX_HTML.to_string());
                     let response = tiny_http::Response::from_string(fallback_html)
                         .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap());
@@ -259,5 +357,17 @@ mod tests {
     fn test_url_decoding() {
         let raw = "hello%20world%2Ftest";
         assert_eq!(urlencoding_decode(raw), "hello world/test");
+    }
+
+    #[test]
+    fn web_assets_never_escape_distribution_root() {
+        let root = std::path::Path::new("C:/Pealayer/web_ui/dist");
+        assert_eq!(
+            web_asset_path(root, "/assets/app.js").unwrap(),
+            root.join("assets/app.js")
+        );
+        assert!(web_asset_path(root, "/../Cargo.toml").is_none());
+        #[cfg(windows)]
+        assert!(web_asset_path(root, "C:/Windows/win.ini").is_none());
     }
 }

@@ -6,6 +6,94 @@ use std::time::Duration;
 use crate::four_d::models::Timeline;
 use crate::four_d::protocol::Command;
 
+enum HardwareTransport {
+    Controller(crate::four_d::controller::ControllerClient),
+    DirectSerial {
+        port: Box<dyn serialport::SerialPort>,
+        sequence: u8,
+    },
+}
+
+impl HardwareTransport {
+    fn send(&mut self, command: Command) -> Result<(), String> {
+        match self {
+            Self::Controller(client) => client.send_command(command),
+            Self::DirectSerial { port, sequence } => {
+                let request_sequence = *sequence;
+                let frame = command.to_pccontroller_frame(request_sequence);
+                *sequence = sequence.wrapping_add(1).max(1);
+                port.write_all(&frame)
+                    .and_then(|_| port.flush())
+                    .map_err(|error| format!("direct COBS serial write failed: {error}"))?;
+
+                let expected_opcode = if matches!(command, Command::Ping) {
+                    0x81 // HELLO_RESP
+                } else {
+                    0x80 // ACK
+                };
+                let deadline = std::time::Instant::now() + Duration::from_millis(500);
+                let mut encoded = Vec::new();
+                let mut buffer = [0_u8; 64];
+                while std::time::Instant::now() < deadline {
+                    match port.read(&mut buffer) {
+                        Ok(count) => {
+                            for byte in &buffer[..count] {
+                                if *byte != 0 {
+                                    encoded.push(*byte);
+                                    continue;
+                                }
+                                if encoded.is_empty() {
+                                    continue;
+                                }
+                                encoded.push(0);
+                                let decoded = crate::four_d::protocol::decode_pccontroller_frame(
+                                    &encoded,
+                                );
+                                encoded.clear();
+                                let Ok((opcode, response_sequence, payload)) = decoded else {
+                                    continue;
+                                };
+                                if response_sequence != request_sequence {
+                                    continue;
+                                }
+                                if opcode == 0x82 {
+                                    return Err(format!(
+                                        "direct board rejected sequence {request_sequence}: {}",
+                                        payload
+                                            .iter()
+                                            .map(|byte| format!("{byte:02X}"))
+                                            .collect::<Vec<_>>()
+                                            .join(" ")
+                                    ));
+                                }
+                                if opcode == expected_opcode {
+                                    return Ok(());
+                                }
+                            }
+                        }
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::TimedOut
+                                    | std::io::ErrorKind::WouldBlock
+                            ) => {}
+                        Err(error) => {
+                            return Err(format!("direct COBS serial read failed: {error}"));
+                        }
+                    }
+                }
+                Err(format!(
+                    "direct board response timeout for sequence {request_sequence}"
+                ))
+            }
+        }
+    }
+
+    fn needs_watchdog_ping(&self) -> bool {
+        matches!(self, Self::DirectSerial { .. })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CompiledAction {
     pub time_ms: u64,
@@ -36,7 +124,9 @@ pub fn spawn_engine() -> EngineHandle {
     let is_playing = Arc::new(AtomicBool::new(false));
     let estop_active = Arc::new(AtomicBool::new(false));
     let is_connected = Arc::new(AtomicBool::new(false));
-    let serial_port = Arc::new(Mutex::new("COM3".to_string()));
+    let serial_port = Arc::new(Mutex::new(
+        crate::four_d::controller::DEFAULT_ENDPOINT.to_string(),
+    ));
     let connection_error = Arc::new(Mutex::new(None));
     
     let (tx, rx) = mpsc::channel();
@@ -57,44 +147,59 @@ pub fn spawn_engine() -> EngineHandle {
         let mut was_estop = false;
         let mut last_ping = std::time::Instant::now();
         
-        let mut active_port: Option<Box<dyn serialport::SerialPort>> = None;
+        let mut active_transport: Option<HardwareTransport> = None;
         
         loop {
             let estop_now = engine_estop.load(Ordering::Relaxed);
             let mut connected = engine_connected.load(Ordering::Relaxed);
             
             // Handle connection/disconnection transitions
-            if connected && active_port.is_none() {
-                let port_name = {
+            if connected && active_transport.is_none() {
+                let endpoint = {
                     let guard = engine_port.lock().unwrap();
                     guard.clone()
                 };
-                let baud_rate = 115200;
-                match serialport::new(&port_name, baud_rate)
-                    .timeout(Duration::from_millis(15))
-                    .open()
-                {
-                    Ok(p) => {
-                        active_port = Some(p);
-                        println!("[Engine] Connected to serial port: {} @ {} baud", port_name, baud_rate);
+                let transport = if crate::four_d::controller::is_controller_endpoint(&endpoint) {
+                    crate::four_d::controller::ControllerClient::connect(&endpoint)
+                        .map(HardwareTransport::Controller)
+                } else {
+                    let direct_override = std::env::var_os("PEALAYER_ALLOW_DIRECT_SERIAL").is_some();
+                    if !direct_override
+                        && crate::four_d::controller::ControllerClient::connect(
+                            crate::four_d::controller::DEFAULT_ENDPOINT,
+                        )
+                        .is_ok()
+                    {
+                        Err("PCController is already reachable and owns the board. Use the pccontroller:// endpoint, or set PEALAYER_ALLOW_DIRECT_SERIAL=1 for an explicit diagnostic override.".to_string())
+                    } else {
+                        let port_name = crate::four_d::controller::direct_serial_name(&endpoint);
+                        serialport::new(port_name, 115200)
+                            .timeout(Duration::from_millis(15))
+                            .open()
+                            .map(|port| HardwareTransport::DirectSerial { port, sequence: 1 })
+                            .map_err(|error| format!("open direct serial endpoint {port_name}: {error}"))
+                    }
+                };
+                match transport {
+                    Ok(transport) => {
+                        println!("[Engine] Connected hardware transport: {endpoint}");
+                        active_transport = Some(transport);
                         last_ping = std::time::Instant::now();
                     }
-                    Err(e) => {
-                        let err_msg = format!("Failed to open port {}: {}", port_name, e);
+                    Err(error) => {
                         if let Ok(mut guard) = engine_conn_error.lock() {
-                            *guard = Some(err_msg);
+                            *guard = Some(error);
                         }
                         engine_connected.store(false, Ordering::Relaxed);
                     }
                 }
-            } else if !connected && active_port.is_some() {
+            } else if !connected && active_transport.is_some() {
                 // Graceful disconnect: send AllOff
-                if let Some(ref mut port) = active_port {
-                    let frame = Command::AllOff.to_frame();
-                    let _ = port.write_all(&frame);
+                if let Some(ref mut transport) = active_transport {
+                    let _ = transport.send(Command::AllOff);
                 }
-                active_port = None;
-                println!("[Engine] Disconnected from serial port");
+                active_transport = None;
+                println!("[Engine] Disconnected hardware transport");
             }
             
             // Check for new messages (non-blocking)
@@ -114,16 +219,15 @@ pub fn spawn_engine() -> EngineHandle {
                         if ch < 16 && value != last_pwm_values[ch] {
                             last_pwm_values[ch] = value;
                             if connected {
-                                if let Some(ref mut port) = active_port {
+                                if let Some(ref mut transport) = active_transport {
                                     let cmd = Command::PwmSet { channel, value };
-                                    let frame = cmd.to_frame();
-                                    if let Err(e) = port.write_all(&frame) {
+                                    if let Err(e) = transport.send(cmd) {
                                         if let Ok(mut err_guard) = engine_conn_error.lock() {
-                                            *err_guard = Some(format!("Serial write failed: {}", e));
+                                            *err_guard = Some(e);
                                         }
                                         engine_connected.store(false, std::sync::atomic::Ordering::Relaxed);
                                         connected = false;
-                                        active_port = None;
+                                        active_transport = None;
                                     }
                                 }
                             }
@@ -131,12 +235,10 @@ pub fn spawn_engine() -> EngineHandle {
                     }
                     EngineMessage::Seek(time) => {
                         if connected {
-                            if let Some(ref mut port) = active_port {
-                                let frame = Command::AllOff.to_frame();
-                                if let Err(e) = port.write_all(&frame) {
-                                    let err_msg = format!("Serial write error on seek: {}", e);
+                            if let Some(ref mut transport) = active_transport {
+                                if let Err(e) = transport.send(Command::AllOff) {
                                     if let Ok(mut guard) = engine_conn_error.lock() {
-                                        *guard = Some(err_msg);
+                                        *guard = Some(e);
                                     }
                                     engine_connected.store(false, Ordering::Relaxed);
                                 }
@@ -152,12 +254,10 @@ pub fn spawn_engine() -> EngineHandle {
                     }
                     EngineMessage::SendCommand(cmd) => {
                         if connected {
-                            if let Some(ref mut port) = active_port {
-                                let frame = cmd.to_frame();
-                                if let Err(e) = port.write_all(&frame) {
-                                    let err_msg = format!("Serial write error: {}", e);
+                            if let Some(ref mut transport) = active_transport {
+                                if let Err(e) = transport.send(cmd) {
                                     if let Ok(mut guard) = engine_conn_error.lock() {
-                                        *guard = Some(err_msg);
+                                        *guard = Some(e);
                                     }
                                     engine_connected.store(false, Ordering::Relaxed);
                                 }
@@ -170,9 +270,8 @@ pub fn spawn_engine() -> EngineHandle {
             if estop_now && !was_estop {
                 last_pwm_values.fill(0);
                 if connected {
-                    if let Some(ref mut port) = active_port {
-                        let frame = Command::AllOff.to_frame();
-                        let _ = port.write_all(&frame);
+                    if let Some(ref mut transport) = active_transport {
+                        let _ = transport.send(Command::AllOff);
                     }
                     let port_name = {
                         let guard = engine_port.lock().unwrap();
@@ -189,9 +288,8 @@ pub fn spawn_engine() -> EngineHandle {
             if was_playing && !is_playing_now {
                 last_pwm_values.fill(0);
                 if connected {
-                    if let Some(ref mut port) = active_port {
-                        let frame = Command::AllOff.to_frame();
-                        let _ = port.write_all(&frame);
+                    if let Some(ref mut transport) = active_transport {
+                        let _ = transport.send(Command::AllOff);
                     }
                     let port_name = {
                         let guard = engine_port.lock().unwrap();
@@ -217,16 +315,14 @@ pub fn spawn_engine() -> EngineHandle {
                             let state_str = if action.state { "ON" } else { "OFF" };
                             println!("[{}] {}:{}", port_name, action.relay_id, state_str);
                             
-                            if let Some(ref mut port) = active_port {
+                            if let Some(ref mut transport) = active_transport {
                                 let cmd = Command::RelaySet {
                                     id: action.relay_id,
                                     state: action.state,
                                 };
-                                let frame = cmd.to_frame();
-                                if let Err(e) = port.write_all(&frame) {
-                                    let err_msg = format!("Serial write error: {}", e);
+                                if let Err(e) = transport.send(cmd) {
                                     if let Ok(mut guard) = engine_conn_error.lock() {
-                                        *guard = Some(err_msg);
+                                        *guard = Some(e);
                                     }
                                     engine_connected.store(false, Ordering::Relaxed);
                                 }
@@ -246,16 +342,14 @@ pub fn spawn_engine() -> EngineHandle {
                         if val != last_pwm_values[ch] {
                             last_pwm_values[ch] = val;
                             if connected {
-                                if let Some(ref mut port) = active_port {
+                                if let Some(ref mut transport) = active_transport {
                                     let cmd = Command::PwmSet {
                                         channel: track.channel,
                                         value: val,
                                     };
-                                    let frame = cmd.to_frame();
-                                    if let Err(e) = port.write_all(&frame) {
-                                        let err_msg = format!("Serial write error (PWM): {}", e);
+                                    if let Err(e) = transport.send(cmd) {
                                         if let Ok(mut guard) = engine_conn_error.lock() {
-                                            *guard = Some(err_msg);
+                                            *guard = Some(e);
                                         }
                                         engine_connected.store(false, Ordering::Relaxed);
                                     }
@@ -267,10 +361,14 @@ pub fn spawn_engine() -> EngineHandle {
             }
             
             // Periodic watchdog heartbeat (every 50ms when connected)
-            if connected && active_port.is_some() && last_ping.elapsed() >= Duration::from_millis(50) {
-                if let Some(ref mut port) = active_port {
-                    let frame = Command::Ping.to_frame();
-                    let _ = port.write_all(&frame);
+            if connected
+                && active_transport
+                    .as_ref()
+                    .is_some_and(HardwareTransport::needs_watchdog_ping)
+                && last_ping.elapsed() >= Duration::from_millis(50)
+            {
+                if let Some(ref mut transport) = active_transport {
+                    let _ = transport.send(Command::Ping);
                 }
                 last_ping = std::time::Instant::now();
             }

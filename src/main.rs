@@ -19,6 +19,16 @@ use mpv::render::mpv_get_proc_address;
 use std::sync::{Arc, Mutex};
 
 fn main() -> eframe::Result {
+    if std::env::args().any(|argument| argument == "--smoke-test") {
+        match Mpv::new() {
+            Ok(_) => std::process::exit(0),
+            Err(error) => {
+                eprintln!("libmpv smoke test failed: {error}");
+                std::process::exit(2);
+            }
+        }
+    }
+
     env_logger::init();
 
     let icon_data = eframe::icon_data::from_png_bytes(include_bytes!("../assets/pealayer-icon.png")).ok();
@@ -141,6 +151,10 @@ fn main() -> eframe::Result {
             let _ = mpv_static.set_property("mute", loaded_config.is_muted);
 
             let (web_state_tx, web_cmd_rx) = crate::server::spawn_web_server(8080, 8081, cc.egui_ctx.clone());
+            let engine_handle = crate::four_d::engine::spawn_engine();
+            engine_handle
+                .is_connected
+                .store(true, std::sync::atomic::Ordering::Relaxed);
 
             Ok(Box::new(PealayerApp {
                 mpv: mpv_static,
@@ -171,7 +185,7 @@ fn main() -> eframe::Result {
                 show_four_d_editor: true,
 
                 timeline: crate::four_d::models::Timeline::new(),
-                engine_handle: crate::four_d::engine::spawn_engine(),
+                engine_handle,
                 recording_session: crate::four_d::curve_record::RecordingSession::new(),
                 input_capture: crate::four_d::input_capture::InputCaptureState::new(),
                 is_recording: false,
@@ -300,8 +314,8 @@ fn main() -> eframe::Result {
                 track_locked: [false; 9],
                 active_drag: None,
                 estop_active: false,
-                serial_port: "COM3".to_string(),
-                is_connected: false,
+                serial_port: crate::four_d::controller::DEFAULT_ENDPOINT.to_string(),
+                is_connected: true,
                 lasso_origin: None,
                 lasso_rect: None,
                 current_video_path: None,
@@ -314,6 +328,9 @@ fn main() -> eframe::Result {
                 show_shortcuts_dialog: false,
                 show_about_dialog: false,
                 interop_rx: crate::platform::interop::spawn_interop_server(cc.egui_ctx.clone()),
+                controller_cmd_rx: crate::platform::interop::spawn_pccontroller_action_bridge(
+                    cc.egui_ctx.clone(),
+                ),
                 web_state_tx,
                 web_cmd_rx,
                 last_web_broadcast: None,
