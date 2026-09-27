@@ -113,6 +113,7 @@ pub struct EngineHandle {
     pub playback_time_ms: Arc<AtomicU64>,
     pub is_playing: Arc<AtomicBool>,
     pub estop_active: Arc<AtomicBool>,
+    pub connection_requested: Arc<AtomicBool>,
     pub is_connected: Arc<AtomicBool>,
     pub serial_port: Arc<Mutex<String>>,
     pub connection_error: Arc<Mutex<Option<String>>>,
@@ -123,6 +124,7 @@ pub fn spawn_engine() -> EngineHandle {
     let playback_time_ms = Arc::new(AtomicU64::new(0));
     let is_playing = Arc::new(AtomicBool::new(false));
     let estop_active = Arc::new(AtomicBool::new(false));
+    let connection_requested = Arc::new(AtomicBool::new(false));
     let is_connected = Arc::new(AtomicBool::new(false));
     let serial_port = Arc::new(Mutex::new(
         crate::four_d::controller::DEFAULT_ENDPOINT.to_string(),
@@ -134,6 +136,7 @@ pub fn spawn_engine() -> EngineHandle {
     let engine_time = Arc::clone(&playback_time_ms);
     let engine_playing = Arc::clone(&is_playing);
     let engine_estop = Arc::clone(&estop_active);
+    let engine_connection_requested = Arc::clone(&connection_requested);
     let engine_connected = Arc::clone(&is_connected);
     let engine_port = Arc::clone(&serial_port);
     let engine_conn_error = Arc::clone(&connection_error);
@@ -151,10 +154,12 @@ pub fn spawn_engine() -> EngineHandle {
         
         loop {
             let estop_now = engine_estop.load(Ordering::Relaxed);
-            let mut connected = engine_connected.load(Ordering::Relaxed);
+            let requested = engine_connection_requested.load(Ordering::Relaxed);
+            let mut connected = active_transport.is_some();
+            engine_connected.store(connected, Ordering::Relaxed);
             
             // Handle connection/disconnection transitions
-            if connected && active_transport.is_none() {
+            if requested && active_transport.is_none() {
                 let endpoint = {
                     let guard = engine_port.lock().unwrap();
                     guard.clone()
@@ -184,21 +189,26 @@ pub fn spawn_engine() -> EngineHandle {
                     Ok(transport) => {
                         println!("[Engine] Connected hardware transport: {endpoint}");
                         active_transport = Some(transport);
+                        engine_connected.store(true, Ordering::Relaxed);
+                        connected = true;
                         last_ping = std::time::Instant::now();
                     }
                     Err(error) => {
                         if let Ok(mut guard) = engine_conn_error.lock() {
                             *guard = Some(error);
                         }
+                        engine_connection_requested.store(false, Ordering::Relaxed);
                         engine_connected.store(false, Ordering::Relaxed);
                     }
                 }
-            } else if !connected && active_transport.is_some() {
+            } else if !requested && active_transport.is_some() {
                 // Graceful disconnect: send AllOff
                 if let Some(ref mut transport) = active_transport {
                     let _ = transport.send(Command::AllOff);
                 }
                 active_transport = None;
+                engine_connected.store(false, Ordering::Relaxed);
+                connected = false;
                 println!("[Engine] Disconnected hardware transport");
             }
             
@@ -265,6 +275,12 @@ pub fn spawn_engine() -> EngineHandle {
                         }
                     }
                 }
+            }
+
+            if !engine_connected.load(Ordering::Relaxed) && active_transport.is_some() {
+                active_transport = None;
+                engine_connection_requested.store(false, Ordering::Relaxed);
+                connected = false;
             }
             
             if estop_now && !was_estop {
@@ -381,6 +397,7 @@ pub fn spawn_engine() -> EngineHandle {
         playback_time_ms,
         is_playing,
         estop_active,
+        connection_requested,
         is_connected,
         serial_port,
         connection_error,
@@ -633,6 +650,8 @@ mod tests {
     #[test]
     fn test_engine_message_send_command() {
         let handle = spawn_engine();
+        assert!(!handle.connection_requested.load(Ordering::Relaxed));
+        assert!(!handle.is_connected.load(Ordering::Relaxed));
         let res = handle.sender.send(EngineMessage::SendCommand(Command::PwmSet { channel: 1, value: 200 }));
         assert!(res.is_ok());
         let res_all_off = handle.sender.send(EngineMessage::SendCommand(Command::AllOff));
@@ -652,5 +671,3 @@ mod tests {
         assert!(res.is_ok());
     }
 }
-
-

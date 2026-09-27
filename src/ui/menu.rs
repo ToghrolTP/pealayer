@@ -262,47 +262,54 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 ui.separator();
                 
                 // 2. Coordinator/direct-diagnostic connection toggle & dropdown
-                let conn_text = if app.is_connected { "Disconnect" } else { "Connect" };
-                let conn_btn = ui.selectable_label(app.is_connected, conn_text);
+                let connection_requested = app
+                    .engine_handle
+                    .connection_requested
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let conn_text = if app.is_connected {
+                    "Disconnect"
+                } else if connection_requested {
+                    "Connecting…"
+                } else {
+                    "Connect"
+                };
+                let conn_btn = ui.add_enabled(
+                    !connection_requested || app.is_connected,
+                    egui::Button::new(conn_text).selected(app.is_connected),
+                );
                 if conn_btn.clicked() {
-                    app.is_connected = !app.is_connected;
-                    app.engine_handle.is_connected.store(app.is_connected, std::sync::atomic::Ordering::Relaxed);
-                    
                     {
                         let mut port_guard = app.engine_handle.serial_port.lock().unwrap();
                         *port_guard = app.serial_port.clone();
                     }
+                    app.engine_handle
+                        .connection_requested
+                        .store(!app.is_connected, std::sync::atomic::Ordering::Relaxed);
                 }
                 
                 // PCController owns the board during normal operation. Direct serial is
                 // deliberately labelled and additionally guarded by the engine.
-                ui.allocate_ui(egui::vec2(210.0, 20.0), |ui| {
-                    egui::ComboBox::from_id_salt("serial_port_select")
-                        .selected_text(&app.serial_port)
-                        .show_ui(ui, |ui| {
-                            let ports = [
-                                crate::four_d::controller::DEFAULT_ENDPOINT,
-                                "direct:COM1",
-                                "direct:COM2",
-                                "direct:COM3",
-                                "direct:COM4",
-                                "direct:/dev/ttyUSB0",
-                                "direct:/dev/ttyUSB1",
-                                "direct:/dev/ttyACM0",
-                            ];
-                            for p in ports {
-                                let res = ui.selectable_value(&mut app.serial_port, p.to_string(), p);
-                                if res.changed() && app.is_connected {
-                                    let mut port_guard = app.engine_handle.serial_port.lock().unwrap();
-                                    *port_guard = app.serial_port.clone();
+                ui.add_enabled_ui(!app.is_connected && !connection_requested, |ui| {
+                    ui.allocate_ui(egui::vec2(210.0, 20.0), |ui| {
+                        egui::ComboBox::from_id_salt("serial_port_select")
+                            .selected_text(&app.serial_port)
+                            .show_ui(ui, |ui| {
+                                for endpoint in crate::four_d::controller::available_endpoints() {
+                                    ui.selectable_value(
+                                        &mut app.serial_port,
+                                        endpoint.clone(),
+                                        endpoint,
+                                    );
                                 }
-                            }
-                        });
+                            });
+                    });
                 });
                 
                 // Connection visual indicator dot
                 let dot_color = if app.is_connected {
                     egui::Color32::from_rgb(46, 204, 113) // Green
+                } else if connection_requested {
+                    egui::Color32::from_rgb(241, 196, 15) // Amber
                 } else {
                     egui::Color32::from_rgb(231, 76, 60) // Red
                 };
@@ -316,6 +323,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     } else {
                         format!("{} direct diagnostic connection", app.serial_port)
                     }
+                } else if connection_requested {
+                    format!("Connecting to {}…", app.serial_port)
                 } else {
                     "Hardware Disconnected".to_string()
                 };
@@ -354,4 +363,3 @@ mod tests {
         assert_eq!(format_track_label(5, Some(""), Some("")), "Track 5");
     }
 }
-

@@ -8,6 +8,22 @@ use crate::four_d::protocol::Command;
 
 pub const DEFAULT_ENDPOINT: &str = "pccontroller://127.0.0.1:8787";
 
+/// Returns the coordinator plus serial ports reported by the current operating
+/// system. No example or cross-platform placeholder device is synthesized.
+pub fn available_endpoints() -> Vec<String> {
+    let mut endpoints = vec![DEFAULT_ENDPOINT.to_string()];
+    if let Ok(ports) = serialport::available_ports() {
+        let mut direct = ports
+            .into_iter()
+            .map(|port| format!("direct:{}", port.port_name))
+            .collect::<Vec<_>>();
+        direct.sort_by_key(|name| name.to_ascii_lowercase());
+        direct.dedup();
+        endpoints.extend(direct);
+    }
+    endpoints
+}
+
 pub struct ControllerClient {
     writer: TcpStream,
     reader: BufReader<TcpStream>,
@@ -148,6 +164,18 @@ mod tests {
         );
         assert_eq!(normalize_endpoint("tcp://host:9000").unwrap(), "host:9000");
         assert!(normalize_endpoint("missing-port").is_err());
+    }
+
+    #[test]
+    fn discovered_endpoints_never_invent_serial_devices() {
+        let endpoints = available_endpoints();
+        assert_eq!(endpoints.first().map(String::as_str), Some(DEFAULT_ENDPOINT));
+        assert!(
+            endpoints
+                .iter()
+                .skip(1)
+                .all(|endpoint| endpoint.starts_with("direct:") && endpoint.len() > 7)
+        );
     }
 
     #[test]

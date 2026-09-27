@@ -15,39 +15,16 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
             ui.separator();
 
-            // Simulated memory info for high density look
-            ui.label("Memory: 42.8 MB");
-
-            ui.separator();
-
-            // System Ready status with a green light
-            ui.horizontal(|ui| {
-                let size = egui::vec2(12.0, 12.0);
-                let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-                
-                // Pulsing glow effect
-                let time = ui.input(|i| i.time);
-                let alpha = (120.0 + (time * 3.0).sin() * 50.0) as u8;
-                ui.painter().circle_filled(
-                    rect.center(),
-                    6.0,
-                    egui::Color32::from_rgba_unmultiplied(46, 204, 113, alpha),
-                );
-                ui.painter().circle_filled(
-                    rect.center(),
-                    4.0,
-                    egui::Color32::from_rgb(46, 204, 113),
-                );
-                
-                ui.label("System Ready");
-            });
-
-            ui.separator();
-
             // Hardware Connection Status
             ui.horizontal(|ui| {
+                let connection_requested = app
+                    .engine_handle
+                    .connection_requested
+                    .load(std::sync::atomic::Ordering::Relaxed);
                 let dot_color = if app.is_connected {
                     egui::Color32::from_rgb(46, 204, 113) // Green
+                } else if connection_requested {
+                    egui::Color32::from_rgb(241, 196, 15) // Amber
                 } else {
                     egui::Color32::from_rgb(231, 76, 60) // Red
                 };
@@ -62,6 +39,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     } else {
                         format!("Hardware: {} direct diagnostic", app.serial_port)
                     }
+                } else if connection_requested {
+                    format!("Hardware: Connecting to {}…", app.serial_port)
                 } else {
                     "Hardware: Disconnected".to_string()
                 };
