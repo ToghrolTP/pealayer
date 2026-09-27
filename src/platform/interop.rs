@@ -39,6 +39,78 @@ pub struct PlayerStatusResponse {
     pub current_video: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct JsonRpcRequest {
+    #[serde(default)]
+    pub jsonrpc: Option<String>,
+    #[serde(default)]
+    pub id: Value,
+    pub method: String,
+    #[serde(default)]
+    pub params: Value,
+}
+
+pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropCommand>, String> {
+    if request.jsonrpc.as_deref().is_some_and(|version| version != "2.0") {
+        return Err("unsupported JSON-RPC version".to_string());
+    }
+    let number = |names: &[&str]| {
+        names
+            .iter()
+            .find_map(|name| request.params.get(*name).and_then(Value::as_f64))
+            .ok_or_else(|| format!("missing numeric parameter: {}", names.join(" or ")))
+    };
+    let string = |names: &[&str]| {
+        names
+            .iter()
+            .find_map(|name| request.params.get(*name).and_then(Value::as_str))
+            .map(str::to_string)
+            .ok_or_else(|| format!("missing string parameter: {}", names.join(" or ")))
+    };
+    match request.method.as_str() {
+        "play" | "pealayer.play" | "pealayer.player.play" => Ok(Some(InteropCommand::Play)),
+        "pause" | "pealayer.pause" | "pealayer.player.pause" => {
+            Ok(Some(InteropCommand::Pause))
+        }
+        "toggle" | "toggle_pause" | "pealayer.toggle" | "pealayer.player.toggle" => {
+            Ok(Some(InteropCommand::TogglePause))
+        }
+        "seek" | "pealayer.seek" | "pealayer.player.seek" => {
+            Ok(Some(InteropCommand::Seek {
+                seconds: number(&["seconds"] )?,
+            }))
+        }
+        "seek_abs" | "pealayer.seek_absolute" | "pealayer.player.seek_absolute" => {
+            Ok(Some(InteropCommand::SeekAbs {
+                percentage: number(&["percentage"] )?,
+            }))
+        }
+        "volume" | "set_volume" | "pealayer.volume.set" | "pealayer.player.volume.set" => {
+            Ok(Some(InteropCommand::SetVolume {
+                value: number(&["value", "level"] )?,
+            }))
+        }
+        "open" | "open_video" | "pealayer.open" | "pealayer.player.open" => {
+            Ok(Some(InteropCommand::Open {
+                target: string(&["target", "path"] )?,
+            }))
+        }
+        "get_status" | "player.status" | "pealayer.status" | "pealayer.player.status" => {
+            Ok(None)
+        }
+        method => Err(format!("unknown Pealayer JSON-RPC method: {method}")),
+    }
+}
+
+pub fn json_rpc_result(id: &Value, result: Value) -> String {
+    serde_json::json!({"jsonrpc":"2.0","id":id,"result":result}).to_string()
+}
+
+pub fn json_rpc_error(id: &Value, code: i32, message: &str) -> String {
+    serde_json::json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
+        .to_string()
+}
+
 static LIVE_STATUS: std::sync::RwLock<Option<PlayerStatusResponse>> = std::sync::RwLock::new(None);
 
 pub fn set_live_status(status: PlayerStatusResponse) {
@@ -612,6 +684,20 @@ mod tests {
         } else {
             panic!("Expected SetVolume command");
         }
+    }
+
+    #[test]
+    fn parses_namespaced_json_rpc_commands() {
+        let request: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":7,"method":"pealayer.seek","params":{"seconds":12.5}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&request).unwrap(),
+            Some(InteropCommand::Seek { seconds: 12.5 })
+        ));
+        assert!(json_rpc_result(&request.id, serde_json::json!({"ok":true}))
+            .contains("\"id\":7"));
     }
 
     #[test]
