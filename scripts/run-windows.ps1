@@ -15,6 +15,15 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $repositoryRoot
+$cargoTargetDirectory = if ($env:CARGO_TARGET_DIR) {
+    if ([System.IO.Path]::IsPathRooted($env:CARGO_TARGET_DIR)) {
+        [System.IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
+    } else {
+        [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot $env:CARGO_TARGET_DIR))
+    }
+} else {
+    Join-Path $repositoryRoot 'target'
+}
 $machineRustupHome = [Environment]::GetEnvironmentVariable('RUSTUP_HOME', 'Machine')
 if ($machineRustupHome) { $env:RUSTUP_HOME = $machineRustupHome }
 $systemRustBin = Join-Path $env:ProgramFiles 'Rust\bin'
@@ -76,7 +85,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "cargo build failed with exit code $LASTEXITCODE"
 }
 
-$binaryDirectory = Join-Path $repositoryRoot "target\$profileDirectory"
+$binaryDirectory = Join-Path $cargoTargetDirectory $profileDirectory
 $binary = Join-Path $binaryDirectory 'pealayer.exe'
 if (-not (Test-Path -LiteralPath $binary)) {
     throw "Pealayer binary was not produced at $binary"
