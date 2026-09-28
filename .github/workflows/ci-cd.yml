@@ -102,7 +102,7 @@ jobs:
 
       - name: Run tests (macOS)
         if: runner.os == 'macOS'
-        run: cargo test --locked
+        run: cargo test --locked --jobs 1 -- --test-threads=1
 
       - name: Download latest libmpv from GitHub releases (Windows)
         if: runner.os == 'Windows'
