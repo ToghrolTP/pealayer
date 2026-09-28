@@ -147,7 +147,15 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         )
                         .changed();
                     ui.label(app.tr("Preferred endpoint"));
-                    changed |= ui.text_edit_singleline(&mut app.serial_port).changed();
+                    let endpoint_hint = app.tr(
+                        "pccontroller://host:port, tcp://host:port, or direct:<device>",
+                    );
+                    changed |= ui
+                        .add(
+                            egui::TextEdit::singleline(&mut app.serial_port)
+                                .hint_text(endpoint_hint),
+                        )
+                        .changed();
                     if let Some(notice) = &app.connection_notice {
                         ui.colored_label(ui.visuals().warn_fg_color, notice);
                     }

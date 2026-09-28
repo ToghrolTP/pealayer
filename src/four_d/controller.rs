@@ -683,7 +683,16 @@ pub fn normalize_endpoint(endpoint: &str) -> Result<&str, String> {
 }
 
 pub fn is_controller_endpoint(endpoint: &str) -> bool {
-    endpoint.starts_with("pccontroller://") || endpoint.starts_with("tcp://")
+    let endpoint = endpoint.trim();
+    endpoint.starts_with("pccontroller://")
+        || endpoint.starts_with("tcp://")
+        // Accept the natural host:port form entered into the custom endpoint
+        // field while keeping explicit direct paths and OS filesystem paths on
+        // the direct-diagnostic transport.
+        || (!endpoint.starts_with("direct:")
+            && !endpoint.contains('/')
+            && !endpoint.contains('\\')
+            && normalize_endpoint(endpoint).is_ok())
 }
 
 fn is_default_controller_endpoint(endpoint: &str) -> bool {
@@ -708,6 +717,16 @@ mod tests {
         );
         assert_eq!(normalize_endpoint("tcp://host:9000").unwrap(), "host:9000");
         assert!(normalize_endpoint("missing-port").is_err());
+    }
+
+    #[test]
+    fn recognizes_custom_controller_addresses_without_misclassifying_device_paths() {
+        assert!(is_controller_endpoint("pccontroller://cafe-pc.local:8787"));
+        assert!(is_controller_endpoint("tcp://10.0.0.12:8787"));
+        assert!(is_controller_endpoint("127.0.0.1:8787"));
+        assert!(!is_controller_endpoint("direct:COM4"));
+        assert!(!is_controller_endpoint(r"C:\\devices\\controller"));
+        assert!(!is_controller_endpoint("/dev/ttyACM0"));
     }
 
     #[test]

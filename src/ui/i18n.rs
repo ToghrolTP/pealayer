@@ -112,6 +112,16 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Disconnect" => "قطع اتصال",
         "Hardware Disconnected" => "سخت‌افزار قطع است",
         "PCController coordinator connected" => "هماهنگ‌کنندهٔ PCController متصل است",
+        "Custom endpoint or hardware path" => "نشانی سفارشی یا مسیر سخت‌افزار",
+        "Enter a PCController endpoint or an OS hardware path." => {
+            "نشانی PCController یا مسیر سخت‌افزار سیستم‌عامل را وارد کنید."
+        }
+        "Enter a hardware endpoint before connecting." => {
+            "پیش از اتصال، نشانی سخت‌افزار را وارد کنید."
+        }
+        "pccontroller://host:port, tcp://host:port, or direct:<device>" => {
+            "pccontroller://میزبان:درگاه، tcp://میزبان:درگاه یا direct:<دستگاه>"
+        }
         "RESET E-STOP" => "بازنشانی توقف اضطراری",
         "E-STOP" => "توقف اضطراری",
         "E-STOP ACTIVE" => "توقف اضطراری فعال است",
