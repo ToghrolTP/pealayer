@@ -2,6 +2,93 @@ use eframe::egui;
 use egui_dock::TabViewer;
 use crate::app::{PealayerApp, EffectDragPayload};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TimelineTrackKind {
+    Video,
+    Audio,
+    Relay(u8),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TimelineTrackRow {
+    name: String,
+    kind: TimelineTrackKind,
+}
+
+fn timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
+    let mut rows = Vec::new();
+    if app.current_video_path.is_some() {
+        rows.push(TimelineTrackRow {
+            name: "Video".to_string(),
+            kind: TimelineTrackKind::Video,
+        });
+        if !app.audio_tracks.is_empty() && app.current_aid != "no" {
+            let selected = app
+                .current_aid
+                .parse::<i64>()
+                .ok()
+                .and_then(|id| app.audio_tracks.iter().find(|track| track.id == id));
+            let name = selected
+                .and_then(|track| track.title.clone().or_else(|| track.lang.clone()))
+                .unwrap_or_else(|| "Audio".to_string());
+            rows.push(TimelineTrackRow {
+                name,
+                kind: TimelineTrackKind::Audio,
+            });
+        }
+    }
+    if let Some(capabilities) = app
+        .advertised_hardware()
+        .filter(|capabilities| capabilities.board_connected)
+    {
+        rows.extend(
+            capabilities
+                .relays
+                .into_iter()
+                .filter(|relay| (1..=8).contains(&relay.id))
+                .map(|relay| TimelineTrackRow {
+                    name: relay.name,
+                    kind: TimelineTrackKind::Relay(relay.id),
+                }),
+        );
+    }
+    rows
+}
+
+fn relay_for_timeline_row(rows: &[TimelineTrackRow], row: i32) -> Option<u8> {
+    rows.get(usize::try_from(row).ok()?).and_then(|track| match track.kind {
+        TimelineTrackKind::Relay(id) => Some(id),
+        _ => None,
+    })
+}
+
+fn timeline_row_for_relay(rows: &[TimelineTrackRow], relay_id: u8) -> Option<usize> {
+    rows.iter().position(|track| track.kind == TimelineTrackKind::Relay(relay_id))
+}
+
+#[cfg(test)]
+mod timeline_row_tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_rows_map_only_explicit_relays() {
+        let rows = vec![
+            TimelineTrackRow {
+                name: "Video".to_string(),
+                kind: TimelineTrackKind::Video,
+            },
+            TimelineTrackRow {
+                name: "Seat left".to_string(),
+                kind: TimelineTrackKind::Relay(6),
+            },
+        ];
+        assert_eq!(relay_for_timeline_row(&rows, 0), None);
+        assert_eq!(relay_for_timeline_row(&rows, 1), Some(6));
+        assert_eq!(timeline_row_for_relay(&rows, 6), Some(1));
+        assert_eq!(timeline_row_for_relay(&rows, 1), None);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PealayerTab {
     ProgramMonitor,
@@ -639,6 +726,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         }
                     }
                     PealayerTab::Timeline => {
+                        let timeline_rows = timeline_track_rows(self.app);
+                        if timeline_rows.is_empty() && self.app.timeline.analog_tracks.is_empty() {
+                            let message = if self.app.advertised_hardware().is_none() {
+                                self.app.tr("Open media or connect PCController to populate the timeline.")
+                            } else {
+                                self.app.tr("No media or advertised hardware tracks are available.")
+                            };
+                            ui.label(message);
+                        }
                         ui.horizontal(|ui| {
                             // 1. Left column: Fixed Track Headers
                             ui.vertical(|ui| {
@@ -659,23 +755,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     egui::Color32::from_rgb(150, 150, 150),
                                 );
                                 
-                                let advertised = self.app.advertised_hardware();
-                                let mut track_names =
-                                    vec!["Video".to_string(), "Audio".to_string()];
-                                track_names.extend((1_u8..=8).map(|relay_id| {
-                                    advertised
-                                        .as_ref()
-                                        .and_then(|capabilities| {
-                                            capabilities
-                                                .relays
-                                                .iter()
-                                                .find(|relay| relay.id == relay_id)
-                                        })
-                                        .map(|relay| relay.name.clone())
-                                        .unwrap_or_else(|| format!("Relay {relay_id}"))
-                                }));
-                                
-                                for (idx, name) in track_names.iter().enumerate() {
+                                for track_row in &timeline_rows {
                                     let (rect, _response) = ui.allocate_exact_size(egui::vec2(250.0, 32.0), egui::Sense::hover());
                                     // Draw background with dark Premiere aesthetics
                                     ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(26, 26, 26));
@@ -687,12 +767,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         ui.add_space(6.0);
                                         // Limit the track name label width
                                         ui.allocate_ui(egui::vec2(85.0, 20.0), |ui| {
-                                            ui.label(egui::RichText::new(name).size(11.0).strong());
+                                            ui.label(egui::RichText::new(&track_row.name).size(11.0).strong());
                                         });
                                         
-                                        // Render M, S, L buttons only for Relay tracks (idx >= 2)
-                                        if idx >= 2 {
-                                            let relay_id = idx - 1; // 1..=8
+                                        if let TimelineTrackKind::Relay(relay_id) = track_row.kind {
+                                            let relay_id = relay_id as usize;
                                             
                                             // Mute button (M)
                                             let muted = &mut self.app.track_muted[relay_id];
@@ -836,7 +915,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let total_seconds = if self.app.duration > 0.0 { self.app.duration } else { 60.0 };
                             let total_width = (total_seconds * zoom as f64) as f32;
                             let num_analog = self.app.timeline.analog_tracks.len();
-                            let total_height = 26.0 + 320.0 + (num_analog as f32 * 40.0);
+                            let track_area_height = timeline_rows.len() as f32 * 32.0;
+                            let total_height = 26.0 + track_area_height + (num_analog as f32 * 40.0);
                             
                             // Define dropping target zone
                             let drop_res = ui.dnd_drop_zone::<EffectDragPayload, _>(egui::Frame::NONE, |ui| {
@@ -903,12 +983,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
                                         
                                         // Draw horizontal track separators and backgrounds
-                                        for i in 0..=10 {
+                                        for i in 0..=timeline_rows.len() {
                                             let grid_y = tracks_top + (i as f32 * 32.0);
                                             
                                             // Lock row background darkening
-                                            if i >= 2 && i <= 9 {
-                                                let relay_id = i - 1;
+                                            if let Some(relay_id) = relay_for_timeline_row(&timeline_rows, i as i32) {
                                                 if self.app.track_locked[relay_id as usize] {
                                                     let track_rect = egui::Rect::from_min_max(
                                                         egui::pos2(rect.min.x, grid_y),
@@ -926,7 +1005,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         // Horizontal separators for Analog tracks
                                         for (t_idx, _) in self.app.timeline.analog_tracks.iter().enumerate() {
-                                            let grid_y = tracks_top + 320.0 + ((t_idx + 1) as f32 * 40.0);
+                                            let grid_y = tracks_top + track_area_height + ((t_idx + 1) as f32 * 40.0);
                                             painter.line_segment(
                                                 [egui::pos2(rect.min.x, grid_y), egui::pos2(rect.max.x, grid_y)],
                                                 egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(45, 45, 45)),
@@ -939,8 +1018,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                                     let relative_y = mouse_pos.y - tracks_top;
                                                     let track_index = (relative_y / 32.0).floor() as i32;
-                                                    if track_index >= 2 && track_index <= 9 {
-                                                        let target_r = (track_index - 1) as u8;
+                                                    if let Some(target_r) = relay_for_timeline_row(&timeline_rows, track_index) {
                                                         let target_compatible = self.app.timeline.instances.iter()
                                                             .find(|i| i.id == drag.instance_id)
                                                             .and_then(|inst| self.app.timeline.templates.iter().find(|t| t.id == inst.effect_id))
@@ -967,36 +1045,28 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
                                         }
                                         
-                                        // Render Video clip placeholder if active
                                         if self.app.duration > 0.0 {
-                                            let video_clip_rect = egui::Rect::from_min_max(
-                                                egui::pos2(rect.min.x, tracks_top + 4.0),
-                                                egui::pos2(rect.min.x + total_width, tracks_top + 28.0),
-                                            );
-                                            painter.rect_filled(video_clip_rect, 4.0, egui::Color32::from_rgb(41, 128, 185)); // Blue clip
-                                            painter.rect_stroke(video_clip_rect, 4.0, egui::Stroke::new(1.0_f32, egui::Color32::WHITE), egui::StrokeKind::Inside);
-                                            painter.text(
-                                                video_clip_rect.left_center() + egui::vec2(10.0, 0.0),
-                                                egui::Align2::LEFT_CENTER,
-                                                "Active Video File",
-                                                egui::FontId::proportional(11.0),
-                                                egui::Color32::WHITE,
-                                            );
-                                            
-                                            // Audio clip placeholder
-                                            let audio_clip_rect = egui::Rect::from_min_max(
-                                                egui::pos2(rect.min.x, tracks_top + 32.0 + 4.0),
-                                                egui::pos2(rect.min.x + total_width, tracks_top + 32.0 + 28.0),
-                                            );
-                                            painter.rect_filled(audio_clip_rect, 4.0, egui::Color32::from_rgb(39, 174, 96)); // Green clip
-                                            painter.rect_stroke(audio_clip_rect, 4.0, egui::Stroke::new(1.0_f32, egui::Color32::WHITE), egui::StrokeKind::Inside);
-                                            painter.text(
-                                                audio_clip_rect.left_center() + egui::vec2(10.0, 0.0),
-                                                egui::Align2::LEFT_CENTER,
-                                                "Active Audio Track",
-                                                egui::FontId::proportional(11.0),
-                                                egui::Color32::WHITE,
-                                            );
+                                            for (row_index, track_row) in timeline_rows.iter().enumerate() {
+                                                let (label, color) = match track_row.kind {
+                                                    TimelineTrackKind::Video => (&track_row.name, egui::Color32::from_rgb(41, 128, 185)),
+                                                    TimelineTrackKind::Audio => (&track_row.name, egui::Color32::from_rgb(39, 174, 96)),
+                                                    TimelineTrackKind::Relay(_) => continue,
+                                                };
+                                                let row_y = tracks_top + row_index as f32 * 32.0;
+                                                let clip_rect = egui::Rect::from_min_max(
+                                                    egui::pos2(rect.min.x, row_y + 4.0),
+                                                    egui::pos2(rect.min.x + total_width, row_y + 28.0),
+                                                );
+                                                painter.rect_filled(clip_rect, 4.0, color);
+                                                painter.rect_stroke(clip_rect, 4.0, egui::Stroke::new(1.0_f32, egui::Color32::WHITE), egui::StrokeKind::Inside);
+                                                painter.text(
+                                                    clip_rect.left_center() + egui::vec2(10.0, 0.0),
+                                                    egui::Align2::LEFT_CENTER,
+                                                    label,
+                                                    egui::FontId::proportional(11.0),
+                                                    egui::Color32::WHITE,
+                                                );
+                                            }
                                         }
                                         
                                         let mut clicked_any_clip = false;
@@ -1013,10 +1083,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 // Find the relay used by this template's actions
                                                 let relay_id = effect.actions.first().map(|a| a.relay_id).unwrap_or(1);
                                                 let is_mismatched = !effect.target.is_compatible_with_relay(relay_id);
-                                                
-                                                // Determine Y range based on relay_id (1..8)
-                                                let track_index = relay_id as f32 + 1.0;
-                                                let track_y = tracks_top + (track_index * 32.0);
+                                                let Some(track_index) = timeline_row_for_relay(&timeline_rows, relay_id) else {
+                                                    continue;
+                                                };
+                                                let track_y = tracks_top + track_index as f32 * 32.0;
                                                 
                                                 let start_x = rect.min.x + (instance.start_time_ms as f32 * px_per_ms);
                                                 let end_x = start_x + (effect.duration_ms as f32 * px_per_ms);
@@ -1285,8 +1355,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                                             let relative_y = mouse_pos.y - tracks_top;
                                                             let track_index = (relative_y / 32.0).floor() as i32;
-                                                            if track_index >= 2 && track_index <= 9 {
-                                                                let target_r = (track_index - 1) as u8;
+                                                            if let Some(target_r) = relay_for_timeline_row(&timeline_rows, track_index) {
                                                                 if !self.app.track_locked[target_r as usize] {
                                                                     let is_compatible = self.app.timeline.instances.iter()
                                                                         .find(|i| i.id == drag_state.instance_id)
@@ -1499,7 +1568,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let mut pending_add_keyframe = None;
 
                                         for (t_idx, track) in self.app.timeline.analog_tracks.iter_mut().enumerate() {
-                                            let row_y = tracks_top + 320.0 + (t_idx as f32 * 40.0);
+                                            let row_y = tracks_top + track_area_height + (t_idx as f32 * 40.0);
                                             let row_rect = egui::Rect::from_min_max(
                                                 egui::pos2(rect.min.x, row_y),
                                                 egui::pos2(rect.max.x, row_y + 40.0),
@@ -1975,10 +2044,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     let relative_y = mouse_pos.y - tracks_top;
                                                     let hovered_track_index = (relative_y / 32.0).floor() as i32;
 
-                                                    // Loop through visible tracks (0..=1 video/audio, 2..=9 relays 1..=8, 10.. analog)
-                                                    // For relay tracks (2..=9):
-                                                    for i in 2..=9 {
-                                                        let relay_id = (i - 1) as u8;
+                                                    for (i, track_row) in timeline_rows.iter().enumerate() {
+                                                        let TimelineTrackKind::Relay(relay_id) = track_row.kind else {
+                                                            continue;
+                                                        };
+                                                        let i = i as i32;
                                                         let is_compatible = payload.target.is_compatible_with_relay(relay_id);
                                                         let is_locked = self.app.track_locked[relay_id as usize];
                                                         let is_primary = payload.target.primary_relay_id() == Some(relay_id);
@@ -2035,8 +2105,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         }
                                                     }
 
-                                                    // Video / Audio tracks (0 and 1) or past relays: NotAllowed
-                                                    if hovered_track_index == 0 || hovered_track_index == 1 {
+                                                    if timeline_rows
+                                                        .get(usize::try_from(hovered_track_index).unwrap_or(usize::MAX))
+                                                        .is_some_and(|row| !matches!(row.kind, TimelineTrackKind::Relay(_)))
+                                                    {
                                                         ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
                                                         let row_y = tracks_top + (hovered_track_index as f32 * 32.0);
                                                         let track_rect = egui::Rect::from_min_max(
@@ -2074,7 +2146,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                     if rect.contains(mouse_pos) {
                                         let relative_y = mouse_pos.y - tracks_top;
-                                        let track_index = (relative_y / 32.0).floor() as i32;
+                                        let visible_row = (relative_y / 32.0).floor() as i32;
+                                        let track_index = relay_for_timeline_row(&timeline_rows, visible_row)
+                                            .map(|relay_id| relay_id as i32 + 1)
+                                            .or_else(|| {
+                                                timeline_rows
+                                                    .get(usize::try_from(visible_row).ok()?)
+                                                    .map(|_| 0)
+                                            })
+                                            .unwrap_or(10);
                                         let relative_x = mouse_pos.x - rect.min.x;
                                         let drop_time_secs = (relative_x / zoom) as f64;
 
@@ -2108,8 +2188,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     for instance in &self.app.timeline.instances {
                                         if let Some(effect) = self.app.timeline.templates.iter().find(|t| t.id == instance.effect_id) {
                                             let relay_id = effect.actions.first().map(|a| a.relay_id).unwrap_or(1);
-                                            let track_index = relay_id as f32 + 1.0;
-                                            let track_y = tracks_top + (track_index * 32.0);
+                                            let Some(track_index) = timeline_row_for_relay(&timeline_rows, relay_id) else {
+                                                continue;
+                                            };
+                                            let track_y = tracks_top + track_index as f32 * 32.0;
                                             let start_x = rect.min.x + (instance.start_time_ms as f32 * px_per_ms);
                                             let end_x = start_x + (effect.duration_ms as f32 * px_per_ms);
                                             let clip_rect = egui::Rect::from_min_max(
@@ -2124,7 +2206,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     
                                     // Keyframes
                                     for (t_idx, track) in self.app.timeline.analog_tracks.iter().enumerate() {
-                                        let t_y = tracks_top + 320.0 + (t_idx as f32 * 40.0);
+                                        let t_y = tracks_top + track_area_height + (t_idx as f32 * 40.0);
                                         for (k_idx, kf) in track.keyframes.iter().enumerate() {
                                             let k_x = rect.min.x + (kf.time_ms as f32 * px_per_ms);
                                             let k_y = (t_y + 36.0) - (kf.value * 32.0);
@@ -2152,7 +2234,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             
                             if response.clicked() && !clicked_any_clip && !clicked_any_keyframe && self.app.active_drag.is_none() && self.app.active_keyframe_drag.is_none() {
                                 if let Some(mouse_pos) = response.interact_pointer_pos() {
-                                    if mouse_pos.y >= tracks_top && mouse_pos.y < tracks_top + 320.0 {
+                                    if mouse_pos.y >= tracks_top && mouse_pos.y < tracks_top + track_area_height {
                                         self.app.selected_instance_ids.clear();
                                         let relative_x = mouse_pos.x - rect.min.x;
                                         let seek_time = (relative_x / zoom) as f64;

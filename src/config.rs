@@ -46,6 +46,8 @@ pub struct AppConfig {
     pub recent_media: Vec<PathBuf>,
     pub app_name: Option<String>,
     pub app_icon: Option<PathBuf>,
+    pub app_publisher: Option<String>,
+    pub app_copyright: Option<String>,
     pub theme: AppTheme,
     pub language: AppLanguage,
     pub direction: AppDirection,
@@ -61,6 +63,8 @@ impl Default for AppConfig {
             recent_media: Vec::new(),
             app_name: None,
             app_icon: None,
+            app_publisher: None,
+            app_copyright: None,
             theme: AppTheme::System,
             language: AppLanguage::System,
             direction: AppDirection::Auto,
@@ -151,6 +155,7 @@ pub fn resolved_app_name(config: &AppConfig) -> String {
     std::env::var("APP_NAME")
         .ok()
         .or_else(|| config.app_name.clone())
+        .or_else(|| application_brand_string("applicationName"))
         .map(|name| name.trim().to_string())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "Pealayer".to_string())
@@ -160,6 +165,52 @@ pub fn resolved_app_icon(config: &AppConfig) -> Option<PathBuf> {
     std::env::var_os("APP_ICON")
         .map(PathBuf::from)
         .or_else(|| config.app_icon.clone())
+        .or_else(application_brand_app_icon)
+}
+
+fn application_brand() -> Option<(PathBuf, serde_json::Value)> {
+    let path = std::env::var_os("APPLICATION_BRAND").map(PathBuf::from)?;
+    let value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+    if value
+        .get("format")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|format| format != "application-brand")
+    {
+        return None;
+    }
+    Some((path, value))
+}
+
+fn application_brand_string(name: &str) -> Option<String> {
+    application_brand()?
+        .1
+        .get(name)?
+        .as_str()
+        .map(str::to_string)
+}
+
+fn application_brand_app_icon() -> Option<PathBuf> {
+    let (path, value) = application_brand()?;
+    let relative = value.get("windowsIcons")?.get("APP")?.as_str()?;
+    Some(path.parent().unwrap_or_else(|| std::path::Path::new(".")).join(relative))
+}
+
+fn resolved_optional_branding(env_name: &str, configured: Option<&str>) -> Option<String> {
+    std::env::var(env_name)
+        .ok()
+        .or_else(|| configured.map(str::to_string))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+pub fn resolved_app_publisher(config: &AppConfig) -> Option<String> {
+    resolved_optional_branding("APP_PUBLISHER", config.app_publisher.as_deref())
+        .or_else(|| application_brand_string("companyName"))
+}
+
+pub fn resolved_app_copyright(config: &AppConfig) -> Option<String> {
+    resolved_optional_branding("APP_COPYRIGHT", config.app_copyright.as_deref())
+        .or_else(|| application_brand_string("legalCopyright"))
 }
 
 pub fn resolved_theme(config: &AppConfig) -> AppTheme {
@@ -176,8 +227,19 @@ pub fn resolved_theme(config: &AppConfig) -> AppTheme {
     }
 }
 
+pub fn runtime_port(env_name: &str, default: u16) -> u16 {
+    std::env::var(env_name)
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port != 0)
+        .unwrap_or(default)
+}
+
 impl AppConfig {
     pub fn get_config_path() -> PathBuf {
+        if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {
+            return PathBuf::from(path);
+        }
         // 1. Portable Mode check (local executable folder flag/file)
         if PathBuf::from("portable.flag").exists() || PathBuf::from("pealayer.json").exists() {
             return PathBuf::from("config").join("settings.json");
@@ -260,6 +322,8 @@ mod tests {
         assert!(cfg.recent_media.is_empty());
         assert!(cfg.app_name.is_none());
         assert!(cfg.app_icon.is_none());
+        assert!(cfg.app_publisher.is_none());
+        assert!(cfg.app_copyright.is_none());
         assert_eq!(cfg.theme, AppTheme::System);
         assert_eq!(cfg.language, AppLanguage::System);
         assert_eq!(cfg.direction, AppDirection::Auto);
@@ -287,6 +351,19 @@ mod tests {
         cfg.app_name = Some("   ".to_string());
         if std::env::var_os("APP_NAME").is_none() {
             assert_eq!(resolved_app_name(&cfg), "Pealayer");
+        }
+    }
+
+    #[test]
+    fn configured_branding_metadata_is_trimmed_and_optional() {
+        let mut cfg = AppConfig::default();
+        cfg.app_publisher = Some("  Example Studio  ".to_string());
+        cfg.app_copyright = Some("   ".to_string());
+        if std::env::var_os("APP_PUBLISHER").is_none()
+            && std::env::var_os("APP_COPYRIGHT").is_none()
+        {
+            assert_eq!(resolved_app_publisher(&cfg).as_deref(), Some("Example Studio"));
+            assert_eq!(resolved_app_copyright(&cfg), None);
         }
     }
 

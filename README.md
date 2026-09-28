@@ -363,8 +363,8 @@ wine target/x86_64-pc-windows-gnu/release/pealayer.exe
 Pealayer includes pre-built assets in `web_ui/dist`. If you modify the React remote control app:
 ```bash
 cd web_ui
-yarn install
-yarn build
+npm ci
+npm run build
 cd ..
 ```
 

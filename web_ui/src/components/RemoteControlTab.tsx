@@ -35,7 +35,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
 }) => {
   const [frameTimestamp, setFrameTimestamp] = useState<number>(Date.now());
   const [isMuted, setIsMuted] = useState<boolean>(false);
-  const [previousVolume, setPreviousVolume] = useState<number>(100);
+  const [previousVolume, setPreviousVolume] = useState<number | undefined>();
 
   useEffect(() => {
     if (state.playing) {
@@ -81,11 +81,13 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
 
   const toggleMute = () => {
     if (isMuted) {
-      sendCmd('set_volume', { level: previousVolume || 100 });
+      if (previousVolume === undefined) return;
+      sendCmd('set_volume', { level: previousVolume });
       setIsMuted(false);
-      message.info(`Volume unmuted to ${Math.round(previousVolume || 100)}%`);
+      message.info(`Volume unmuted to ${Math.round(previousVolume)}%`);
     } else {
-      setPreviousVolume(state.volume || 100);
+      if (state.volume === undefined) return;
+      setPreviousVolume(state.volume);
       sendCmd('set_volume', { level: 0 });
       setIsMuted(true);
       message.info('Volume muted');
@@ -185,7 +187,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
               <Card size="small" style={{ background: '#0a2239', border: '1px solid rgba(23, 96, 135, 0.2)' }}>
                 <Statistic
                   title={<Text type="secondary" style={{ fontSize: 12 }}>Volume</Text>}
-                  value={Math.round(state.volume || 100)}
+                  value={state.volume === undefined ? '—' : Math.round(state.volume)}
                   suffix="%"
                   prefix={<SoundOutlined style={{ color: '#1d84b5' }} />}
                   valueStyle={{ fontSize: 16, color: '#f8fafc', fontFamily: 'monospace' }}
@@ -286,7 +288,8 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
                 <Slider
                   min={0}
                   max={130}
-                  value={isMuted ? 0 : state.volume || 100}
+                  value={isMuted ? 0 : (state.volume ?? 0)}
+                  disabled={state.volume === undefined}
                   onChange={handleVolumeChange}
                   trackStyle={{ backgroundColor: '#e11d48' }}
                   handleStyle={{ borderColor: '#e11d48', backgroundColor: '#e11d48' }}
@@ -294,7 +297,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
               </Col>
               <Col>
                 <Text style={{ fontFamily: 'monospace', color: '#cbd5e1', width: 45, display: 'inline-block', textAlign: 'right' }}>
-                  {isMuted ? '0%' : `${Math.round(state.volume || 100)}%`}
+                  {state.volume === undefined ? '—' : (isMuted ? '0%' : `${Math.round(state.volume)}%`)}
                 </Text>
               </Col>
             </Row>

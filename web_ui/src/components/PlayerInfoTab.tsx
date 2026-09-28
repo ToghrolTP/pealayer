@@ -8,15 +8,17 @@ import {
   SoundOutlined,
 } from '@ant-design/icons';
 import { PlayerState } from './RemoteControlTab';
+import { RuntimeConfig } from '../App';
 
 const { Title, Text } = Typography;
 
 interface PlayerInfoTabProps {
   state: PlayerState;
   connectionMode: 'ws' | 'http';
+  runtime: RuntimeConfig | null;
 }
 
-export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionMode }) => {
+export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionMode, runtime }) => {
   const formatTime = (sec: number = 0) => {
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60);
@@ -51,7 +53,7 @@ export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionM
           <Card bordered={false} style={{ background: '#0a2239', border: '1px solid rgba(23, 96, 135, 0.2)', borderRadius: 12 }}>
             <Statistic
               title={<Text type="secondary">Volume Level</Text>}
-              value={Math.round(state.volume || 100)}
+              value={state.volume === undefined ? '—' : Math.round(state.volume)}
               suffix="%"
               prefix={<SoundOutlined style={{ color: '#53a2be' }} />}
               valueStyle={{ color: '#f8fafc', fontSize: 18, fontFamily: 'monospace' }}
@@ -101,13 +103,13 @@ export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionM
             )}
           </Descriptions.Item>
           <Descriptions.Item label="HTTP Remote Endpoint">
-            <Text code>http://0.0.0.0:8080</Text>
+            <Text code>{window.location.origin}</Text>
           </Descriptions.Item>
           <Descriptions.Item label="WebSocket Remote Endpoint">
-            <Text code>ws://0.0.0.0:8081</Text>
+            <Text code>{runtime ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:${runtime.wsPort}` : 'Initializing…'}</Text>
           </Descriptions.Item>
-          <Descriptions.Item label="Pealayer Core Version">
-            <Text style={{ color: '#f8fafc' }}>0.1.0 (Rust Edition 2024)</Text>
+          <Descriptions.Item label={`${runtime?.appName || 'Application'} Version`}>
+            <Text style={{ color: '#f8fafc' }}>{runtime?.version || 'Initializing…'}</Text>
           </Descriptions.Item>
           <Descriptions.Item label="Hardware Acceleration">
             <Tag color="blue">mpv libmpv2 render</Tag>

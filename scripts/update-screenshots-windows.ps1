@@ -3,6 +3,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Executable,
     [string]$OutputDirectory,
+    [string]$AppName,
+    [string]$Branding,
     [ValidateSet('dark', 'light')]
     [string]$Theme = 'dark',
     [ValidateSet('en', 'fa')]
@@ -24,6 +26,9 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $resolvedExecutable = (Resolve-Path -LiteralPath $Executable).Path
+$artifactProductName = (Get-Item -LiteralPath $resolvedExecutable).VersionInfo.ProductName
+$effectiveAppName = if ($AppName) { $AppName.Trim() } elseif ($artifactProductName) { $artifactProductName } else { 'Application' }
+$resolvedBranding = if ($Branding) { (Resolve-Path -LiteralPath $Branding -ErrorAction Stop).Path } else { $null }
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $repositoryRoot 'docs\screenshots'
 }
@@ -96,8 +101,12 @@ function Save-WindowScreenshot([IntPtr]$Handle, [string]$Path) {
 $sourceCommit = (& git -C $repositoryRoot rev-parse HEAD).Trim()
 $executableHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedExecutable).Hash.ToLowerInvariant()
 $captures = @()
+$captureSession = [Guid]::NewGuid().ToString('N')
+$captureProfile = Join-Path ([IO.Path]::GetTempPath()) "pealayer-screenshot-$captureSession"
+New-Item -ItemType Directory -Path $captureProfile -Force | Out-Null
 
-foreach ($language in $Locale) {
+for ($localeIndex = 0; $localeIndex -lt $Locale.Count; $localeIndex++) {
+    $language = $Locale[$localeIndex]
     $start = New-Object Diagnostics.ProcessStartInfo
     $start.FileName = $resolvedExecutable
     $start.WorkingDirectory = Split-Path -Parent $resolvedExecutable
@@ -105,7 +114,14 @@ foreach ($language in $Locale) {
     $start.EnvironmentVariables['APP_LOCALE'] = $language
     $start.EnvironmentVariables['APP_DIRECTION'] = 'auto'
     $start.EnvironmentVariables['APP_THEME'] = $Theme
-    $start.EnvironmentVariables['APP_NAME'] = 'Pealayer'
+    $start.EnvironmentVariables['APP_NAME'] = $effectiveAppName
+    $start.EnvironmentVariables['PEALAYER_CONFIG_FILE'] = Join-Path $captureProfile "$language-settings.json"
+    $start.EnvironmentVariables['PEALAYER_HTTP_PORT'] = (28080 + ($localeIndex * 10)).ToString()
+    $start.EnvironmentVariables['PEALAYER_WS_PORT'] = (28081 + ($localeIndex * 10)).ToString()
+    $start.EnvironmentVariables['PEALAYER_IPC_PORT'] = (28082 + ($localeIndex * 10)).ToString()
+    if ($resolvedBranding) {
+        $start.EnvironmentVariables['APPLICATION_BRAND'] = $resolvedBranding
+    }
 
     $process = [Diagnostics.Process]::Start($start)
     try {
@@ -122,6 +138,8 @@ foreach ($language in $Locale) {
             width = $Width
             height = $Height
             sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
+            capture_method = 'System.Drawing.Graphics.CopyFromScreen'
+            session = 'signed-in-interactive-desktop'
         }
     } finally {
         if (-not $process.HasExited) {
@@ -135,12 +153,22 @@ foreach ($language in $Locale) {
     }
 }
 
+$resolvedTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+$resolvedCaptureProfile = [IO.Path]::GetFullPath($captureProfile)
+if (-not $resolvedCaptureProfile.StartsWith($resolvedTempRoot, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to clean screenshot profile outside the temporary directory: $resolvedCaptureProfile"
+}
+Remove-Item -LiteralPath $resolvedCaptureProfile -Recurse -Force
+
 $manifest = [ordered]@{
-    format = 'pealayer-screenshots/v1'
+    format = 'pealayer-screenshots'
     generated_at_utc = [DateTime]::UtcNow.ToString('o')
     git_commit = $sourceCommit
     executable = Split-Path -Leaf $resolvedExecutable
     executable_sha256 = $executableHash
+    application_name = $effectiveAppName
+    isolated_profile = $true
+    capture_method = 'System.Drawing.Graphics.CopyFromScreen'
     captures = $captures
 }
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $resolvedOutput 'manifest.json') -Encoding utf8

@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+check_only=false
+if [[ "${1:-}" == "--check" ]]; then
+  check_only=true
+  shift
+fi
+
 if [[ $# -lt 1 || $# -gt 2 ]]; then
-  echo "usage: $0 /absolute/path/to/pealayer [output-directory]" >&2
+  echo "usage: $0 [--check] /absolute/path/to/pealayer [output-directory]" >&2
   exit 2
 fi
 
-executable="$(realpath "$1")"
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+[[ -f "$1" && -x "$1" ]] || {
+  echo "screenshot executable does not exist or is not executable: $1" >&2
+  exit 2
+}
+executable="$(realpath "$1")"
 output_directory="${2:-$repository_root/docs/screenshots}"
-mkdir -p "$output_directory"
-output_directory="$(realpath "$output_directory")"
 
 for command in xdotool import sha256sum git; do
   command -v "$command" >/dev/null || {
@@ -22,6 +30,14 @@ done
   echo 'DISPLAY is not set; run from the signed-in graphical session.' >&2
   exit 4
 }
+
+if $check_only; then
+  echo "Linux screenshot preflight passed for $executable on DISPLAY=$DISPLAY"
+  exit 0
+fi
+
+mkdir -p "$output_directory"
+output_directory="$(realpath "$output_directory")"
 
 source_commit="$(git -C "$repository_root" rev-parse HEAD)"
 executable_hash="$(sha256sum "$executable" | awk '{print $1}')"
@@ -71,7 +87,7 @@ done
 
 {
   printf '{\n'
-  printf '  "format": "pealayer-screenshots/v1",\n'
+  printf '  "format": "pealayer-screenshots",\n'
   printf '  "generated_at_utc": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf '  "git_commit": "%s",\n' "$source_commit"
   printf '  "executable": "%s",\n' "$(basename "$executable")"

@@ -155,11 +155,25 @@ impl Default for Timeline {
         Self {
             instances: Vec::new(),
             templates: Vec::new(),
-            analog_tracks: vec![
-                crate::four_d::curve::AnalogTrack::new("Wind Turbine", 0),
-                crate::four_d::curve::AnalogTrack::new("Seat Rumble", 1),
-            ],
+            // A new production project is intentionally empty. Tracks are
+            // created by project data or from hardware capabilities that were
+            // actually advertised by PCController; example actuators must not
+            // appear as if they were connected equipment.
+            analog_tracks: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fresh_timeline_contains_no_invented_production_data() {
+        let timeline = Timeline::default();
+        assert!(timeline.instances.is_empty());
+        assert!(timeline.templates.is_empty());
+        assert!(timeline.analog_tracks.is_empty());
     }
 }
 
