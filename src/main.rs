@@ -170,9 +170,7 @@ fn main() -> eframe::Result {
             eframe::icon_data::from_png_bytes(include_bytes!("../assets/pealayer-icon.png")).ok()
         });
 
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_inner_size([800.0, 600.0])
-        .with_transparent(true);
+    let mut viewport = egui::ViewportBuilder::default().with_inner_size([800.0, 600.0]);
     if cli_options.fullscreen {
         viewport = viewport.with_fullscreen(true);
     }
