@@ -49,9 +49,9 @@ Whether designing an immersive theme park ride, an experiential 4D theater, or h
 * **Template Isolation (Copy-on-Write)**: Modifying a placed cue automatically clones the template, protecting shared library presets from unintended edits.
 * **Deep Multi-Level Undo/Redo**: Full history tracking across all moves, trims, deletions, and track relocations (`Ctrl+Z` / `Ctrl+Y`).
 * **Lasso Marquee Selection**: Click-and-drag rubber-band selection across multiple cues and keyframes simultaneously.
-* **Smart Track Auto-Routing**: Validates hardware actuator compatibility upon dropping clips (e.g., routing Water to Water or Aux relays) and alerts on track mismatches with 1-click relocation.
+* **Capability-Driven Track Routing**: Accepts and relocates cues only against the exact output IDs and names advertised by the connected PCController. No actuator roles or fallback relay mappings are invented locally.
 
-### 📈 Continuous Analog Curve Automation (PWM 0–15)
+### 📈 Continuous Analog Curve Automation
 * **High-Precision Actuator Curves**: Smooth intensity automation for variable-speed fans, proportional valves, vibration rumblers, and lighting.
 * **Three Interpolation Algorithms**:
   * **Step**: Holds value until the next keyframe.
@@ -60,26 +60,32 @@ Whether designing an immersive theme park ride, an experiential 4D theater, or h
 * **Live Motion Capture Recording**: Arm analog tracks and capture motion curves in real-time during playback using keyboard arrows, WASD, or UI throttle sliders, featuring automatic **Ramer-Douglas-Peucker (RDP)** point simplification and punch-in overwriting.
 
 ### ⚡ Industrial Hardware Protocol Support
-* **Standard Binary Framing**: Consistent Overhead Byte Stuffing (**COBS**) with Dallas/Maxim **CRC-8** checksums for reliable serial communication over noisy lines.
-* **PCController Wire Contract**: Enterprise 4D theater frame envelope (`0xA5 0x01 ... CRC-8/ATM`) supporting 12-bit PWM resolution (0–4095).
-* **Legacy ASCII Fallback**: Human-readable newline-terminated ASCII (`R{id}:1\n` / `R{id}:0\n`) for basic microcontrollers.
-* **Live F1–F8 Digital Macro Recording**: Hold hotkeys during playback to burn physical cue activations directly into the timeline on the fly.
+* **Coordinator-First Control**: Normal output uses persistent NDJSON JSON-RPC 2.0 to PCController at `127.0.0.1:8787`; PCController remains the sole UART owner, safety authority, and board coordinator.
+* **Native Board Wire Contract**: The explicit diagnostic/fallback path follows PCController's living COBS/TLV feature contract; PCController remains the protocol authority.
+* **Ownership Arbitration**: Direct serial is rejected while PCController is reachable unless `PEALAYER_ALLOW_DIRECT_SERIAL=1` is deliberately set for diagnostics.
+* **Capability-Bound Digital Recording Shortcuts**: During playback, the available F-key positions bind in catalog order to at most the first eight outputs actually advertised by PCController. Missing outputs have no shortcut and recorded cues retain the advertised output ID and name.
+* **Controller-Owned Strip Effects**: LED-strip streams and named effects are consumed only when advertised through PCController's living capability/RPC surface. Pealayer does not carry a duplicate effect-name list or board renderer; implementation and physical proof are tracked in [PCController #390](https://github.com/atomicdeploy/PCController/issues/390).
 
 ### 🛡 Hardware Monitor & Mission-Critical Safety
 * **Emergency Stop (E-STOP)**: Global hardware software latch locking all relays and PWM lines low instantaneously.
-* **Automatic Failsafe Zeroing**: Automatically dispatches all-off frames on pause, seek, stop, track muting, or serial cable disconnection to prevent solenoids, heaters, or valves from burning out or flooding.
+* **Automatic Failsafe Zeroing**: Automatically dispatches coordinated relay/PWM all-off commands on pause, seek, stop, track muting, or hardware disconnection to prevent solenoids, heaters, or valves from burning out or flooding.
 * **Live Actuator Telemetry**: Real-time status LEDs and manual "Force ON" overrides in the Hardware Monitor panel.
 
 ### 🌐 Built-In Web Remote Control & REST/WebSocket APIs
-* **Headless Server Engine**: Built-in HTTP server (`tiny_http` on `:8080`) and WebSocket server (`tungstenite` on `:8081`).
+* **Headless Server Engine**: Built-in loopback-only HTTP server (`tiny_http` on `127.0.0.1:8080`) and WebSocket server (`tungstenite` on `127.0.0.1:8081`). Set `PEALAYER_WEB_BIND` to a specific interface address only when remote access is intended.
 * **Mobile-Responsive Remote Web App**: Standalone SPA built with **React 19**, **TypeScript**, **Vite**, and **Ant Design 6** (`web_ui/dist`). Control playback, seek, adjust volume, and trigger E-STOP from any phone, tablet, or secondary monitor.
 * **Remote Media Library & Thumbnail Caching**: Browse server directories, inspect media durations, and view dynamically cached video thumbnails over HTTP.
 
 ### 🖥 Operating System Integration & IPC
 * **Unix Domain Socket IPC**: Direct headless automation on Linux via `/tmp/pealayer.sock` or `$XDG_RUNTIME_DIR/pealayer.sock`.
+* **Pealayer Automation Endpoint**: Pealayer's own newline-delimited command and JSON-RPC endpoint listens on `127.0.0.1:8082`. This is distinct from the PCController coordinator endpoint on `:8787`; native local IPC/embedded transport support is tracked separately and `:8787` remains the controller fallback.
 * **Desktop File Associations**: 1-click registration as default system player for 9+ media formats (`.mp4`, `.mkv`, `.avi`, `.webm`, `.mov`, `.flv`, `.mp3`, `.flac`, `.wav`) via Windows Registry (`winreg`) and Linux FreeDesktop XDG desktop entries (`xdg-mime`).
 * **Automatic Sidecar Mounting**: Automatically discovers and loads `<video>.4d.json` timeline projects saved alongside movie files.
+* **Native Multi-File Drop**: Dropped media is opened or queued, external subtitles are attached, and timeline JSON is imported according to the actual file type.
+* **System-Aware Desktop UI**: Uses the host UI font and light/dark preference, keeps the Windows caption synchronized, and updates the window title from the active media and hardware state. `APP_NAME`, `APP_ICON` (PNG path), `APP_THEME=system|light|dark`, `APP_LOCALE=system|en|fa`, and `APP_DIRECTION=auto|ltr|rtl` override deployment branding and appearance without recompilation. These locale, direction, and theme values intentionally match PCController WebUI's appearance contract. Persian uses a bundled Vazirmatn fallback and right-to-left application chrome; live PCController board, relay, effect, and macro names remain exactly as advertised instead of being replaced with translated samples.
 * **Portable Mode**: Automatic detection of `portable.flag` or local `pealayer.json` for self-contained, configuration-free deployments on USB drives.
+* **Reproducible visual QA**: Windows and Linux screenshot update commands, artifact hashes, and stale-image checks are documented in [`docs/SCREENSHOTS.md`](docs/SCREENSHOTS.md).
+* **Documentation**: Operator, integration, packaging, localization, and troubleshooting guidance lives in the [Pealayer Wiki](https://github.com/ToghrolTP/pealayer/wiki).
 
 ---
 
@@ -108,16 +114,17 @@ flowchart TD
     end
 
     subgraph Hardware ["Hardware Interop"]
+        RPC["PCController NDJSON JSON-RPC\n127.0.0.1:8787"]
+        PCC["PCController coordinator\nsole UART owner"]
+        Direct["Explicit direct diagnostic path"]
+        COBS["COBS + CRC-8/ATM\nsequence correlation"]
         Serial["Serial Driver (serialport)"]
-        COBS["COBS + CRC-8 Frame Encoder"]
-        PCC["PCController Wire Contract\n(12-bit PWM + CRC-8/ATM)"]
-        ASCII["Legacy ASCII Protocol"]
         MCU["Microcontroller / 4D Rig\n(Arduino / ESP32 / Relays / PWM)"]
     end
 
     subgraph Network ["Remote Control & Network Server"]
-        HTTP["HTTP Server (tiny_http :8080)\nREST API & Thumbnail Cache"]
-        WS["WebSocket Server (tungstenite :8081)\nReal-time State Broadcast"]
+        HTTP["HTTP Server (tiny_http 127.0.0.1:8080)\nREST API & Thumbnail Cache"]
+        WS["WebSocket Server (tungstenite 127.0.0.1:8081)\nReal-time State Broadcast"]
         WebUI["React 19 Web Remote SPA\n(web_ui / Mobile & Tablet UI)"]
         IPC["Unix Domain Socket IPC\n(pealayer.sock)"]
     end
@@ -128,13 +135,13 @@ flowchart TD
     TL <-->|Edit & Snap| FourD
     FourD --> Engine
     Engine --> Safety
-    Safety --> COBS
-    Safety --> PCC
-    Safety --> ASCII
+    Safety --> RPC
+    RPC <--> PCC
+    PCC <--> MCU
+    Safety -. explicit fallback .-> Direct
+    Direct --> COBS
     COBS --> Serial
-    PCC --> Serial
-    ASCII --> Serial
-    Serial --> MCU
+    Serial -. only without coordinator ownership .-> MCU
 
     Engine -->|State Telemetry| WS
     WS <--> WebUI
@@ -158,26 +165,25 @@ Observe live relay LEDs in the **Hardware Monitor**. Toggle manual overrides, tr
 
 ---
 
-## Hardware Serial Protocol
+## Hardware Coordination and Serial Protocol
 
-Pealayer communicates with microcontrollers (Arduino, ESP32, STM32, USB Relay Boards) via high-speed serial.
+Pealayer normally communicates with PCController over persistent loopback NDJSON JSON-RPC. PCController owns the serial port, converts semantic relay/PWM commands to its native COBS/CRC protocol, correlates board replies, and routes board-originated navigation back to registered applications. This prevents two desktop processes from opening the same UART or applying conflicting safety policies.
 
-### 1. Industrial Binary Protocol (Recommended)
-Pealayer encodes binary frames using **COBS (Consistent Overhead Byte Stuffing)** with a trailing `0x00` delimiter and Dallas/Maxim **CRC-8** (Polynomial `0x31`, reflected as `0x8C`, init `0x00`).
+When a packaged `pccontroller.dll`, `pccontroller.so`, or `pccontroller.dylib` is available beside Pealayer (or through `PEALAYER_PCCONTROLLER_LIBRARY`), Pealayer prefers the real in-process PCController Host. It keeps the Go shared runtime loaded for the process lifetime and executes the canonical `host_create` → `host_start` → `host_call` / `host_endpoints` lifecycle, followed by `host_stop` → `host_destroy` at shutdown. `PEALAYER_PCCONTROLLER_DATA_ROOT` overrides its private Host data directory, and `PEALAYER_PCCONTROLLER_HTTP_ADDRESS` optionally enables an HTTP/WebSocket listener. If the library is absent or another coordinator owns the Host identity/listener, Pealayer falls back to the external coordinator at the selected local endpoint; it never turns that failure into an implicit direct-UART open. The status bar reports the transport that actually connected.
+
+### 1. PCController Coordinator API (Recommended)
 
 ```text
-[ Opcode (1B) | Payload (NB) | CRC-8 (1B) ]  -->  COBS Encode  -->  [ Encoded Data ] + [ 0x00 ]
+Pealayer timeline -> JSON-RPC 2.0 -> PCController -> COBS/CRC-8/ATM -> board
+board keys/menu   -> COBS/CRC-8/ATM -> PCController -> Pealayer JSON-RPC/API
 ```
 
-| Opcode | Command | Payload Format | Description |
-| :---: | :--- | :--- | :--- |
-| `0x01` | **Ping** | _None_ | Heartbeat probe |
-| `0x02` | **RelaySet** | `[ id (u8), state (0 or 1) ]` | Turn Relay `id` (1–8) ON or OFF |
-| `0x03` | **PwmSet** | `[ channel (u8), value (0–255) ]` | Set PWM Actuator Channel (0–15) duty cycle |
-| `0x04` | **AllOff** | _None_ | **Safety Failsafe:** Turn off all relays and PWM lines immediately |
+The default endpoint is `pccontroller://127.0.0.1:8787`. Relay commands use PCController's shared command dispatcher; PWM uses typed `controller.pwm.set`/`controller.pwm.off` methods. Pealayer's live integration test calls `controller.status`, which crosses JSON-RPC, PCController's native board request, COBS decoding, and the correlated response path.
 
-### 2. PCController Wire Contract (Enterprise 4D Theater)
-For enterprise theater installations requiring 12-bit PWM accuracy and sequence tracking:
+Pealayer also registers a leased `pealayer` application instance over PCController's `/ipc` WebSocket, subscribes to pushed state/event/opcode streams, and advertises exact-target player actions. PCController or a board mapping can send `pealayer.play`, `pealayer.pause`, `pealayer.toggle`, `pealayer.seek`, `pealayer.seek_absolute`, `pealayer.volume.set`, `pealayer.open`, or the compatible `app.page` navigation aliases. Pealayer deduplicates each operation/delivery pair, rejects malformed, expired, or unsupported deliveries, applies valid commands on the player thread, and acknowledges the coordinator's delivery nonce.
+
+### 2. Direct PCController Wire Contract (Diagnostic/Fallback Only)
+When the coordinator is unavailable, selecting a `direct:` endpoint uses:
 
 ```text
 [ 0xA5 (Magic) | 0x01 (Rev) | Opcode (u8) | Sequence (u8) | Length (u8) | Payload (NB) | CRC-8/ATM ]
@@ -187,16 +193,10 @@ For enterprise theater installations requiring 12-bit PWM accuracy and sequence 
 * **Opcode `0x31`**: Set digital relay state (`id`, `state`).
 * **Opcode `0x33`**: Emergency All-Off command.
 
-### 3. Legacy ASCII Protocol
-When connecting to legacy serial scripts, Pealayer supports newline-delimited ASCII strings at 9600 baud:
-
-| Command | Action | Example |
-| :--- | :--- | :--- |
-| `R{id}:1\n` | Turn relay `id` (1–8) **ON** | `R1:1\n` (Water Mist ON) |
-| `R{id}:0\n` | Turn relay `id` (1–8) **OFF** | `R1:0\n` (Water Mist OFF) |
-
 > [!IMPORTANT]
-> **Automatic Fail-Safe Zeroing**: On playback pause, seek, stop, track muting, or serial cable disconnection, Pealayer automatically transmits `AllOff` / `R{id}:0\n` to prevent physical solenoids, heaters, or pneumatic valves from sticking energized.
+> Direct serial is a diagnostic escape hatch, not a second production driver. Pealayer refuses it when PCController is reachable unless `PEALAYER_ALLOW_DIRECT_SERIAL=1` is explicitly present.
+> Each direct request waits for the correlated native `ACK`, `HELLO_RESP`, or `ERROR` frame; an absent or mismatched response fails closed instead of being reported as a successful write.
+> **Automatic Fail-Safe Zeroing**: On playback pause, seek, stop, track muting, or serial cable disconnection, Pealayer requests coordinated relay/PWM shutdown (or sends the native COBS `AllOff` frame on the explicit direct path) to prevent physical solenoids, heaters, or pneumatic valves from sticking energized.
 
 ---
 
@@ -205,7 +205,8 @@ When connecting to legacy serial scripts, Pealayer supports newline-delimited AS
 Pealayer embeds a high-performance web service to control playback and view media libraries over local networks.
 
 <div align="center">
-  <b>Web Remote URL:</b> <code>http://&lt;player-ip&gt;:8080/</code> &nbsp;•&nbsp; <b>WebSocket Endpoint:</b> <code>ws://&lt;player-ip&gt;:8081</code>
+  <b>Local Web Remote:</b> <code>http://127.0.0.1:8080/</code> &nbsp;•&nbsp; <b>WebSocket Endpoint:</b> <code>ws://127.0.0.1:8081</code><br>
+  For an intentionally shared LAN remote, set <code>PEALAYER_WEB_BIND</code> to the machine's interface address and use that address from the client.
 </div>
 
 ### REST Endpoints
@@ -214,10 +215,12 @@ Pealayer embeds a high-performance web service to control playback and view medi
 | :--- | :--- | :--- |
 | `GET` | `/api/player/status` | Returns JSON status: `{"status":"ok","playing":bool,"volume":f64,"playback_time":f64,"duration":f64}` |
 | `POST` | `/api/player/command` | Dispatches player commands (JSON payload) |
+| `POST` | `/api/rpc` | JSON-RPC 2.0 methods such as `pealayer.play`, `pealayer.seek`, `pealayer.open`, and `pealayer.status` |
+| `GET` | `/healthz` | Service/API liveness for coordinators and supervisors |
 | `GET` | `/api/fs/browse?dir=<path>` | Lists directory entries, folders, video files, and metadata |
 | `GET` | `/api/fs/thumbnail?path=<path>` | Returns extracted, cached thumbnail image (JPEG/PNG) for media files |
 
-### WebSocket Protocol (`ws://localhost:8081`)
+### WebSocket Protocol (`ws://127.0.0.1:8081`)
 Send and receive JSON command packets in real time:
 
 ```json
@@ -275,7 +278,7 @@ To bridge virtual PTYs directly to a TCP socket:
 | `Ctrl` + `Z` | Undo last timeline edit / move / trim |
 | `Ctrl` + `Y` / `Ctrl` + `Shift` + `Z` | Redo last reverted edit |
 | `Delete` / `Backspace` | Delete selected timeline instances or keyframes |
-| `F1` to `F8` | Hold during playback to record digital macro on Relays 1 to 8 |
+| Available `F1` to `F8` positions | Hold during playback to record the correspondingly ordered PCController-advertised output; unavailable positions do nothing |
 | `W` / `S` or `Up` / `Down` | Ramp analog throttle up / down during curve recording |
 
 ---
@@ -309,7 +312,7 @@ brew install mpv pkg-config
 
 ### 2. Windows Setup (Native & Cross-Compilation)
 
-Because Pealayer links against `libmpv`, you must supply `mpv.lib` and `libmpv-2.dll`:
+Because Pealayer links against `libmpv`, you must supply a matching import library (`libmpv.dll.a` for the GNU toolchain or `mpv.lib` for MSVC) and `libmpv-2.dll`:
 
 1. Download the 64-bit `mpv-dev` package (from [shinchiro/mpv-winbuild-cmake releases](https://sourceforge.net/projects/mpv-player-windows/files/libmpv/) or [zhongfly/mpv-winbuild releases](https://github.com/zhongfly/mpv-winbuild/releases)).
 2. **Native Build**:
@@ -321,6 +324,25 @@ Because Pealayer links against `libmpv`, you must supply `mpv.lib` and `libmpv-2
    cargo run --release
    ```
 3. Place `libmpv-2.dll` directly next to `pealayer.exe` (or add it to your system `%PATH%`).
+
+For a machine-wide installation at `%ProgramFiles%\MPV`, set `LIBMPV_DIR` to that directory (or rely on the script's default) and use the checked-in launcher:
+
+```powershell
+# Build the locked release profile, copy libmpv beside the executable, and start Pealayer.
+.\scripts\run-windows.ps1
+
+# Build without starting the GUI.
+.\scripts\run-windows.ps1 -BuildOnly
+
+# Use the debug profile when iterating locally.
+.\scripts\run-windows.ps1 -DebugBuild
+```
+
+For the canonical tested Windows package, run `build.cmd`. The one Windows checkout lives at `%LOCALAPPDATA%\Programs\Pealayer\source\Pealayer` and the script mirrors PCController's stable layout by publishing the real files `%LOCALAPPDATA%\Programs\Pealayer\bin\pealayer.exe`, `libmpv-2.dll`, and `host-manifest.json` (no hashed package directory and no `bin` junction). Outside that canonical layout it falls back to a repository-local `bin` for contributor builds. Tests and Win32 resources are verified before UPX 5.2 packages the executable with `--best --lzma`; `upx -t` and a packed libmpv smoke test must then pass. Use `build.cmd -NoUpx` only when an unpacked diagnostic binary is intentionally required, or `build.cmd -SkipTests` for a measured incremental package rebuild.
+
+The lower-level launcher accepts additional application arguments after its switches and keeps Cargo output under this repository's `target` directory. It uses `CARGO_ENCODED_RUSTFLAGS` so installation paths containing spaces are passed to `rustc` correctly.
+
+Current mpv builds require a Vulkan loader that exports Vulkan 1.1 entry points. If `mpv.com --version` exits with Windows status `0xc0000139`, update the graphics driver or install the current [LunarG Vulkan Runtime](https://vulkan.lunarg.com/sdk/home) and retry before debugging Pealayer itself.
 
 #### Cross-Compiling for Windows from Linux
 You can cross-compile a Windows PE binary from Linux and test it using Wine:
@@ -346,8 +368,8 @@ wine target/x86_64-pc-windows-gnu/release/pealayer.exe
 Pealayer includes pre-built assets in `web_ui/dist`. If you modify the React remote control app:
 ```bash
 cd web_ui
-yarn install
-yarn build
+npm ci
+npm run build
 cd ..
 ```
 

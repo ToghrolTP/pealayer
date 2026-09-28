@@ -24,6 +24,8 @@ permissions:
 
 env:
   LIBMPV_WINDOWS_RELEASES_API_URL: https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest
+  UPX_WINDOWS_URL: https://github.com/upx/upx/releases/download/v5.2.0/upx-5.2.0-win64.zip
+  UPX_WINDOWS_SHA256: b471ebf1b7f20f4a89150264ed9a008a2a5bfd247f3c6d1184a75bb59ca08f5d
   ARTIFACT_RETENTION_DAYS: "30"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
@@ -93,7 +95,7 @@ jobs:
           if (-not $assets) {
             throw 'Could not find latest x86_64 mpv-dev .7z asset in the GitHub release.'
           }
-          $asset = $assets | Where-Object { $_.name -match '^mpv-dev-x86_64-v3-' } | Select-Object -First 1
+          $asset = $assets | Where-Object { $_.name -notmatch '^mpv-dev-x86_64-v3-' } | Select-Object -First 1
           if (-not $asset) {
             $asset = $assets | Select-Object -First 1
           }
@@ -106,11 +108,21 @@ jobs:
           Write-Host "Using libmpv package: $archiveName"
 
           Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath
+          $actualHash = (Get-FileHash -Path $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expectedHash = [string]$asset.digest -replace '^sha256:', ''
+          if (-not $expectedHash -or $actualHash -ne $expectedHash.ToLowerInvariant()) {
+            throw "libmpv archive SHA-256 mismatch: expected $expectedHash, found $actualHash"
+          }
           & 7z x $archivePath "-o$extractDir" -y
 
-          $importLib = Get-ChildItem -Path $extractDir -Recurse -File | Where-Object {
-            $_.Name -in @('mpv.lib', 'libmpv.dll.a', 'libmpv.a')
-          } | Select-Object -First 1
+          # This job targets MinGW/GNU, so never let filesystem enumeration
+          # accidentally select the MSVC import library first.
+          $importLib = Get-ChildItem -Path $extractDir -Recurse -File -Filter 'libmpv.dll.a' |
+            Select-Object -First 1
+          if (-not $importLib) {
+            $importLib = Get-ChildItem -Path $extractDir -Recurse -File -Filter 'libmpv.a' |
+              Select-Object -First 1
+          }
           if (-not $importLib) {
             throw 'No supported libmpv import library was found in the extracted package.'
           }
@@ -129,11 +141,39 @@ jobs:
           "MPV_IMPORT_LIB_PATH=$($importLib.FullName)" >> $env:GITHUB_ENV
           "MPV_DLL_PATH=$($mpvDll.FullName)" >> $env:GITHUB_ENV
           "RUSTFLAGS=-L native=$($importLib.DirectoryName)" >> $env:GITHUB_ENV
+          Add-Content -Path $env:GITHUB_PATH -Value $mpvDll.DirectoryName
 
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Windows libmpv package"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Source: $downloadUrl"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Import library: $($importLib.Name)"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Runtime DLL: $($mpvDll.FullName)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- SHA256: $actualHash"
+
+      - name: Install hash-locked UPX (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'upx-5.2.0-win64.zip'
+          $extract = Join-Path $env:RUNNER_TEMP 'upx'
+          Invoke-WebRequest -Uri '${{ env.UPX_WINDOWS_URL }}' -OutFile $archive
+          $actual = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '${{ env.UPX_WINDOWS_SHA256 }}') {
+            throw "UPX archive SHA-256 mismatch: $actual"
+          }
+          Expand-Archive -Path $archive -DestinationPath $extract
+          $upx = Get-ChildItem -Path $extract -Recurse -Filter upx.exe | Select-Object -First 1
+          if (-not $upx) { throw 'UPX executable was not found after extraction.' }
+          Add-Content -Path $env:GITHUB_PATH -Value $upx.DirectoryName
+          "UPX_PATH=$($upx.FullName)" >> $env:GITHUB_ENV
+          & $upx.FullName --version
+
+      - name: Run tests (Windows GNU)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CARGO_BUILD_JOBS: "1"
+        run: cargo test --locked --jobs 1 --target x86_64-pc-windows-gnu
 
       - name: Build release binary
         if: runner.os != 'Windows'
@@ -142,6 +182,20 @@ jobs:
       - name: Build release binary (Windows GNU)
         if: runner.os == 'Windows'
         run: cargo build --release --locked --target x86_64-pc-windows-gnu
+
+      - name: Pack and smoke-test Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $binary = Join-Path $PWD 'target\x86_64-pc-windows-gnu\release\pealayer.exe'
+          Copy-Item -LiteralPath $env:MPV_DLL_PATH -Destination (Split-Path $binary) -Force
+          & $env:UPX_PATH --best --lzma $binary
+          if ($LASTEXITCODE -ne 0) { throw "UPX compression failed: $LASTEXITCODE" }
+          & $env:UPX_PATH -t $binary
+          if ($LASTEXITCODE -ne 0) { throw "UPX validation failed: $LASTEXITCODE" }
+          $smoke = Start-Process -FilePath $binary -ArgumentList '--smoke-test' -WorkingDirectory (Split-Path $binary) -Wait -PassThru
+          if ($smoke.ExitCode -ne 0) { throw "Packed libmpv smoke test failed: $($smoke.ExitCode)" }
 
       - name: Package build output
         id: package
@@ -160,6 +214,8 @@ jobs:
           fi
           cp "${binary_path}" "${DIST_DIR}/"
           cp README.md LICENSE "${DIST_DIR}/"
+          mkdir -p "${DIST_DIR}/assets/fonts"
+          cp assets/fonts/Vazirmatn-Regular.ttf "${DIST_DIR}/assets/fonts/"
 
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
             dll_source="${MPV_DLL_PATH//\\//}"

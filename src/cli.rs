@@ -2,6 +2,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
+use crate::platform::interop::{InteropCommand, LaunchRequest};
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CliOptions {
     pub target: Option<String>,
@@ -90,10 +92,14 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
 }
 
 pub fn send_remote_command(cmd_str: &str) -> Result<String, String> {
+    let address = format!(
+        "127.0.0.1:{}",
+        crate::config::runtime_port("PEALAYER_IPC_PORT", 8082)
+    );
     let mut stream = TcpStream::connect_timeout(
-        &"127.0.0.1:8082".parse().unwrap(),
+        &address.parse().unwrap(),
         Duration::from_millis(500),
-    ).map_err(|e| format!("Could not connect to Pealayer on 127.0.0.1:8082: {}", e))?;
+    ).map_err(|e| format!("Could not connect to the player instance at {address}: {e}"))?;
 
     stream.set_read_timeout(Some(Duration::from_secs(2))).map_err(|e| e.to_string())?;
 
@@ -143,20 +149,54 @@ pub fn send_remote_command(cmd_str: &str) -> Result<String, String> {
     Ok(response.trim().to_string())
 }
 
-pub fn try_forward_to_existing_instance(target: &str) -> bool {
-    let payload = serde_json::json!({
-        "command": "open",
-        "target": target
-    }).to_string() + "\n";
+pub fn launch_request(options: &CliOptions) -> LaunchRequest {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    LaunchRequest {
+        operation_id: format!(
+            "launch-{}-{timestamp}-{}",
+            std::process::id(),
+            REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ),
+        sender_working_directory: std::env::current_dir()
+            .ok()
+            .map(|path| path.to_string_lossy().to_string()),
+        target: options.target.clone(),
+        fullscreen: options.fullscreen,
+        volume: options.volume,
+        activate: true,
+    }
+}
+
+pub fn try_forward_to_existing_instance(options: &CliOptions) -> bool {
+    let command = InteropCommand::Launch {
+        request: launch_request(options),
+    };
+    let payload = match serde_json::to_string(&command) {
+        Ok(payload) => payload + "\n",
+        Err(_) => return false,
+    };
+    let address = format!(
+        "127.0.0.1:{}",
+        crate::config::runtime_port("PEALAYER_IPC_PORT", 8082)
+    );
     if let Ok(mut stream) = TcpStream::connect_timeout(
-        &"127.0.0.1:8082".parse().unwrap(),
+        &address.parse().unwrap(),
         Duration::from_millis(200),
     ) {
         let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
         if stream.write_all(payload.as_bytes()).is_ok() && stream.flush().is_ok() {
             let mut reader = BufReader::new(stream);
             let mut line = String::new();
-            if reader.read_line(&mut line).is_ok() && line.contains("\"status\":\"ok\"") {
+            if reader.read_line(&mut line).is_ok()
+                && line.contains("\"status\":\"accepted\"")
+            {
                 return true;
             }
         }

@@ -1,6 +1,7 @@
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 static WINDOW_HWND: AtomicIsize = AtomicIsize::new(0);
+static WINDOW_DARK_THEME: AtomicBool = AtomicBool::new(true);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskbarProgressFlag {
@@ -69,6 +70,22 @@ pub fn get_registered_hwnd() -> isize {
     WINDOW_HWND.load(Ordering::SeqCst)
 }
 
+pub fn set_window_theme(dark: bool) {
+    let previous = WINDOW_DARK_THEME.swap(dark, Ordering::SeqCst);
+    let hwnd = get_registered_hwnd();
+    if hwnd != 0 && previous != dark {
+        apply_windows_window_decorations(hwnd);
+    }
+}
+
+fn decoration_colors(dark: bool) -> (u32, u32) {
+    if dark {
+        (0x00212121, 0x00FFFFFF)
+    } else {
+        (0x00F4F4F4, 0x00111111)
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub fn apply_windows_window_decorations(hwnd_raw: isize) {
     use windows::Win32::Foundation::{BOOL, HWND};
@@ -86,10 +103,12 @@ pub fn apply_windows_window_decorations(hwnd_raw: isize) {
         return;
     }
     let hwnd = HWND(hwnd_raw as *mut _);
+    let dark = WINDOW_DARK_THEME.load(Ordering::SeqCst);
+    let (caption_color, text_color) = decoration_colors(dark);
 
     unsafe {
         // 1. Enable immersive dark mode (attribute 20, fallback 19 for older Win10 builds)
-        let dark_mode = BOOL::from(true);
+        let dark_mode = BOOL::from(dark);
         if DwmSetWindowAttribute(
             hwnd,
             DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -113,17 +132,16 @@ pub fn apply_windows_window_decorations(hwnd_raw: isize) {
             std::mem::size_of::<u32>() as u32,
         ).is_err() {
             // Fallback for Windows 11 22000: DWMWA_MICA_EFFECT = 1029
-            let mica_legacy = BOOL::from(true);
+            let mica_compat = BOOL::from(true);
             let _ = DwmSetWindowAttribute(
                 hwnd,
                 DWMWINDOWATTRIBUTE(1029),
-                &mica_legacy as *const _ as *const _,
+                &mica_compat as *const _ as *const _,
                 std::mem::size_of::<BOOL>() as u32,
             );
         }
 
-        // 3. Caption Color: #212121 (RGB 33, 33, 33 -> COLORREF 0x00212121)
-        let caption_color: u32 = 0x00212121;
+        // 3. Keep native caption and text colors aligned with the app theme.
         let _ = DwmSetWindowAttribute(
             hwnd,
             DWMWA_CAPTION_COLOR,
@@ -131,8 +149,6 @@ pub fn apply_windows_window_decorations(hwnd_raw: isize) {
             std::mem::size_of::<u32>() as u32,
         );
 
-        // 4. Text Color: White (0x00FFFFFF)
-        let text_color: u32 = 0x00FFFFFF;
         let _ = DwmSetWindowAttribute(
             hwnd,
             DWMWA_TEXT_COLOR,
@@ -256,6 +272,7 @@ mod tests {
         let b: u32 = 33;
         let colorref = r | (g << 8) | (b << 16);
         assert_eq!(colorref, 0x00212121);
+        assert_eq!(decoration_colors(true), (0x00212121, 0x00FFFFFF));
+        assert_eq!(decoration_colors(false), (0x00F4F4F4, 0x00111111));
     }
 }
-

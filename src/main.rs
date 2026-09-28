@@ -3,11 +3,11 @@
 pub mod app;
 pub mod cli;
 pub mod config;
+pub mod four_d;
 pub mod mpv;
 pub mod platform;
 pub mod server;
 pub mod ui;
-pub mod four_d;
 
 use app::PealayerApp;
 use eframe::egui;
@@ -19,7 +19,76 @@ use mpv::render::RenderContextWrapper;
 use mpv::render::mpv_get_proc_address;
 use std::sync::{Arc, Mutex};
 
+fn configure_ui_fonts(context: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+
+    // Prefer the platform UI face. Vazirmatn remains immediately behind it so
+    // Persian and Arabic text has a bundled, release-safe fallback.
+    let system_font = [
+        #[cfg(target_os = "windows")]
+        r"C:\Windows\Fonts\segoeui.ttf",
+        #[cfg(target_os = "macos")]
+        "/System/Library/Fonts/SFNS.ttf",
+        #[cfg(target_os = "linux")]
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        #[cfg(target_os = "linux")]
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    .iter()
+    .find_map(|path| std::fs::read(path).ok());
+
+    fonts.font_data.insert(
+        "pealayer-vazirmatn".to_owned(),
+        Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/Vazirmatn-Regular.ttf"
+        ))),
+    );
+    let proportional = fonts
+        .families
+        .get_mut(&egui::FontFamily::Proportional)
+        .expect("egui provides a proportional font family");
+    proportional.insert(0, "pealayer-vazirmatn".to_owned());
+
+    if let Some(bytes) = system_font {
+        fonts.font_data.insert(
+            "pealayer-system-ui".to_owned(),
+            Arc::new(egui::FontData::from_owned(bytes)),
+        );
+        proportional.insert(0, "pealayer-system-ui".to_owned());
+    }
+
+    context.set_fonts(fonts);
+}
+
+fn subtitle_font_directory() -> Option<std::path::PathBuf> {
+    let packaged = std::env::current_exe()
+        .ok()
+        .and_then(|executable| {
+            executable
+                .parent()
+                .map(|directory| directory.join("assets/fonts"))
+        })
+        .filter(|directory| directory.join("Vazirmatn-Regular.ttf").is_file());
+    packaged.or_else(|| {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/fonts");
+        source
+            .join("Vazirmatn-Regular.ttf")
+            .is_file()
+            .then_some(source)
+    })
+}
+
 fn main() -> eframe::Result {
+    if std::env::args().any(|argument| argument == "--smoke-test") {
+        match Mpv::new() {
+            Ok(_) => std::process::exit(0),
+            Err(error) => {
+                eprintln!("libmpv smoke test failed: {error}");
+                std::process::exit(2);
+            }
+        }
+    }
+
     env_logger::init();
 
     let args: Vec<String> = std::env::args().collect();
@@ -32,22 +101,23 @@ fn main() -> eframe::Result {
             println!("{}", ver);
             return Ok(());
         }
-        Ok(crate::cli::CliAction::SendRemote(cmd)) => {
-            match crate::cli::send_remote_command(&cmd) {
-                Ok(resp) => {
-                    println!("{}", resp);
-                    return Ok(());
-                }
-                Err(e) => {
-                    eprintln!("{}", e);
-                    std::process::exit(1);
-                }
+        Ok(crate::cli::CliAction::SendRemote(cmd)) => match crate::cli::send_remote_command(&cmd) {
+            Ok(resp) => {
+                println!("{}", resp);
+                return Ok(());
             }
-        }
+            Err(e) => {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+        },
         Ok(crate::cli::CliAction::RegisterAssociations) => {
             match crate::platform::associations::register_file_associations(None) {
                 Ok(count) => {
-                    println!("Successfully registered Pealayer for {} media file types.", count);
+                    println!(
+                        "Successfully registered Pealayer for {} media file types.",
+                        count
+                    );
                     return Ok(());
                 }
                 Err(e) => {
@@ -59,7 +129,10 @@ fn main() -> eframe::Result {
         Ok(crate::cli::CliAction::UnregisterAssociations) => {
             match crate::platform::associations::unregister_file_associations() {
                 Ok(count) => {
-                    println!("Successfully unregistered Pealayer media file associations ({} processed).", count);
+                    println!(
+                        "Successfully unregistered Pealayer media file associations ({} processed).",
+                        count
+                    );
                     return Ok(());
                 }
                 Err(e) => {
@@ -69,11 +142,9 @@ fn main() -> eframe::Result {
             }
         }
         Ok(crate::cli::CliAction::RunGui(opts)) => {
-            if let Some(ref target) = opts.target {
-                if crate::cli::try_forward_to_existing_instance(target) {
-                    println!("Forwarded '{}' to active Pealayer instance.", target);
-                    return Ok(());
-                }
+            if crate::cli::try_forward_to_existing_instance(&opts) {
+                println!("Forwarded launch request to active Pealayer instance.");
+                return Ok(());
             }
             opts
         }
@@ -83,11 +154,21 @@ fn main() -> eframe::Result {
         }
     };
 
-    let icon_data = eframe::icon_data::from_png_bytes(include_bytes!("../assets/pealayer-icon.png")).ok();
+    let launch_config = crate::config::AppConfig::load();
+    let app_name = crate::config::resolved_app_name(&launch_config);
+    let language_preference = crate::config::resolved_language_preference(&launch_config);
+    let language = crate::config::resolve_language(language_preference);
+    let direction_preference = crate::config::resolved_direction_preference(&launch_config);
+    let rtl = crate::config::resolve_rtl(direction_preference, language);
+    let initial_window_title = app_name.clone();
+    let icon_data = crate::config::resolved_app_icon(&launch_config)
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| eframe::icon_data::from_png_bytes(&bytes).ok())
+        .or_else(|| {
+            eframe::icon_data::from_png_bytes(include_bytes!("../assets/pealayer-icon.png")).ok()
+        });
 
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_inner_size([800.0, 600.0])
-        .with_transparent(true);
+    let mut viewport = egui::ViewportBuilder::default().with_inner_size([800.0, 600.0]);
     if cli_options.fullscreen {
         viewport = viewport.with_fullscreen(true);
     }
@@ -102,16 +183,26 @@ fn main() -> eframe::Result {
     };
 
     eframe::run_native(
-        "Pealayer",
+        &initial_window_title,
         options,
         Box::new(move |cc| {
-            cc.egui_ctx.set_theme(egui::ThemePreference::Dark);
-            let mut visuals = egui::Visuals::dark();
-            visuals.panel_fill = egui::Color32::from_rgb(33, 33, 33); // #212121
-            visuals.window_fill = egui::Color32::from_rgb(26, 26, 26); // #1a1a1a
-            cc.egui_ctx.set_visuals_of(egui::Theme::Dark, visuals.clone());
-            cc.egui_ctx.set_visuals_of(egui::Theme::Light, visuals.clone());
-            cc.egui_ctx.set_visuals(visuals);
+            let loaded_config = launch_config.clone();
+            configure_ui_fonts(&cc.egui_ctx);
+            let theme_preference = match crate::config::resolved_theme(&loaded_config) {
+                crate::config::AppTheme::System => egui::ThemePreference::System,
+                crate::config::AppTheme::Light => egui::ThemePreference::Light,
+                crate::config::AppTheme::Dark => egui::ThemePreference::Dark,
+            };
+            cc.egui_ctx.set_theme(theme_preference);
+            let mut dark_visuals = egui::Visuals::dark();
+            dark_visuals.panel_fill = egui::Color32::from_rgb(33, 33, 33);
+            dark_visuals.window_fill = egui::Color32::from_rgb(26, 26, 26);
+            cc.egui_ctx.set_visuals_of(egui::Theme::Dark, dark_visuals);
+            cc.egui_ctx
+                .set_visuals_of(egui::Theme::Light, egui::Visuals::light());
+            crate::platform::windows::set_window_theme(
+                cc.egui_ctx.global_style().visuals.dark_mode,
+            );
 
             let mut style = (*cc.egui_ctx.global_style()).clone();
             for font_id in style.text_styles.values_mut() {
@@ -126,15 +217,16 @@ fn main() -> eframe::Result {
                 .clone()
                 .expect("Glow backend must provide get_proc_address");
 
-
+            let subtitle_font_directory = subtitle_font_directory();
             let mpv = Mpv::with_initializer(|init| {
                 init.set_property("vo", "libmpv")?;
                 init.set_property("keep-open", "always")?;
 
                 // Set up Arabic/Farsi Vazirmatn font for subtitles
-                let current_dir = std::env::current_dir().unwrap();
-                let font_dir = current_dir.join("test-data").join("vazirmatn");
-                if let Some(font_dir_str) = font_dir.to_str() {
+                if let Some(font_dir_str) = subtitle_font_directory
+                    .as_deref()
+                    .and_then(std::path::Path::to_str)
+                {
                     init.set_property("sub-fonts-dir", font_dir_str)?;
                 }
                 init.set_property("sub-font", "Vazirmatn")?;
@@ -205,18 +297,53 @@ fn main() -> eframe::Result {
                 egui_ctx2.request_repaint();
             });
 
-            let loaded_config = crate::config::AppConfig::load();
             let initial_volume = cli_options.volume.unwrap_or(loaded_config.volume);
             let _ = mpv_static.set_property("volume", initial_volume);
             let _ = mpv_static.set_property("mute", loaded_config.is_muted);
             crate::platform::windows::sync_windows_jump_list(&loaded_config.recent_media);
 
             let (interop_tx, interop_rx) = std::sync::mpsc::channel();
-            crate::platform::interop::spawn_interop_listener(interop_tx.clone(), cc.egui_ctx.clone());
+            crate::platform::interop::spawn_interop_listener(
+                interop_tx.clone(),
+                cc.egui_ctx.clone(),
+            );
 
-            let (web_state_tx, web_cmd_rx) = crate::server::spawn_web_server(8080, 8081, cc.egui_ctx.clone());
+            let http_port = crate::config::runtime_port("PEALAYER_HTTP_PORT", 8080);
+            let ws_port = crate::config::runtime_port("PEALAYER_WS_PORT", 8081);
+            let web_runtime = crate::server::WebRuntimeConfig::production(
+                app_name.clone(),
+                ws_port,
+                match language {
+                    crate::config::AppLanguage::Persian => "fa",
+                    _ => "en",
+                }
+                .to_string(),
+                if rtl { "rtl" } else { "ltr" }.to_string(),
+                match crate::config::resolved_theme(&loaded_config) {
+                    crate::config::AppTheme::Light => "light",
+                    crate::config::AppTheme::Dark => "dark",
+                    crate::config::AppTheme::System => "system",
+                }
+                .to_string(),
+            );
+            let (web_state_tx, web_cmd_rx) = crate::server::spawn_web_server_configured(
+                http_port,
+                ws_port,
+                cc.egui_ctx.clone(),
+                web_runtime,
+            );
+            let controller_cmd_rx =
+                crate::platform::interop::spawn_pccontroller_action_bridge(cc.egui_ctx.clone());
 
             let mut app = PealayerApp {
+                app_name: app_name.clone(),
+                app_publisher: crate::config::resolved_app_publisher(&loaded_config),
+                app_copyright: crate::config::resolved_app_copyright(&loaded_config),
+                last_window_title: String::new(),
+                language_preference,
+                language,
+                direction_preference,
+                rtl,
                 mpv: mpv_static,
                 mpv_client,
                 render_context: Arc::new(Mutex::new(Some(RenderContextWrapper(render_context)))),
@@ -237,7 +364,9 @@ fn main() -> eframe::Result {
                 current_aid: "no".to_string(),
                 audio_tracks: Vec::new(),
                 seek_pos: None,
-                seek_controller: crate::mpv::seek::SeekController::new(crate::mpv::seek::MpvSeekBackend::new(mpv_static)),
+                seek_controller: crate::mpv::seek::SeekController::new(
+                    crate::mpv::seek::MpvSeekBackend::new(mpv_static),
+                ),
                 was_playing_before_scrub: false,
                 is_scrubbing: false,
                 last_mouse_activity: std::time::Instant::now(),
@@ -264,118 +393,14 @@ fn main() -> eframe::Result {
                 active_keyframe_drag: None,
                 timeline_zoom: 100.0,
                 undo_stack: crate::four_d::history::UndoStack::default(),
-                relay_overrides: [None; 9],
-                preset_library: vec![
-                    // Atmospherics
-                    crate::app::EffectPreset {
-                        category: "Atmospherics".to_string(),
-                        effect: crate::four_d::models::Effect::with_target(
-                            "Water Splash".to_string(),
-                            "💧".to_string(),
-                            1500,
-                            crate::four_d::models::HardwareTarget::Water,
-                            crate::four_d::patterns::generate_constant(1, true, 1500),
-                        ),
-                    },
-                    crate::app::EffectPreset {
-                        category: "Atmospherics".to_string(),
-                        effect: crate::four_d::models::Effect::with_target(
-                            "Mist Spray".to_string(),
-                            "🌫".to_string(),
-                            3000,
-                            crate::four_d::models::HardwareTarget::Water,
-                            crate::four_d::patterns::generate_constant(1, true, 3000),
-                        ),
-                    },
-                    crate::app::EffectPreset {
-                        category: "Atmospherics".to_string(),
-                        effect: crate::four_d::models::Effect::with_target(
-                            "Wind Blast".to_string(),
-                            "💨".to_string(),
-                            2000,
-                            crate::four_d::models::HardwareTarget::Wind,
-                            crate::four_d::patterns::generate_constant(2, true, 2000),
-                        ),
-                    },
-                    crate::app::EffectPreset {
-                        category: "Atmospherics".to_string(),
-                        effect: crate::four_d::models::Effect::with_target(
-                            "Wind Gale".to_string(),
-                            "🌀".to_string(),
-                            5000,
-                            crate::four_d::models::HardwareTarget::Wind,
-                            crate::four_d::patterns::generate_constant(2, true, 5000),
-                        ),
-                    },
-                    // Physical Effects
-                    crate::app::EffectPreset {
-                        category: "Physical Effects".to_string(),
-                        effect: crate::four_d::models::Effect::with_target(
-                            "Seat Rumble".to_string(),
-                            "📳".to_string(),
-                            1000,
-                            crate::four_d::models::HardwareTarget::SeatVibration,
-                            crate::four_d::patterns::generate_constant(3, true, 1000),
-                        ),
-                    },
-                    crate::app::EffectPreset {
-                        category: "Physical Effects".to_string(),
-                        effect: crate::four_d::models::Effect::with_target(
-                            "Seat Shake".to_string(),
-                            "🫨".to_string(),
-                            2500,
-                            crate::four_d::models::HardwareTarget::SeatVibration,
-                            crate::four_d::patterns::generate_constant(3, true, 2500),
-                        ),
-                    },
-                    crate::app::EffectPreset {
-                        category: "Physical Effects".to_string(),
-                        effect: crate::four_d::models::Effect::with_target(
-                            "Smoke Blast".to_string(),
-                            "💨".to_string(),
-                            1800,
-                            crate::four_d::models::HardwareTarget::Smoke,
-                            crate::four_d::patterns::generate_constant(4, true, 1800),
-                        ),
-                    },
-                    crate::app::EffectPreset {
-                        category: "Physical Effects".to_string(),
-                        effect: crate::four_d::models::Effect::with_target(
-                            "Fog Screen".to_string(),
-                            "🌫".to_string(),
-                            4000,
-                            crate::four_d::models::HardwareTarget::Smoke,
-                            crate::four_d::patterns::generate_constant(4, true, 4000),
-                        ),
-                    },
-                    crate::app::EffectPreset {
-                        category: "Auxiliary Controls".to_string(),
-                        effect: crate::four_d::models::Effect::with_target(
-                            "Aux Trigger A".to_string(),
-                            "⚡".to_string(),
-                            1500,
-                            crate::four_d::models::HardwareTarget::Auxiliary,
-                            crate::four_d::patterns::generate_constant(5, true, 1500),
-                        ),
-                    },
-                    crate::app::EffectPreset {
-                        category: "Auxiliary Controls".to_string(),
-                        effect: crate::four_d::models::Effect::with_target(
-                            "Aux Trigger B".to_string(),
-                            "🔌".to_string(),
-                            2400,
-                            crate::four_d::models::HardwareTarget::Auxiliary,
-                            crate::four_d::patterns::generate_constant(6, true, 2400),
-                        ),
-                    },
-                ],
+                relay_overrides: std::collections::BTreeSet::new(),
                 effects_search_query: String::new(),
-                track_muted: [false; 9],
-                track_soloed: [false; 9],
-                track_locked: [false; 9],
+                track_muted: std::collections::BTreeSet::new(),
+                track_soloed: std::collections::BTreeSet::new(),
+                track_locked: std::collections::BTreeSet::new(),
                 active_drag: None,
                 estop_active: false,
-                serial_port: "COM3".to_string(),
+                serial_port: crate::four_d::controller::DEFAULT_ENDPOINT.to_string(),
                 is_connected: false,
                 lasso_origin: None,
                 lasso_rect: None,
@@ -389,6 +414,7 @@ fn main() -> eframe::Result {
                 show_shortcuts_dialog: false,
                 show_about_dialog: false,
                 interop_rx,
+                controller_cmd_rx,
                 web_state_tx,
                 web_cmd_rx,
                 last_web_broadcast: None,
