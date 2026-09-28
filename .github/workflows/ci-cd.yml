@@ -45,6 +45,14 @@ jobs:
             os: windows-latest
             binary_name: pealayer.exe
             archive_ext: zip
+          - platform: macos-aarch64
+            os: macos-14
+            binary_name: pealayer
+            archive_ext: zip
+          - platform: macos-x86_64
+            os: macos-13
+            binary_name: pealayer
+            archive_ext: zip
 
     steps:
       - name: Checkout
@@ -71,8 +79,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libmpv-dev pkg-config libasound2-dev libx11-dev libxcb-shape0-dev libxcb-xfixes0-dev libudev-dev
 
+      - name: Install macOS build dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew list mpv &>/dev/null || brew install mpv
+          brew list pkg-config &>/dev/null || brew install pkg-config
+          if [[ "${RUNNER_ARCH}" == "ARM64" ]]; then
+            BREW_PREFIX="/opt/homebrew"
+          else
+            BREW_PREFIX="/usr/local"
+          fi
+          echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/mpv/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "DYLD_FALLBACK_LIBRARY_PATH=${BREW_PREFIX}/lib" >> "$GITHUB_ENV"
+          echo "${BREW_PREFIX}/bin" >> "$GITHUB_PATH"
+
       - name: Run tests (Linux)
         if: runner.os == 'Linux'
+        run: cargo test --locked
+
+      - name: Run tests (macOS)
+        if: runner.os == 'macOS'
         run: cargo test --locked
 
       - name: Download latest libmpv from GitHub releases (Windows)
@@ -197,6 +223,11 @@ jobs:
           $smoke = Start-Process -FilePath $binary -ArgumentList '--smoke-test' -WorkingDirectory (Split-Path $binary) -Wait -PassThru
           if ($smoke.ExitCode -ne 0) { throw "Packed libmpv smoke test failed: $($smoke.ExitCode)" }
 
+      - name: Smoke-test binary (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          ./target/release/pealayer --smoke-test
+
       - name: Package build output
         id: package
         shell: bash
@@ -223,6 +254,21 @@ jobs:
             cp "${dll_source}" "${DIST_DIR}/${dll_name}"
           fi
 
+          if [[ "${RUNNER_OS}" == "macOS" ]]; then
+            if [[ "${RUNNER_ARCH}" == "ARM64" ]]; then
+              BREW_PREFIX="/opt/homebrew"
+            else
+              BREW_PREFIX="/usr/local"
+            fi
+            if [[ -f "${BREW_PREFIX}/lib/libmpv.dylib" ]]; then
+              cp -L "${BREW_PREFIX}/lib/libmpv.dylib" "${DIST_DIR}/" 2>/dev/null || true
+            fi
+            if [[ -f "${BREW_PREFIX}/lib/libmpv.2.dylib" ]]; then
+              cp -L "${BREW_PREFIX}/lib/libmpv.2.dylib" "${DIST_DIR}/" 2>/dev/null || true
+            fi
+            install_name_tool -add_rpath "@executable_path" "${DIST_DIR}/${BINARY_NAME}" 2>/dev/null || true
+          fi
+
           if [[ -d "web_ui/dist" ]]; then
             mkdir -p "${DIST_DIR}/web_ui"
             cp -r "web_ui/dist" "${DIST_DIR}/web_ui/"
@@ -231,7 +277,11 @@ jobs:
           SAFE_REF="${GITHUB_REF_NAME//\//-}"
           BUNDLE_BASE="Pealayer-${PLATFORM}-${SAFE_REF}-${GITHUB_SHA::7}"
           if [[ "${ARCHIVE_EXT}" == "zip" ]]; then
-            (cd dist && 7z a "${BUNDLE_BASE}.zip" "${PLATFORM}")
+            if command -v 7z >/dev/null 2>&1; then
+              (cd dist && 7z a "${BUNDLE_BASE}.zip" "${PLATFORM}")
+            else
+              (cd dist && zip -r "${BUNDLE_BASE}.zip" "${PLATFORM}")
+            fi
             ARCHIVE_PATH="dist/${BUNDLE_BASE}.zip"
           else
             tar -C dist -czf "dist/${BUNDLE_BASE}.tar.gz" "${PLATFORM}"

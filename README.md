@@ -13,7 +13,7 @@
 [![GUI: egui](https://img.shields.io/badge/GUI-egui%20%7C%20eframe-blue?logo=rust)](https://github.com/emilk/egui)
 [![Engine: mpv](https://img.shields.io/badge/Engine-mpv%20%7C%20libmpv2-purple)](https://mpv.io/)
 [![Web Remote: React 19](https://img.shields.io/badge/Web%20Remote-React%2019%20%2B%20Vite-61DAFB?logo=react)](web_ui)
-[![Platforms: Linux | Windows](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows-lightgrey)](https://github.com/ToghrolTP/pealayer)
+[![Platforms: Linux | Windows | macOS](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)](https://github.com/ToghrolTP/pealayer)
 
 <br/>
 

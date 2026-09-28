@@ -1,8 +1,10 @@
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 use std::path::PathBuf;
 
 pub const SUPPORTED_EXTENSIONS: &[&str] = &["mp4", "mkv", "avi", "webm", "mov", "flv", "mp3", "flac", "wav"];
 
 pub fn register_as_default_player() -> Result<String, String> {
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     let current_exe = std::env::current_exe()
         .map_err(|e| format!("Failed getting executable path: {}", e))?;
 
