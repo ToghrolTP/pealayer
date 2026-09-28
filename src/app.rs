@@ -1246,6 +1246,12 @@ impl PealayerApp {
                 self.workspace_before_fullscreen = Some(self.show_four_d_editor);
             }
             self.show_four_d_editor = false;
+        } else if !self.was_fullscreen {
+            // The OS may not have observed a rapid ON request yet. Cancelling
+            // that pending entry must restore the workspace staged above.
+            if let Some(previous_workspace) = self.workspace_before_fullscreen.take() {
+                self.show_four_d_editor = previous_workspace;
+            }
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(enabled));
         self.set_osd(if enabled {
@@ -2099,6 +2105,28 @@ mod tests {
         app.observe_fullscreen_state(false);
         assert!(app.show_four_d_editor);
         assert_eq!(app.workspace_before_fullscreen, None);
+    }
+
+    #[test]
+    fn rapid_remote_fullscreen_on_off_restores_nle_before_viewport_entry() {
+        let mut app = PealayerApp::default();
+        let ctx = egui::Context::default();
+        app.show_four_d_editor = true;
+
+        app.set_fullscreen(&ctx, true);
+        app.set_fullscreen(&ctx, false);
+
+        assert!(app.show_four_d_editor);
+        assert_eq!(app.workspace_before_fullscreen, None);
+        assert!(!app.was_fullscreen);
+
+        // If the delayed ON reaches the viewport despite cancellation, the
+        // observed fullscreen frame still forces Simple and exits back to NLE.
+        app.observe_fullscreen_state(true);
+        assert!(!app.show_four_d_editor);
+        assert_eq!(app.workspace_before_fullscreen, Some(true));
+        app.observe_fullscreen_state(false);
+        assert!(app.show_four_d_editor);
     }
 
     #[test]
