@@ -110,6 +110,19 @@ impl HardwareTransport {
             Self::DirectSerial { .. } => Ok(None),
         }
     }
+
+    fn call_controller(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        match self {
+            Self::Controller(client) => client.call(method, params),
+            Self::DirectSerial { .. } => Err(
+                "this hardware action requires the PCController coordinator".to_string(),
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -125,9 +138,14 @@ pub enum EngineMessage {
     LiveActuatorOverride { channel: u8, value: u8 },
     Seek(u64), // Emitted when user seeks, to clear current active queue and reset hardware
     SendCommand(Command), // Manual override or direct hardware command
+    ControllerCall {
+        method: String,
+        params: serde_json::Value,
+    },
 }
 
 pub struct EngineHandle {
+    lifecycle: Arc<()>,
     pub playback_time_ms: Arc<AtomicU64>,
     pub is_playing: Arc<AtomicBool>,
     pub estop_active: Arc<AtomicBool>,
@@ -140,6 +158,102 @@ pub struct EngineHandle {
     pub sender: mpsc::Sender<EngineMessage>,
 }
 
+/// Weak access to the live hardware view for PCController's push transport.
+/// The weak references make the WebSocket worker self-cancelling when the app
+/// and its engine are dropped, without keeping a hidden process-lifetime task.
+#[derive(Clone)]
+pub struct ControllerPushTarget {
+    lifecycle: std::sync::Weak<()>,
+    connection_requested: std::sync::Weak<AtomicBool>,
+    serial_port: std::sync::Weak<Mutex<String>>,
+    hardware_capabilities:
+        std::sync::Weak<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
+}
+
+impl EngineHandle {
+    pub fn controller_push_target(&self) -> ControllerPushTarget {
+        ControllerPushTarget {
+            lifecycle: Arc::downgrade(&self.lifecycle),
+            connection_requested: Arc::downgrade(&self.connection_requested),
+            serial_port: Arc::downgrade(&self.serial_port),
+            hardware_capabilities: Arc::downgrade(&self.hardware_capabilities),
+        }
+    }
+}
+
+impl ControllerPushTarget {
+    pub(crate) fn is_alive(&self) -> bool {
+        self.lifecycle.strong_count() > 0
+    }
+
+    /// Returns the selected WebSocket URL only while the user wants a
+    /// PCController connection. Direct-serial diagnostics never start a second
+    /// coordinator transport.
+    pub(crate) fn websocket_endpoint(&self) -> Option<String> {
+        if !self.connection_requested.upgrade()?.load(Ordering::Relaxed) {
+            return None;
+        }
+        let endpoint = self.serial_port.upgrade()?.lock().ok()?.clone();
+        if !crate::four_d::controller::is_controller_endpoint(&endpoint) {
+            return None;
+        }
+        let address = endpoint
+            .strip_prefix("pccontroller://")
+            .or_else(|| endpoint.strip_prefix("tcp://"))
+            .unwrap_or(&endpoint);
+        Some(format!("ws://{address}/ipc"))
+    }
+
+    pub(crate) fn apply_notification(&self, method: &str, params: &serde_json::Value) -> bool {
+        let Some(capabilities) = self.hardware_capabilities.upgrade() else {
+            return false;
+        };
+        let Ok(mut capabilities) = capabilities.lock() else {
+            return false;
+        };
+        let Some(capabilities) = capabilities.as_mut() else {
+            return false;
+        };
+        match method {
+            "controller.status" => capabilities.apply_status_notification(params),
+            "controller.state" | "controller.event" => {
+                capabilities.apply_state_notification(params)
+            }
+            "controller.error" => capabilities.mark_board_disconnected(),
+            _ => false,
+        }
+    }
+
+    /// Accepts the authoritative host identity from a fresh WebSocket
+    /// subscription. A PCController process restart resets LED revisions, so
+    /// the old process revision must not suppress the new process's first frame.
+    pub(crate) fn observe_source_instance(&self, instance_id: &str) -> bool {
+        let instance_id = instance_id.trim();
+        if instance_id.is_empty() {
+            return false;
+        }
+        let Some(capabilities) = self.hardware_capabilities.upgrade() else {
+            return false;
+        };
+        let Ok(mut capabilities) = capabilities.lock() else {
+            return false;
+        };
+        let Some(capabilities) = capabilities.as_mut() else {
+            return false;
+        };
+        if capabilities.host_instance_id == instance_id {
+            return false;
+        }
+        let source_changed = !capabilities.host_instance_id.is_empty();
+        capabilities.host_instance_id = instance_id.to_string();
+        if source_changed {
+            capabilities.status_led = None;
+            capabilities.status_led_revision = 0;
+        }
+        source_changed
+    }
+}
+
 fn should_yield_direct_transport(
     is_direct: bool,
     diagnostic_override: bool,
@@ -149,6 +263,7 @@ fn should_yield_direct_transport(
 }
 
 pub fn spawn_engine() -> EngineHandle {
+    let lifecycle = Arc::new(());
     let playback_time_ms = Arc::new(AtomicU64::new(0));
     let is_playing = Arc::new(AtomicBool::new(false));
     let estop_active = Arc::new(AtomicBool::new(false));
@@ -183,6 +298,7 @@ pub fn spawn_engine() -> EngineHandle {
         let mut last_ping = std::time::Instant::now();
         let mut last_owner_check = std::time::Instant::now();
         let mut last_capability_refresh = std::time::Instant::now();
+        let mut last_connect_attempt: Option<std::time::Instant> = None;
 
         let mut active_transport: Option<HardwareTransport> = None;
 
@@ -193,7 +309,12 @@ pub fn spawn_engine() -> EngineHandle {
             engine_connected.store(connected, Ordering::Relaxed);
 
             // Handle connection/disconnection transitions
-            if requested && active_transport.is_none() {
+            if requested
+                && active_transport.is_none()
+                && last_connect_attempt
+                    .is_none_or(|attempt| attempt.elapsed() >= Duration::from_secs(1))
+            {
+                last_connect_attempt = Some(std::time::Instant::now());
                 let endpoint = {
                     let guard = engine_port.lock().unwrap();
                     guard.clone()
@@ -251,6 +372,28 @@ pub fn spawn_engine() -> EngineHandle {
                         }
                         engine_connected.store(true, Ordering::Relaxed);
                         connected = true;
+                        let estop_reassert_error = engine_estop
+                            .load(Ordering::Relaxed)
+                            .then(|| {
+                                active_transport
+                                    .as_mut()
+                                    .and_then(|transport| transport.send(Command::AllOff).err())
+                            })
+                            .flatten();
+                        if let Some(error) = estop_reassert_error {
+                            if let Ok(mut guard) = engine_conn_error.lock() {
+                                *guard = Some(format!(
+                                    "reassert emergency stop after reconnect: {error}"
+                                ));
+                            }
+                            engine_connected.store(false, Ordering::Relaxed);
+                            connected = false;
+                            active_transport = None;
+                            if let Ok(mut guard) = engine_transport_description.lock() {
+                                *guard = None;
+                            }
+                            continue;
+                        }
                         last_ping = std::time::Instant::now();
                         last_owner_check = std::time::Instant::now();
                         last_capability_refresh = std::time::Instant::now();
@@ -259,7 +402,6 @@ pub fn spawn_engine() -> EngineHandle {
                         if let Ok(mut guard) = engine_conn_error.lock() {
                             *guard = Some(error);
                         }
-                        engine_connection_requested.store(false, Ordering::Relaxed);
                         engine_connected.store(false, Ordering::Relaxed);
                         if let Ok(mut guard) = engine_transport_description.lock() {
                             *guard = None;
@@ -349,6 +491,18 @@ pub fn spawn_engine() -> EngineHandle {
                             }
                         }
                     }
+                    EngineMessage::ControllerCall { method, params } => {
+                        if connected {
+                            if let Some(ref mut transport) = active_transport {
+                                if let Err(error) = transport.call_controller(&method, params) {
+                                    if let Ok(mut guard) = engine_conn_error.lock() {
+                                        *guard = Some(format!("{method}: {error}"));
+                                    }
+                                    engine_connected.store(false, Ordering::Relaxed);
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -360,7 +514,6 @@ pub fn spawn_engine() -> EngineHandle {
                 if let Ok(mut guard) = engine_capabilities.lock() {
                     *guard = None;
                 }
-                engine_connection_requested.store(false, Ordering::Relaxed);
                 connected = false;
             }
 
@@ -401,7 +554,10 @@ pub fn spawn_engine() -> EngineHandle {
             }
 
             if connected
-                && last_capability_refresh.elapsed() >= Duration::from_secs(1)
+                // Live relay, telemetry, and status-LED changes arrive on the
+                // controller WebSocket. This slow refresh is only a recovery
+                // baseline for catalog/config changes or a missed push epoch.
+                && last_capability_refresh.elapsed() >= Duration::from_secs(30)
                 && active_transport
                     .as_ref()
                     .is_some_and(|transport| !transport.is_direct_serial())
@@ -411,6 +567,12 @@ pub fn spawn_engine() -> EngineHandle {
                     match transport.refresh_capabilities() {
                         Ok(capabilities) => {
                             if let Ok(mut guard) = engine_capabilities.lock() {
+                                let mut capabilities = capabilities;
+                                if let (Some(current), Some(ref mut refreshed)) =
+                                    (guard.as_ref(), capabilities.as_mut())
+                                {
+                                    refreshed.preserve_newer_live_led_from(current);
+                                }
                                 *guard = capabilities;
                             }
                         }
@@ -419,6 +581,7 @@ pub fn spawn_engine() -> EngineHandle {
                                 *guard =
                                     Some(format!("refresh PCController capabilities: {error}"));
                             }
+                            engine_connected.store(false, Ordering::Relaxed);
                         }
                     }
                 }
@@ -535,6 +698,7 @@ pub fn spawn_engine() -> EngineHandle {
     });
 
     EngineHandle {
+        lifecycle,
         playback_time_ms,
         is_playing,
         estop_active,
@@ -897,5 +1061,83 @@ mod tests {
         assert!(!should_yield_direct_transport(true, true, true));
         assert!(!should_yield_direct_transport(true, false, false));
         assert!(!should_yield_direct_transport(false, false, true));
+    }
+
+    #[test]
+    fn controller_push_target_tracks_selected_coordinator_and_lifetime() {
+        let handle = spawn_engine();
+        let target = handle.controller_push_target();
+        assert!(target.is_alive());
+        assert_eq!(target.websocket_endpoint(), None);
+
+        *handle.serial_port.lock().unwrap() = "pccontroller://controller.test:9000".to_string();
+        handle.connection_requested.store(true, Ordering::Relaxed);
+        assert_eq!(
+            target.websocket_endpoint().as_deref(),
+            Some("ws://controller.test:9000/ipc")
+        );
+
+        *handle.serial_port.lock().unwrap() = "direct:COM9".to_string();
+        assert_eq!(target.websocket_endpoint(), None);
+        drop(handle);
+        assert!(!target.is_alive());
+    }
+
+    #[test]
+    fn controller_error_immediately_marks_the_board_disconnected() {
+        let handle = spawn_engine();
+        *handle.hardware_capabilities.lock().unwrap() =
+            Some(crate::four_d::controller::HardwareCapabilities {
+                board_connected: true,
+                status_led: Some(crate::four_d::controller::HardwareStatusLed {
+                    red: 10,
+                    green: 20,
+                    blue: 30,
+                    brightness: 255,
+                    effect: 0,
+                    condition: 0,
+                }),
+                ..Default::default()
+            });
+        let target = handle.controller_push_target();
+        assert!(target.apply_notification(
+            "controller.error",
+            &serde_json::json!({"message": "board disconnected"}),
+        ));
+        let capabilities = handle.hardware_capabilities.lock().unwrap();
+        let capabilities = capabilities.as_ref().unwrap();
+        assert!(!capabilities.board_connected);
+        assert!(capabilities.status_led.is_none());
+    }
+
+    #[test]
+    fn restarted_controller_accepts_low_led_revisions_from_new_instance() {
+        let handle = spawn_engine();
+        *handle.hardware_capabilities.lock().unwrap() =
+            Some(crate::four_d::controller::HardwareCapabilities {
+                board_connected: true,
+                host_instance_id: "old-host".to_string(),
+                status_led_revision: 100,
+                status_led: Some(crate::four_d::controller::HardwareStatusLed::default()),
+                ..Default::default()
+            });
+        let target = handle.controller_push_target();
+        assert!(target.observe_source_instance("new-host"));
+        assert!(target.apply_notification(
+            "controller.state",
+            &serde_json::json!({
+                "kind": "status_led.changed",
+                "metadata": {
+                    "red": "1", "green": "2", "blue": "3",
+                    "brightness": "255", "effect": "0", "condition": "0",
+                    "revision": "1"
+                }
+            }),
+        ));
+        let capabilities = handle.hardware_capabilities.lock().unwrap();
+        let capabilities = capabilities.as_ref().unwrap();
+        assert_eq!(capabilities.host_instance_id, "new-host");
+        assert_eq!(capabilities.status_led_revision, 1);
+        assert_eq!(capabilities.status_led.as_ref().unwrap().red, 1);
     }
 }

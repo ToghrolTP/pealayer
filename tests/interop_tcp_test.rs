@@ -48,6 +48,7 @@ fn test_loopback_tcp_interop_commands_and_status() {
         playback_time: 12.34,
         duration: 100.0,
         current_video: Some("/movies/test.mp4".to_string()),
+        ..PlayerStatusResponse::default()
     };
     set_live_status(mock_status);
 

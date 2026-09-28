@@ -19,47 +19,6 @@ use mpv::render::RenderContextWrapper;
 use mpv::render::mpv_get_proc_address;
 use std::sync::{Arc, Mutex};
 
-fn configure_ui_fonts(context: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-
-    // Prefer the platform UI face. Vazirmatn remains immediately behind it so
-    // Persian and Arabic text has a bundled, release-safe fallback.
-    let system_font = [
-        #[cfg(target_os = "windows")]
-        r"C:\Windows\Fonts\segoeui.ttf",
-        #[cfg(target_os = "macos")]
-        "/System/Library/Fonts/SFNS.ttf",
-        #[cfg(target_os = "linux")]
-        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-        #[cfg(target_os = "linux")]
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    .iter()
-    .find_map(|path| std::fs::read(path).ok());
-
-    fonts.font_data.insert(
-        "pealayer-vazirmatn".to_owned(),
-        Arc::new(egui::FontData::from_static(include_bytes!(
-            "../assets/fonts/Vazirmatn-Regular.ttf"
-        ))),
-    );
-    let proportional = fonts
-        .families
-        .get_mut(&egui::FontFamily::Proportional)
-        .expect("egui provides a proportional font family");
-    proportional.insert(0, "pealayer-vazirmatn".to_owned());
-
-    if let Some(bytes) = system_font {
-        fonts.font_data.insert(
-            "pealayer-system-ui".to_owned(),
-            Arc::new(egui::FontData::from_owned(bytes)),
-        );
-        proportional.insert(0, "pealayer-system-ui".to_owned());
-    }
-
-    context.set_fonts(fonts);
-}
-
 fn subtitle_font_directory() -> Option<std::path::PathBuf> {
     let packaged = std::env::current_exe()
         .ok()
@@ -225,7 +184,10 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let loaded_config = launch_config.clone();
-            configure_ui_fonts(&cc.egui_ctx);
+            crate::ui::i18n::configure_ui_fonts(
+                &cc.egui_ctx,
+                language == crate::config::AppLanguage::Persian,
+            );
             let theme_preference = match crate::config::resolved_theme(&loaded_config) {
                 crate::config::AppTheme::System => egui::ThemePreference::System,
                 crate::config::AppTheme::Light => egui::ThemePreference::Light,
@@ -329,6 +291,9 @@ fn main() -> eframe::Result {
             mpv_client
                 .observe_property("eof-reached", libmpv2::Format::Flag, 12)
                 .unwrap();
+            mpv_client
+                .observe_property("estimated-vf-fps", libmpv2::Format::Double, 13)
+                .unwrap();
 
             let egui_ctx2 = cc.egui_ctx.clone();
             mpv_client.set_wakeup_callback(move || {
@@ -371,8 +336,11 @@ fn main() -> eframe::Result {
                 cc.egui_ctx.clone(),
                 web_runtime,
             );
-            let controller_cmd_rx =
-                crate::platform::interop::spawn_pccontroller_action_bridge(cc.egui_ctx.clone());
+            let engine_handle = crate::four_d::engine::spawn_engine();
+            let controller_cmd_rx = crate::platform::interop::spawn_pccontroller_action_bridge(
+                cc.egui_ctx.clone(),
+                engine_handle.controller_push_target(),
+            );
 
             let mut app = PealayerApp {
                 app_name: app_name.clone(),
@@ -382,12 +350,14 @@ fn main() -> eframe::Result {
                 language_preference,
                 language,
                 direction_preference,
+                theme_preference: crate::config::resolved_theme(&loaded_config),
                 rtl,
                 mpv: mpv_static,
                 mpv_client,
                 render_context: Arc::new(Mutex::new(Some(RenderContextWrapper(render_context)))),
                 playback_time: 0.0,
                 duration: 0.0,
+                media_fps: 0.0,
                 is_paused: false,
                 is_eof: false,
                 volume: initial_volume,
@@ -414,7 +384,7 @@ fn main() -> eframe::Result {
                 show_four_d_editor: true,
 
                 timeline: crate::four_d::models::Timeline::new(),
-                engine_handle: crate::four_d::engine::spawn_engine(),
+                engine_handle,
                 recording_session: crate::four_d::curve_record::RecordingSession::new(),
                 input_capture: crate::four_d::input_capture::InputCaptureState::new(),
                 is_recording: false,
@@ -439,19 +409,40 @@ fn main() -> eframe::Result {
                 track_locked: std::collections::BTreeSet::new(),
                 active_drag: None,
                 estop_active: false,
-                serial_port: crate::four_d::controller::DEFAULT_ENDPOINT.to_string(),
+                serial_port: loaded_config
+                    .hardware_endpoint
+                    .clone()
+                    .unwrap_or_else(|| crate::four_d::controller::DEFAULT_ENDPOINT.to_string()),
                 is_connected: false,
                 lasso_origin: None,
                 lasso_rect: None,
                 current_video_path: None,
                 show_remaining_time: loaded_config.show_remaining_time,
                 osd_message: None,
-                recent_media: loaded_config.recent_media,
+                recent_media: loaded_config.recent_media.clone(),
                 show_open_url_dialog: false,
                 url_input_buffer: String::new(),
                 is_window_operating: false,
                 show_shortcuts_dialog: false,
                 show_about_dialog: false,
+                show_preferences_dialog: false,
+                preferences_tab: 0,
+                pause_on_hardware_disconnect: loaded_config.pause_on_hardware_disconnect,
+                auto_connect_hardware: loaded_config.auto_connect_hardware,
+                click_player_to_toggle: loaded_config.click_player_to_toggle,
+                show_subseconds: loaded_config.show_subseconds,
+                wheel_seek_seconds: loaded_config.wheel_seek_seconds,
+                osd_position: loaded_config.osd_position,
+                osd_timeout_seconds: loaded_config.osd_timeout_seconds,
+                paused_drag_action: loaded_config.paused_drag_action,
+                playing_drag_action: loaded_config.playing_drag_action,
+                was_hardware_connected: false,
+                was_board_connected: false,
+                connection_notice: None,
+                workspace_before_fullscreen: None,
+                // Let the first frame observe a CLI-started fullscreen viewport
+                // as an entry transition so it always switches to Simple mode.
+                was_fullscreen: false,
                 interop_rx,
                 controller_cmd_rx,
                 web_state_tx,
@@ -462,6 +453,40 @@ fn main() -> eframe::Result {
                 window_handle: None,
                 shell_initialized: false,
             };
+
+            if app.auto_connect_hardware {
+                let configured_endpoint = app.serial_port.clone();
+                let selected_endpoint = if crate::four_d::controller::is_controller_endpoint(
+                    &configured_endpoint,
+                ) && crate::four_d::controller::ControllerClient::is_reachable(
+                    &configured_endpoint,
+                    std::time::Duration::from_millis(250),
+                ) {
+                    Some(configured_endpoint)
+                } else if !crate::four_d::controller::is_controller_endpoint(&configured_endpoint)
+                    && crate::four_d::controller::available_endpoints()
+                        .iter()
+                        .any(|candidate| candidate == &configured_endpoint)
+                {
+                    Some(configured_endpoint)
+                } else if crate::four_d::controller::ControllerClient::is_reachable(
+                    crate::four_d::controller::DEFAULT_ENDPOINT,
+                    std::time::Duration::from_millis(250),
+                ) {
+                    Some(crate::four_d::controller::DEFAULT_ENDPOINT.to_string())
+                } else {
+                    None
+                };
+                if let Some(endpoint) = selected_endpoint {
+                    app.serial_port = endpoint.clone();
+                    if let Ok(mut selected) = app.engine_handle.serial_port.lock() {
+                        *selected = endpoint;
+                    }
+                    app.engine_handle
+                        .connection_requested
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
 
             if let Some(target) = cli_options.target {
                 if target.starts_with("http://") || target.starts_with("https://") {

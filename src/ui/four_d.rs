@@ -354,7 +354,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             }
 
                             // Pick current time from seekbar/playback
-                            if ui.button("📍").on_hover_text(&set_current_label).clicked() {
+                            if ui.button("◇").on_hover_text(&set_current_label).clicked() {
                                 instance.start_time_ms = (app.playback_time * 1000.0) as u64;
                                 dirty = true;
                             }

@@ -1,5 +1,58 @@
 use crate::config::AppLanguage;
 use eframe::egui;
+use std::sync::Arc;
+
+pub(crate) fn configure_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool) {
+    let mut fonts = egui::FontDefinitions::default();
+
+    // Prefer the platform UI face. Vazirmatn remains immediately behind it so
+    // Persian and Arabic text has a bundled, release-safe fallback. For a
+    // Persian UI the bundled font is first so shaping is consistent across OSes.
+    let system_font = [
+        #[cfg(target_os = "windows")]
+        r"C:\Windows\Fonts\segoeui.ttf",
+        #[cfg(target_os = "macos")]
+        "/System/Library/Fonts/SFNS.ttf",
+        #[cfg(target_os = "linux")]
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        #[cfg(target_os = "linux")]
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    .iter()
+    .find_map(|path| std::fs::read(path).ok());
+
+    fonts.font_data.insert(
+        "pealayer-vazirmatn".to_owned(),
+        Arc::new(egui::FontData::from_static(include_bytes!(
+            "../../assets/fonts/Vazirmatn-Regular.ttf"
+        ))),
+    );
+    if let Some(bytes) = system_font {
+        fonts.font_data.insert(
+            "pealayer-system-ui".to_owned(),
+            Arc::new(egui::FontData::from_owned(bytes)),
+        );
+    }
+
+    let has_system_font = fonts.font_data.contains_key("pealayer-system-ui");
+    let proportional = fonts
+        .families
+        .get_mut(&egui::FontFamily::Proportional)
+        .expect("egui provides a proportional font family");
+    if prefer_vazirmatn {
+        proportional.insert(0, "pealayer-vazirmatn".to_owned());
+        if has_system_font {
+            proportional.insert(1, "pealayer-system-ui".to_owned());
+        }
+    } else if has_system_font {
+        proportional.insert(0, "pealayer-system-ui".to_owned());
+        proportional.insert(1, "pealayer-vazirmatn".to_owned());
+    } else {
+        proportional.insert(0, "pealayer-vazirmatn".to_owned());
+    }
+
+    context.set_fonts(fonts);
+}
 
 /// Translate application-owned copy. Values learned from media metadata or
 /// PCController are deliberately never passed through this table.

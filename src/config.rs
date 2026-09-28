@@ -36,6 +36,24 @@ pub enum AppDirection {
     Rtl,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OsdPosition {
+    #[default]
+    TopLeft,
+    Center,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlayerDragAction {
+    #[default]
+    MoveWindow,
+    Seek,
+    TemporaryFastForward,
+    None,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -51,6 +69,16 @@ pub struct AppConfig {
     pub theme: AppTheme,
     pub language: AppLanguage,
     pub direction: AppDirection,
+    pub hardware_endpoint: Option<String>,
+    pub auto_connect_hardware: bool,
+    pub pause_on_hardware_disconnect: bool,
+    pub click_player_to_toggle: bool,
+    pub show_subseconds: bool,
+    pub wheel_seek_seconds: f64,
+    pub osd_position: OsdPosition,
+    pub osd_timeout_seconds: f32,
+    pub paused_drag_action: PlayerDragAction,
+    pub playing_drag_action: PlayerDragAction,
 }
 
 impl Default for AppConfig {
@@ -68,6 +96,16 @@ impl Default for AppConfig {
             theme: AppTheme::System,
             language: AppLanguage::System,
             direction: AppDirection::Auto,
+            hardware_endpoint: None,
+            auto_connect_hardware: true,
+            pause_on_hardware_disconnect: true,
+            click_player_to_toggle: true,
+            show_subseconds: true,
+            wheel_seek_seconds: 5.0,
+            osd_position: OsdPosition::TopLeft,
+            osd_timeout_seconds: 3.5,
+            paused_drag_action: PlayerDragAction::MoveWindow,
+            playing_drag_action: PlayerDragAction::TemporaryFastForward,
         }
     }
 }
@@ -598,4 +636,3 @@ mod tests {
         assert!(!resolve_rtl(AppDirection::Ltr, AppLanguage::Persian));
     }
 }
-

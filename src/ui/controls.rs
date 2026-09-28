@@ -70,19 +70,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     };
 
                     let is_long_video = app.duration >= 3600.0;
-                    let format_time = move |t: f64| {
-                        let is_negative = t < 0.0;
-                        let s = t.abs() as i64;
-                        let formatted = if is_long_video {
-                            format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
-                        } else {
-                            format!("{:02}:{:02}", (s / 60) % 60, s % 60)
-                        };
-                        if is_negative {
-                            format!("-{}", formatted)
-                        } else {
-                            formatted
-                        }
+                    let show_subseconds = app.show_subseconds;
+                    let format_time = |time| {
+                        format_player_time(time, is_long_video, show_subseconds)
                     };
 
                     let elapsed_str = format_time(elapsed_time);
@@ -121,31 +111,48 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.set_clip_rect(ui.max_rect());
-                        if ui.button("⛶").clicked() {
+                        if ui
+                            .button("⛶")
+                            .on_hover_text(format!("{} (F)", app.tr("Fullscreen")))
+                            .clicked()
+                        {
                             let is_fullscreen =
                                 ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(
-                                !is_fullscreen,
-                            ));
-                            app.set_osd(app.tr("Fullscreen"));
+                            app.set_fullscreen(&ctx, !is_fullscreen);
                         }
 
-                        let pin_icon = if app.pin_controls { "📌" } else { "📍" };
-                        if ui.button(pin_icon).clicked() {
+                        let pin_icon = if app.pin_controls { "◆" } else { "◇" };
+                        if ui
+                            .button(pin_icon)
+                            .on_hover_text(if app.pin_controls {
+                                app.tr("Unpin Controls")
+                            } else {
+                                app.tr("Pin Controls")
+                            })
+                            .clicked()
+                        {
                             app.pin_controls = !app.pin_controls;
                             app.set_osd(if app.pin_controls { app.tr("Controls Pinned") } else { app.tr("Controls Unpinned") });
                             app.save_config();
                         }
 
-                        if ui.button("🎵").clicked() {
+                        if ui.button("♫").on_hover_text(app.tr("Audio Settings...")).clicked() {
                             app.show_audio_settings = !app.show_audio_settings;
                         }
 
-                        if ui.button("🎬").clicked() {
+                        if ui
+                            .button("▤")
+                            .on_hover_text(app.tr("Switch NLE / Simple Player"))
+                            .clicked()
+                        {
                             app.show_four_d_editor = !app.show_four_d_editor;
                         }
 
-                        if ui.button("💬").clicked() {
+                        if ui
+                            .button("CC")
+                            .on_hover_text(app.tr("Subtitle Settings..."))
+                            .clicked()
+                        {
                             app.show_sub_settings = !app.show_sub_settings;
                         }
 
@@ -180,8 +187,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     app.save_config();
                                 }
                             }
-                            let mute_icon = if app.is_muted { "🔇" } else { "🔊" };
-                            if ui.add(egui::Button::new(mute_icon).frame(false)).clicked() {
+                            let mute_icon = if app.is_muted { "×♪" } else { "♪" };
+                            if ui
+                                .add(egui::Button::new(mute_icon).frame(false))
+                                .on_hover_text(format!("{} (M)", if app.is_muted { app.tr("Unmute") } else { app.tr("Mute") }))
+                                .clicked()
+                            {
                                 let _ = app.mpv.command("cycle", &["mute"]);
                                 app.is_muted = !app.is_muted;
                                 app.set_osd(if app.is_muted { app.tr("Mute") } else { app.tr("Unmute") });
@@ -247,6 +258,26 @@ pub fn multiply_style_opacity(style: &mut egui::Style, alpha: f32) {
 
 pub fn resolve_display_time(seek_pos: Option<f64>, playback_time: f64) -> f64 {
     seek_pos.unwrap_or(playback_time)
+}
+
+pub fn format_player_time(time: f64, include_hours: bool, show_subseconds: bool) -> String {
+    let negative = time < 0.0;
+    let absolute = time.abs();
+    let total_millis = (absolute * 1000.0).round() as i64;
+    let whole = total_millis / 1000;
+    let millis = total_millis % 1000;
+    let formatted = if include_hours {
+        if show_subseconds {
+            format!("{:02}:{:02}:{:02}.{:03}", whole / 3600, (whole / 60) % 60, whole % 60, millis)
+        } else {
+            format!("{:02}:{:02}:{:02}", whole / 3600, (whole / 60) % 60, whole % 60)
+        }
+    } else if show_subseconds {
+        format!("{:02}:{:02}.{:03}", (whole / 60) % 60, whole % 60, millis)
+    } else {
+        format!("{:02}:{:02}", (whole / 60) % 60, whole % 60)
+    };
+    if negative { format!("-{formatted}") } else { formatted }
 }
 
 pub const LEFT_CONTROLS_WIDTH: f32 = 93.0;
@@ -367,6 +398,12 @@ mod tests {
 
         let no_seek: Option<f64> = None;
         assert_eq!(resolve_display_time(no_seek, playback_time), 45.0);
+    }
+
+    #[test]
+    fn subsecond_timecode_uses_a_decimal_separator() {
+        assert_eq!(format_player_time(65.125, false, true), "01:05.125");
+        assert_eq!(format_player_time(-3661.5, true, true), "-01:01:01.500");
     }
 
     #[test]

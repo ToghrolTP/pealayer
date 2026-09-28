@@ -8,4 +8,4 @@ pub mod video;
 pub mod four_d;
 pub mod layout;
 pub mod status_bar;
-
+pub mod preferences;

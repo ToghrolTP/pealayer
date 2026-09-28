@@ -113,10 +113,13 @@ pub enum InteropCommand {
         #[serde(alias = "path")]
         target: String,
     },
+    SetFullscreen { enabled: bool },
+    ToggleFullscreen,
+    SetWorkspace { nle: bool },
     GetStatus,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlayerStatusResponse {
     pub status: String,
     pub playing: bool,
@@ -124,6 +127,27 @@ pub struct PlayerStatusResponse {
     pub playback_time: f64,
     pub duration: f64,
     pub current_video: Option<String>,
+    #[serde(default)]
+    pub fullscreen: bool,
+    #[serde(default)]
+    pub workspace: String,
+    #[serde(default)]
+    pub controller_connected: bool,
+    #[serde(default)]
+    pub hardware_connected: bool,
+    #[serde(default)]
+    pub hardware: Option<HardwareStatusSummary>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HardwareStatusSummary {
+    pub board_name: String,
+    pub relay_count: usize,
+    pub pwm_count: usize,
+    pub supports_rf_transmit: bool,
+    pub supports_addressable_led: bool,
+    pub supports_segment_display: bool,
+    pub supports_lcd_display: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -182,6 +206,25 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 target: string(&["target", "path"] )?,
             }))
         }
+        "fullscreen" | "pealayer.fullscreen.set" | "pealayer.player.fullscreen.set" => {
+            let enabled = request
+                .params
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "missing boolean parameter: enabled".to_string())?;
+            Ok(Some(InteropCommand::SetFullscreen { enabled }))
+        }
+        "toggle_fullscreen" | "pealayer.fullscreen.toggle" => {
+            Ok(Some(InteropCommand::ToggleFullscreen))
+        }
+        "workspace" | "pealayer.workspace.set" => {
+            let workspace = string(&["workspace", "value"])?;
+            match workspace.trim().to_ascii_lowercase().as_str() {
+                "nle" | "editor" => Ok(Some(InteropCommand::SetWorkspace { nle: true })),
+                "simple" | "player" => Ok(Some(InteropCommand::SetWorkspace { nle: false })),
+                _ => Err("workspace must be nle or simple".to_string()),
+            }
+        }
         "get_status" | "player.status" | "pealayer.status" | "pealayer.player.status" => {
             Ok(None)
         }
@@ -214,11 +257,7 @@ pub fn get_live_status() -> PlayerStatusResponse {
     }
     PlayerStatusResponse {
         status: "initializing".to_string(),
-        playing: false,
-        volume: 0.0,
-        playback_time: 0.0,
-        duration: 0.0,
-        current_video: None,
+        ..PlayerStatusResponse::default()
     }
 }
 
@@ -261,6 +300,25 @@ pub fn parse_interop_request(line: &str) -> Result<(Option<serde_json::Value>, I
             "open" | "open_video" => {
                 let target = params.and_then(|p| p.get("target").or_else(|| p.get("path"))).and_then(|t| t.as_str()).unwrap_or("").to_string();
                 InteropCommand::Open { target }
+            }
+            "fullscreen" | "set_fullscreen" => {
+                let enabled = params
+                    .and_then(|p| p.get("enabled"))
+                    .and_then(|value| value.as_bool())
+                    .ok_or("Missing enabled boolean")?;
+                InteropCommand::SetFullscreen { enabled }
+            }
+            "toggle_fullscreen" => InteropCommand::ToggleFullscreen,
+            "workspace" | "set_workspace" => {
+                let workspace = params
+                    .and_then(|p| p.get("workspace").or_else(|| p.get("value")))
+                    .and_then(|value| value.as_str())
+                    .ok_or("Missing workspace")?;
+                match workspace.trim().to_ascii_lowercase().as_str() {
+                    "nle" | "editor" => InteropCommand::SetWorkspace { nle: true },
+                    "simple" | "player" => InteropCommand::SetWorkspace { nle: false },
+                    _ => return Err("workspace must be nle or simple".to_string()),
+                }
             }
             "get_status" | "player.status" => InteropCommand::GetStatus,
             other => return Err(format!("Unknown RPC method: {}", other)),
@@ -495,7 +553,6 @@ pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<Interop
     rx
 }
 
-const PCCONTROLLER_WEBSOCKET_ENDPOINT: &str = "ws://127.0.0.1:8787/ipc";
 const PCCONTROLLER_ACTIONS: &str = "app.page,pealayer.play,pealayer.pause,pealayer.toggle,pealayer.seek,pealayer.seek_absolute,pealayer.volume.set,pealayer.open";
 
 struct ControllerAction {
@@ -665,20 +722,62 @@ fn send_action_ack(
     Ok(())
 }
 
+fn gate_controller_subscription_message(
+    message: Value,
+    subscription_ready: &mut bool,
+    pending: &mut std::collections::VecDeque<Value>,
+    push_target: &crate::four_d::engine::ControllerPushTarget,
+) -> Result<Vec<Value>, String> {
+    if *subscription_ready {
+        return Ok(vec![message]);
+    }
+    if message.get("id").and_then(Value::as_u64) == Some(1) {
+        if let Some(error) = message.get("error").filter(|value| !value.is_null()) {
+            return Err(format!("PCController subscription failed: {error}"));
+        }
+        let result = message
+            .get("result")
+            .filter(|value| value.is_object())
+            .ok_or_else(|| "PCController subscription returned no result".to_string())?;
+        if result.get("subscribed").and_then(Value::as_bool) != Some(true) {
+            return Err("PCController did not confirm the subscription".to_string());
+        }
+        let instance_id = result
+            .get("instance_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "PCController subscription omitted its host identity".to_string())?;
+        push_target.observe_source_instance(instance_id);
+        *subscription_ready = true;
+        return Ok(pending.drain(..).collect());
+    }
+    if message.get("method").and_then(Value::as_str).is_some() {
+        if pending.len() >= 256 {
+            pending.pop_front();
+        }
+        pending.push_back(message);
+    }
+    Ok(Vec::new())
+}
+
 fn run_pccontroller_action_bridge(
     tx: &std::sync::mpsc::Sender<ControllerDelivery>,
     egui_ctx: &eframe::egui::Context,
+    push_target: &crate::four_d::engine::ControllerPushTarget,
+    endpoint: &str,
+    connected_once: &mut bool,
 ) -> Result<(), String> {
     use std::collections::{HashSet, VecDeque};
     use std::io::ErrorKind;
     use std::time::{Duration, Instant};
     use tungstenite::Message;
 
-    let (mut socket, _) = tungstenite::connect(PCCONTROLLER_WEBSOCKET_ENDPOINT)
+    let (mut socket, _) = tungstenite::connect(endpoint)
         .map_err(|error| format!("connect to PCController action WebSocket: {error}"))?;
+    *connected_once = true;
     if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_mut() {
         stream
-            .set_read_timeout(Some(Duration::from_secs(1)))
+            .set_read_timeout(Some(Duration::from_millis(250)))
             .map_err(|error| format!("configure PCController action read timeout: {error}"))?;
     }
 
@@ -688,7 +787,11 @@ fn run_pccontroller_action_bridge(
         .send(controller_rpc(
             next_id,
             "controller.subscribe",
-            serde_json::json!({"topics":["state","events","opcodes"],"after_id":0}),
+            serde_json::json!({
+                "topics":["state","events","status","opcodes"],
+                "interval_ms":100,
+                "after_id":0
+            }),
         ))
         .map_err(|error| format!("subscribe to PCController actions: {error}"))?;
     next_id += 1;
@@ -699,7 +802,13 @@ fn run_pccontroller_action_bridge(
     let mut last_report = Instant::now();
     let mut receipts = HashSet::new();
     let mut receipt_order = VecDeque::new();
+    let mut subscription_ready = false;
+    let mut pending_pre_ack = VecDeque::new();
     loop {
+        if !push_target.is_alive() || push_target.websocket_endpoint().as_deref() != Some(endpoint) {
+            let _ = socket.close(None);
+            return Ok(());
+        }
         while let Ok(acknowledgement) = acknowledgement_rx.try_recv() {
             send_action_ack(&mut socket, &mut next_id, acknowledgement)?;
         }
@@ -713,42 +822,57 @@ fn run_pccontroller_action_bridge(
                 let Ok(message) = serde_json::from_str::<Value>(&text) else {
                     continue;
                 };
-                if !matches!(
-                    message.get("method").and_then(Value::as_str),
-                    Some("controller.state" | "controller.event")
-                ) {
-                    continue;
+                let ready_messages = gate_controller_subscription_message(
+                    message,
+                    &mut subscription_ready,
+                    &mut pending_pre_ack,
+                    push_target,
+                )?;
+                if subscription_ready {
+                    egui_ctx.request_repaint();
                 }
-                let Some(action) = message
-                    .get("params")
-                    .and_then(|event| controller_action_from_event(event, &instance_id))
-                else {
-                    continue;
-                };
-                let first_delivery = receipts.insert(action.receipt_key.clone());
-                if first_delivery {
-                    receipt_order.push_back(action.receipt_key.clone());
-                    if receipt_order.len() > 256 {
-                        if let Some(oldest) = receipt_order.pop_front() {
-                            receipts.remove(&oldest);
-                        }
-                    }
-                    if let Some(command) = action.command {
-                        tx.send(ControllerDelivery {
-                            command,
-                            acknowledgement: action.acknowledgement,
-                            acknowledgement_tx: acknowledgement_tx.clone(),
-                        })
-                        .map_err(|error| {
-                            format!("deliver PCController action to player: {error}")
-                        })?;
+                for message in ready_messages {
+                    let Some(method) = message.get("method").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let params = message.get("params").unwrap_or(&Value::Null);
+                    if push_target.apply_notification(method, params) {
                         egui_ctx.request_repaint();
-                    } else {
-                        send_action_ack(
-                            &mut socket,
-                            &mut next_id,
-                            action.acknowledgement,
-                        )?;
+                    }
+                    if !matches!(method, "controller.state" | "controller.event") {
+                        continue;
+                    }
+                    let Some(action) = message
+                        .get("params")
+                        .and_then(|event| controller_action_from_event(event, &instance_id))
+                    else {
+                        continue;
+                    };
+                    let first_delivery = receipts.insert(action.receipt_key.clone());
+                    if first_delivery {
+                        receipt_order.push_back(action.receipt_key.clone());
+                        if receipt_order.len() > 256 {
+                            if let Some(oldest) = receipt_order.pop_front() {
+                                receipts.remove(&oldest);
+                            }
+                        }
+                        if let Some(command) = action.command {
+                            tx.send(ControllerDelivery {
+                                command,
+                                acknowledgement: action.acknowledgement,
+                                acknowledgement_tx: acknowledgement_tx.clone(),
+                            })
+                            .map_err(|error| {
+                                format!("deliver PCController action to player: {error}")
+                            })?;
+                            egui_ctx.request_repaint();
+                        } else {
+                            send_action_ack(
+                                &mut socket,
+                                &mut next_id,
+                                action.acknowledgement,
+                            )?;
+                        }
                     }
                 }
             }
@@ -770,13 +894,46 @@ fn run_pccontroller_action_bridge(
 
 pub fn spawn_pccontroller_action_bridge(
     egui_ctx: eframe::egui::Context,
+    push_target: crate::four_d::engine::ControllerPushTarget,
 ) -> Receiver<ControllerDelivery> {
     let (tx, rx) = channel();
-    thread::spawn(move || loop {
-        if let Err(error) = run_pccontroller_action_bridge(&tx, &egui_ctx) {
-            log::warn!("[PCController] {error}; retrying in 2 seconds");
+    thread::spawn(move || {
+        let mut retry_delay = std::time::Duration::from_millis(250);
+        while push_target.is_alive() {
+            let Some(endpoint) = push_target.websocket_endpoint() else {
+                thread::sleep(std::time::Duration::from_millis(100));
+                retry_delay = std::time::Duration::from_millis(250);
+                continue;
+            };
+            let mut connected_once = false;
+            if let Err(error) = run_pccontroller_action_bridge(
+                &tx,
+                &egui_ctx,
+                &push_target,
+                &endpoint,
+                &mut connected_once,
+            ) {
+                log::warn!(
+                    "[PCController] {error}; retrying push transport in {} ms",
+                    retry_delay.as_millis()
+                );
+            }
+            if connected_once {
+                retry_delay = std::time::Duration::from_millis(250);
+            }
+            let slices = (retry_delay.as_millis() / 50).max(1) as usize;
+            for _ in 0..slices {
+                if !push_target.is_alive()
+                    || push_target.websocket_endpoint().as_deref() != Some(endpoint.as_str())
+                {
+                    break;
+                }
+                thread::sleep(std::time::Duration::from_millis(50));
+            }
+            if !connected_once {
+                retry_delay = (retry_delay * 2).min(std::time::Duration::from_secs(5));
+            }
         }
-        thread::sleep(std::time::Duration::from_secs(2));
     });
     rx
 }
@@ -925,11 +1082,15 @@ mod tests {
             playback_time: 15.0,
             duration: 120.0,
             current_video: Some("/path/file.mp4".to_string()),
+            fullscreen: true,
+            workspace: "simple".to_string(),
+            ..PlayerStatusResponse::default()
         };
 
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("\"playing\":true"));
         assert!(json.contains("\"volume\":80.0"));
+        assert!(json.contains("\"fullscreen\":true"));
     }
 
     #[test]
@@ -984,6 +1145,7 @@ mod tests {
             playback_time: 45.5,
             duration: 120.0,
             current_video: Some("/path/sample.mkv".to_string()),
+            ..PlayerStatusResponse::default()
         };
         set_live_status(status.clone());
         let retrieved = get_live_status();
@@ -1030,5 +1192,76 @@ mod tests {
         assert!(action.command.is_none());
         assert_eq!(action.acknowledgement["state"], "rejected");
         assert_eq!(action.acknowledgement["reason"], "expired");
+    }
+
+    #[test]
+    fn controller_state_waits_for_subscription_identity_before_applying() {
+        let handle = crate::four_d::engine::spawn_engine();
+        *handle.hardware_capabilities.lock().unwrap() =
+            Some(crate::four_d::controller::HardwareCapabilities {
+                board_connected: true,
+                host_instance_id: "old-host".to_string(),
+                status_led_revision: 100,
+                status_led: Some(crate::four_d::controller::HardwareStatusLed::default()),
+                ..Default::default()
+            });
+        let target = handle.controller_push_target();
+        let mut ready = false;
+        let mut pending = std::collections::VecDeque::new();
+        let state = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "controller.state",
+            "params": {
+                "kind": "status_led.changed",
+                "metadata": {
+                    "red": "1", "green": "2", "blue": "3",
+                    "brightness": "255", "effect": "0", "condition": "0",
+                    "revision": "1"
+                }
+            }
+        });
+
+        assert!(gate_controller_subscription_message(
+            state,
+            &mut ready,
+            &mut pending,
+            &target,
+        )
+        .unwrap()
+        .is_empty());
+        assert!(!ready);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            handle
+                .hardware_capabilities
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .status_led_revision,
+            100
+        );
+
+        let buffered = gate_controller_subscription_message(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"subscribed": true, "instance_id": "new-host"}
+            }),
+            &mut ready,
+            &mut pending,
+            &target,
+        )
+        .unwrap();
+        assert!(ready);
+        assert_eq!(buffered.len(), 1);
+        let params = buffered[0].get("params").unwrap();
+        assert!(target.apply_notification("controller.state", params));
+
+        let capabilities = handle.hardware_capabilities.lock().unwrap();
+        let capabilities = capabilities.as_ref().unwrap();
+        assert_eq!(capabilities.host_instance_id, "new-host");
+        assert_eq!(capabilities.status_led_revision, 1);
+        assert_eq!(capabilities.status_led.as_ref().unwrap().red, 1);
     }
 }

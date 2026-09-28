@@ -8,7 +8,7 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
     let mut open = app.show_sub_settings;
 
-    egui::Window::new(format!("💬 {}", app.tr("Subtitle Settings")))
+    egui::Window::new(format!("CC {}", app.tr("Subtitle Settings")))
         .open(&mut open)
         .collapsible(true)
         .resizable(true)
