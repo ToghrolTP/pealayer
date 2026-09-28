@@ -91,6 +91,9 @@ fn main() -> eframe::Result {
 
     env_logger::init();
 
+    #[cfg(target_os = "windows")]
+    let mut gui_ownership = None;
+
     let args: Vec<String> = std::env::args().collect();
     let cli_options = match crate::cli::parse_cli_args(args) {
         Ok(crate::cli::CliAction::PrintHelp(msg)) => {
@@ -146,6 +149,37 @@ fn main() -> eframe::Result {
                 println!("Forwarded launch request to active Pealayer instance.");
                 return Ok(());
             }
+            #[cfg(target_os = "windows")]
+            {
+                let config = crate::config::AppConfig::load();
+                let app_identity = crate::config::resolved_app_name(&config);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    match crate::platform::windows::acquire_gui_ownership(&app_identity) {
+                        Ok(crate::platform::windows::GuiOwnership::Primary(owner)) => {
+                            gui_ownership = Some(owner);
+                            break;
+                        }
+                        Ok(crate::platform::windows::GuiOwnership::Existing) => {
+                            if crate::cli::try_forward_to_existing_instance(&opts) {
+                                println!("Forwarded launch request to active Pealayer instance.");
+                                return Ok(());
+                            }
+                            if std::time::Instant::now() >= deadline {
+                                eprintln!(
+                                    "The active Pealayer instance did not accept the launch request."
+                                );
+                                std::process::exit(3);
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                        }
+                        Err(error) => {
+                            eprintln!("Could not establish Pealayer GUI ownership: {error}");
+                            std::process::exit(3);
+                        }
+                    }
+                }
+            }
             opts
         }
         Err(err) => {
@@ -153,6 +187,9 @@ fn main() -> eframe::Result {
             std::process::exit(1);
         }
     };
+
+    #[cfg(target_os = "windows")]
+    let _gui_ownership = gui_ownership;
 
     let launch_config = crate::config::AppConfig::load();
     let app_name = crate::config::resolved_app_name(&launch_config);

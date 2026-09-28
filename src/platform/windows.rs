@@ -3,6 +3,67 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 static WINDOW_HWND: AtomicIsize = AtomicIsize::new(0);
 static WINDOW_DARK_THEME: AtomicBool = AtomicBool::new(true);
 
+#[cfg(target_os = "windows")]
+pub struct GuiOwnershipGuard(windows::Win32::Foundation::HANDLE);
+
+#[cfg(target_os = "windows")]
+impl Drop for GuiOwnershipGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub enum GuiOwnership {
+    Primary(GuiOwnershipGuard),
+    Existing,
+}
+
+fn gui_identity_hash(app_identity: &str) -> u64 {
+    // FNV-1a is deterministic across processes and Rust releases. This is a
+    // namespace discriminator, not a security boundary.
+    app_identity
+        .trim()
+        .to_lowercase()
+        .as_bytes()
+        .iter()
+        .fold(0xcbf29ce484222325_u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+        })
+}
+
+pub fn gui_mutex_name(app_identity: &str) -> String {
+    format!(
+        "Local\\Pealayer.GuiOwner.{:016x}",
+        gui_identity_hash(app_identity)
+    )
+}
+
+#[cfg(target_os = "windows")]
+pub fn acquire_gui_ownership(app_identity: &str) -> Result<GuiOwnership, String> {
+    use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
+    use windows::Win32::System::Threading::CreateMutexW;
+    use windows::core::PCWSTR;
+
+    let wide_name: Vec<u16> = gui_mutex_name(app_identity)
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let handle = unsafe { CreateMutexW(None, false, PCWSTR(wide_name.as_ptr())) }
+        .map_err(|error| format!("create GUI ownership mutex: {error}"))?;
+    let already_exists = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
+    if already_exists {
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(handle);
+        }
+        Ok(GuiOwnership::Existing)
+    } else {
+        Ok(GuiOwnership::Primary(GuiOwnershipGuard(handle)))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskbarProgressFlag {
     NoProgress = 0,
@@ -274,5 +335,37 @@ mod tests {
         assert_eq!(colorref, 0x00212121);
         assert_eq!(decoration_colors(true), (0x00212121, 0x00FFFFFF));
         assert_eq!(decoration_colors(false), (0x00F4F4F4, 0x00111111));
+    }
+
+    #[test]
+    fn gui_mutex_namespace_is_stable_and_brand_specific() {
+        assert_eq!(
+            gui_mutex_name(" Pealayer "),
+            gui_mutex_name("pealayer")
+        );
+        assert_ne!(
+            gui_mutex_name("Pealayer"),
+            gui_mutex_name("Workshop Player")
+        );
+        assert!(gui_mutex_name("Pealayer").starts_with("Local\\Pealayer.GuiOwner."));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn gui_mutex_has_one_owner_and_recovers_after_drop() {
+        let identity = format!("Pealayer ownership test {}", std::process::id());
+        let primary = match acquire_gui_ownership(&identity).expect("first mutex acquisition") {
+            GuiOwnership::Primary(owner) => owner,
+            GuiOwnership::Existing => panic!("unique test identity unexpectedly had an owner"),
+        };
+        assert!(matches!(
+            acquire_gui_ownership(&identity).expect("second mutex acquisition"),
+            GuiOwnership::Existing
+        ));
+        drop(primary);
+        assert!(matches!(
+            acquire_gui_ownership(&identity).expect("post-drop mutex acquisition"),
+            GuiOwnership::Primary(_)
+        ));
     }
 }
