@@ -1,4 +1,4 @@
-use pealayer::cli::{send_remote_command, try_forward_to_existing_instance, CliOptions};
+use pealayer::cli::{launch_request, send_remote_command, try_forward_launch_request, CliOptions};
 use pealayer::platform::interop::{spawn_interop_listener, InteropCommand};
 use std::sync::mpsc::channel;
 use std::time::Duration;
@@ -7,16 +7,19 @@ use std::time::Duration;
 fn test_cli_remote_and_single_instance_forwarding() {
     let (tx, rx) = channel::<InteropCommand>();
     let ctx = eframe::egui::Context::default();
-    spawn_interop_listener(tx, ctx);
+    let application_identity =
+        pealayer::config::resolved_app_name(&pealayer::config::AppConfig::load());
+    spawn_interop_listener(tx, ctx, application_identity);
 
     std::thread::sleep(Duration::from_millis(100));
 
     // 1. Test forwarding an open target
-    let forwarded = try_forward_to_existing_instance(&CliOptions {
+    let request = launch_request(&CliOptions {
         target: Some("test_video.mkv".to_string()),
         fullscreen: true,
         volume: Some(65.0),
     });
+    let forwarded = try_forward_launch_request(&request);
     assert!(forwarded);
 
     let cmd = rx.recv_timeout(Duration::from_secs(1)).expect("Did not receive forwarded open command");
@@ -27,9 +30,15 @@ fn test_cli_remote_and_single_instance_forwarding() {
         assert!(request.activate);
         assert!(!request.operation_id.is_empty());
         assert!(request.sender_working_directory.is_some());
+        assert!(!request.application_identity.is_empty());
     } else {
         panic!("Expected Launch command");
     }
+
+    // A retry reuses the same operation ID and receives the cached accepted
+    // result without dispatching the launch a second time.
+    assert!(try_forward_launch_request(&request));
+    assert!(rx.recv_timeout(Duration::from_millis(150)).is_err());
 
     // 2. Test sending remote commands
     // 2a. Pause

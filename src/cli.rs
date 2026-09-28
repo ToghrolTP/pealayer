@@ -164,6 +164,11 @@ pub fn launch_request(options: &CliOptions) -> LaunchRequest {
             std::process::id(),
             REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ),
+        application_identity: crate::config::resolved_app_name(&crate::config::AppConfig::load()),
+        #[cfg(target_os = "windows")]
+        sender_session_id: crate::platform::windows::current_session_id().ok(),
+        #[cfg(not(target_os = "windows"))]
+        sender_session_id: None,
         sender_working_directory: std::env::current_dir()
             .ok()
             .map(|path| path.to_string_lossy().to_string()),
@@ -174,9 +179,9 @@ pub fn launch_request(options: &CliOptions) -> LaunchRequest {
     }
 }
 
-pub fn try_forward_to_existing_instance(options: &CliOptions) -> bool {
+pub fn try_forward_launch_request(request: &LaunchRequest) -> bool {
     let command = InteropCommand::Launch {
-        request: launch_request(options),
+        request: request.clone(),
     };
     let payload = match serde_json::to_string(&command) {
         Ok(payload) => payload + "\n",
