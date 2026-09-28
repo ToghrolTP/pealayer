@@ -57,6 +57,9 @@ public static class PealayerScreenshotNative {
     public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
 
     [DllImport("user32.dll")]
+    public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr value);
+
+    [DllImport("user32.dll")]
     public static extern bool BringWindowToTop(IntPtr hwnd);
 
     [DllImport("user32.dll")]
@@ -74,6 +77,7 @@ public static class PealayerScreenshotNative {
 # PowerShell is DPI-unaware by default. Without this opt-in, user32 virtualizes
 # window coordinates while CopyFromScreen consumes physical pixels.
 [void][PealayerScreenshotNative]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))
+[void][PealayerScreenshotNative]::SetThreadDpiAwarenessContext([IntPtr]::new(-4))
 
 function Test-NearUniformBlack([Drawing.Bitmap]$Bitmap) {
     $minimum = 255
