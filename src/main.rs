@@ -145,7 +145,8 @@ fn main() -> eframe::Result {
             }
         }
         Ok(crate::cli::CliAction::RunGui(opts)) => {
-            if crate::cli::try_forward_to_existing_instance(&opts) {
+            let launch_request = crate::cli::launch_request(&opts);
+            if crate::cli::try_forward_launch_request(&launch_request) {
                 println!("Forwarded launch request to active Pealayer instance.");
                 return Ok(());
             }
@@ -161,7 +162,7 @@ fn main() -> eframe::Result {
                             break;
                         }
                         Ok(crate::platform::windows::GuiOwnership::Existing) => {
-                            if crate::cli::try_forward_to_existing_instance(&opts) {
+                            if crate::cli::try_forward_launch_request(&launch_request) {
                                 println!("Forwarded launch request to active Pealayer instance.");
                                 return Ok(());
                             }

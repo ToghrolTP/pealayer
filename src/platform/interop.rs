@@ -5,12 +5,15 @@ use std::net::TcpListener;
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LaunchRequest {
     pub operation_id: String,
+    pub application_identity: String,
+    pub sender_session_id: Option<u32>,
     pub sender_working_directory: Option<String>,
     pub target: Option<String>,
     pub fullscreen: bool,
@@ -22,6 +25,9 @@ impl LaunchRequest {
     pub fn validate(&self) -> Result<(), String> {
         if self.operation_id.trim().is_empty() || self.operation_id.len() > 128 {
             return Err("launch operation_id must contain 1 to 128 bytes".to_string());
+        }
+        if self.application_identity.trim().is_empty() || self.application_identity.len() > 256 {
+            return Err("launch application_identity must contain 1 to 256 bytes".to_string());
         }
         if self
             .sender_working_directory
@@ -38,6 +44,51 @@ impl LaunchRequest {
             return Err("launch volume must be a finite value from 0 to 130".to_string());
         }
         Ok(())
+    }
+}
+
+fn normalized_application_identity(identity: &str) -> String {
+    identity.trim().to_lowercase()
+}
+
+fn validate_launch_destination(request: &LaunchRequest) -> Result<(), String> {
+    let expected = crate::config::resolved_app_name(&crate::config::AppConfig::load());
+    if normalized_application_identity(&request.application_identity)
+        != normalized_application_identity(&expected)
+    {
+        return Err("launch request targets a different application identity".to_string());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let expected_session = crate::platform::windows::current_session_id()?;
+        if request.sender_session_id != Some(expected_session) {
+            return Err("launch request targets a different Windows session".to_string());
+        }
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct LaunchReceiptCache {
+    operation_ids: std::collections::VecDeque<String>,
+}
+
+impl LaunchReceiptCache {
+    const CAPACITY: usize = 1024;
+
+    fn claim(&mut self, operation_id: &str) -> bool {
+        if self.operation_ids.iter().any(|known| known == operation_id) {
+            return false;
+        }
+        if self.operation_ids.len() == Self::CAPACITY {
+            self.operation_ids.pop_front();
+        }
+        self.operation_ids.push_back(operation_id.to_string());
+        true
+    }
+
+    fn release(&mut self, operation_id: &str) {
+        self.operation_ids.retain(|known| known != operation_id);
     }
 }
 
@@ -256,6 +307,7 @@ fn handle_client_connection<R: std::io::Read, W: Write>(
     mut writer: W,
     tx: std::sync::mpsc::Sender<InteropCommand>,
     egui_ctx: eframe::egui::Context,
+    launch_receipts: Arc<Mutex<LaunchReceiptCache>>,
 ) {
     let mut line = String::new();
     while let Ok(n) = reader.read_line(&mut line) {
@@ -273,7 +325,50 @@ fn handle_client_connection<R: std::io::Read, W: Write>(
                     let _ = writer.flush();
                 }
                 Ok((id, cmd)) => {
-                    let response = if tx.send(cmd).is_ok() {
+                    let operation_id = match &cmd {
+                        InteropCommand::Launch { request } => {
+                            if let Err(error) = validate_launch_destination(request) {
+                                let response = format_interop_error(id, -32600, &error);
+                                let _ = writer.write_all(response.as_bytes());
+                                let _ = writer.flush();
+                                line.clear();
+                                continue;
+                            }
+                            Some(request.operation_id.clone())
+                        }
+                        _ => None,
+                    };
+                    let response = if let Some(operation_id) = operation_id {
+                        match launch_receipts.lock() {
+                            Ok(mut receipts) if !receipts.claim(&operation_id) => {
+                                format_interop_response(
+                                    id,
+                                    &serde_json::json!({"status": "accepted", "duplicate": true}),
+                                )
+                            }
+                            Ok(mut receipts) => {
+                                if tx.send(cmd).is_ok() {
+                                    egui_ctx.request_repaint();
+                                    format_interop_response(
+                                        id,
+                                        &serde_json::json!({"status": "accepted"}),
+                                    )
+                                } else {
+                                    receipts.release(&operation_id);
+                                    format_interop_error(
+                                        id,
+                                        -32000,
+                                        "application dispatcher is unavailable",
+                                    )
+                                }
+                            }
+                            Err(_) => format_interop_error(
+                                id,
+                                -32000,
+                                "launch receipt cache is unavailable",
+                            ),
+                        }
+                    } else if tx.send(cmd).is_ok() {
                         egui_ctx.request_repaint();
                         format_interop_response(id, &serde_json::json!({"status": "accepted"}))
                     } else {
@@ -298,6 +393,8 @@ pub fn spawn_interop_listener(tx: std::sync::mpsc::Sender<InteropCommand>, egui_
     // isolated test and screenshot profiles without displacing a live app.
     let tx_tcp = tx.clone();
     let ctx_tcp = egui_ctx.clone();
+    let launch_receipts = Arc::new(Mutex::new(LaunchReceiptCache::default()));
+    let tcp_launch_receipts = launch_receipts.clone();
     thread::spawn(move || {
         let ipc_port = crate::config::runtime_port("PEALAYER_IPC_PORT", 8082);
         let address = format!("127.0.0.1:{ipc_port}");
@@ -306,10 +403,11 @@ pub fn spawn_interop_listener(tx: std::sync::mpsc::Sender<InteropCommand>, egui_
                 if let Ok(stream) = stream {
                     let tx_conn = tx_tcp.clone();
                     let ctx_conn = ctx_tcp.clone();
+                    let receipts_conn = tcp_launch_receipts.clone();
                     thread::spawn(move || {
                         if let Ok(read_clone) = stream.try_clone() {
                             let reader = BufReader::new(read_clone);
-                            handle_client_connection(reader, stream, tx_conn, ctx_conn);
+                            handle_client_connection(reader, stream, tx_conn, ctx_conn, receipts_conn);
                         }
                     });
                 }
@@ -324,6 +422,7 @@ pub fn spawn_interop_listener(tx: std::sync::mpsc::Sender<InteropCommand>, egui_
     {
         let tx_unix = tx.clone();
         let ctx_unix = egui_ctx.clone();
+        let unix_launch_receipts = launch_receipts.clone();
         thread::spawn(move || {
             let socket_path = get_socket_path();
             if socket_path.exists() {
@@ -335,10 +434,11 @@ pub fn spawn_interop_listener(tx: std::sync::mpsc::Sender<InteropCommand>, egui_
                     if let Ok(stream) = stream {
                         let tx_conn = tx_unix.clone();
                         let ctx_conn = ctx_unix.clone();
+                        let receipts_conn = unix_launch_receipts.clone();
                         thread::spawn(move || {
                             if let Ok(read_clone) = stream.try_clone() {
                                 let reader = BufReader::new(read_clone);
-                                handle_client_connection(reader, stream, tx_conn, ctx_conn);
+                                handle_client_connection(reader, stream, tx_conn, ctx_conn, receipts_conn);
                             }
                         });
                     }
@@ -689,6 +789,8 @@ mod tests {
             "command":"launch",
             "request":{
                 "operation_id":"launch-test-1",
+                "application_identity":"Pealayer",
+                "sender_session_id":null,
                 "sender_working_directory":"/sender/work",
                 "target":"media/clip.mkv",
                 "fullscreen":true,
@@ -710,6 +812,8 @@ mod tests {
             "command":"launch",
             "request":{
                 "operation_id":"",
+                "application_identity":"Pealayer",
+                "sender_session_id":null,
                 "sender_working_directory":null,
                 "target":null,
                 "fullscreen":false,
@@ -718,6 +822,41 @@ mod tests {
             }
         }"#;
         assert!(parse_interop_request(invalid).is_err());
+    }
+
+    #[test]
+    fn launch_destination_rejects_other_identity_and_session() {
+        let options = crate::cli::CliOptions {
+            target: None,
+            fullscreen: false,
+            volume: None,
+        };
+        let request = crate::cli::launch_request(&options);
+        assert!(validate_launch_destination(&request).is_ok());
+
+        let mut other_identity = request.clone();
+        other_identity.application_identity = "Different Player".to_string();
+        assert!(validate_launch_destination(&other_identity).is_err());
+
+        #[cfg(target_os = "windows")]
+        {
+            let mut other_session = request;
+            other_session.sender_session_id = Some(
+                crate::platform::windows::current_session_id()
+                    .expect("current Windows session")
+                    .wrapping_add(1),
+            );
+            assert!(validate_launch_destination(&other_session).is_err());
+        }
+    }
+
+    #[test]
+    fn launch_receipts_claim_once_and_recover_after_release() {
+        let mut receipts = LaunchReceiptCache::default();
+        assert!(receipts.claim("launch-one"));
+        assert!(!receipts.claim("launch-one"));
+        receipts.release("launch-one");
+        assert!(receipts.claim("launch-one"));
     }
 
     #[test]

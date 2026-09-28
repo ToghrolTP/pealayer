@@ -42,6 +42,17 @@ pub fn gui_mutex_name(app_identity: &str) -> String {
 }
 
 #[cfg(target_os = "windows")]
+pub fn current_session_id() -> Result<u32, String> {
+    use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+    use windows::Win32::System::Threading::GetCurrentProcessId;
+
+    let mut session_id = 0;
+    unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut session_id) }
+        .map_err(|error| format!("resolve current Windows session: {error}"))?;
+    Ok(session_id)
+}
+
+#[cfg(target_os = "windows")]
 pub fn acquire_gui_ownership(app_identity: &str) -> Result<GuiOwnership, String> {
     use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
     use windows::Win32::System::Threading::CreateMutexW;
