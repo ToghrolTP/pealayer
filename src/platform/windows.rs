@@ -510,6 +510,251 @@ pub fn update_taskbar_thumbnail_buttons(
     Ok(())
 }
 
+pub const WM_TRAYICON: u32 = 0x8000 + 101; // WM_APP + 101
+pub const TRAY_CMD_PLAYPAUSE: u32 = 2001;
+pub const TRAY_CMD_MUTE: u32 = 2002;
+pub const TRAY_CMD_OPEN: u32 = 2003;
+pub const TRAY_CMD_EXIT: u32 = 2004;
+
+pub fn tray_menu_label(cmd: u32, active: bool) -> &'static str {
+    match cmd {
+        TRAY_CMD_PLAYPAUSE => {
+            if active {
+                "Play"
+            } else {
+                "Pause"
+            }
+        }
+        TRAY_CMD_MUTE => {
+            if active {
+                "Unmute"
+            } else {
+                "Mute"
+            }
+        }
+        TRAY_CMD_OPEN => "Open Media...",
+        TRAY_CMD_EXIT => "Exit",
+        _ => "",
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn str_to_u16_buf_128(text: &str) -> [u16; 128] {
+    let mut buf = [0u16; 128];
+    for (i, code_unit) in text.encode_utf16().take(127).enumerate() {
+        buf[i] = code_unit;
+    }
+    buf
+}
+
+#[cfg(target_os = "windows")]
+pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::Shell::{
+        Shell_NotifyIconW, NOTIFYICONDATAW, NIM_ADD, NIF_ICON, NIF_MESSAGE, NIF_TIP,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassLongPtrW, GCLP_HICON, LoadIconW, IDI_APPLICATION, HICON,
+    };
+
+    if hwnd_raw == 0 {
+        return Err("invalid window handle (HWND is 0)".to_string());
+    }
+    let hwnd = HWND(hwnd_raw as *mut _);
+
+    unsafe {
+        let mut hicon = HICON(GetClassLongPtrW(hwnd, GCLP_HICON) as *mut _);
+        if hicon.0.is_null() {
+            if let Ok(default_icon) = LoadIconW(None, IDI_APPLICATION) {
+                hicon = default_icon;
+            }
+        }
+
+        let mut nid = NOTIFYICONDATAW {
+            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: hwnd,
+            uID: 1,
+            uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
+            uCallbackMessage: WM_TRAYICON,
+            hIcon: hicon,
+            szTip: str_to_u16_buf_128(tip),
+            ..Default::default()
+        };
+
+        let res = Shell_NotifyIconW(NIM_ADD, &mut nid);
+        if res.as_bool() {
+            Ok(())
+        } else {
+            Err("Shell_NotifyIconW NIM_ADD failed".to_string())
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn update_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::Shell::{
+        Shell_NotifyIconW, NOTIFYICONDATAW, NIM_MODIFY, NIF_TIP,
+    };
+
+    if hwnd_raw == 0 {
+        return Err("invalid window handle (HWND is 0)".to_string());
+    }
+    let hwnd = HWND(hwnd_raw as *mut _);
+
+    unsafe {
+        let mut nid = NOTIFYICONDATAW {
+            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: hwnd,
+            uID: 1,
+            uFlags: NIF_TIP,
+            szTip: str_to_u16_buf_128(tip),
+            ..Default::default()
+        };
+
+        let res = Shell_NotifyIconW(NIM_MODIFY, &mut nid);
+        if res.as_bool() {
+            Ok(())
+        } else {
+            Err("Shell_NotifyIconW NIM_MODIFY failed".to_string())
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn remove_system_tray_icon(hwnd_raw: isize) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::Shell::{
+        Shell_NotifyIconW, NOTIFYICONDATAW, NIM_DELETE,
+    };
+
+    if hwnd_raw == 0 {
+        return Err("invalid window handle (HWND is 0)".to_string());
+    }
+    let hwnd = HWND(hwnd_raw as *mut _);
+
+    unsafe {
+        let mut nid = NOTIFYICONDATAW {
+            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: hwnd,
+            uID: 1,
+            ..Default::default()
+        };
+
+        let res = Shell_NotifyIconW(NIM_DELETE, &mut nid);
+        if res.as_bool() {
+            Ok(())
+        } else {
+            Err("Shell_NotifyIconW NIM_DELETE failed".to_string())
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn show_tray_popup_menu(hwnd_raw: isize, is_paused: bool, is_muted: bool) -> Option<u32> {
+    use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, PostMessageW,
+        SetForegroundWindow, TrackPopupMenu, MF_SEPARATOR, MF_STRING, TPM_NONOTIFY,
+        TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_NULL,
+    };
+    use windows::core::PCWSTR;
+
+    if hwnd_raw == 0 {
+        return None;
+    }
+    let hwnd = HWND(hwnd_raw as *mut _);
+
+    unsafe {
+        let mut cursor = POINT { x: 0, y: 0 };
+        let _ = GetCursorPos(&mut cursor);
+
+        let hmenu = CreatePopupMenu().ok()?;
+
+        let playpause_text: Vec<u16> = tray_menu_label(TRAY_CMD_PLAYPAUSE, is_paused)
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let mute_text: Vec<u16> = tray_menu_label(TRAY_CMD_MUTE, is_muted)
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let open_text: Vec<u16> = tray_menu_label(TRAY_CMD_OPEN, false)
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let exit_text: Vec<u16> = tray_menu_label(TRAY_CMD_EXIT, false)
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let _ = AppendMenuW(
+            hmenu,
+            MF_STRING,
+            TRAY_CMD_PLAYPAUSE as usize,
+            PCWSTR(playpause_text.as_ptr()),
+        );
+        let _ = AppendMenuW(
+            hmenu,
+            MF_STRING,
+            TRAY_CMD_MUTE as usize,
+            PCWSTR(mute_text.as_ptr()),
+        );
+        let _ = AppendMenuW(
+            hmenu,
+            MF_STRING,
+            TRAY_CMD_OPEN as usize,
+            PCWSTR(open_text.as_ptr()),
+        );
+        let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
+        let _ = AppendMenuW(
+            hmenu,
+            MF_STRING,
+            TRAY_CMD_EXIT as usize,
+            PCWSTR(exit_text.as_ptr()),
+        );
+
+        let _ = SetForegroundWindow(hwnd);
+        let cmd = TrackPopupMenu(
+            hmenu,
+            TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
+            cursor.x,
+            cursor.y,
+            0,
+            hwnd,
+            None,
+        );
+        let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
+        let _ = DestroyMenu(hmenu);
+
+        if cmd.0 != 0 {
+            Some(cmd.0 as u32)
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn register_system_tray_icon(_hwnd_raw: isize, _tip: &str) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn update_system_tray_icon(_hwnd_raw: isize, _tip: &str) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn remove_system_tray_icon(_hwnd_raw: isize) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn show_tray_popup_menu(_hwnd_raw: isize, _is_paused: bool, _is_muted: bool) -> Option<u32> {
+    None
+}
+
 #[cfg(not(target_os = "windows"))]
 pub fn sync_windows_jump_list(_recent_media: &[std::path::PathBuf]) {
     // No-op on non-Windows platforms
@@ -614,5 +859,33 @@ mod tests {
         assert_eq!(thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, true), "Play");
         assert_eq!(thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, false), "Pause");
         assert_eq!(thumbnail_button_tooltip(THUMB_BUTTON_NEXT, false), "Next");
+    }
+
+    #[test]
+    fn test_tray_command_ids_and_menu_labels() {
+        assert_eq!(tray_menu_label(TRAY_CMD_PLAYPAUSE, true), "Play");
+        assert_eq!(tray_menu_label(TRAY_CMD_PLAYPAUSE, false), "Pause");
+        assert_eq!(tray_menu_label(TRAY_CMD_MUTE, true), "Unmute");
+        assert_eq!(tray_menu_label(TRAY_CMD_MUTE, false), "Mute");
+        assert_eq!(tray_menu_label(TRAY_CMD_OPEN, false), "Open Media...");
+        assert_eq!(tray_menu_label(TRAY_CMD_EXIT, false), "Exit");
+    }
+
+    #[test]
+    fn test_tray_stubs_or_validation() {
+        #[cfg(target_os = "windows")]
+        {
+            assert!(register_system_tray_icon(0, "test").is_err());
+            assert!(update_system_tray_icon(0, "test").is_err());
+            assert!(remove_system_tray_icon(0).is_err());
+            assert_eq!(show_tray_popup_menu(0, false, false), None);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(register_system_tray_icon(0, "test").is_ok());
+            assert!(update_system_tray_icon(0, "test").is_ok());
+            assert!(remove_system_tray_icon(0).is_ok());
+            assert_eq!(show_tray_popup_menu(0, false, false), None);
+        }
     }
 }
