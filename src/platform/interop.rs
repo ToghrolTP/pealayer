@@ -119,7 +119,7 @@ pub enum InteropCommand {
     GetStatus,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlayerStatusResponse {
     pub status: String,
     pub playing: bool,
@@ -127,6 +127,27 @@ pub struct PlayerStatusResponse {
     pub playback_time: f64,
     pub duration: f64,
     pub current_video: Option<String>,
+    #[serde(default)]
+    pub fullscreen: bool,
+    #[serde(default)]
+    pub workspace: String,
+    #[serde(default)]
+    pub controller_connected: bool,
+    #[serde(default)]
+    pub hardware_connected: bool,
+    #[serde(default)]
+    pub hardware: Option<HardwareStatusSummary>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HardwareStatusSummary {
+    pub board_name: String,
+    pub relay_count: usize,
+    pub pwm_count: usize,
+    pub supports_rf_transmit: bool,
+    pub supports_addressable_led: bool,
+    pub supports_segment_display: bool,
+    pub supports_lcd_display: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -236,11 +257,7 @@ pub fn get_live_status() -> PlayerStatusResponse {
     }
     PlayerStatusResponse {
         status: "initializing".to_string(),
-        playing: false,
-        volume: 0.0,
-        playback_time: 0.0,
-        duration: 0.0,
-        current_video: None,
+        ..PlayerStatusResponse::default()
     }
 }
 
@@ -1014,11 +1031,15 @@ mod tests {
             playback_time: 15.0,
             duration: 120.0,
             current_video: Some("/path/file.mp4".to_string()),
+            fullscreen: true,
+            workspace: "simple".to_string(),
+            ..PlayerStatusResponse::default()
         };
 
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("\"playing\":true"));
         assert!(json.contains("\"volume\":80.0"));
+        assert!(json.contains("\"fullscreen\":true"));
     }
 
     #[test]
@@ -1073,6 +1094,7 @@ mod tests {
             playback_time: 45.5,
             duration: 120.0,
             current_video: Some("/path/sample.mkv".to_string()),
+            ..PlayerStatusResponse::default()
         };
         set_live_status(status.clone());
         let retrieved = get_live_status();

@@ -219,6 +219,7 @@ impl ControllerPushTarget {
             "controller.state" | "controller.event" => {
                 capabilities.apply_state_notification(params)
             }
+            "controller.error" => capabilities.mark_board_disconnected(),
             _ => false,
         }
     }
@@ -342,6 +343,28 @@ pub fn spawn_engine() -> EngineHandle {
                         }
                         engine_connected.store(true, Ordering::Relaxed);
                         connected = true;
+                        let estop_reassert_error = engine_estop
+                            .load(Ordering::Relaxed)
+                            .then(|| {
+                                active_transport
+                                    .as_mut()
+                                    .and_then(|transport| transport.send(Command::AllOff).err())
+                            })
+                            .flatten();
+                        if let Some(error) = estop_reassert_error {
+                            if let Ok(mut guard) = engine_conn_error.lock() {
+                                *guard = Some(format!(
+                                    "reassert emergency stop after reconnect: {error}"
+                                ));
+                            }
+                            engine_connected.store(false, Ordering::Relaxed);
+                            connected = false;
+                            active_transport = None;
+                            if let Ok(mut guard) = engine_transport_description.lock() {
+                                *guard = None;
+                            }
+                            continue;
+                        }
                         last_ping = std::time::Instant::now();
                         last_owner_check = std::time::Instant::now();
                         last_capability_refresh = std::time::Instant::now();
@@ -1023,5 +1046,32 @@ mod tests {
         assert_eq!(target.websocket_endpoint(), None);
         drop(handle);
         assert!(!target.is_alive());
+    }
+
+    #[test]
+    fn controller_error_immediately_marks_the_board_disconnected() {
+        let handle = spawn_engine();
+        *handle.hardware_capabilities.lock().unwrap() =
+            Some(crate::four_d::controller::HardwareCapabilities {
+                board_connected: true,
+                status_led: Some(crate::four_d::controller::HardwareStatusLed {
+                    red: 10,
+                    green: 20,
+                    blue: 30,
+                    brightness: 255,
+                    effect: 0,
+                    condition: 0,
+                }),
+                ..Default::default()
+            });
+        let target = handle.controller_push_target();
+        assert!(target.apply_notification(
+            "controller.error",
+            &serde_json::json!({"message": "board disconnected"}),
+        ));
+        let capabilities = handle.hardware_capabilities.lock().unwrap();
+        let capabilities = capabilities.as_ref().unwrap();
+        assert!(!capabilities.board_connected);
+        assert!(capabilities.status_led.is_none());
     }
 }

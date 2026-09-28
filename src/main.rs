@@ -437,9 +437,12 @@ fn main() -> eframe::Result {
                 paused_drag_action: loaded_config.paused_drag_action,
                 playing_drag_action: loaded_config.playing_drag_action,
                 was_hardware_connected: false,
+                was_board_connected: false,
                 connection_notice: None,
                 workspace_before_fullscreen: None,
-                was_fullscreen: cli_options.fullscreen,
+                // Let the first frame observe a CLI-started fullscreen viewport
+                // as an entry transition so it always switches to Simple mode.
+                was_fullscreen: false,
                 interop_rx,
                 controller_cmd_rx,
                 web_state_tx,

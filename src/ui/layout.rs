@@ -1290,6 +1290,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         if let Some(pos) = pointer_pos {
                                             if rect.contains(pos) && scroll_delta.y != 0.0 {
                                                 self.app.timeline_zoom = (self.app.timeline_zoom + scroll_delta.y * 0.2).clamp(20.0, 500.0);
+                                                // The wheel gesture belongs to timeline zoom while
+                                                // the pointer is over the canvas; prevent the parent
+                                                // two-axis ScrollArea from also moving vertically.
+                                                ui.ctx().input_mut(|input| {
+                                                    input.smooth_scroll_delta.y = 0.0;
+                                                });
                                             }
                                         }
 

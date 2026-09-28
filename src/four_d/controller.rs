@@ -2,7 +2,6 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
-use base64::Engine as _;
 use serde_json::{Value, json};
 
 use crate::four_d::embedded_host::EmbeddedHost;
@@ -114,21 +113,32 @@ impl HardwareCapabilities {
     pub(crate) fn apply_state_notification(&mut self, event: &Value) -> bool {
         match event.get("kind").and_then(Value::as_str) {
             Some("status_led.changed") => {
-                let Some(payload) = event
-                    .get("payload")
-                    .and_then(Value::as_str)
-                    .and_then(|encoded| base64::engine::general_purpose::STANDARD.decode(encoded).ok())
-                    .filter(|payload| payload.len() == 6)
-                else {
+                let Some(metadata) = event.get("metadata").filter(|value| value.is_object()) else {
+                    return false;
+                };
+                let byte = |name| {
+                    metadata
+                        .get(name)
+                        .and_then(Value::as_u64)
+                        .and_then(|value| u8::try_from(value).ok())
+                };
+                let (Some(red), Some(green), Some(blue), Some(brightness), Some(effect), Some(condition)) = (
+                    byte("red"),
+                    byte("green"),
+                    byte("blue"),
+                    byte("brightness"),
+                    byte("effect"),
+                    byte("condition"),
+                ) else {
                     return false;
                 };
                 let next = HardwareStatusLed {
-                    red: payload[0],
-                    green: payload[1],
-                    blue: payload[2],
-                    brightness: payload[3],
-                    effect: payload[4],
-                    condition: payload[5],
+                    red,
+                    green,
+                    blue,
+                    brightness,
+                    effect,
+                    condition,
                 };
                 if self.status_led.as_ref() == Some(&next) {
                     false
@@ -157,6 +167,18 @@ impl HardwareCapabilities {
             }
             _ => false,
         }
+    }
+
+    pub(crate) fn mark_board_disconnected(&mut self) -> bool {
+        let changed = self.board_connected
+            || !self.active_relays.is_empty()
+            || self.status_led.is_some()
+            || self.telemetry != HardwareTelemetry::default();
+        self.board_connected = false;
+        self.active_relays.clear();
+        self.status_led = None;
+        self.telemetry = HardwareTelemetry::default();
+        changed
     }
 }
 
@@ -765,7 +787,15 @@ mod tests {
         capabilities.active_relays = [5, 6].into_iter().collect();
         assert!(capabilities.apply_state_notification(&json!({
             "kind": "status_led.changed",
-            "payload": "EjRWeAQF"
+            "metadata": {
+                "red": 18,
+                "green": 52,
+                "blue": 86,
+                "brightness": 120,
+                "effect": 4,
+                "condition": 5,
+                "revision": 42
+            }
         })));
         assert_eq!(
             capabilities.status_led,
@@ -792,9 +822,22 @@ mod tests {
         assert!(!capabilities.apply_status_notification(&json!({"status": null})));
         assert!(!capabilities.apply_state_notification(&json!({
             "kind": "status_led.changed",
-            "payload": "not-base64"
+            "metadata": {"red": "not-a-number"}
         })));
         assert!(!capabilities.apply_state_notification(&json!({"kind": "door"})));
         assert_eq!(capabilities, original);
+    }
+
+    #[test]
+    fn controller_error_clears_live_board_state() {
+        let mut capabilities = live_capabilities();
+        capabilities.active_relays = [5].into_iter().collect();
+        capabilities.telemetry.supply_mv = Some(12_000);
+        assert!(capabilities.mark_board_disconnected());
+        assert!(!capabilities.board_connected);
+        assert!(capabilities.active_relays.is_empty());
+        assert!(capabilities.status_led.is_none());
+        assert_eq!(capabilities.telemetry, HardwareTelemetry::default());
+        assert!(!capabilities.mark_board_disconnected());
     }
 }

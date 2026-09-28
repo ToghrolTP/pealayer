@@ -204,6 +204,7 @@ pub struct PealayerApp {
     pub(crate) paused_drag_action: crate::config::PlayerDragAction,
     pub(crate) playing_drag_action: crate::config::PlayerDragAction,
     pub(crate) was_hardware_connected: bool,
+    pub(crate) was_board_connected: bool,
     pub(crate) connection_notice: Option<String>,
     pub(crate) workspace_before_fullscreen: Option<bool>,
     pub(crate) was_fullscreen: bool,
@@ -308,8 +309,23 @@ impl eframe::App for PealayerApp {
 
         if should_broadcast {
             self.last_web_broadcast = Some(now);
+            let hardware = self.advertised_hardware();
+            let controller_connected = self
+                .engine_handle
+                .is_connected
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let hardware_connected = hardware
+                .as_ref()
+                .is_some_and(|capabilities| capabilities.board_connected);
             let status_resp = crate::platform::interop::PlayerStatusResponse {
-                status: "ok".to_string(),
+                status: if !controller_connected {
+                    "connecting"
+                } else if !hardware_connected {
+                    "hardware_unavailable"
+                } else {
+                    "ok"
+                }
+                .to_string(),
                 playing: !self.is_paused && self.current_video_path.is_some(),
                 volume: self.volume,
                 playback_time: self.playback_time,
@@ -318,6 +334,21 @@ impl eframe::App for PealayerApp {
                     .current_video_path
                     .as_ref()
                     .map(|p| p.to_string_lossy().to_string()),
+                fullscreen: ui.input(|input| input.viewport().fullscreen.unwrap_or(false)),
+                workspace: if self.show_four_d_editor { "nle" } else { "simple" }.to_string(),
+                controller_connected,
+                hardware_connected,
+                hardware: hardware.map(|capabilities| {
+                    crate::platform::interop::HardwareStatusSummary {
+                        board_name: capabilities.board_name,
+                        relay_count: capabilities.relays.len(),
+                        pwm_count: capabilities.pwm_channels.len(),
+                        supports_rf_transmit: capabilities.supports_rf_transmit,
+                        supports_addressable_led: capabilities.supports_addressable_led,
+                        supports_segment_display: capabilities.supports_segment_display,
+                        supports_lcd_display: capabilities.supports_lcd_display,
+                    }
+                }),
             };
             crate::platform::interop::set_live_status(status_resp.clone());
             if let Ok(json) = serde_json::to_string(&status_resp) {
@@ -412,7 +443,17 @@ impl eframe::App for PealayerApp {
             .engine_handle
             .is_connected
             .load(std::sync::atomic::Ordering::Relaxed);
-        if self.was_hardware_connected && !connected_now && self.pause_on_hardware_disconnect {
+        let board_connected_now = connected_now
+            && self
+                .advertised_hardware()
+                .is_some_and(|capabilities| capabilities.board_connected);
+        if hardware_connection_was_lost(
+            self.was_hardware_connected,
+            connected_now,
+            self.was_board_connected,
+            board_connected_now,
+        ) && self.pause_on_hardware_disconnect
+        {
             self.pause();
             self.set_osd(self.tr("Hardware disconnected — playback paused"));
         }
@@ -422,6 +463,7 @@ impl eframe::App for PealayerApp {
         }
         self.is_connected = connected_now;
         self.was_hardware_connected = connected_now;
+        self.was_board_connected = board_connected_now;
         if connected_now {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
@@ -614,23 +656,47 @@ impl eframe::App for PealayerApp {
                             .show_inside(ui, &mut tab_viewer);
                     });
                     self.dock_state = dock_state;
-                    dock_response.response.context_menu(|ui| {
-                        ui.label(egui::RichText::new(self.tr("Workspace")).strong());
-                        ui.separator();
-                        if ui.button(format!("▦ {}", self.tr("Reset workspace layout"))).clicked() {
-                            self.dock_state = crate::ui::layout::create_initial_layout();
-                            ui.close();
-                        }
-                        if ui.button(format!("▶ {}", self.tr("Switch to Simple Player"))).clicked() {
-                            self.show_four_d_editor = false;
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button(format!("⚙ {}", self.tr("Preferences..."))).clicked() {
-                            self.show_preferences_dialog = true;
-                            ui.close();
-                        }
-                    });
+                    let pointer_is_in_primary_tab_header = ui
+                        .ctx()
+                        .pointer_latest_pos()
+                        .is_some_and(|pointer| {
+                            pointer.y >= dock_response.response.rect.top()
+                                && pointer.y <= dock_response.response.rect.top() + 32.0
+                        });
+                    if pointer_is_in_primary_tab_header {
+                        dock_response.response.context_menu(|ui| {
+                            ui.label(egui::RichText::new(self.tr("Workspace")).strong());
+                            ui.separator();
+                            if ui
+                                .button(format!(
+                                    "▦ {}",
+                                    self.tr("Reset workspace layout")
+                                ))
+                                .clicked()
+                            {
+                                self.dock_state = crate::ui::layout::create_initial_layout();
+                                ui.close();
+                            }
+                            if ui
+                                .button(format!(
+                                    "▶ {}",
+                                    self.tr("Switch to Simple Player")
+                                ))
+                                .clicked()
+                            {
+                                self.show_four_d_editor = false;
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui
+                                .button(format!("⚙ {}", self.tr("Preferences...")))
+                                .clicked()
+                            {
+                                self.show_preferences_dialog = true;
+                                ui.close();
+                            }
+                        });
+                    }
                 } else {
                     crate::ui::video::draw(self, ui);
                     crate::ui::controls::draw(self, ui);
@@ -1846,6 +1912,7 @@ impl Default for PealayerApp {
             paused_drag_action: crate::config::PlayerDragAction::MoveWindow,
             playing_drag_action: crate::config::PlayerDragAction::TemporaryFastForward,
             was_hardware_connected: false,
+            was_board_connected: false,
             connection_notice: None,
             workspace_before_fullscreen: None,
             was_fullscreen: false,
@@ -1878,6 +1945,16 @@ pub fn contextual_window_title(
     } else {
         app_name.to_string()
     }
+}
+
+fn hardware_connection_was_lost(
+    was_transport_connected: bool,
+    transport_connected: bool,
+    was_board_connected: bool,
+    board_connected: bool,
+) -> bool {
+    (was_transport_connected && !transport_connected)
+        || (was_board_connected && !board_connected)
 }
 
 #[cfg(test)]
@@ -1972,6 +2049,21 @@ mod tests {
             ),
             "demo.mp4 — Studio"
         );
+    }
+
+    #[test]
+    fn board_loss_is_detected_behind_a_healthy_controller_transport() {
+        assert!(hardware_connection_was_lost(true, true, true, false));
+        assert!(hardware_connection_was_lost(true, false, true, false));
+        assert!(!hardware_connection_was_lost(true, true, false, false));
+        assert!(!hardware_connection_was_lost(false, true, false, true));
+    }
+
+    #[test]
+    fn fullscreen_startup_uses_an_entry_transition() {
+        let app = PealayerApp::default();
+        assert!(!app.was_fullscreen);
+        assert!(app.show_four_d_editor);
     }
 
     #[test]
