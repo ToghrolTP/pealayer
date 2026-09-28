@@ -89,6 +89,7 @@ pub struct TaskbarState {
     pub progress_percent: u32,
     pub is_paused: bool,
     pub is_active: bool,
+    pub has_error: bool,
 }
 
 impl Default for TaskbarState {
@@ -97,13 +98,16 @@ impl Default for TaskbarState {
             progress_percent: 0,
             is_paused: false,
             is_active: false,
+            has_error: false,
         }
     }
 }
 
 impl TaskbarState {
     pub fn to_progress_flag(&self) -> TaskbarProgressFlag {
-        if !self.is_active {
+        if self.has_error {
+            TaskbarProgressFlag::Error
+        } else if !self.is_active {
             TaskbarProgressFlag::NoProgress
         } else if self.is_paused {
             TaskbarProgressFlag::Paused
@@ -119,6 +123,7 @@ pub fn compute_taskbar_state(playback_time: f64, duration: f64, is_paused: bool)
             progress_percent: 0,
             is_paused,
             is_active: false,
+            has_error: false,
         };
     }
 
@@ -130,7 +135,27 @@ pub fn compute_taskbar_state(playback_time: f64, duration: f64, is_paused: bool)
         progress_percent,
         is_paused,
         is_active: true,
+        has_error: false,
     }
+}
+
+pub fn compute_taskbar_state_with_error(
+    playback_time: f64,
+    duration: f64,
+    is_paused: bool,
+    has_error: bool,
+) -> TaskbarState {
+    if has_error {
+        return TaskbarState {
+            progress_percent: 100,
+            is_paused,
+            is_active: true,
+            has_error: true,
+        };
+    }
+    let mut state = compute_taskbar_state(playback_time, duration, is_paused);
+    state.has_error = false;
+    state
 }
 
 pub fn register_window_hwnd(hwnd: isize) {
@@ -237,7 +262,12 @@ pub fn apply_windows_window_decorations(_hwnd_raw: isize) {
 
 
 #[cfg(target_os = "windows")]
-pub fn update_windows_taskbar_state(progress: f64, duration: f64, is_paused: bool) {
+pub fn update_windows_taskbar_state_ext(
+    progress: f64,
+    duration: f64,
+    is_paused: bool,
+    has_error: bool,
+) {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
     use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList, TBPFLAG};
@@ -248,7 +278,7 @@ pub fn update_windows_taskbar_state(progress: f64, duration: f64, is_paused: boo
     }
     let hwnd = HWND(hwnd_raw as *mut _);
 
-    let state = compute_taskbar_state(progress, duration, is_paused);
+    let state = compute_taskbar_state_with_error(progress, duration, is_paused, has_error);
 
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
@@ -265,10 +295,29 @@ pub fn update_windows_taskbar_state(progress: f64, duration: f64, is_paused: boo
                     let _ = taskbar.SetProgressState(hwnd, TBPFLAG(8));
                     let _ = taskbar.SetProgressValue(hwnd, state.progress_percent as u64, 100);
                 }
+                TaskbarProgressFlag::Error => {
+                    let _ = taskbar.SetProgressState(hwnd, TBPFLAG(4));
+                    let _ = taskbar.SetProgressValue(hwnd, 100, 100);
+                }
                 _ => {}
             }
         }
     }
+}
+
+#[cfg(target_os = "windows")]
+pub fn update_windows_taskbar_state(progress: f64, duration: f64, is_paused: bool) {
+    update_windows_taskbar_state_ext(progress, duration, is_paused, false);
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn update_windows_taskbar_state_ext(
+    _progress: f64,
+    _duration: f64,
+    _is_paused: bool,
+    _has_error: bool,
+) {
+    // No-op on non-Windows platforms
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -334,6 +383,19 @@ mod tests {
         // Clamping overflow
         let clamped = compute_taskbar_state(120.0, 60.0, false);
         assert_eq!(clamped.progress_percent, 100);
+    }
+
+    #[test]
+    fn test_compute_taskbar_state_with_error() {
+        let err_state = compute_taskbar_state_with_error(10.0, 60.0, false, true);
+        assert!(err_state.is_active);
+        assert_eq!(err_state.to_progress_flag(), TaskbarProgressFlag::Error);
+
+        let normal_state = compute_taskbar_state_with_error(10.0, 60.0, false, false);
+        assert_eq!(normal_state.to_progress_flag(), TaskbarProgressFlag::Normal);
+
+        let paused_state = compute_taskbar_state_with_error(10.0, 60.0, true, false);
+        assert_eq!(paused_state.to_progress_flag(), TaskbarProgressFlag::Paused);
     }
 
     #[test]
