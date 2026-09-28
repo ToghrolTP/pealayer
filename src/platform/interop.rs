@@ -553,7 +553,7 @@ pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<Interop
     rx
 }
 
-const PCCONTROLLER_ACTIONS: &str = "app.page,pealayer.play,pealayer.pause,pealayer.toggle,pealayer.seek,pealayer.seek_absolute,pealayer.volume.set,pealayer.open";
+const PCCONTROLLER_ACTIONS: &str = "pealayer.play,pealayer.pause,pealayer.toggle,pealayer.seek,pealayer.seek_absolute,pealayer.volume.set,pealayer.open,pealayer.fullscreen.set,pealayer.fullscreen.toggle,pealayer.workspace.set";
 
 struct ControllerAction {
     command: Option<InteropCommand>,
@@ -589,7 +589,7 @@ fn controller_action_from_event(event: &Value, instance_id: &str) -> Option<Cont
 
     let kind = event.get("kind")?.as_str()?.trim().to_ascii_lowercase();
     let value = metadata
-        .get(if kind == "app.page" { "page" } else { "value" })
+        .get("value")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .trim();
@@ -607,26 +607,36 @@ fn controller_action_from_event(event: &Value, instance_id: &str) -> Option<Cont
             "pealayer.seek" => value
                 .parse::<f64>()
                 .ok()
+                .filter(|seconds| seconds.is_finite())
                 .map(|seconds| InteropCommand::Seek { seconds }),
             "pealayer.seek_absolute" => value
                 .parse::<f64>()
                 .ok()
+                .filter(|percentage| percentage.is_finite() && (0.0..=100.0).contains(percentage))
                 .map(|percentage| InteropCommand::SeekAbs { percentage }),
             "pealayer.volume.set" => value
                 .parse::<f64>()
                 .ok()
+                .filter(|value| value.is_finite() && (0.0..=130.0).contains(value))
                 .map(|value| InteropCommand::SetVolume { value }),
             "pealayer.open" if !value.is_empty() => Some(InteropCommand::Open {
                 target: value.to_string(),
             }),
-            "app.page" => match value.to_ascii_lowercase().as_str() {
-                "play" | "player.play" => Some(InteropCommand::Play),
-                "pause" | "player.pause" => Some(InteropCommand::Pause),
-                "toggle" | "player.toggle" => Some(InteropCommand::TogglePause),
-                "back" | "previous" | "rewind" => {
-                    Some(InteropCommand::Seek { seconds: -10.0 })
+            "pealayer.fullscreen.set" => match value.to_ascii_lowercase().as_str() {
+                "true" | "1" | "on" | "yes" => {
+                    Some(InteropCommand::SetFullscreen { enabled: true })
                 }
-                "forward" | "next" => Some(InteropCommand::Seek { seconds: 10.0 }),
+                "false" | "0" | "off" | "no" => {
+                    Some(InteropCommand::SetFullscreen { enabled: false })
+                }
+                _ => None,
+            },
+            "pealayer.fullscreen.toggle" if value.is_empty() => {
+                Some(InteropCommand::ToggleFullscreen)
+            }
+            "pealayer.workspace.set" => match value.to_ascii_lowercase().as_str() {
+                "nle" | "editor" => Some(InteropCommand::SetWorkspace { nle: true }),
+                "simple" | "player" => Some(InteropCommand::SetWorkspace { nle: false }),
                 _ => None,
             },
             _ => None,
@@ -1175,6 +1185,100 @@ mod tests {
         assert_eq!(action.acknowledgement["state"], "applied");
         assert_eq!(action.acknowledgement["delivery_id"], "delivery-1");
         assert!(controller_action_from_event(&event, "pealayer:other").is_none());
+    }
+
+    #[test]
+    fn advertised_pccontroller_workspace_actions_are_executable() {
+        assert_eq!(
+            PCCONTROLLER_ACTIONS.split(',').collect::<Vec<_>>(),
+            vec![
+                "pealayer.play",
+                "pealayer.pause",
+                "pealayer.toggle",
+                "pealayer.seek",
+                "pealayer.seek_absolute",
+                "pealayer.volume.set",
+                "pealayer.open",
+                "pealayer.fullscreen.set",
+                "pealayer.fullscreen.toggle",
+                "pealayer.workspace.set",
+            ]
+        );
+
+        let action = |kind: &str, value: &str| {
+            controller_action_from_event(
+                &serde_json::json!({
+                    "kind": kind,
+                    "metadata": {
+                        "target_instance": "pealayer:test",
+                        "operation_id": format!("operation-{kind}-{value}"),
+                        "operation_delivery_id": format!("delivery-{kind}-{value}"),
+                        "operation_expires_at": "2099-01-01T00:00:00Z",
+                        "value": value,
+                    },
+                }),
+                "pealayer:test",
+            )
+            .unwrap()
+        };
+
+        assert!(matches!(
+            action("pealayer.fullscreen.set", "true").command,
+            Some(InteropCommand::SetFullscreen { enabled: true })
+        ));
+        assert!(matches!(
+            action("pealayer.fullscreen.set", "false").command,
+            Some(InteropCommand::SetFullscreen { enabled: false })
+        ));
+        assert!(matches!(
+            action("pealayer.fullscreen.toggle", "").command,
+            Some(InteropCommand::ToggleFullscreen)
+        ));
+        assert!(action("pealayer.fullscreen.toggle", "unexpected")
+            .command
+            .is_none());
+        assert!(matches!(
+            action("pealayer.workspace.set", "nle").command,
+            Some(InteropCommand::SetWorkspace { nle: true })
+        ));
+        assert!(matches!(
+            action("pealayer.workspace.set", "simple").command,
+            Some(InteropCommand::SetWorkspace { nle: false })
+        ));
+        let invalid = action("pealayer.fullscreen.set", "sometimes");
+        assert!(invalid.command.is_none());
+        assert_eq!(invalid.acknowledgement["state"], "rejected");
+        assert_eq!(
+            invalid.acknowledgement["reason"],
+            "unsupported_or_invalid_pealayer_action"
+        );
+
+        for (kind, value) in [
+            ("pealayer.seek", "NaN"),
+            ("pealayer.seek", "inf"),
+            ("pealayer.seek_absolute", "-0.01"),
+            ("pealayer.seek_absolute", "100.01"),
+            ("pealayer.seek_absolute", "NaN"),
+            ("pealayer.volume.set", "-0.01"),
+            ("pealayer.volume.set", "130.01"),
+            ("pealayer.volume.set", "inf"),
+        ] {
+            let invalid = action(kind, value);
+            assert!(invalid.command.is_none(), "{kind} accepted {value}");
+            assert_eq!(invalid.acknowledgement["state"], "rejected");
+        }
+        assert!(matches!(
+            action("pealayer.seek_absolute", "100").command,
+            Some(InteropCommand::SeekAbs { percentage: 100.0 })
+        ));
+        assert!(matches!(
+            action("pealayer.volume.set", "130").command,
+            Some(InteropCommand::SetVolume { value: 130.0 })
+        ));
+
+        let app_page = action("app.page", "play");
+        assert!(app_page.command.is_none());
+        assert_eq!(app_page.acknowledgement["state"], "rejected");
     }
 
     #[test]

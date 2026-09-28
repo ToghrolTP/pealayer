@@ -116,9 +116,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             .on_hover_text(format!("{} (F)", app.tr("Fullscreen")))
                             .clicked()
                         {
-                            let is_fullscreen =
-                                ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
-                            app.set_fullscreen(&ctx, !is_fullscreen);
+                            app.toggle_fullscreen(&ctx);
                         }
 
                         let pin_icon = if app.pin_controls { "◆" } else { "◇" };

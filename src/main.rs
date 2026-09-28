@@ -443,6 +443,7 @@ fn main() -> eframe::Result {
                 // Let the first frame observe a CLI-started fullscreen viewport
                 // as an entry transition so it always switches to Simple mode.
                 was_fullscreen: false,
+                desired_fullscreen: None,
                 interop_rx,
                 controller_cmd_rx,
                 web_state_tx,
