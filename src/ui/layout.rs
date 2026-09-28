@@ -116,6 +116,66 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
         }
     }
 
+    fn context_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        tab: &mut Self::Tab,
+        _path: egui_dock::NodePath,
+    ) {
+        let title = match tab {
+            PealayerTab::ProgramMonitor => self.app.tr("Program Monitor"),
+            PealayerTab::EffectControls => self.app.tr("Effect Controls"),
+            PealayerTab::EffectsLibrary => self.app.tr("Effects Library"),
+            PealayerTab::HardwareMonitor => self.app.tr("Hardware Monitor"),
+            PealayerTab::Timeline => self.app.tr("Timeline"),
+        };
+        ui.label(egui::RichText::new(title).strong());
+        ui.separator();
+        match tab {
+            PealayerTab::ProgramMonitor => {
+                let is_fullscreen = ui.input(|input| input.viewport().fullscreen.unwrap_or(false));
+                let label = if is_fullscreen {
+                    self.app.tr("Exit Fullscreen")
+                } else {
+                    self.app.tr("Fullscreen")
+                };
+                if ui.button(format!("⛶ {label}")).clicked() {
+                    self.app.set_fullscreen(ui.ctx(), !is_fullscreen);
+                    ui.close();
+                }
+            }
+            PealayerTab::Timeline => {
+                if ui.button(format!("▣ {}", self.app.tr("Select all cues"))).clicked() {
+                    self.app.selected_instance_ids = self
+                        .app
+                        .timeline
+                        .instances
+                        .iter()
+                        .map(|instance| instance.id)
+                        .collect();
+                    ui.close();
+                }
+                if ui.button(format!("↺ {}", self.app.tr("Reset zoom"))).clicked() {
+                    self.app.timeline_zoom = 100.0;
+                    ui.close();
+                }
+            }
+            PealayerTab::HardwareMonitor => {
+                if ui.button(format!("⌁ {}", self.app.tr("Hardware preferences"))).clicked() {
+                    self.app.preferences_tab = 2;
+                    self.app.show_preferences_dialog = true;
+                    ui.close();
+                }
+            }
+            _ => {}
+        }
+        ui.separator();
+        if ui.button(format!("⚙ {}", self.app.tr("Preferences..."))).clicked() {
+            self.app.show_preferences_dialog = true;
+            ui.close();
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         let display_language = self.app.language;
         let replay_label = self.app.tr("Replay");

@@ -608,9 +608,29 @@ impl eframe::App for PealayerApp {
                 if self.show_four_d_editor {
                     let mut dock_state =
                         std::mem::replace(&mut self.dock_state, egui_dock::DockState::new(vec![]));
-                    let mut tab_viewer = crate::ui::layout::PealayerTabViewer { app: self };
-                    egui_dock::DockArea::new(&mut dock_state).show_inside(ui, &mut tab_viewer);
+                    let dock_response = ui.scope(|ui| {
+                        let mut tab_viewer = crate::ui::layout::PealayerTabViewer { app: self };
+                        egui_dock::DockArea::new(&mut dock_state)
+                            .show_inside(ui, &mut tab_viewer);
+                    });
                     self.dock_state = dock_state;
+                    dock_response.response.context_menu(|ui| {
+                        ui.label(egui::RichText::new(self.tr("Workspace")).strong());
+                        ui.separator();
+                        if ui.button(format!("▦ {}", self.tr("Reset workspace layout"))).clicked() {
+                            self.dock_state = crate::ui::layout::create_initial_layout();
+                            ui.close();
+                        }
+                        if ui.button(format!("▶ {}", self.tr("Switch to Simple Player"))).clicked() {
+                            self.show_four_d_editor = false;
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button(format!("⚙ {}", self.tr("Preferences..."))).clicked() {
+                            self.show_preferences_dialog = true;
+                            ui.close();
+                        }
+                    });
                 } else {
                     crate::ui::video::draw(self, ui);
                     crate::ui::controls::draw(self, ui);
