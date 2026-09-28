@@ -79,71 +79,105 @@ pub fn resolve_system_config_path() -> PathBuf {
 
 impl AppConfig {
     pub fn get_config_path() -> PathBuf {
-        // 1. Portable Mode check (local executable folder flag/file)
-        if PathBuf::from("portable.flag").exists() || PathBuf::from("pealayer.json").exists() {
-            return PathBuf::from("config").join("settings.json");
+        let exe_dir = detect_executable_dir();
+        match detect_storage_mode(&exe_dir) {
+            StorageMode::Portable => resolve_portable_config_path(&exe_dir),
+            StorageMode::System | StorageMode::Auto => resolve_system_config_path(),
         }
+    }
 
-        // 2. Windows vs Linux standard AppData / XDG config path
-        #[cfg(target_os = "windows")]
-        {
-            if let Ok(appdata) = std::env::var("APPDATA") {
-                return PathBuf::from(appdata).join("pealayer").join("config.json");
+    pub fn load_with_mode(mode: StorageMode, exe_dir: &std::path::Path) -> Self {
+        match mode {
+            StorageMode::Portable => {
+                let path = resolve_portable_config_path(exe_dir);
+                if path.exists() {
+                    if let Ok(data) = std::fs::read_to_string(&path) {
+                        if let Ok(cfg) = serde_json::from_str::<AppConfig>(&data) {
+                            return cfg;
+                        }
+                    }
+                }
+                Self::default()
             }
-            if let Ok(userprofile) = std::env::var("USERPROFILE") {
-                return PathBuf::from(userprofile)
-                    .join("AppData")
-                    .join("Roaming")
+            StorageMode::System | StorageMode::Auto => {
+                // On Windows, try reading from Registry first
+                #[cfg(target_os = "windows")]
+                {
+                    if let Ok(Some(reg_cfg)) = crate::platform::registry::load_settings_from_registry() {
+                        return reg_cfg;
+                    }
+                }
+
+                // Fall back to system configuration file
+                let path = resolve_system_config_path();
+                if path.exists() {
+                    if let Ok(data) = std::fs::read_to_string(&path) {
+                        if let Ok(cfg) = serde_json::from_str::<AppConfig>(&data) {
+                            return cfg;
+                        }
+                    }
+                }
+
+                // Transparent Migration from legacy recent.json if present
+                let legacy_path = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
+                    .join(".config")
                     .join("pealayer")
-                    .join("config.json");
+                    .join("recent.json");
+
+                let mut config = Self::default();
+                if legacy_path.exists() {
+                    if let Ok(data) = std::fs::read_to_string(&legacy_path) {
+                        if let Ok(list) = serde_json::from_str::<Vec<PathBuf>>(&data) {
+                            config.recent_media = list;
+                        }
+                    }
+                }
+
+                config
             }
         }
+    }
 
-        // Linux / Unix XDG fallback
-        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-            return PathBuf::from(xdg).join("pealayer").join("config.json");
+    pub fn save_with_mode(&self, mode: StorageMode, exe_dir: &std::path::Path) {
+        match mode {
+            StorageMode::Portable => {
+                let path = resolve_portable_config_path(exe_dir);
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if let Ok(json) = serde_json::to_string_pretty(self) {
+                    let _ = std::fs::write(path, json);
+                }
+            }
+            StorageMode::System | StorageMode::Auto => {
+                // On Windows, save to Registry
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = crate::platform::registry::save_settings_to_registry(self);
+                }
+
+                // Save to system config file (as shadow backup / cross-platform standard)
+                let path = resolve_system_config_path();
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if let Ok(json) = serde_json::to_string_pretty(self) {
+                    let _ = std::fs::write(path, json);
+                }
+            }
         }
-
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home).join(".config").join("pealayer").join("config.json")
     }
 
     pub fn load() -> Self {
-        let path = Self::get_config_path();
-        if path.exists() {
-            if let Ok(data) = std::fs::read_to_string(&path) {
-                if let Ok(cfg) = serde_json::from_str::<AppConfig>(&data) {
-                    return cfg;
-                }
-            }
-        }
-
-        // Transparent Migration from legacy recent.json if present
-        let legacy_path = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
-            .join(".config")
-            .join("pealayer")
-            .join("recent.json");
-
-        let mut config = Self::default();
-        if legacy_path.exists() {
-            if let Ok(data) = std::fs::read_to_string(&legacy_path) {
-                if let Ok(list) = serde_json::from_str::<Vec<PathBuf>>(&data) {
-                    config.recent_media = list;
-                }
-            }
-        }
-
-        config
+        let exe_dir = detect_executable_dir();
+        let mode = detect_storage_mode(&exe_dir);
+        Self::load_with_mode(mode, &exe_dir)
     }
 
     pub fn save(&self) {
-        let path = Self::get_config_path();
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(path, json);
-        }
+        let exe_dir = detect_executable_dir();
+        let mode = detect_storage_mode(&exe_dir);
+        self.save_with_mode(mode, &exe_dir);
     }
 }
 
@@ -252,6 +286,33 @@ mod tests {
     fn test_detect_executable_dir() {
         let exe_dir = detect_executable_dir();
         assert!(exe_dir.exists());
+    }
+
+    #[test]
+    fn test_portable_save_and_load_roundtrip() {
+        let temp_dir = std::env::temp_dir().join(format!("pealayer_port_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let mut cfg = AppConfig::default();
+        cfg.volume = 77.0;
+        cfg.is_muted = true;
+        cfg.pin_controls = true;
+        cfg.show_remaining_time = true;
+        cfg.recent_media.push(PathBuf::from("/media/video.mp4"));
+
+        cfg.save_with_mode(StorageMode::Portable, &temp_dir);
+
+        let portable_file = temp_dir.join("pealayer.json");
+        assert!(portable_file.exists());
+
+        let loaded = AppConfig::load_with_mode(StorageMode::Portable, &temp_dir);
+        assert_eq!(loaded.volume, 77.0);
+        assert!(loaded.is_muted);
+        assert!(loaded.pin_controls);
+        assert!(loaded.show_remaining_time);
+        assert_eq!(loaded.recent_media, vec![PathBuf::from("/media/video.mp4")]);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
 
