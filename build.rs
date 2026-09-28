@@ -143,7 +143,7 @@ fn main() {
         ] {
             if std::path::Path::new(path).exists() {
                 println!("cargo:rustc-link-search=native={path}");
-                println!("cargo:rustc-link-arg=-Wl,-rpath={path}");
+                println!("cargo:rustc-link-arg=-Wl,-rpath,{path}");
             }
         }
     }
