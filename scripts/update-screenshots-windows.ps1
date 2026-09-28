@@ -175,7 +175,7 @@ function Save-WindowScreenshot([IntPtr]$Handle, [int]$ExpectedProcessId, [string
 
     [void][PealayerScreenshotNative]::BringWindowToTop($Handle)
     [void][PealayerScreenshotNative]::SetForegroundWindow($Handle)
-    Start-Sleep -Milliseconds 900
+    Start-Sleep -Milliseconds 1800
 
     $rect = New-Object PealayerScreenshotNative+Rect
     if (-not [PealayerScreenshotNative]::GetWindowRect($Handle, [ref]$rect)) {
