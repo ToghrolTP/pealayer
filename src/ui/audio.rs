@@ -15,109 +15,123 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .default_size([420.0, 320.0])
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ui.ctx(), |ui| {
-          ui.with_layout(crate::ui::i18n::vertical_layout(app.rtl), |ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
+            ui.with_layout(crate::ui::i18n::vertical_layout(app.rtl), |ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
 
-            // Track Selection
-            ui.with_layout(crate::ui::i18n::layout(app.rtl, egui::Align::Center), |ui| {
-                ui.label(app.tr("Track:"));
-                let current_label = if app.current_aid == "no" {
-                    app.tr("None").to_string()
-                } else {
-                    let mut label = format!("Track {}", app.current_aid);
-                    for t in &app.audio_tracks {
-                        if t.id.to_string() == app.current_aid {
-                            let parts: Vec<&str> = vec![
-                                t.lang.as_deref().unwrap_or(""),
-                                t.title.as_deref().unwrap_or(""),
-                            ]
-                            .into_iter()
-                            .filter(|s| !s.is_empty())
-                            .collect();
-                            if !parts.is_empty() {
-                                label = format!("Track {} ({})", t.id, parts.join(" - "));
+                // Track Selection
+                ui.with_layout(
+                    crate::ui::i18n::layout(app.rtl, egui::Align::Center),
+                    |ui| {
+                        ui.label(app.tr("Track:"));
+                        let current_label = if app.current_aid == "no" {
+                            app.tr("None").to_string()
+                        } else {
+                            let mut label = format!("Track {}", app.current_aid);
+                            for t in &app.audio_tracks {
+                                if t.id.to_string() == app.current_aid {
+                                    let parts: Vec<&str> = vec![
+                                        t.lang.as_deref().unwrap_or(""),
+                                        t.title.as_deref().unwrap_or(""),
+                                    ]
+                                    .into_iter()
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
+                                    if !parts.is_empty() {
+                                        label = format!("Track {} ({})", t.id, parts.join(" - "));
+                                    }
+                                    break;
+                                }
                             }
-                            break;
-                        }
-                    }
-                    label
-                };
+                            label
+                        };
 
-                let none_label = app.tr("None");
-                egui::ComboBox::from_id_salt("audio_track_combo")
-                    .selected_text(current_label)
-                    .show_ui(ui, |ui| {
+                        let none_label = app.tr("None");
+                        egui::ComboBox::from_id_salt("audio_track_combo")
+                            .selected_text(current_label)
+                            .show_ui(ui, |ui| {
+                                if ui
+                                    .selectable_value(
+                                        &mut app.current_aid,
+                                        "no".to_string(),
+                                        none_label,
+                                    )
+                                    .clicked()
+                                {
+                                    let _ = app.mpv.set_property("aid", "no");
+                                }
+                                for track in &app.audio_tracks {
+                                    let track_id_str = track.id.to_string();
+                                    let parts: Vec<&str> = vec![
+                                        track.lang.as_deref().unwrap_or(""),
+                                        track.title.as_deref().unwrap_or(""),
+                                    ]
+                                    .into_iter()
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
+
+                                    let label = if parts.is_empty() {
+                                        format!("Track {}", track.id)
+                                    } else {
+                                        format!("Track {} ({})", track.id, parts.join(" - "))
+                                    };
+
+                                    if ui
+                                        .selectable_value(
+                                            &mut app.current_aid,
+                                            track_id_str.clone(),
+                                            label,
+                                        )
+                                        .clicked()
+                                    {
+                                        let _ = app.mpv.set_property("aid", track_id_str);
+                                    }
+                                }
+                            });
+                    },
+                );
+
+                ui.separator();
+
+                // Synchronization
+                ui.label(app.tr("Synchronization"));
+                ui.with_layout(
+                    crate::ui::i18n::layout(app.rtl, egui::Align::Center),
+                    |ui| {
+                        ui.label(app.tr("Delay (s):"));
+                        let mut delay = app.audio_delay;
                         if ui
-                            .selectable_value(&mut app.current_aid, "no".to_string(), none_label)
-                            .clicked()
+                            .add(
+                                egui::DragValue::new(&mut delay)
+                                    .speed(0.1)
+                                    .range(MIN_AUDIO_DELAY..=MAX_AUDIO_DELAY),
+                            )
+                            .changed()
                         {
-                            let _ = app.mpv.set_property("aid", "no");
+                            app.audio_delay = delay;
+                            let _ = app.mpv.set_property("audio-delay", delay);
                         }
-                        for track in &app.audio_tracks {
-                            let track_id_str = track.id.to_string();
-                            let parts: Vec<&str> = vec![
-                                track.lang.as_deref().unwrap_or(""),
-                                track.title.as_deref().unwrap_or(""),
-                            ]
-                            .into_iter()
-                            .filter(|s| !s.is_empty())
-                            .collect();
-                            
-                            let label = if parts.is_empty() {
-                                format!("Track {}", track.id)
-                            } else {
-                                format!("Track {} ({})", track.id, parts.join(" - "))
-                            };
-
-                            if ui
-                                .selectable_value(&mut app.current_aid, track_id_str.clone(), label)
-                                .clicked()
-                            {
-                                let _ = app.mpv.set_property("aid", track_id_str);
-                            }
+                        if ui.button(app.tr("Reset")).clicked() {
+                            app.audio_delay = 0.0;
+                            let _ = app.mpv.set_property("audio-delay", 0.0);
                         }
-                    });
-            });
+                    },
+                );
 
-            ui.separator();
+                ui.separator();
 
-            // Synchronization
-            ui.label(app.tr("Synchronization"));
-            ui.with_layout(crate::ui::i18n::layout(app.rtl, egui::Align::Center), |ui| {
-                ui.label(app.tr("Delay (s):"));
-                let mut delay = app.audio_delay;
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut delay)
-                            .speed(0.1)
-                            .range(MIN_AUDIO_DELAY..=MAX_AUDIO_DELAY),
-                    )
-                    .changed()
-                {
-                    app.audio_delay = delay;
-                    let _ = app.mpv.set_property("audio-delay", delay);
-                }
-                if ui.button(app.tr("Reset")).clicked() {
-                    app.audio_delay = 0.0;
-                    let _ = app.mpv.set_property("audio-delay", 0.0);
-                }
-            });
-
-            ui.separator();
-
-            // Load External
-            if ui.button(app.tr("Load External Audio...")).clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Audio Files", &["mp3", "flac", "wav", "m4a", "aac", "ogg"])
-                    .pick_file()
-                {
-                    if let Some(path_str) = path.to_str() {
-                        let _ = app.mpv.command("audio-add", &[path_str]);
-                        app.refresh_audio_tracks();
+                // Load External
+                if ui.button(app.tr("Load External Audio...")).clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Audio Files", &["mp3", "flac", "wav", "m4a", "aac", "ogg"])
+                        .pick_file()
+                    {
+                        if let Some(path_str) = path.to_str() {
+                            let _ = app.mpv.command("audio-add", &[path_str]);
+                            app.refresh_audio_tracks();
+                        }
                     }
                 }
-            }
-          });
+            });
         });
 
     app.show_audio_settings = open;

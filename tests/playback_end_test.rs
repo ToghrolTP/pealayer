@@ -36,14 +36,20 @@ fn test_app_playback_finish_replay_and_seek() {
         }
     }
     assert!(reached_finish, "Playback should reach finished state");
-    assert!(app.is_paused, "Video should be paused when playback finishes");
+    assert!(
+        app.is_paused,
+        "Video should be paused when playback finishes"
+    );
 
     // 1. Test seeking backwards from finished state
     app.seek_relative(-5.0);
     thread::sleep(Duration::from_millis(150));
     app.process_events();
 
-    assert!(!app.is_playback_finished(), "Should no longer be in finished state after seeking back");
+    assert!(
+        !app.is_playback_finished(),
+        "Should no longer be in finished state after seeking back"
+    );
     assert!(
         app.playback_time >= 4.0 && app.playback_time <= 6.0,
         "Playback time after seek -5s should be around 5.0s, was {}",
@@ -62,14 +68,20 @@ fn test_app_playback_finish_replay_and_seek() {
             break;
         }
     }
-    assert!(app.is_playback_finished(), "Should reach finished state again");
+    assert!(
+        app.is_playback_finished(),
+        "Should reach finished state again"
+    );
 
     // 3. Test replay at finished state
     app.toggle_playback();
     thread::sleep(Duration::from_millis(200));
     app.process_events();
 
-    assert!(!app.is_playback_finished(), "Should not be finished after replay");
+    assert!(
+        !app.is_playback_finished(),
+        "Should not be finished after replay"
+    );
     assert!(!app.is_paused, "Should be playing after replay");
     assert!(
         app.playback_time < 2.0,
@@ -106,7 +118,10 @@ fn test_app_playback_finish_scrub_and_move_around() {
             break;
         }
     }
-    assert!(app.is_playback_finished(), "Playback should reach finished state");
+    assert!(
+        app.is_playback_finished(),
+        "Playback should reach finished state"
+    );
 
     // Scrub to 2.5s
     app.scrub_to(2.5);
@@ -114,14 +129,24 @@ fn test_app_playback_finish_scrub_and_move_around() {
     thread::sleep(Duration::from_millis(150));
     app.process_events();
 
-    assert!(!app.is_playback_finished(), "Should not be finished after scrub to 2.5s");
+    assert!(
+        !app.is_playback_finished(),
+        "Should not be finished after scrub to 2.5s"
+    );
     let pos = app.seek_pos.unwrap_or(app.playback_time);
-    assert!((pos - 2.5).abs() < 1.0, "Position should be near 2.5s, was {}", pos);
+    assert!(
+        (pos - 2.5).abs() < 1.0,
+        "Position should be near 2.5s, was {}",
+        pos
+    );
 
     // Now unpause and verify playback runs normally
     app.play();
     assert!(!app.is_paused);
     thread::sleep(Duration::from_millis(200));
     app.process_events();
-    assert!(app.playback_time > 1.5, "Playback should progress from scrubbed position");
+    assert!(
+        app.playback_time > 1.5,
+        "Playback should progress from scrubbed position"
+    );
 }

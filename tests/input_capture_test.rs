@@ -55,7 +55,8 @@ fn test_input_capture_keyboard_update() {
 #[test]
 fn test_analog_track_serde_backward_compatible_armed() {
     // JSON without armed field
-    let json = r#"{"id":"00000000-0000-0000-0000-000000000000","name":"Test","channel":1,"keyframes":[]}"#;
+    let json =
+        r#"{"id":"00000000-0000-0000-0000-000000000000","name":"Test","channel":1,"keyframes":[]}"#;
     let track: AnalogTrack = serde_json::from_str(json).expect("Deserialization failed");
     assert!(!track.armed);
 }

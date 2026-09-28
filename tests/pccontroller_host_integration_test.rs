@@ -1,6 +1,6 @@
 use pealayer::four_d::controller::{ControllerClient, DEFAULT_ENDPOINT};
-use serde_json::json;
 use serde_json::Value;
+use serde_json::json;
 
 fn live_test_enabled() -> bool {
     std::env::var_os("PEALAYER_PCCONTROLLER_LIVE_TEST").is_some()
@@ -9,7 +9,9 @@ fn live_test_enabled() -> bool {
 #[test]
 fn pccontroller_json_rpc_and_board_cobs_roundtrip() {
     if !live_test_enabled() {
-        eprintln!("set PEALAYER_PCCONTROLLER_LIVE_TEST=1 to exercise the installed coordinator and board");
+        eprintln!(
+            "set PEALAYER_PCCONTROLLER_LIVE_TEST=1 to exercise the installed coordinator and board"
+        );
         return;
     }
 
@@ -21,7 +23,10 @@ fn pccontroller_json_rpc_and_board_cobs_roundtrip() {
     let snapshot = client
         .call("controller.snapshot", json!({}))
         .unwrap_or_else(|error| panic!("PCController snapshot over JSON-RPC: {error}"));
-    assert!(snapshot.is_object(), "snapshot must be a JSON object: {snapshot}");
+    assert!(
+        snapshot.is_object(),
+        "snapshot must be a JSON object: {snapshot}"
+    );
 
     // controller.status crosses the high-level JSON-RPC boundary, is serialized by
     // PCController as its native COBS/CRC request, and completes only after the
@@ -29,7 +34,10 @@ fn pccontroller_json_rpc_and_board_cobs_roundtrip() {
     let status = client
         .call("controller.status", json!({}))
         .unwrap_or_else(|error| panic!("PCController/board status roundtrip: {error}"));
-    assert!(status.is_object(), "board status must be a JSON object: {status}");
+    assert!(
+        status.is_object(),
+        "board status must be a JSON object: {status}"
+    );
 }
 
 #[test]
@@ -39,8 +47,8 @@ fn pccontroller_exact_target_action_push_ack_roundtrip() {
         return;
     }
 
-    let (mut socket, _) = tungstenite::connect("ws://127.0.0.1:8787/ipc")
-        .expect("connect to PCController WebSocket");
+    let (mut socket, _) =
+        tungstenite::connect("ws://127.0.0.1:8787/ipc").expect("connect to PCController WebSocket");
     if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_mut() {
         stream
             .set_read_timeout(Some(std::time::Duration::from_secs(10)))
@@ -76,13 +84,17 @@ fn pccontroller_exact_target_action_push_ack_roundtrip() {
         ))
         .unwrap();
     loop {
-        let tungstenite::Message::Text(text) = socket.read().expect("confirm Pealayer instance report")
+        let tungstenite::Message::Text(text) =
+            socket.read().expect("confirm Pealayer instance report")
         else {
             continue;
         };
         let value: Value = serde_json::from_str(&text).unwrap();
         if value["id"] == 2 {
-            assert!(value.get("error").is_none(), "instance report failed: {value}");
+            assert!(
+                value.get("error").is_none(),
+                "instance report failed: {value}"
+            );
             break;
         }
     }

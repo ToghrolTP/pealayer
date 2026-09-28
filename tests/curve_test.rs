@@ -71,8 +71,16 @@ fn test_smooth_cubic_interpolation() {
 
     assert_eq!(track.evaluate(0), 0.0);
     assert!((val_500 - 0.5).abs() < 0.001);
-    assert!(val_250 < 0.25, "Ease-in should be shallower than linear (0.25), got {}", val_250);
-    assert!(val_750 > 0.75, "Ease-out should be steeper than linear (0.75), got {}", val_750);
+    assert!(
+        val_250 < 0.25,
+        "Ease-in should be shallower than linear (0.25), got {}",
+        val_250
+    );
+    assert!(
+        val_750 > 0.75,
+        "Ease-out should be steeper than linear (0.75), got {}",
+        val_750
+    );
     assert_eq!(track.evaluate(1000), 1.0);
 }
 

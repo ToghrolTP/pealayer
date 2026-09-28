@@ -20,7 +20,14 @@ impl TestVirtualBoard {
             return None;
         }
         let child = ProcessCommand::new(bin)
-            .args(["--bind", "127.0.0.1", "--port", &port.to_string(), "--no-stdin", "--quiet"])
+            .args([
+                "--bind",
+                "127.0.0.1",
+                "--port",
+                &port.to_string(),
+                "--no-stdin",
+                "--quiet",
+            ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -39,7 +46,11 @@ impl Drop for TestVirtualBoard {
 
 #[test]
 fn test_live_recording_to_virtual_board_stream() {
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     let vb = match TestVirtualBoard::try_spawn(port) {
         Some(vb) => vb,
         None => {
@@ -48,8 +59,8 @@ fn test_live_recording_to_virtual_board_stream() {
         }
     };
 
-    let mut stream = TcpStream::connect(("127.0.0.1", vb.port))
-        .expect("Failed to connect to VirtualBoard");
+    let mut stream =
+        TcpStream::connect(("127.0.0.1", vb.port)).expect("Failed to connect to VirtualBoard");
 
     // 1. Simulate live motion capture session at 50Hz for 500ms (10 samples)
     let mut track = AnalogTrack::new("Wind Turbine", 0);
@@ -66,7 +77,10 @@ fn test_live_recording_to_virtual_board_stream() {
 
         // Hardware pass-through frame
         let byte_val = (val * 255.0).round() as u8;
-        let cmd = Command::PwmSet { channel: track.channel, value: byte_val };
+        let cmd = Command::PwmSet {
+            channel: track.channel,
+            value: byte_val,
+        };
         let frame = cmd.to_pccontroller_frame(seq);
         seq = seq.wrapping_add(1);
         stream.write_all(&frame).expect("Write failed");
@@ -76,14 +90,22 @@ fn test_live_recording_to_virtual_board_stream() {
     session.commit_to_track(&mut track, 0.02, Interpolation::Smooth);
 
     // Linear ramp from 0 to 450ms should decimate to start & end keyframes
-    assert!(track.keyframes.len() <= 3, "RDP should decimate linear ramp: got {}", track.keyframes.len());
+    assert!(
+        track.keyframes.len() <= 3,
+        "RDP should decimate linear ramp: got {}",
+        track.keyframes.len()
+    );
     assert_eq!(track.keyframes.first().unwrap().time_ms, 0);
     assert_eq!(track.keyframes.last().unwrap().time_ms, 450);
 
     // 3. Read back last ACK from VirtualBoard
     let mut buf = [0u8; 1024];
-    stream.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
-    let n = stream.read(&mut buf).expect("Failed to read ACK from VirtualBoard");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    let n = stream
+        .read(&mut buf)
+        .expect("Failed to read ACK from VirtualBoard");
     assert!(n > 0);
 
     // Verify frames from VirtualBoard and confirm receipt of PwmSet ACK

@@ -29,12 +29,19 @@ fn main() {
     let brand_path = std::env::var_os("APPLICATION_BRAND").map(std::path::PathBuf::from);
     let brand = brand_path.as_ref().map(|path| {
         println!("cargo:rerun-if-changed={}", path.display());
-        let source = std::fs::read_to_string(path)
-            .unwrap_or_else(|error| panic!("could not read application branding file {}: {error}", path.display()));
+        let source = std::fs::read_to_string(path).unwrap_or_else(|error| {
+            panic!(
+                "could not read application branding file {}: {error}",
+                path.display()
+            )
+        });
         let value: serde_json::Value = serde_json::from_str(&source)
             .unwrap_or_else(|error| panic!("invalid branding JSON {}: {error}", path.display()));
         if let Some(format) = value.get("format").and_then(serde_json::Value::as_str) {
-            assert_eq!(format, "application-brand", "unsupported application branding format");
+            assert_eq!(
+                format, "application-brand",
+                "unsupported application branding format"
+            );
         }
         value
     });
@@ -75,7 +82,10 @@ fn main() {
     );
     let document_icon = brand.as_ref().and_then(|value| {
         let relative = value.get("windowsIcons")?.get("APP")?.as_str()?;
-        let base = brand_path.as_ref()?.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let base = brand_path
+            .as_ref()?
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
         Some(base.join(relative).to_string_lossy().into_owned())
     });
     let icon = std::env::var("APP_ICON_ICO")
@@ -99,8 +109,7 @@ fn main() {
     if std::path::Path::new(&icon).exists() {
         res.set_icon(&icon);
     }
-    res.compile()
-        .expect("failed to compile Windows resources");
+    res.compile().expect("failed to compile Windows resources");
 
     // This package exposes both a library and a binary.  GNU ld can discard
     // winres' otherwise-unreferenced static archive while linking the binary
@@ -111,10 +120,7 @@ fn main() {
             std::env::var_os("OUT_DIR").expect("Cargo did not provide OUT_DIR"),
         )
         .join("resource.o");
-        println!(
-            "cargo:rustc-link-arg-bin=pealayer={}",
-            resource.display()
-        );
+        println!("cargo:rustc-link-arg-bin=pealayer={}", resource.display());
     }
     println!("cargo:rerun-if-changed=assets/icon.ico");
     if icon != "assets/icon.ico" {

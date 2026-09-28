@@ -1,5 +1,5 @@
 use pealayer::platform::interop::{
-    set_live_status, spawn_interop_listener, InteropCommand, PlayerStatusResponse,
+    InteropCommand, PlayerStatusResponse, set_live_status, spawn_interop_listener,
 };
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -15,8 +15,11 @@ fn test_loopback_tcp_interop_commands_and_status() {
     // Give background TCP listener a moment to bind
     std::thread::sleep(Duration::from_millis(100));
 
-    let mut stream = TcpStream::connect("127.0.0.1:8082").expect("Failed to connect to loopback IPC");
-    stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut stream =
+        TcpStream::connect("127.0.0.1:8082").expect("Failed to connect to loopback IPC");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
 
     // 1. Send JSON-RPC Play command
     stream

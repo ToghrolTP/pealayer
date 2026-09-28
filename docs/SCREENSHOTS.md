@@ -55,6 +55,12 @@ image SHA-256. Commit the images and manifest together. A screenshot is stale
 when the manifest commit or executable hash no longer matches the artifact under
 review.
 
+The Windows updater verifies that the captured HWND belongs to the exact
+launched process and uses `PrintWindow(PW_RENDERFULLCONTENT)` so the artifact
+contains only the application window. A firewall prompt, terminal, desktop, or
+unrelated window in a capture is a failed acceptance run and must not be
+committed.
+
 Additional connected/error/E-STOP evidence must be captured from real state:
 connect the intended PCController/board, perform the user action, and rerun the
 same capture tool. Do not add production code paths that fabricate those states.

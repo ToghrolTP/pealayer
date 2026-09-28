@@ -3,9 +3,19 @@ pub mod thumbnails;
 pub mod web_assets;
 
 use std::io::Read;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
+
+fn resolve_web_bind_address(value: Option<&str>) -> std::net::IpAddr {
+    value
+        .and_then(|candidate| candidate.trim().parse().ok())
+        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
+}
+
+fn web_bind_address() -> std::net::IpAddr {
+    resolve_web_bind_address(std::env::var("PEALAYER_WEB_BIND").ok().as_deref())
+}
 
 fn web_dist_root() -> std::path::PathBuf {
     let working_tree = std::path::PathBuf::from("web_ui/dist");
@@ -54,7 +64,13 @@ pub struct WebRuntimeConfig {
 }
 
 impl WebRuntimeConfig {
-    pub fn production(app_name: String, ws_port: u16, locale: String, direction: String, theme: String) -> Self {
+    pub fn production(
+        app_name: String,
+        ws_port: u16,
+        locale: String,
+        direction: String,
+        theme: String,
+    ) -> Self {
         Self {
             app_name,
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -66,7 +82,14 @@ impl WebRuntimeConfig {
     }
 }
 
-pub fn spawn_web_server(http_port: u16, ws_port: u16, egui_ctx: eframe::egui::Context) -> (Sender<String>, Receiver<crate::platform::interop::InteropCommand>) {
+pub fn spawn_web_server(
+    http_port: u16,
+    ws_port: u16,
+    egui_ctx: eframe::egui::Context,
+) -> (
+    Sender<String>,
+    Receiver<crate::platform::interop::InteropCommand>,
+) {
     spawn_web_server_configured(
         http_port,
         ws_port,
@@ -86,7 +109,10 @@ pub fn spawn_web_server_configured(
     ws_port: u16,
     egui_ctx: eframe::egui::Context,
     runtime_config: WebRuntimeConfig,
-) -> (Sender<String>, Receiver<crate::platform::interop::InteropCommand>) {
+) -> (
+    Sender<String>,
+    Receiver<crate::platform::interop::InteropCommand>,
+) {
     let (cmd_tx, cmd_rx) = channel::<crate::platform::interop::InteropCommand>();
     let (state_tx, state_rx) = channel::<String>();
 
@@ -98,6 +124,7 @@ pub fn spawn_web_server_configured(
 
     let ws_clients: Arc<Mutex<Vec<Sender<String>>>> = Arc::new(Mutex::new(Vec::new()));
     let ws_clients_clone = ws_clients.clone();
+    let bind_address = web_bind_address();
 
     // 1. Broadcast state updates from main thread to WebSocket clients and cache latest status
     thread::spawn(move || {
@@ -116,7 +143,7 @@ pub fn spawn_web_server_configured(
     let latest_status_ws = latest_status.clone();
     let egui_ctx_ws = egui_ctx.clone();
     thread::spawn(move || {
-        let ws_addr = format!("0.0.0.0:{}", ws_port);
+        let ws_addr = std::net::SocketAddr::new(bind_address, ws_port);
         if let Ok(listener) = std::net::TcpListener::bind(&ws_addr) {
             for stream in listener.incoming().flatten() {
                 let cmd_tx_conn = cmd_tx_ws.clone();
@@ -134,7 +161,10 @@ pub fn spawn_web_server_configured(
                         loop {
                             // Check for outgoing state broadcasts to send to WS client
                             if let Ok(msg_text) = client_rx.try_recv() {
-                                if websocket.send(tungstenite::Message::Text(msg_text.into())).is_err() {
+                                if websocket
+                                    .send(tungstenite::Message::Text(msg_text.into()))
+                                    .is_err()
+                                {
                                     break;
                                 }
                             }
@@ -142,38 +172,57 @@ pub fn spawn_web_server_configured(
                             // Read incoming WebSocket frames from browser client
                             match websocket.read() {
                                 Ok(tungstenite::Message::Text(text)) => {
-                                    if let Ok(cmd) = serde_json::from_str::<crate::platform::interop::InteropCommand>(&text) {
+                                    if let Ok(cmd) = serde_json::from_str::<
+                                        crate::platform::interop::InteropCommand,
+                                    >(&text)
+                                    {
                                         let _ = cmd_tx_conn.send(cmd);
                                         egui_ctx_conn.request_repaint();
-                                    } else if let Ok(request) = serde_json::from_str::<crate::platform::interop::JsonRpcRequest>(&text) {
-                                        let response = match crate::platform::interop::command_from_json_rpc(&request) {
-                                            Ok(Some(command)) => {
-                                                let _ = cmd_tx_conn.send(command);
-                                                egui_ctx_conn.request_repaint();
-                                                crate::platform::interop::json_rpc_result(
-                                                    &request.id,
-                                                    serde_json::json!({"accepted":true}),
-                                                )
-                                            }
-                                            Ok(None) => {
-                                                let status = latest_status_conn.lock().unwrap().clone();
-                                                let value = status
+                                    } else if let Ok(request) =
+                                        serde_json::from_str::<
+                                            crate::platform::interop::JsonRpcRequest,
+                                        >(&text)
+                                    {
+                                        let response =
+                                            match crate::platform::interop::command_from_json_rpc(
+                                                &request,
+                                            ) {
+                                                Ok(Some(command)) => {
+                                                    let _ = cmd_tx_conn.send(command);
+                                                    egui_ctx_conn.request_repaint();
+                                                    crate::platform::interop::json_rpc_result(
+                                                        &request.id,
+                                                        serde_json::json!({"accepted":true}),
+                                                    )
+                                                }
+                                                Ok(None) => {
+                                                    let status =
+                                                        latest_status_conn.lock().unwrap().clone();
+                                                    let value = status
                                                     .as_deref()
                                                     .and_then(|status| serde_json::from_str(status).ok())
                                                     .unwrap_or_else(|| serde_json::json!({"status":"initializing"}));
-                                                crate::platform::interop::json_rpc_result(&request.id, value)
-                                            }
-                                            Err(error) => crate::platform::interop::json_rpc_error(
-                                                &request.id,
-                                                -32601,
-                                                &error,
-                                            ),
-                                        };
-                                        let _ = websocket.send(tungstenite::Message::Text(response.into()));
+                                                    crate::platform::interop::json_rpc_result(
+                                                        &request.id,
+                                                        value,
+                                                    )
+                                                }
+                                                Err(error) => {
+                                                    crate::platform::interop::json_rpc_error(
+                                                        &request.id,
+                                                        -32601,
+                                                        &error,
+                                                    )
+                                                }
+                                            };
+                                        let _ = websocket
+                                            .send(tungstenite::Message::Text(response.into()));
                                     }
                                 }
                                 Ok(tungstenite::Message::Close(_)) => break,
-                                Err(tungstenite::Error::Io(ref e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                Err(tungstenite::Error::Io(ref e))
+                                    if e.kind() == std::io::ErrorKind::WouldBlock =>
+                                {
                                     thread::sleep(std::time::Duration::from_millis(15));
                                 }
                                 Err(_) => break,
@@ -191,23 +240,35 @@ pub fn spawn_web_server_configured(
     let cmd_tx_http = cmd_tx.clone();
     let egui_ctx_http = egui_ctx.clone();
     let web_dist_http = web_dist_root();
-    let runtime_config_json = serde_json::to_string(&runtime_config)
-        .expect("web runtime configuration must serialize");
+    let runtime_config_json =
+        serde_json::to_string(&runtime_config).expect("web runtime configuration must serialize");
     thread::spawn(move || {
-        let server_addr = format!("0.0.0.0:{}", http_port);
+        let server_addr = std::net::SocketAddr::new(bind_address, http_port);
         if let Ok(server) = tiny_http::Server::http(&server_addr) {
             for mut request in server.incoming_requests() {
                 let url = request.url().to_string();
 
                 if url == "/api/runtime/config" {
                     let response = tiny_http::Response::from_string(runtime_config_json.clone())
-                        .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                        .with_header(
+                            tiny_http::Header::from_bytes(
+                                &b"Content-Type"[..],
+                                &b"application/json"[..],
+                            )
+                            .unwrap(),
+                        );
                     let _ = request.respond(response);
                 } else if url == "/healthz" {
                     let response = tiny_http::Response::from_string(
                         "{\"status\":\"ok\",\"service\":\"pealayer\",\"rpc\":\"2.0\"}",
                     )
-                    .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                    .with_header(
+                        tiny_http::Header::from_bytes(
+                            &b"Content-Type"[..],
+                            &b"application/json"[..],
+                        )
+                        .unwrap(),
+                    );
                     let _ = request.respond(response);
                 } else if url.starts_with("/api/player/status") {
                     let json = latest_status_http.lock().unwrap().clone();
@@ -216,12 +277,26 @@ pub fn spawn_web_server_configured(
                         .unwrap_or_else(|| ("{\"status\":\"initializing\"}".to_string(), 503));
                     let response = tiny_http::Response::from_string(body)
                         .with_status_code(status_code)
-                        .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                        .with_header(
+                            tiny_http::Header::from_bytes(
+                                &b"Content-Type"[..],
+                                &b"application/json"[..],
+                            )
+                            .unwrap(),
+                        );
                     let _ = request.respond(response);
-                } else if url.starts_with("/api/rpc") && request.method() == &tiny_http::Method::Post {
+                } else if url.starts_with("/api/rpc")
+                    && request.method() == &tiny_http::Method::Post
+                {
                     let mut body = String::new();
-                    let _ = request.as_reader().take(1024 * 1024).read_to_string(&mut body);
-                    let response_body = match serde_json::from_str::<crate::platform::interop::JsonRpcRequest>(&body) {
+                    let _ = request
+                        .as_reader()
+                        .take(1024 * 1024)
+                        .read_to_string(&mut body);
+                    let response_body = match serde_json::from_str::<
+                        crate::platform::interop::JsonRpcRequest,
+                    >(&body)
+                    {
                         Ok(rpc) => match crate::platform::interop::command_from_json_rpc(&rpc) {
                             Ok(Some(command)) => {
                                 let _ = cmd_tx_http.send(command);
@@ -236,14 +311,14 @@ pub fn spawn_web_server_configured(
                                 let value = status
                                     .as_deref()
                                     .and_then(|status| serde_json::from_str(status).ok())
-                                    .unwrap_or_else(|| serde_json::json!({"status":"initializing"}));
+                                    .unwrap_or_else(
+                                        || serde_json::json!({"status":"initializing"}),
+                                    );
                                 crate::platform::interop::json_rpc_result(&rpc.id, value)
                             }
-                            Err(error) => crate::platform::interop::json_rpc_error(
-                                &rpc.id,
-                                -32601,
-                                &error,
-                            ),
+                            Err(error) => {
+                                crate::platform::interop::json_rpc_error(&rpc.id, -32601, &error)
+                            }
                         },
                         Err(error) => crate::platform::interop::json_rpc_error(
                             &serde_json::Value::Null,
@@ -251,23 +326,40 @@ pub fn spawn_web_server_configured(
                             &format!("invalid JSON-RPC request: {error}"),
                         ),
                     };
-                    let response = tiny_http::Response::from_string(response_body)
-                        .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                    let response = tiny_http::Response::from_string(response_body).with_header(
+                        tiny_http::Header::from_bytes(
+                            &b"Content-Type"[..],
+                            &b"application/json"[..],
+                        )
+                        .unwrap(),
+                    );
                     let _ = request.respond(response);
-                } else if url.starts_with("/api/player/command") && request.method() == &tiny_http::Method::Post {
+                } else if url.starts_with("/api/player/command")
+                    && request.method() == &tiny_http::Method::Post
+                {
                     let mut body = String::new();
                     let reader = request.as_reader();
                     if reader.read_to_string(&mut body).is_ok() {
-                        if let Ok(cmd) = serde_json::from_str::<crate::platform::interop::InteropCommand>(&body) {
+                        if let Ok(cmd) =
+                            serde_json::from_str::<crate::platform::interop::InteropCommand>(&body)
+                        {
                             let _ = cmd_tx_http.send(cmd);
                             egui_ctx_http.request_repaint();
                             let response = tiny_http::Response::from_string("{\"status\":\"ok\"}")
-                                .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                                .with_header(
+                                    tiny_http::Header::from_bytes(
+                                        &b"Content-Type"[..],
+                                        &b"application/json"[..],
+                                    )
+                                    .unwrap(),
+                                );
                             let _ = request.respond(response);
                             continue;
                         }
                     }
-                    let _ = request.respond(tiny_http::Response::from_string("Bad Command").with_status_code(400));
+                    let _ = request.respond(
+                        tiny_http::Response::from_string("Bad Command").with_status_code(400),
+                    );
                 } else if url.starts_with("/api/player/frame") {
                     let mut path_opt = None;
                     if let Some(p) = url.split("path=").nth(1) {
@@ -279,7 +371,10 @@ pub fn spawn_web_server_configured(
                     }
                     if path_opt.is_none() {
                         if let Some(status) = latest_status_http.lock().unwrap().as_deref() {
-                            if let Ok(json) = serde_json::from_str::<crate::platform::interop::PlayerStatusResponse>(status) {
+                            if let Ok(json) = serde_json::from_str::<
+                                crate::platform::interop::PlayerStatusResponse,
+                            >(status)
+                            {
                                 if let Some(v_path) = json.current_video {
                                     path_opt = Some(std::path::PathBuf::from(v_path));
                                 }
@@ -289,14 +384,20 @@ pub fn spawn_web_server_configured(
                     if let Some(ref path) = path_opt {
                         if let Some(thumb_path) = thumbnails::get_or_generate_thumbnail(path) {
                             if let Ok(data) = std::fs::read(&thumb_path) {
-                                let response = tiny_http::Response::from_data(data)
-                                    .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"image/jpeg"[..]).unwrap());
+                                let response = tiny_http::Response::from_data(data).with_header(
+                                    tiny_http::Header::from_bytes(
+                                        &b"Content-Type"[..],
+                                        &b"image/jpeg"[..],
+                                    )
+                                    .unwrap(),
+                                );
                                 let _ = request.respond(response);
                                 continue;
                             }
                         }
                     }
-                    let response = tiny_http::Response::from_string("Frame Not Found").with_status_code(404);
+                    let response =
+                        tiny_http::Response::from_string("Frame Not Found").with_status_code(404);
                     let _ = request.respond(response);
                 } else if url.starts_with("/api/fs/browse") {
                     let path_param = url.split("path=").nth(1).map(|p| p.to_string());
@@ -304,8 +405,13 @@ pub fn spawn_web_server_configured(
 
                     if let Ok(res) = fs_api::browse_directory(decoded_path.as_deref()) {
                         let json = serde_json::to_string(&res).unwrap_or_default();
-                        let response = tiny_http::Response::from_string(json)
-                            .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                        let response = tiny_http::Response::from_string(json).with_header(
+                            tiny_http::Header::from_bytes(
+                                &b"Content-Type"[..],
+                                &b"application/json"[..],
+                            )
+                            .unwrap(),
+                        );
                         let _ = request.respond(response);
                     }
                 } else if url.starts_with("/api/fs/thumbnail") {
@@ -314,8 +420,13 @@ pub fn spawn_web_server_configured(
                         let path = std::path::PathBuf::from(&decoded);
                         if let Some(thumb_path) = thumbnails::get_or_generate_thumbnail(&path) {
                             if let Ok(data) = std::fs::read(&thumb_path) {
-                                let response = tiny_http::Response::from_data(data)
-                                    .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"image/jpeg"[..]).unwrap());
+                                let response = tiny_http::Response::from_data(data).with_header(
+                                    tiny_http::Header::from_bytes(
+                                        &b"Content-Type"[..],
+                                        &b"image/jpeg"[..],
+                                    )
+                                    .unwrap(),
+                                );
                                 let _ = request.respond(response);
                                 continue;
                             }
@@ -324,34 +435,57 @@ pub fn spawn_web_server_configured(
                     let response = tiny_http::Response::from_string("Thumbnail Not Found")
                         .with_status_code(404);
                     let _ = request.respond(response);
-                } else if url.starts_with("/api/fs/rename") && request.method() == &tiny_http::Method::Post {
+                } else if url.starts_with("/api/fs/rename")
+                    && request.method() == &tiny_http::Method::Post
+                {
                     let mut body = String::new();
                     let reader = request.as_reader();
                     if reader.read_to_string(&mut body).is_ok() {
                         if let Ok(req) = serde_json::from_str::<fs_api::RenameRequest>(&body) {
-                            if let Ok(new_path) = fs_api::rename_file(&req.old_path, &req.new_name) {
-                                let response = tiny_http::Response::from_string(format!("{{\"status\":\"ok\",\"new_path\":\"{}\"}}", new_path))
-                                    .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                            if let Ok(new_path) = fs_api::rename_file(&req.old_path, &req.new_name)
+                            {
+                                let response = tiny_http::Response::from_string(format!(
+                                    "{{\"status\":\"ok\",\"new_path\":\"{}\"}}",
+                                    new_path
+                                ))
+                                .with_header(
+                                    tiny_http::Header::from_bytes(
+                                        &b"Content-Type"[..],
+                                        &b"application/json"[..],
+                                    )
+                                    .unwrap(),
+                                );
                                 let _ = request.respond(response);
                                 continue;
                             }
                         }
                     }
-                    let _ = request.respond(tiny_http::Response::from_string("Error").with_status_code(400));
-                } else if url.starts_with("/api/fs/trash") && request.method() == &tiny_http::Method::Post {
+                    let _ = request
+                        .respond(tiny_http::Response::from_string("Error").with_status_code(400));
+                } else if url.starts_with("/api/fs/trash")
+                    && request.method() == &tiny_http::Method::Post
+                {
                     let mut body = String::new();
                     let reader = request.as_reader();
                     if reader.read_to_string(&mut body).is_ok() {
                         if let Ok(req) = serde_json::from_str::<fs_api::TrashRequest>(&body) {
                             if fs_api::trash_file(&req.target_path).is_ok() {
-                                let response = tiny_http::Response::from_string("{\"status\":\"ok\"}")
-                                    .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                                let response =
+                                    tiny_http::Response::from_string("{\"status\":\"ok\"}")
+                                        .with_header(
+                                            tiny_http::Header::from_bytes(
+                                                &b"Content-Type"[..],
+                                                &b"application/json"[..],
+                                            )
+                                            .unwrap(),
+                                        );
                                 let _ = request.respond(response);
                                 continue;
                             }
                         }
                     }
-                    let _ = request.respond(tiny_http::Response::from_string("Error").with_status_code(400));
+                    let _ = request
+                        .respond(tiny_http::Response::from_string("Error").with_status_code(400));
                 } else {
                     // Serve Web UI single page app (Ant Design React interface from web_ui/dist)
                     let req_path = url.split('?').next().unwrap_or(&url);
@@ -371,8 +505,13 @@ pub fn spawn_web_server_configured(
                                 Some("woff2") => "font/woff2",
                                 _ => "application/octet-stream",
                             };
-                            let response = tiny_http::Response::from_data(data)
-                                .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], mime.as_bytes()).unwrap());
+                            let response = tiny_http::Response::from_data(data).with_header(
+                                tiny_http::Header::from_bytes(
+                                    &b"Content-Type"[..],
+                                    mime.as_bytes(),
+                                )
+                                .unwrap(),
+                            );
                             let _ = request.respond(response);
                             continue;
                         }
@@ -381,8 +520,13 @@ pub fn spawn_web_server_configured(
                     // SPA fallback: serve web_ui/dist/index.html if available, or fallback to web_assets::INDEX_HTML
                     let fallback_html = std::fs::read_to_string(web_dist_http.join("index.html"))
                         .unwrap_or_else(|_| web_assets::INDEX_HTML.to_string());
-                    let response = tiny_http::Response::from_string(fallback_html)
-                        .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap());
+                    let response = tiny_http::Response::from_string(fallback_html).with_header(
+                        tiny_http::Header::from_bytes(
+                            &b"Content-Type"[..],
+                            &b"text/html; charset=utf-8"[..],
+                        )
+                        .unwrap(),
+                    );
                     let _ = request.respond(response);
                 }
             }
@@ -398,8 +542,12 @@ fn urlencoding_decode(s: &str) -> String {
     while let Some(ch) = chars.next() {
         if ch == '%' {
             let mut hex = String::new();
-            if let Some(h1) = chars.next() { hex.push(h1); }
-            if let Some(h2) = chars.next() { hex.push(h2); }
+            if let Some(h1) = chars.next() {
+                hex.push(h1);
+            }
+            if let Some(h2) = chars.next() {
+                hex.push(h2);
+            }
             if let Ok(byte) = u8::from_str_radix(&hex, 16) {
                 result.push(byte as char);
             }
@@ -415,6 +563,27 @@ fn urlencoding_decode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn web_server_is_loopback_only_unless_explicitly_exposed() {
+        assert_eq!(
+            resolve_web_bind_address(None),
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        );
+        assert_eq!(
+            resolve_web_bind_address(Some("invalid-hostname")),
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        );
+        assert_eq!(
+            resolve_web_bind_address(Some("0.0.0.0")),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        );
+        assert_eq!(
+            resolve_web_bind_address(Some("::")),
+            IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+        );
+    }
 
     #[test]
     fn test_url_decoding() {

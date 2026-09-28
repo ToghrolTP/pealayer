@@ -1,0 +1,34 @@
+﻿{
+    "format":  "pealayer-screenshots",
+    "generated_at_utc":  "2026-09-28T00:29:05.5065203Z",
+    "git_commit":  "7ad844084c06a6efcf8648f530fdc87d409ac92f",
+    "executable":  "pealayer.exe",
+    "executable_sha256":  "b189b42c2d0860749c400f971d37e879a3d118cdb0fab4d7b7cee7d1024aa3f7",
+    "application_name":  "Pealayer",
+    "isolated_profile":  true,
+    "capture_method":  "System.Drawing.Graphics.CopyFromScreen",
+    "captures":  [
+                     {
+                         "file":  "pealayer-en-dark.png",
+                         "locale":  "en",
+                         "direction":  "ltr",
+                         "theme":  "dark",
+                         "width":  1280,
+                         "height":  800,
+                         "sha256":  "8b5b942d91afac8d42abfc2c32fa377845004613972a411cca00a0becc9e5590",
+                         "capture_method":  "System.Drawing.Graphics.CopyFromScreen",
+                         "session":  "signed-in-interactive-desktop"
+                     },
+                     {
+                         "file":  "pealayer-fa-dark.png",
+                         "locale":  "fa",
+                         "direction":  "rtl",
+                         "theme":  "dark",
+                         "width":  1280,
+                         "height":  800,
+                         "sha256":  "494ce1f67f2ea2d9db58e30b44777522318265ae69c220b6ab024bb9942f9125",
+                         "capture_method":  "System.Drawing.Graphics.CopyFromScreen",
+                         "session":  "signed-in-interactive-desktop"
+                     }
+                 ]
+}

@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons';
 import { PlayerState } from './RemoteControlTab';
 import { RuntimeConfig } from '../App';
+import { tr, UiLocale } from '../i18n';
 
 const { Title, Text } = Typography;
 
@@ -16,10 +17,12 @@ interface PlayerInfoTabProps {
   state: PlayerState;
   connectionMode: 'ws' | 'http';
   runtime: RuntimeConfig | null;
+  locale: UiLocale;
 }
 
-export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionMode, runtime }) => {
-  const formatTime = (sec: number = 0) => {
+export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionMode, runtime, locale }) => {
+  const formatTime = (sec?: number) => {
+    if (sec === undefined) return '—';
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60);
     return `${m}:${s < 10 ? '0' : ''}${s}`;
@@ -32,7 +35,7 @@ export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionM
         <Col xs={24} sm={12} md={6}>
           <Card bordered={false} style={{ background: '#0a2239', border: '1px solid rgba(23, 96, 135, 0.2)', borderRadius: 12 }}>
             <Statistic
-              title={<Text type="secondary">Connection Type</Text>}
+              title={<Text type="secondary">{tr(locale, 'Connection Type')}</Text>}
               value={connectionMode.toUpperCase()}
               prefix={<ApiOutlined style={{ color: '#53a2be' }} />}
               valueStyle={{ color: '#53a2be', fontSize: 18, fontWeight: 700 }}
@@ -42,7 +45,7 @@ export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionM
         <Col xs={24} sm={12} md={6}>
           <Card bordered={false} style={{ background: '#0a2239', border: '1px solid rgba(23, 96, 135, 0.2)', borderRadius: 12 }}>
             <Statistic
-              title={<Text type="secondary">Playback Duration</Text>}
+              title={<Text type="secondary">{tr(locale, 'Playback Duration')}</Text>}
               value={formatTime(state.duration)}
               prefix={<DesktopOutlined style={{ color: '#1d84b5' }} />}
               valueStyle={{ color: '#f8fafc', fontSize: 18, fontFamily: 'monospace' }}
@@ -52,7 +55,7 @@ export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionM
         <Col xs={24} sm={12} md={6}>
           <Card bordered={false} style={{ background: '#0a2239', border: '1px solid rgba(23, 96, 135, 0.2)', borderRadius: 12 }}>
             <Statistic
-              title={<Text type="secondary">Volume Level</Text>}
+              title={<Text type="secondary">{tr(locale, 'Volume Level')}</Text>}
               value={state.volume === undefined ? '—' : Math.round(state.volume)}
               suffix="%"
               prefix={<SoundOutlined style={{ color: '#53a2be' }} />}
@@ -63,7 +66,7 @@ export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionM
         <Col xs={24} sm={12} md={6}>
           <Card bordered={false} style={{ background: '#0a2239', border: '1px solid rgba(23, 96, 135, 0.2)', borderRadius: 12 }}>
             <Statistic
-              title={<Text type="secondary">Player Engine</Text>}
+              title={<Text type="secondary">{tr(locale, 'Player Engine')}</Text>}
               value="MPV Core"
               prefix={<CodeOutlined style={{ color: '#22c55e' }} />}
               valueStyle={{ color: '#22c55e', fontSize: 18 }}
@@ -79,7 +82,7 @@ export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionM
           <Space>
             <InfoCircleOutlined style={{ color: '#1d84b5' }} />
             <Title level={4} style={{ margin: 0, color: '#f8fafc' }}>
-              System & Media Metadata
+              {tr(locale, 'System & Media Metadata')}
             </Title>
           </Space>
         }
@@ -90,28 +93,30 @@ export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionM
         }}
       >
         <Descriptions bordered column={{ xs: 1, sm: 1, md: 2 }} size="middle">
-          <Descriptions.Item label="Active Video Path">
+          <Descriptions.Item label={tr(locale, 'Active Video Path')}>
             <Text style={{ fontFamily: 'monospace', color: '#cbd5e1', wordBreak: 'break-all' }}>
-              {state.current_video || 'None'}
+              {state.current_video === undefined ? tr(locale, 'Initializing…') : state.current_video || tr(locale, 'None')}
             </Text>
           </Descriptions.Item>
-          <Descriptions.Item label="Playback Status">
-            {state.playing ? (
-              <Tag color="success">Active Playback</Tag>
+          <Descriptions.Item label={tr(locale, 'Playback Status')}>
+            {state.playing === true ? (
+              <Tag color="success">{tr(locale, 'Active Playback')}</Tag>
+            ) : state.playing === false ? (
+              <Tag color="warning">{tr(locale, 'Paused / Idle')}</Tag>
             ) : (
-              <Tag color="warning">Paused / Idle</Tag>
+              <Tag>{tr(locale, 'Unknown')}</Tag>
             )}
           </Descriptions.Item>
-          <Descriptions.Item label="HTTP Remote Endpoint">
+          <Descriptions.Item label={tr(locale, 'HTTP Remote Endpoint')}>
             <Text code>{window.location.origin}</Text>
           </Descriptions.Item>
-          <Descriptions.Item label="WebSocket Remote Endpoint">
+          <Descriptions.Item label={tr(locale, 'WebSocket Remote Endpoint')}>
             <Text code>{runtime ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:${runtime.wsPort}` : 'Initializing…'}</Text>
           </Descriptions.Item>
-          <Descriptions.Item label={`${runtime?.appName || 'Application'} Version`}>
+          <Descriptions.Item label={`${runtime?.appName || tr(locale, 'Application')} ${tr(locale, 'Version')}`}>
             <Text style={{ color: '#f8fafc' }}>{runtime?.version || 'Initializing…'}</Text>
           </Descriptions.Item>
-          <Descriptions.Item label="Hardware Acceleration">
+          <Descriptions.Item label={tr(locale, 'Hardware Acceleration')}>
             <Tag color="blue">mpv libmpv2 render</Tag>
           </Descriptions.Item>
         </Descriptions>

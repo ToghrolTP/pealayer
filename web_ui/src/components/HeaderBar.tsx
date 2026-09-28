@@ -54,7 +54,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
         <Space size="middle" align="center">
           <img
             src="/pealayer-icon.svg"
-            alt={appName ? `${appName} logo` : 'Application logo'}
+            alt={appName ? `${appName} ${tr(locale, 'Application logo')}` : tr(locale, 'Application logo')}
             style={{ width: 28, height: 28, borderRadius: 6, objectFit: 'contain' }}
           />
           <Title level={4} style={{ margin: 0, color: '#f8fafc', fontWeight: 700 }}>

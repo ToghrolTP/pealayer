@@ -4,7 +4,7 @@ use uuid::Uuid;
 /// Represents the smallest unit of a command to a relay.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AtomicAction {
-    /// The target relay ID (1 to 8)
+    /// The non-zero relay ID advertised by the active PCController capability catalog.
     pub relay_id: u8,
     /// The state to set the relay to: true = ON, false = OFF
     pub state: bool,
@@ -14,60 +14,35 @@ pub struct AtomicAction {
 
 pub type Action = AtomicAction;
 
-/// Hardware actuator target category for an effect template.
+/// Capability-derived output target for an effect template.
+///
+/// Relay identifiers are supplied by PCController or explicit project data;
+/// Pealayer does not assign physical meanings or names to numeric outputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HardwareTarget {
-    Water,          // Relay 1 (Water Valve)
-    Wind,           // Relay 2 (Wind Fan)
-    SeatVibration,  // Relay 3 (Seat Vibration)
-    Smoke,          // Relay 4 (Smoke Machine)
-    Auxiliary,      // Relays 5..=8 (Aux Triggers)
-    Any,            // Unconstrained cues
+    Any,
+    Relay(u8),
 }
 
 impl HardwareTarget {
     pub fn primary_relay_id(&self) -> Option<u8> {
         match self {
-            Self::Water => Some(1),
-            Self::Wind => Some(2),
-            Self::SeatVibration => Some(3),
-            Self::Smoke => Some(4),
-            Self::Auxiliary => Some(5),
             Self::Any => None,
+            Self::Relay(relay_id) => Some(*relay_id),
         }
     }
 
     pub fn is_compatible_with_relay(&self, relay_id: u8) -> bool {
         match self {
-            Self::Water => relay_id == 1 || (5..=8).contains(&relay_id),
-            Self::Wind => relay_id == 2 || (5..=8).contains(&relay_id),
-            Self::SeatVibration => relay_id == 3 || (5..=8).contains(&relay_id),
-            Self::Smoke => relay_id == 4 || (5..=8).contains(&relay_id),
-            Self::Auxiliary => (5..=8).contains(&relay_id),
-            Self::Any => (1..=8).contains(&relay_id),
+            Self::Any => relay_id != 0,
+            Self::Relay(target_id) => *target_id == relay_id,
         }
     }
 
     pub fn for_relay(relay_id: u8) -> Self {
-        match relay_id {
-            1 => Self::Water,
-            2 => Self::Wind,
-            3 => Self::SeatVibration,
-            4 => Self::Smoke,
-            5..=8 => Self::Auxiliary,
-            _ => Self::Any,
-        }
-    }
-
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            Self::Water => "Water Valve",
-            Self::Wind => "Wind Fan",
-            Self::SeatVibration => "Seat Vibration",
-            Self::Smoke => "Smoke Machine",
-            Self::Auxiliary => "Aux Relay",
-            Self::Any => "General Cue",
-        }
+        (relay_id != 0)
+            .then_some(Self::Relay(relay_id))
+            .unwrap_or(Self::Any)
     }
 }
 
@@ -105,7 +80,13 @@ impl Effect {
         }
     }
 
-    pub fn with_target(name: String, icon: String, duration_ms: u64, target: HardwareTarget, actions: Vec<AtomicAction>) -> Self {
+    pub fn with_target(
+        name: String,
+        icon: String,
+        duration_ms: u64,
+        target: HardwareTarget,
+        actions: Vec<AtomicAction>,
+    ) -> Self {
         Self {
             id: Uuid::new_v4(),
             name,

@@ -3,6 +3,7 @@ use eframe::egui;
 
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
+    let controls_label = app.tr("Controls");
     let time_since_activity = app.last_mouse_activity.elapsed().as_secs_f32();
     let alpha = if app.pin_controls {
         1.0
@@ -13,7 +14,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if alpha > 0.0 {
         let window_width = ui.available_width() - 20.0;
 
-        egui::Window::new("Controls")
+        egui::Window::new(controls_label)
             .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -20.0))
             .min_width(window_width)
             .default_width(window_width)
@@ -36,11 +37,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             "⏸"
                         };
                         let play_tooltip = if app.is_playback_finished() {
-                            "Replay"
+                            app.tr("Replay")
                         } else if app.is_paused {
-                            "Play"
+                            app.tr("Play")
                         } else {
-                            "Pause"
+                            app.tr("Pause")
                         };
                         if ui
                             .add_sized([30.0, 22.0], egui::Button::new(play_icon))
@@ -75,7 +76,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     };
 
                     let elapsed_str = format_time(elapsed_time);
-                    let elapsed_resp = ui.add_enabled(has_video, egui::Label::new(elapsed_str).sense(egui::Sense::click()));
+                    let elapsed_resp = ui.add_enabled(
+                        has_video,
+                        egui::Label::new(elapsed_str).sense(egui::Sense::click()),
+                    );
                     if has_video && elapsed_resp.clicked() {
                         app.show_remaining_time = !app.show_remaining_time;
                     }
@@ -119,13 +123,17 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(
                                 !is_fullscreen,
                             ));
-                            app.set_osd("Fullscreen".to_string());
+                            app.set_osd(app.tr("Fullscreen"));
                         }
 
                         let pin_icon = if app.pin_controls { "📌" } else { "📍" };
                         if ui.button(pin_icon).clicked() {
                             app.pin_controls = !app.pin_controls;
-                            app.set_osd(if app.pin_controls { "Controls Pinned".to_string() } else { "Controls Unpinned".to_string() });
+                            app.set_osd(if app.pin_controls {
+                                app.tr("Controls Pinned")
+                            } else {
+                                app.tr("Controls Unpinned")
+                            });
                             app.save_config();
                         }
 
@@ -144,7 +152,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         let has_video = app.current_video_path.is_some();
                         ui.add_enabled_ui(has_video, |ui| {
                             let mut vol = app.volume;
-                            let vol_slider = egui::Slider::new(&mut vol, 0.0..=130.0).show_value(false);
+                            let vol_slider =
+                                egui::Slider::new(&mut vol, 0.0..=130.0).show_value(false);
                             let vol_resp = ui.add_sized([80.0, 15.0], vol_slider);
                             if vol_resp.changed() {
                                 let _ = app.mpv.set_property("volume", vol);
@@ -168,7 +177,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     let new_vol = (app.volume + vol_change).clamp(0.0, 130.0);
                                     let _ = app.mpv.set_property("volume", new_vol);
                                     app.volume = new_vol;
-                                    app.set_osd(format!("Volume: {:.0}%", new_vol));
+                                    app.set_osd(format!("{}: {:.0}%", app.tr("Volume"), new_vol));
                                     app.save_config();
                                 }
                             }
@@ -176,13 +185,20 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             if ui.add(egui::Button::new(mute_icon).frame(false)).clicked() {
                                 let _ = app.mpv.command("cycle", &["mute"]);
                                 app.is_muted = !app.is_muted;
-                                app.set_osd(if app.is_muted { "Mute".to_string() } else { "Unmute".to_string() });
+                                app.set_osd(if app.is_muted {
+                                    app.tr("Mute")
+                                } else {
+                                    app.tr("Unmute")
+                                });
                                 app.save_config();
                             }
                         });
 
                         let total_str = format_time(display_total);
-                        let total_resp = ui.add_enabled(has_video, egui::Label::new(total_str).sense(egui::Sense::click()));
+                        let total_resp = ui.add_enabled(
+                            has_video,
+                            egui::Label::new(total_str).sense(egui::Sense::click()),
+                        );
                         if has_video && total_resp.clicked() {
                             app.show_remaining_time = !app.show_remaining_time;
                             app.save_config();
@@ -238,7 +254,8 @@ mod tests {
     #[test]
     fn test_multiply_style_opacity() {
         let mut style = egui::Style::default();
-        style.visuals.override_text_color = Some(egui::Color32::from_rgba_premultiplied(200, 200, 200, 200));
+        style.visuals.override_text_color =
+            Some(egui::Color32::from_rgba_premultiplied(200, 200, 200, 200));
         let orig_fill = style.visuals.widgets.inactive.bg_fill;
 
         multiply_style_opacity(&mut style, 0.5);
@@ -256,7 +273,8 @@ mod tests {
     #[test]
     fn test_multiply_style_opacity_zero() {
         let mut style = egui::Style::default();
-        style.visuals.override_text_color = Some(egui::Color32::from_rgba_premultiplied(200, 200, 200, 200));
+        style.visuals.override_text_color =
+            Some(egui::Color32::from_rgba_premultiplied(200, 200, 200, 200));
 
         multiply_style_opacity(&mut style, 0.0);
 
@@ -316,10 +334,13 @@ mod tests {
         let duration = 0.0;
 
         let current_pos = if has_video { playback_time } else { 0.0 };
-        let max_dur = if has_video && duration > 0.0 { duration } else { 1.0 };
+        let max_dur = if has_video && duration > 0.0 {
+            duration
+        } else {
+            1.0
+        };
 
         assert_eq!(current_pos, 0.0);
         assert_eq!(max_dur, 1.0);
     }
 }
-

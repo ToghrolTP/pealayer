@@ -1,11 +1,10 @@
+pub mod audio;
 pub mod controls;
 pub mod error;
-pub mod i18n;
-pub mod menu;
-pub mod subtitles;
-pub mod audio;
-pub mod video;
 pub mod four_d;
+pub mod i18n;
 pub mod layout;
+pub mod menu;
 pub mod status_bar;
-
+pub mod subtitles;
+pub mod video;

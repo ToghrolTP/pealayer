@@ -1,6 +1,6 @@
+pub mod controller;
 pub mod curve;
 pub mod curve_record;
-pub mod controller;
 pub mod engine;
 pub mod history;
 pub mod input_capture;

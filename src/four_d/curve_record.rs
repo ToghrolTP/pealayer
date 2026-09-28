@@ -1,6 +1,6 @@
+use crate::four_d::curve::{AnalogTrack, Interpolation, Keyframe};
 use std::collections::HashMap;
 use uuid::Uuid;
-use crate::four_d::curve::{AnalogTrack, Interpolation, Keyframe};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RdpPoint {
@@ -110,7 +110,9 @@ impl RecordingSession {
             let max_time = samples.iter().map(|s| s.0).max().unwrap_or(0);
 
             // Remove existing keyframes within the recorded time range (punch-in replace)
-            track.keyframes.retain(|k| k.time_ms < min_time || k.time_ms > max_time);
+            track
+                .keyframes
+                .retain(|k| k.time_ms < min_time || k.time_ms > max_time);
 
             for pt in simplified {
                 let time_ms = pt.x.round().max(0.0) as u64;
