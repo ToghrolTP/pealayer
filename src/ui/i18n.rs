@@ -53,7 +53,6 @@ pub(crate) fn configure_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool
 
     context.set_fonts(fonts);
 }
-use eframe::egui;
 
 /// Translate application-owned copy. Values learned from media metadata or
 /// PCController are deliberately never passed through this table.
