@@ -267,11 +267,11 @@ impl eframe::App for PealayerApp {
             inbound_commands.push(("Web UI", command));
         }
         while let Ok(delivery) = self.controller_cmd_rx.try_recv() {
-            self.apply_interop_command(delivery.command.clone(), "PCController");
+            self.apply_interop_command(ui.ctx(), delivery.command.clone(), "PCController");
             delivery.acknowledge_applied();
         }
         for (source, command) in inbound_commands {
-            self.apply_interop_command(command, source);
+            self.apply_interop_command(ui.ctx(), command, source);
         }
 
         // Broadcast state JSON to Web-UI clients (throttled to 10Hz to save CPU / network spam)
@@ -810,12 +810,45 @@ impl PealayerApp {
 
     fn apply_interop_command(
         &mut self,
+        ctx: &egui::Context,
         command: crate::platform::interop::InteropCommand,
         source: &str,
     ) {
         use crate::platform::interop::InteropCommand;
 
         match command {
+            InteropCommand::Launch { request } => {
+                if let Some(value) = request.volume {
+                    let _ = self.mpv.set_property("volume", value);
+                    self.volume = value;
+                    self.save_config();
+                }
+                if let Some(target) = request.target {
+                    if target.starts_with("http://") || target.starts_with("https://") {
+                        self.load_url(&target);
+                    } else {
+                        let path = std::path::PathBuf::from(target);
+                        let resolved = if path.is_relative() {
+                            request
+                                .sender_working_directory
+                                .as_deref()
+                                .map(std::path::Path::new)
+                                .map(|directory| directory.join(&path))
+                                .unwrap_or(path)
+                        } else {
+                            path
+                        };
+                        self.load_video_file(resolved);
+                    }
+                }
+                if request.fullscreen {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+                }
+                if request.activate {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+            }
             InteropCommand::Play => self.play(),
             InteropCommand::Pause => self.pause(),
             InteropCommand::TogglePause => self.toggle_playback(),

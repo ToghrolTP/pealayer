@@ -142,11 +142,9 @@ fn main() -> eframe::Result {
             }
         }
         Ok(crate::cli::CliAction::RunGui(opts)) => {
-            if let Some(ref target) = opts.target {
-                if crate::cli::try_forward_to_existing_instance(target) {
-                    println!("Forwarded '{}' to active Pealayer instance.", target);
-                    return Ok(());
-                }
+            if crate::cli::try_forward_to_existing_instance(&opts) {
+                println!("Forwarded launch request to active Pealayer instance.");
+                return Ok(());
             }
             opts
         }

@@ -8,9 +8,43 @@ use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LaunchRequest {
+    pub operation_id: String,
+    pub sender_working_directory: Option<String>,
+    pub target: Option<String>,
+    pub fullscreen: bool,
+    pub volume: Option<f64>,
+    pub activate: bool,
+}
+
+impl LaunchRequest {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.operation_id.trim().is_empty() || self.operation_id.len() > 128 {
+            return Err("launch operation_id must contain 1 to 128 bytes".to_string());
+        }
+        if self
+            .sender_working_directory
+            .as_ref()
+            .is_some_and(|value| value.len() > 32_768)
+            || self.target.as_ref().is_some_and(|value| value.len() > 32_768)
+        {
+            return Err("launch path fields must not exceed 32768 bytes".to_string());
+        }
+        if self
+            .volume
+            .is_some_and(|value| !value.is_finite() || !(0.0..=130.0).contains(&value))
+        {
+            return Err("launch volume must be a finite value from 0 to 130".to_string());
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum InteropCommand {
+    Launch { request: LaunchRequest },
     Play,
     Pause,
     TogglePause,
@@ -181,6 +215,9 @@ pub fn parse_interop_request(line: &str) -> Result<(Option<serde_json::Value>, I
 
     // Fall back to standard InteropCommand deserialization
     let cmd: InteropCommand = serde_json::from_value(val).map_err(|e| e.to_string())?;
+    if let InteropCommand::Launch { request } = &cmd {
+        request.validate()?;
+    }
     Ok((None, cmd))
 }
 
@@ -236,11 +273,13 @@ fn handle_client_connection<R: std::io::Read, W: Write>(
                     let _ = writer.flush();
                 }
                 Ok((id, cmd)) => {
-                    let _ = tx.send(cmd);
-                    egui_ctx.request_repaint();
-                    let resp_val = serde_json::json!({"status": "ok"});
-                    let resp = format_interop_response(id, &resp_val);
-                    let _ = writer.write_all(resp.as_bytes());
+                    let response = if tx.send(cmd).is_ok() {
+                        egui_ctx.request_repaint();
+                        format_interop_response(id, &serde_json::json!({"status": "accepted"}))
+                    } else {
+                        format_interop_error(id, -32000, "application dispatcher is unavailable")
+                    };
+                    let _ = writer.write_all(response.as_bytes());
                     let _ = writer.flush();
                 }
                 Err(err) => {
@@ -642,6 +681,43 @@ mod tests {
         } else {
             panic!("Expected SetVolume command with aliases");
         }
+    }
+
+    #[test]
+    fn launch_request_is_bounded_and_additive() {
+        let json = r#"{
+            "command":"launch",
+            "request":{
+                "operation_id":"launch-test-1",
+                "sender_working_directory":"/sender/work",
+                "target":"media/clip.mkv",
+                "fullscreen":true,
+                "volume":42.0,
+                "activate":true,
+                "future_optional_field":"ignored"
+            },
+            "future_envelope_field":true
+        }"#;
+        let (_, command) = parse_interop_request(json).unwrap();
+        let InteropCommand::Launch { request } = command else {
+            panic!("expected launch command");
+        };
+        assert_eq!(request.operation_id, "launch-test-1");
+        assert_eq!(request.target.as_deref(), Some("media/clip.mkv"));
+        assert_eq!(request.volume, Some(42.0));
+
+        let invalid = r#"{
+            "command":"launch",
+            "request":{
+                "operation_id":"",
+                "sender_working_directory":null,
+                "target":null,
+                "fullscreen":false,
+                "volume":131.0,
+                "activate":true
+            }
+        }"#;
+        assert!(parse_interop_request(invalid).is_err());
     }
 
     #[test]
