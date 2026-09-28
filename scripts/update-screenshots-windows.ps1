@@ -54,6 +54,9 @@ public static class PealayerScreenshotNative {
     public static extern bool SetForegroundWindow(IntPtr hwnd);
 
     [DllImport("user32.dll")]
+    public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+
+    [DllImport("user32.dll")]
     public static extern bool BringWindowToTop(IntPtr hwnd);
 
     [DllImport("user32.dll")]
@@ -61,8 +64,16 @@ public static class PealayerScreenshotNative {
 
     [DllImport("user32.dll")]
     public static extern bool PrintWindow(IntPtr hwnd, IntPtr deviceContext, uint flags);
+
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmGetWindowAttribute(
+        IntPtr hwnd, uint attribute, out Rect value, uint valueSize);
 }
 '@
+
+# PowerShell is DPI-unaware by default. Without this opt-in, user32 virtualizes
+# window coordinates while CopyFromScreen consumes physical pixels.
+[void][PealayerScreenshotNative]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))
 
 function Test-NearUniformBlack([Drawing.Bitmap]$Bitmap) {
     $minimum = 255
@@ -112,6 +123,16 @@ function Save-WindowScreenshot([IntPtr]$Handle, [int]$ExpectedProcessId, [string
     $rect = New-Object PealayerScreenshotNative+Rect
     if (-not [PealayerScreenshotNative]::GetWindowRect($Handle, [ref]$rect)) {
         throw 'Could not read the Pealayer window bounds.'
+    }
+    $physicalRect = New-Object PealayerScreenshotNative+Rect
+    $dwmFrameBounds = 9 # DWMWA_EXTENDED_FRAME_BOUNDS, always physical pixels
+    if ([PealayerScreenshotNative]::DwmGetWindowAttribute(
+            $Handle,
+            $dwmFrameBounds,
+            [ref]$physicalRect,
+            [Runtime.InteropServices.Marshal]::SizeOf($physicalRect)
+        ) -eq 0) {
+        $rect = $physicalRect
     }
     $captureWidth = $rect.Right - $rect.Left
     $captureHeight = $rect.Bottom - $rect.Top
