@@ -2930,6 +2930,7 @@ dependencies = [
  "egui_dock",
  "env_logger",
  "jiff",
+ "libloading",
  "libmpv2",
  "log",
  "raw-window-handle",
