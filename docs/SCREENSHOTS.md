@@ -24,9 +24,12 @@ The script launches isolated English and Persian processes, fixes the window to
 1280 by 800 pixels, captures the actual window, and terminates only the process
 it created. Each launch uses an isolated settings file and dedicated HTTP,
 WebSocket, and loopback IPC ports, so it never stops, forwards into, or replaces
-an installed Pealayer instance. `CopyFromScreen` requires the target window to
-remain unobscured in the signed-in interactive desktop; the manifest records
-that capture method and session type.
+an installed Pealayer instance. The updater tries
+`PrintWindow(PW_RENDERFULLCONTENT)` first, detects the blank frame produced by
+some OpenGL drivers, and then captures the validated window rectangle from the
+interactive desktop. The fallback requires the target window to remain
+foreground and unobscured; the per-capture manifest records which method was
+used and the session type.
 
 ## Linux
 
@@ -56,10 +59,10 @@ when the manifest commit or executable hash no longer matches the artifact under
 review.
 
 The Windows updater verifies that the captured HWND belongs to the exact
-launched process and uses `PrintWindow(PW_RENDERFULLCONTENT)` so the artifact
-contains only the application window. A firewall prompt, terminal, desktop, or
-unrelated window in a capture is a failed acceptance run and must not be
-committed.
+launched process and crops to that window's bounds. It rejects captures that
+remain blank after the OpenGL screen-pixel fallback. A firewall prompt,
+terminal, desktop, or unrelated window in a capture is a failed acceptance run
+and must not be committed.
 
 Additional connected/error/E-STOP evidence must be captured from real state:
 connect the intended PCController/board, perform the user action, and rerun the

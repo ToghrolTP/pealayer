@@ -54,12 +54,30 @@ public static class PealayerScreenshotNative {
     public static extern bool SetForegroundWindow(IntPtr hwnd);
 
     [DllImport("user32.dll")]
+    public static extern bool BringWindowToTop(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
     public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
 
     [DllImport("user32.dll")]
     public static extern bool PrintWindow(IntPtr hwnd, IntPtr deviceContext, uint flags);
 }
 '@
+
+function Test-NearUniformBlack([Drawing.Bitmap]$Bitmap) {
+    $minimum = 255
+    $maximum = 0
+    $stepX = [Math]::Max(1, [Math]::Floor($Bitmap.Width / 32))
+    $stepY = [Math]::Max(1, [Math]::Floor($Bitmap.Height / 20))
+    for ($y = 0; $y -lt $Bitmap.Height; $y += $stepY) {
+        for ($x = 0; $x -lt $Bitmap.Width; $x += $stepX) {
+            $pixel = $Bitmap.GetPixel($x, $y)
+            $minimum = [Math]::Min($minimum, [Math]::Min($pixel.R, [Math]::Min($pixel.G, $pixel.B)))
+            $maximum = [Math]::Max($maximum, [Math]::Max($pixel.R, [Math]::Max($pixel.G, $pixel.B)))
+        }
+    }
+    return $maximum -lt 12 -or ($maximum - $minimum) -lt 3
+}
 
 function Wait-MainWindow([Diagnostics.Process]$Process, [int]$TimeoutSeconds) {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
@@ -87,6 +105,7 @@ function Save-WindowScreenshot([IntPtr]$Handle, [int]$ExpectedProcessId, [string
     if (-not [PealayerScreenshotNative]::SetWindowPos($Handle, [IntPtr]::Zero, 32, 32, $Width, $Height, $flags)) {
         throw 'Could not resize the Pealayer window.'
     }
+    [void][PealayerScreenshotNative]::BringWindowToTop($Handle)
     [void][PealayerScreenshotNative]::SetForegroundWindow($Handle)
     Start-Sleep -Milliseconds 900
 
@@ -109,8 +128,22 @@ function Save-WindowScreenshot([IntPtr]$Handle, [int]$ExpectedProcessId, [string
             } finally {
                 $graphics.ReleaseHdc($deviceContext)
             }
+            if (Test-NearUniformBlack $bitmap) {
+                $graphics.CopyFromScreen(
+                    $rect.Left,
+                    $rect.Top,
+                    0,
+                    0,
+                    [Drawing.Size]::new($captureWidth, $captureHeight),
+                    [Drawing.CopyPixelOperation]::SourceCopy
+                )
+                $captureMethod = 'System.Drawing.Graphics.CopyFromScreen(window-rect)'
+            }
         } finally {
             $graphics.Dispose()
+        }
+        if (Test-NearUniformBlack $bitmap) {
+            throw 'Window capture remained blank after the screen-pixel fallback.'
         }
         $bitmap.Save($Path, [Drawing.Imaging.ImageFormat]::Png)
     } finally {
@@ -195,7 +228,7 @@ $manifest = [ordered]@{
     executable_sha256 = $executableHash
     application_name = $effectiveAppName
     isolated_profile = $true
-    capture_method = 'user32.PrintWindow(PW_RENDERFULLCONTENT)'
+    capture_method = 'per-capture'
     captures = $captures
 }
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $resolvedOutput 'manifest.json') -Encoding utf8
