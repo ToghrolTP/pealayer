@@ -889,7 +889,7 @@ mod tests {
 
         #[cfg(target_os = "windows")]
         {
-            let mut other_session = request;
+            let mut other_session = request.clone();
             other_session.sender_session_id = Some(
                 crate::platform::windows::current_session_id()
                     .expect("current Windows session")
