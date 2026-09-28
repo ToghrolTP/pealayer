@@ -2,6 +2,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
+use base64::Engine as _;
 use serde_json::{Value, json};
 
 use crate::four_d::embedded_host::EmbeddedHost;
@@ -86,6 +87,149 @@ pub struct HardwareMacro {
     pub name: String,
     pub category: String,
     pub steps: Vec<HardwareMacroStep>,
+}
+
+impl HardwareCapabilities {
+    /// Applies the typed status payload pushed by `controller.status`.
+    /// Static capability/catalog data stays intact; only live board state is
+    /// replaced. Returning `true` lets callers repaint only for real changes.
+    pub(crate) fn apply_status_notification(&mut self, params: &Value) -> bool {
+        let Some(status) = params.get("status").filter(|value| value.is_object()) else {
+            return false;
+        };
+        let before_relays = self.active_relays.clone();
+        let before_telemetry = self.telemetry.clone();
+
+        if let Some(mask) = status.get("active_relays").and_then(Value::as_u64) {
+            self.active_relays = active_relays_from_mask(&self.relays, mask);
+        }
+        self.telemetry = telemetry_from_status(status, self.board_connected);
+
+        self.active_relays != before_relays || self.telemetry != before_telemetry
+    }
+
+    /// Applies changed-only state events that are not part of telemetry
+    /// polling. PCController publishes the physical LED result after its MCU
+    /// compositor has applied priority, brightness, and procedural effects.
+    pub(crate) fn apply_state_notification(&mut self, event: &Value) -> bool {
+        match event.get("kind").and_then(Value::as_str) {
+            Some("status_led.changed") => {
+                let Some(payload) = event
+                    .get("payload")
+                    .and_then(Value::as_str)
+                    .and_then(|encoded| base64::engine::general_purpose::STANDARD.decode(encoded).ok())
+                    .filter(|payload| payload.len() == 6)
+                else {
+                    return false;
+                };
+                let next = HardwareStatusLed {
+                    red: payload[0],
+                    green: payload[1],
+                    blue: payload[2],
+                    brightness: payload[3],
+                    effect: payload[4],
+                    condition: payload[5],
+                };
+                if self.status_led.as_ref() == Some(&next) {
+                    false
+                } else {
+                    self.status_led = Some(next);
+                    true
+                }
+            }
+            Some("relay") => {
+                let Some(device) = event.get("device").filter(|value| value.is_object()) else {
+                    return false;
+                };
+                // `relay_mask` is omitted by Go's JSON encoder when all relays
+                // are off, so a relay event with no field authoritatively means 0.
+                let mask = device
+                    .get("relay_mask")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let next = active_relays_from_mask(&self.relays, mask);
+                if next == self.active_relays {
+                    false
+                } else {
+                    self.active_relays = next;
+                    true
+                }
+            }
+            _ => false,
+        }
+    }
+}
+
+fn active_relays_from_mask(
+    relays: &[HardwareOutput],
+    mask: u64,
+) -> std::collections::BTreeSet<u8> {
+    relays
+        .iter()
+        .filter(|relay| {
+            relay.id > 0
+                && relay.id <= u64::BITS as u8
+                && mask & (1_u64 << u32::from(relay.id - 1)) != 0
+        })
+        .map(|relay| relay.id)
+        .collect()
+}
+
+fn telemetry_from_status(status: &Value, board_connected: bool) -> HardwareTelemetry {
+    HardwareTelemetry {
+        supply_mv: status
+            .get("ina219_available")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            .then(|| status.get("supply_mv").and_then(Value::as_i64).unwrap_or(0) as i32),
+        bus_mv: status
+            .get("ina219_available")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            .then(|| status.get("bus_mv").and_then(Value::as_i64).unwrap_or(0) as i32),
+        current_ma: status
+            .get("ina219_available")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            .then(|| status.get("current_ma").and_then(Value::as_i64).unwrap_or(0) as i32),
+        power_mw: status
+            .get("ina219_available")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            .then(|| status.get("power_mw").and_then(Value::as_i64).unwrap_or(0) as i32),
+        led_temperature_centi_c: status
+            .get("temperature_led_available")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            .then(|| {
+                status
+                    .get("temperature_led_centi_c")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0) as i32
+            }),
+        audio_temperature_centi_c: status
+            .get("temperature_bt_audio_available")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            .then(|| {
+                status
+                    .get("temperature_bt_audio_centi_c")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0) as i32
+            }),
+        pwm_channel: status
+            .get("pwm_available")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            .then(|| status.get("pwm_channel").and_then(Value::as_u64).unwrap_or(0) as u8),
+        pwm_value: status
+            .get("pwm_available")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            .then(|| status.get("pwm_value").and_then(Value::as_u64).unwrap_or(0) as u16),
+        door_open: board_connected
+            .then(|| status.get("door_open").and_then(Value::as_bool).unwrap_or(false)),
+    }
 }
 
 /// Returns the coordinator plus serial ports reported by the current operating
@@ -372,25 +516,7 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
     });
     let empty_status = Value::Null;
     let status = snapshot.get("status").unwrap_or(&empty_status);
-    let telemetry = HardwareTelemetry {
-        supply_mv: status.get("ina219_available").and_then(Value::as_bool).unwrap_or(false)
-            .then(|| status.get("supply_mv").and_then(Value::as_i64).unwrap_or(0) as i32),
-        bus_mv: status.get("ina219_available").and_then(Value::as_bool).unwrap_or(false)
-            .then(|| status.get("bus_mv").and_then(Value::as_i64).unwrap_or(0) as i32),
-        current_ma: status.get("ina219_available").and_then(Value::as_bool).unwrap_or(false)
-            .then(|| status.get("current_ma").and_then(Value::as_i64).unwrap_or(0) as i32),
-        power_mw: status.get("ina219_available").and_then(Value::as_bool).unwrap_or(false)
-            .then(|| status.get("power_mw").and_then(Value::as_i64).unwrap_or(0) as i32),
-        led_temperature_centi_c: status.get("temperature_led_available").and_then(Value::as_bool).unwrap_or(false)
-            .then(|| status.get("temperature_led_centi_c").and_then(Value::as_i64).unwrap_or(0) as i32),
-        audio_temperature_centi_c: status.get("temperature_bt_audio_available").and_then(Value::as_bool).unwrap_or(false)
-            .then(|| status.get("temperature_bt_audio_centi_c").and_then(Value::as_i64).unwrap_or(0) as i32),
-        pwm_channel: status.get("pwm_available").and_then(Value::as_bool).unwrap_or(false)
-            .then(|| status.get("pwm_channel").and_then(Value::as_u64).unwrap_or(0) as u8),
-        pwm_value: status.get("pwm_available").and_then(Value::as_bool).unwrap_or(false)
-            .then(|| status.get("pwm_value").and_then(Value::as_u64).unwrap_or(0) as u16),
-        door_open: board_connected.then(|| status.get("door_open").and_then(Value::as_bool).unwrap_or(false)),
-    };
+    let telemetry = telemetry_from_status(status, board_connected);
     let warnings = snapshot
         .get("hardware_problems")
         .and_then(Value::as_array)
@@ -447,14 +573,7 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
         })
         .collect();
 
-    let active_relays = relays
-        .iter()
-        .filter(|relay| {
-            relay.id <= u64::BITS as u8
-                && active_relay_bits & (1_u64 << u32::from(relay.id - 1)) != 0
-        })
-        .map(|relay| relay.id)
-        .collect();
+    let active_relays = active_relays_from_mask(&relays, active_relay_bits);
 
     HardwareCapabilities {
         board_connected,
@@ -584,5 +703,98 @@ mod tests {
         let parsed = parse_hardware_capabilities(&snapshot, &catalog);
         assert!(parsed.relays.is_empty());
         assert!(parsed.pwm_channels.is_empty());
+    }
+
+    fn live_capabilities() -> HardwareCapabilities {
+        let snapshot = json!({
+            "connected": true,
+            "hello": {"name": "Cinema", "capabilities": CAPABILITY_RELAY_MOTION},
+            "status": {"active_relays": 0},
+            "have_status_led": true,
+            "status_led": {"red": 0, "green": 0, "blue": 0, "brightness": 0, "effect": 0, "condition": 0}
+        });
+        let catalog = json!({"peripherals": [
+            {"key":"relay.5","kind":"relay","role":"user-output","index":5,"default_name":"Relay 5","control":"relay"},
+            {"key":"relay.6","kind":"relay","role":"user-output","index":6,"default_name":"Relay 6","control":"relay"}
+        ]});
+        parse_hardware_capabilities(&snapshot, &catalog)
+    }
+
+    #[test]
+    fn pushed_status_replaces_live_relay_and_telemetry_state() {
+        let mut capabilities = live_capabilities();
+        let changed = capabilities.apply_status_notification(&json!({"status": {
+            "active_relays": 48,
+            "ina219_available": true,
+            "supply_mv": 12100,
+            "bus_mv": 12000,
+            "current_ma": 750,
+            "power_mw": 9000,
+            "temperature_led_available": false,
+            "temperature_bt_audio_available": false,
+            "pwm_available": true,
+            "pwm_channel": 3,
+            "pwm_value": 2048,
+            "door_open": true
+        }}));
+
+        assert!(changed);
+        assert_eq!(capabilities.active_relays, [5, 6].into_iter().collect());
+        assert_eq!(capabilities.telemetry.supply_mv, Some(12100));
+        assert_eq!(capabilities.telemetry.pwm_channel, Some(3));
+        assert_eq!(capabilities.telemetry.door_open, Some(true));
+        assert!(!capabilities.apply_status_notification(&json!({"status": {
+            "active_relays": 48,
+            "ina219_available": true,
+            "supply_mv": 12100,
+            "bus_mv": 12000,
+            "current_ma": 750,
+            "power_mw": 9000,
+            "temperature_led_available": false,
+            "temperature_bt_audio_available": false,
+            "pwm_available": true,
+            "pwm_channel": 3,
+            "pwm_value": 2048,
+            "door_open": true
+        }})));
+    }
+
+    #[test]
+    fn pushed_state_updates_physical_led_and_all_relays_off() {
+        let mut capabilities = live_capabilities();
+        capabilities.active_relays = [5, 6].into_iter().collect();
+        assert!(capabilities.apply_state_notification(&json!({
+            "kind": "status_led.changed",
+            "payload": "EjRWeAQF"
+        })));
+        assert_eq!(
+            capabilities.status_led,
+            Some(HardwareStatusLed {
+                red: 0x12,
+                green: 0x34,
+                blue: 0x56,
+                brightness: 0x78,
+                effect: 4,
+                condition: 5,
+            })
+        );
+        assert!(capabilities.apply_state_notification(&json!({
+            "kind": "relay",
+            "device": {"type": 11}
+        })));
+        assert!(capabilities.active_relays.is_empty());
+    }
+
+    #[test]
+    fn malformed_or_unrelated_push_does_not_replace_live_state() {
+        let mut capabilities = live_capabilities();
+        let original = capabilities.clone();
+        assert!(!capabilities.apply_status_notification(&json!({"status": null})));
+        assert!(!capabilities.apply_state_notification(&json!({
+            "kind": "status_led.changed",
+            "payload": "not-base64"
+        })));
+        assert!(!capabilities.apply_state_notification(&json!({"kind": "door"})));
+        assert_eq!(capabilities, original);
     }
 }

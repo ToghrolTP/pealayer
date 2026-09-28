@@ -533,7 +533,6 @@ pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<Interop
     rx
 }
 
-const PCCONTROLLER_WEBSOCKET_ENDPOINT: &str = "ws://127.0.0.1:8787/ipc";
 const PCCONTROLLER_ACTIONS: &str = "app.page,pealayer.play,pealayer.pause,pealayer.toggle,pealayer.seek,pealayer.seek_absolute,pealayer.volume.set,pealayer.open";
 
 struct ControllerAction {
@@ -706,17 +705,21 @@ fn send_action_ack(
 fn run_pccontroller_action_bridge(
     tx: &std::sync::mpsc::Sender<ControllerDelivery>,
     egui_ctx: &eframe::egui::Context,
+    push_target: &crate::four_d::engine::ControllerPushTarget,
+    endpoint: &str,
+    connected_once: &mut bool,
 ) -> Result<(), String> {
     use std::collections::{HashSet, VecDeque};
     use std::io::ErrorKind;
     use std::time::{Duration, Instant};
     use tungstenite::Message;
 
-    let (mut socket, _) = tungstenite::connect(PCCONTROLLER_WEBSOCKET_ENDPOINT)
+    let (mut socket, _) = tungstenite::connect(endpoint)
         .map_err(|error| format!("connect to PCController action WebSocket: {error}"))?;
+    *connected_once = true;
     if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_mut() {
         stream
-            .set_read_timeout(Some(Duration::from_secs(1)))
+            .set_read_timeout(Some(Duration::from_millis(250)))
             .map_err(|error| format!("configure PCController action read timeout: {error}"))?;
     }
 
@@ -726,7 +729,11 @@ fn run_pccontroller_action_bridge(
         .send(controller_rpc(
             next_id,
             "controller.subscribe",
-            serde_json::json!({"topics":["state","events","opcodes"],"after_id":0}),
+            serde_json::json!({
+                "topics":["state","events","status","opcodes"],
+                "interval_ms":100,
+                "after_id":0
+            }),
         ))
         .map_err(|error| format!("subscribe to PCController actions: {error}"))?;
     next_id += 1;
@@ -738,6 +745,10 @@ fn run_pccontroller_action_bridge(
     let mut receipts = HashSet::new();
     let mut receipt_order = VecDeque::new();
     loop {
+        if !push_target.is_alive() || push_target.websocket_endpoint().as_deref() != Some(endpoint) {
+            let _ = socket.close(None);
+            return Ok(());
+        }
         while let Ok(acknowledgement) = acknowledgement_rx.try_recv() {
             send_action_ack(&mut socket, &mut next_id, acknowledgement)?;
         }
@@ -751,10 +762,14 @@ fn run_pccontroller_action_bridge(
                 let Ok(message) = serde_json::from_str::<Value>(&text) else {
                     continue;
                 };
-                if !matches!(
-                    message.get("method").and_then(Value::as_str),
-                    Some("controller.state" | "controller.event")
-                ) {
+                let Some(method) = message.get("method").and_then(Value::as_str) else {
+                    continue;
+                };
+                let params = message.get("params").unwrap_or(&Value::Null);
+                if push_target.apply_notification(method, params) {
+                    egui_ctx.request_repaint();
+                }
+                if !matches!(method, "controller.state" | "controller.event") {
                     continue;
                 }
                 let Some(action) = message
@@ -808,13 +823,46 @@ fn run_pccontroller_action_bridge(
 
 pub fn spawn_pccontroller_action_bridge(
     egui_ctx: eframe::egui::Context,
+    push_target: crate::four_d::engine::ControllerPushTarget,
 ) -> Receiver<ControllerDelivery> {
     let (tx, rx) = channel();
-    thread::spawn(move || loop {
-        if let Err(error) = run_pccontroller_action_bridge(&tx, &egui_ctx) {
-            log::warn!("[PCController] {error}; retrying in 2 seconds");
+    thread::spawn(move || {
+        let mut retry_delay = std::time::Duration::from_millis(250);
+        while push_target.is_alive() {
+            let Some(endpoint) = push_target.websocket_endpoint() else {
+                thread::sleep(std::time::Duration::from_millis(100));
+                retry_delay = std::time::Duration::from_millis(250);
+                continue;
+            };
+            let mut connected_once = false;
+            if let Err(error) = run_pccontroller_action_bridge(
+                &tx,
+                &egui_ctx,
+                &push_target,
+                &endpoint,
+                &mut connected_once,
+            ) {
+                log::warn!(
+                    "[PCController] {error}; retrying push transport in {} ms",
+                    retry_delay.as_millis()
+                );
+            }
+            if connected_once {
+                retry_delay = std::time::Duration::from_millis(250);
+            }
+            let slices = (retry_delay.as_millis() / 50).max(1) as usize;
+            for _ in 0..slices {
+                if !push_target.is_alive()
+                    || push_target.websocket_endpoint().as_deref() != Some(endpoint.as_str())
+                {
+                    break;
+                }
+                thread::sleep(std::time::Duration::from_millis(50));
+            }
+            if !connected_once {
+                retry_delay = (retry_delay * 2).min(std::time::Duration::from_secs(5));
+            }
         }
-        thread::sleep(std::time::Duration::from_secs(2));
     });
     rx
 }

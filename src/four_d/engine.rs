@@ -145,6 +145,7 @@ pub enum EngineMessage {
 }
 
 pub struct EngineHandle {
+    lifecycle: Arc<()>,
     pub playback_time_ms: Arc<AtomicU64>,
     pub is_playing: Arc<AtomicBool>,
     pub estop_active: Arc<AtomicBool>,
@@ -157,6 +158,72 @@ pub struct EngineHandle {
     pub sender: mpsc::Sender<EngineMessage>,
 }
 
+/// Weak access to the live hardware view for PCController's push transport.
+/// The weak references make the WebSocket worker self-cancelling when the app
+/// and its engine are dropped, without keeping a hidden process-lifetime task.
+#[derive(Clone)]
+pub struct ControllerPushTarget {
+    lifecycle: std::sync::Weak<()>,
+    connection_requested: std::sync::Weak<AtomicBool>,
+    serial_port: std::sync::Weak<Mutex<String>>,
+    hardware_capabilities:
+        std::sync::Weak<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
+}
+
+impl EngineHandle {
+    pub fn controller_push_target(&self) -> ControllerPushTarget {
+        ControllerPushTarget {
+            lifecycle: Arc::downgrade(&self.lifecycle),
+            connection_requested: Arc::downgrade(&self.connection_requested),
+            serial_port: Arc::downgrade(&self.serial_port),
+            hardware_capabilities: Arc::downgrade(&self.hardware_capabilities),
+        }
+    }
+}
+
+impl ControllerPushTarget {
+    pub(crate) fn is_alive(&self) -> bool {
+        self.lifecycle.strong_count() > 0
+    }
+
+    /// Returns the selected WebSocket URL only while the user wants a
+    /// PCController connection. Direct-serial diagnostics never start a second
+    /// coordinator transport.
+    pub(crate) fn websocket_endpoint(&self) -> Option<String> {
+        if !self.connection_requested.upgrade()?.load(Ordering::Relaxed) {
+            return None;
+        }
+        let endpoint = self.serial_port.upgrade()?.lock().ok()?.clone();
+        if !crate::four_d::controller::is_controller_endpoint(&endpoint) {
+            return None;
+        }
+        let address = endpoint
+            .strip_prefix("pccontroller://")
+            .or_else(|| endpoint.strip_prefix("tcp://"))
+            .unwrap_or(&endpoint);
+        Some(format!("ws://{address}/ipc"))
+    }
+
+    pub(crate) fn apply_notification(&self, method: &str, params: &serde_json::Value) -> bool {
+        let Some(capabilities) = self.hardware_capabilities.upgrade() else {
+            return false;
+        };
+        let Ok(mut capabilities) = capabilities.lock() else {
+            return false;
+        };
+        let Some(capabilities) = capabilities.as_mut() else {
+            return false;
+        };
+        match method {
+            "controller.status" => capabilities.apply_status_notification(params),
+            "controller.state" | "controller.event" => {
+                capabilities.apply_state_notification(params)
+            }
+            _ => false,
+        }
+    }
+}
+
 fn should_yield_direct_transport(
     is_direct: bool,
     diagnostic_override: bool,
@@ -166,6 +233,7 @@ fn should_yield_direct_transport(
 }
 
 pub fn spawn_engine() -> EngineHandle {
+    let lifecycle = Arc::new(());
     let playback_time_ms = Arc::new(AtomicU64::new(0));
     let is_playing = Arc::new(AtomicBool::new(false));
     let estop_active = Arc::new(AtomicBool::new(false));
@@ -434,7 +502,10 @@ pub fn spawn_engine() -> EngineHandle {
             }
 
             if connected
-                && last_capability_refresh.elapsed() >= Duration::from_millis(100)
+                // Live relay, telemetry, and status-LED changes arrive on the
+                // controller WebSocket. This slow refresh is only a recovery
+                // baseline for catalog/config changes or a missed push epoch.
+                && last_capability_refresh.elapsed() >= Duration::from_secs(30)
                 && active_transport
                     .as_ref()
                     .is_some_and(|transport| !transport.is_direct_serial())
@@ -569,6 +640,7 @@ pub fn spawn_engine() -> EngineHandle {
     });
 
     EngineHandle {
+        lifecycle,
         playback_time_ms,
         is_playing,
         estop_active,
@@ -931,5 +1003,25 @@ mod tests {
         assert!(!should_yield_direct_transport(true, true, true));
         assert!(!should_yield_direct_transport(true, false, false));
         assert!(!should_yield_direct_transport(false, false, true));
+    }
+
+    #[test]
+    fn controller_push_target_tracks_selected_coordinator_and_lifetime() {
+        let handle = spawn_engine();
+        let target = handle.controller_push_target();
+        assert!(target.is_alive());
+        assert_eq!(target.websocket_endpoint(), None);
+
+        *handle.serial_port.lock().unwrap() = "pccontroller://controller.test:9000".to_string();
+        handle.connection_requested.store(true, Ordering::Relaxed);
+        assert_eq!(
+            target.websocket_endpoint().as_deref(),
+            Some("ws://controller.test:9000/ipc")
+        );
+
+        *handle.serial_port.lock().unwrap() = "direct:COM9".to_string();
+        assert_eq!(target.websocket_endpoint(), None);
+        drop(handle);
+        assert!(!target.is_alive());
     }
 }
