@@ -36,6 +36,8 @@ Add-Type @'
 using System;
 using System.Runtime.InteropServices;
 public static class PealayerScreenshotNative {
+    public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr parameter);
+
     [StructLayout(LayoutKind.Sequential)]
     public struct Rect { public int Left, Top, Right, Bottom; }
 
@@ -44,6 +46,12 @@ public static class PealayerScreenshotNative {
 
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
+
+    [DllImport("user32.dll")]
+    public static extern bool EnumWindows(EnumWindowsProc callback, IntPtr parameter);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr hwnd);
 
     [DllImport("user32.dll")]
     public static extern bool GetClientRect(IntPtr hwnd, out Rect rect);
@@ -99,6 +107,27 @@ public static class PealayerScreenshotNative {
     public static extern bool BitBlt(
         IntPtr destination, int x, int y, int width, int height,
         IntPtr source, int sourceX, int sourceY, uint operation);
+
+    public static IntPtr FindLargestVisibleWindow(uint expectedProcessId) {
+        IntPtr best = IntPtr.Zero;
+        long bestArea = 0;
+        EnumWindows((hwnd, parameter) => {
+            uint processId;
+            GetWindowThreadProcessId(hwnd, out processId);
+            Rect rect;
+            if (processId == expectedProcessId && IsWindowVisible(hwnd) && GetWindowRect(hwnd, out rect)) {
+                int width = Math.Max(0, rect.Right - rect.Left);
+                int height = Math.Max(0, rect.Bottom - rect.Top);
+                long area = (long)width * height;
+                if (width >= 320 && height >= 240 && area > bestArea) {
+                    best = hwnd;
+                    bestArea = area;
+                }
+            }
+            return true;
+        }, IntPtr.Zero);
+        return best;
+    }
 }
 '@
 
@@ -128,9 +157,9 @@ function Wait-MainWindow([Diagnostics.Process]$Process, [int]$TimeoutSeconds) {
         if ($Process.HasExited) {
             throw "Pealayer exited before its window was ready (exit $($Process.ExitCode))."
         }
-        $Process.Refresh()
-        if ($Process.MainWindowHandle -ne [IntPtr]::Zero) {
-            return $Process.MainWindowHandle
+        $handle = [PealayerScreenshotNative]::FindLargestVisibleWindow([uint32]$Process.Id)
+        if ($handle -ne [IntPtr]::Zero) {
+            return $handle
         }
         Start-Sleep -Milliseconds 100
     }

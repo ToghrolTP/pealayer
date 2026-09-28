@@ -60,8 +60,9 @@ image SHA-256. Commit the images and manifest together. A screenshot is stale
 when the manifest commit or executable hash no longer matches the artifact under
 review.
 
-The Windows updater verifies that the captured HWND belongs to the exact
-launched process and crops to that window's bounds. It rejects captures that
+The Windows updater enumerates that launched PID's visible top-level windows,
+ignores tiny renderer helper HWNDs, verifies ownership again, and crops to the
+largest app window's bounds. It rejects captures that
 remain blank after the OpenGL screen-pixel fallback. A firewall prompt,
 terminal, desktop, or unrelated window in a capture is a failed acceptance run
 and must not be committed.
