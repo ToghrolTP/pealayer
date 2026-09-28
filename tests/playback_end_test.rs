@@ -1,13 +1,37 @@
 use pealayer::app::PealayerApp;
 use std::path::PathBuf;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 static PLAYBACK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+fn lock_playback_tests() -> std::sync::MutexGuard<'static, ()> {
+    PLAYBACK_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn wait_for_app_state(
+    app: &mut PealayerApp,
+    timeout: Duration,
+    mut predicate: impl FnMut(&PealayerApp) -> bool,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        app.process_events();
+        if predicate(app) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
 #[test]
 fn test_app_playback_finish_replay_and_seek() {
-    let _lock = PLAYBACK_TEST_LOCK.lock().unwrap();
+    let _lock = lock_playback_tests();
     let mut app = PealayerApp::default();
     let video_path = PathBuf::from("test-data/jellyfish.mp4");
     assert!(video_path.exists(), "test video must exist");
@@ -39,17 +63,19 @@ fn test_app_playback_finish_replay_and_seek() {
         }
     }
     assert!(reached_finish, "Playback should reach finished state");
-    assert!(app.is_paused, "Video should be paused when playback finishes");
+    assert!(
+        app.is_paused,
+        "Video should be paused when playback finishes"
+    );
 
     // 1. Test seeking backwards from finished state
+    let expected_seek_time = (app.playback_time - 5.0).clamp(0.0, app.duration);
     app.seek_relative(-5.0);
-    thread::sleep(Duration::from_millis(150));
-    app.process_events();
-
-    assert!(!app.is_playback_finished(), "Should no longer be in finished state after seeking back");
     assert!(
-        app.playback_time >= 4.0 && app.playback_time <= 6.0,
-        "Playback time after seek -5s should be around 5.0s, was {}",
+        wait_for_app_state(&mut app, Duration::from_secs(3), |app| {
+            !app.is_playback_finished() && (app.playback_time - expected_seek_time).abs() < 1.0
+        }),
+        "Playback should leave the finished state and reach {expected_seek_time:.2}s after seeking back; last observed position was {:.2}s",
         app.playback_time
     );
 
@@ -65,25 +91,27 @@ fn test_app_playback_finish_replay_and_seek() {
             break;
         }
     }
-    assert!(app.is_playback_finished(), "Should reach finished state again");
+    assert!(
+        app.is_playback_finished(),
+        "Should reach finished state again"
+    );
 
     // 3. Test replay at finished state
     app.toggle_playback();
-    thread::sleep(Duration::from_millis(200));
-    app.process_events();
-
-    assert!(!app.is_playback_finished(), "Should not be finished after replay");
-    assert!(!app.is_paused, "Should be playing after replay");
     assert!(
-        app.playback_time < 2.0,
-        "Playback time after replay should be near 0, was {}",
-        app.playback_time
+        wait_for_app_state(&mut app, Duration::from_secs(3), |app| {
+            !app.is_playback_finished() && !app.is_paused && app.playback_time < 2.0
+        }),
+        "Replay should restart playback near 0s; last observed position was {:.2}s (paused: {}, finished: {})",
+        app.playback_time,
+        app.is_paused,
+        app.is_playback_finished()
     );
 }
 
 #[test]
 fn test_app_playback_finish_scrub_and_move_around() {
-    let _lock = PLAYBACK_TEST_LOCK.lock().unwrap();
+    let _lock = lock_playback_tests();
     let mut app = PealayerApp::default();
     let video_path = PathBuf::from("test-data/jellyfish.mp4");
     assert!(video_path.exists(), "test video must exist");
@@ -110,22 +138,32 @@ fn test_app_playback_finish_scrub_and_move_around() {
             break;
         }
     }
-    assert!(app.is_playback_finished(), "Playback should reach finished state");
+    assert!(
+        app.is_playback_finished(),
+        "Playback should reach finished state"
+    );
 
-    // Scrub to 2.5s
+    // Scrub to 2.5s and verify mpv reports the committed position. The seek is
+    // asynchronous and can take longer on resource-constrained CI runners.
     app.scrub_to(2.5);
     app.finish_scrub(2.5);
-    thread::sleep(Duration::from_millis(150));
-    app.process_events();
-
-    assert!(!app.is_playback_finished(), "Should not be finished after scrub to 2.5s");
-    let pos = app.seek_pos.unwrap_or(app.playback_time);
-    assert!((pos - 2.5).abs() < 1.0, "Position should be near 2.5s, was {}", pos);
+    assert!(
+        wait_for_app_state(&mut app, Duration::from_secs(3), |app| {
+            !app.is_playback_finished() && (app.playback_time - 2.5).abs() < 1.0
+        }),
+        "Playback should leave the finished state and settle near 2.5s; last observed position was {:.2}s",
+        app.playback_time
+    );
 
     // Now unpause and verify playback runs normally
+    let playback_start = app.playback_time;
     app.play();
     assert!(!app.is_paused);
-    thread::sleep(Duration::from_millis(200));
-    app.process_events();
-    assert!(app.playback_time > 1.5, "Playback should progress from scrubbed position");
+    assert!(
+        wait_for_app_state(&mut app, Duration::from_secs(3), |app| {
+            app.playback_time > playback_start + 0.1
+        }),
+        "Playback should progress from the scrubbed position; started at {playback_start:.2}s and last observed {:.2}s",
+        app.playback_time
+    );
 }
