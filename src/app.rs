@@ -1479,7 +1479,7 @@ impl PealayerApp {
         self.language_preference = preference;
         self.language = crate::config::resolve_language(preference);
         self.rtl = crate::config::resolve_rtl(self.direction_preference, self.language);
-        crate::configure_ui_fonts(
+        crate::ui::i18n::configure_ui_fonts(
             ctx,
             self.language == crate::config::AppLanguage::Persian,
         );

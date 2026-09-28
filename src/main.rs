@@ -19,53 +19,6 @@ use mpv::render::RenderContextWrapper;
 use mpv::render::mpv_get_proc_address;
 use std::sync::{Arc, Mutex};
 
-pub(crate) fn configure_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool) {
-    let mut fonts = egui::FontDefinitions::default();
-
-    // Prefer the platform UI face. Vazirmatn remains immediately behind it so
-    // Persian and Arabic text has a bundled, release-safe fallback.
-    let system_font = [
-        #[cfg(target_os = "windows")]
-        r"C:\Windows\Fonts\segoeui.ttf",
-        #[cfg(target_os = "macos")]
-        "/System/Library/Fonts/SFNS.ttf",
-        #[cfg(target_os = "linux")]
-        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-        #[cfg(target_os = "linux")]
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    .iter()
-    .find_map(|path| std::fs::read(path).ok());
-
-    fonts.font_data.insert(
-        "pealayer-vazirmatn".to_owned(),
-        Arc::new(egui::FontData::from_static(include_bytes!(
-            "../assets/fonts/Vazirmatn-Regular.ttf"
-        ))),
-    );
-    let proportional = fonts
-        .families
-        .get_mut(&egui::FontFamily::Proportional)
-        .expect("egui provides a proportional font family");
-    if let Some(bytes) = system_font {
-        fonts.font_data.insert(
-            "pealayer-system-ui".to_owned(),
-            Arc::new(egui::FontData::from_owned(bytes)),
-        );
-        if prefer_vazirmatn {
-            proportional.insert(0, "pealayer-system-ui".to_owned());
-            proportional.insert(0, "pealayer-vazirmatn".to_owned());
-        } else {
-            proportional.insert(0, "pealayer-vazirmatn".to_owned());
-            proportional.insert(0, "pealayer-system-ui".to_owned());
-        }
-    } else {
-        proportional.insert(0, "pealayer-vazirmatn".to_owned());
-    }
-
-    context.set_fonts(fonts);
-}
-
 fn subtitle_font_directory() -> Option<std::path::PathBuf> {
     let packaged = std::env::current_exe()
         .ok()
@@ -231,7 +184,7 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let loaded_config = launch_config.clone();
-            configure_ui_fonts(
+            crate::ui::i18n::configure_ui_fonts(
                 &cc.egui_ctx,
                 language == crate::config::AppLanguage::Persian,
             );
@@ -383,8 +336,11 @@ fn main() -> eframe::Result {
                 cc.egui_ctx.clone(),
                 web_runtime,
             );
-            let controller_cmd_rx =
-                crate::platform::interop::spawn_pccontroller_action_bridge(cc.egui_ctx.clone());
+            let engine_handle = crate::four_d::engine::spawn_engine();
+            let controller_cmd_rx = crate::platform::interop::spawn_pccontroller_action_bridge(
+                cc.egui_ctx.clone(),
+                engine_handle.controller_push_target(),
+            );
 
             let mut app = PealayerApp {
                 app_name: app_name.clone(),
@@ -428,7 +384,7 @@ fn main() -> eframe::Result {
                 show_four_d_editor: true,
 
                 timeline: crate::four_d::models::Timeline::new(),
-                engine_handle: crate::four_d::engine::spawn_engine(),
+                engine_handle,
                 recording_session: crate::four_d::curve_record::RecordingSession::new(),
                 input_capture: crate::four_d::input_capture::InputCaptureState::new(),
                 is_recording: false,
