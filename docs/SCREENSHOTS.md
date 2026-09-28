@@ -26,10 +26,10 @@ it created. Each launch uses an isolated settings file and dedicated HTTP,
 WebSocket, and loopback IPC ports, so it never stops, forwards into, or replaces
 an installed Pealayer instance. The updater tries
 `PrintWindow(PW_RENDERFULLCONTENT)` first, detects the blank frame produced by
-some OpenGL drivers, and then captures the validated window rectangle from the
-interactive desktop. It enables per-monitor DPI awareness and uses the DWM
-physical frame bounds so scaling cannot expose pixels outside the app. The
-fallback requires the target window to remain
+some OpenGL drivers, and then tries the target window's composed device context
+before using screen pixels as a final fallback. It enables per-monitor DPI
+awareness and derives the fallback frame from the native client bounds. The
+screen-pixel fallback requires the target window to remain
 foreground and unobscured; the per-capture manifest records which method was
 used and the session type.
 

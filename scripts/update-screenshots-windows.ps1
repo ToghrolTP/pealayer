@@ -81,11 +81,22 @@ public static class PealayerScreenshotNative {
     public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
 
     [DllImport("user32.dll")]
+    public static extern IntPtr GetWindowDC(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    public static extern int ReleaseDC(IntPtr hwnd, IntPtr deviceContext);
+
+    [DllImport("user32.dll")]
     public static extern bool PrintWindow(IntPtr hwnd, IntPtr deviceContext, uint flags);
 
     [DllImport("dwmapi.dll")]
     public static extern int DwmGetWindowAttribute(
         IntPtr hwnd, uint attribute, out Rect value, uint valueSize);
+
+    [DllImport("gdi32.dll")]
+    public static extern bool BitBlt(
+        IntPtr destination, int x, int y, int width, int height,
+        IntPtr source, int sourceX, int sourceY, uint operation);
 }
 '@
 
@@ -173,6 +184,23 @@ function Save-WindowScreenshot([IntPtr]$Handle, [int]$ExpectedProcessId, [string
                 $graphics.ReleaseHdc($deviceContext)
             }
             if (Test-NearUniformBlack $bitmap) {
+                $windowDc = [PealayerScreenshotNative]::GetWindowDC($Handle)
+                if ($windowDc -ne [IntPtr]::Zero) {
+                    $targetDc = $graphics.GetHdc()
+                    try {
+                        $sourceCopyWithLayeredWindows = 0x40CC0020
+                        if ([PealayerScreenshotNative]::BitBlt(
+                                $targetDc, 0, 0, $captureWidth, $captureHeight,
+                                $windowDc, 0, 0, $sourceCopyWithLayeredWindows)) {
+                            $captureMethod = 'gdi32.BitBlt(window-dc)'
+                        }
+                    } finally {
+                        $graphics.ReleaseHdc($targetDc)
+                        [void][PealayerScreenshotNative]::ReleaseDC($Handle, $windowDc)
+                    }
+                }
+            }
+            if (Test-NearUniformBlack $bitmap) {
                 $graphics.CopyFromScreen(
                     $rect.Left,
                     $rect.Top,
@@ -181,7 +209,7 @@ function Save-WindowScreenshot([IntPtr]$Handle, [int]$ExpectedProcessId, [string
                     [Drawing.Size]::new($captureWidth, $captureHeight),
                     [Drawing.CopyPixelOperation]::SourceCopy
                 )
-                $captureMethod = 'System.Drawing.Graphics.CopyFromScreen(window-rect)'
+                $captureMethod = 'System.Drawing.Graphics.CopyFromScreen(client-frame)'
             }
         } finally {
             $graphics.Dispose()
