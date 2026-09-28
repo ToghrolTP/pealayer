@@ -10,14 +10,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         ui.with_layout(
             crate::ui::i18n::layout(app.rtl, egui::Align::Center),
             |ui| {
-                // FPS Counter
                 let dt = ui.input(|i| i.stable_dt);
                 let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
                 ui.label(format!("FPS: {:.0}", fps));
 
                 ui.separator();
-
-                // Hardware Connection Status
                 ui.horizontal(|ui| {
                     let connection_requested = app
                         .engine_handle
@@ -29,12 +26,22 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         .is_some_and(|capabilities| capabilities.board_connected);
                     let coordinator_endpoint =
                         crate::four_d::controller::is_controller_endpoint(&app.serial_port);
+                    let selected_transport = app
+                        .engine_handle
+                        .active_transport
+                        .try_lock()
+                        .ok()
+                        .and_then(|transport| transport.clone());
+                    let transport_suffix = selected_transport
+                        .as_deref()
+                        .map(|transport| format!(" via {transport}"))
+                        .unwrap_or_default();
                     let dot_color = if app.is_connected && (!coordinator_endpoint || board_ready) {
-                        egui::Color32::from_rgb(46, 204, 113) // Green
+                        egui::Color32::from_rgb(46, 204, 113)
                     } else if connection_requested || app.is_connected {
-                        egui::Color32::from_rgb(241, 196, 15) // Amber
+                        egui::Color32::from_rgb(241, 196, 15)
                     } else {
-                        egui::Color32::from_rgb(231, 76, 60) // Red
+                        egui::Color32::from_rgb(231, 76, 60)
                     };
 
                     let size = egui::vec2(12.0, 12.0);
@@ -49,24 +56,28 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 .filter(|name| !name.is_empty())
                                 .unwrap_or("board");
                             let board_name = app.display_text(board_name);
-                            format!("Hardware: PCController + {board_name} connected")
+                            format!(
+                                "Hardware: PCController + {board_name} connected{transport_suffix}"
+                            )
                         } else if coordinator_endpoint {
                             if app.language.is_rtl() {
-                                "سخت‌افزار: PCController متصل است؛ برد در دسترس نیست".to_string()
+                                format!(
+                                    "سخت‌افزار: PCController متصل است؛ برد در دسترس نیست{transport_suffix}"
+                                )
                             } else {
-                                "Hardware: PCController connected; board unavailable".to_string()
+                                format!(
+                                    "Hardware: PCController connected; board unavailable{transport_suffix}"
+                                )
                             }
                         } else {
                             format!("Hardware: {} direct diagnostic", app.serial_port)
                         }
                     } else if connection_requested {
                         format!("Hardware: Connecting to {}…", app.serial_port)
+                    } else if app.language.is_rtl() {
+                        "سخت‌افزار: قطع است".to_string()
                     } else {
-                        if app.language.is_rtl() {
-                            "سخت‌افزار: قطع است".to_string()
-                        } else {
-                            "Hardware: Disconnected".to_string()
-                        }
+                        "Hardware: Disconnected".to_string()
                     };
                     ui.label(label_text);
                 });

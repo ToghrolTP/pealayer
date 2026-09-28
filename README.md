@@ -169,6 +169,8 @@ Observe live relay LEDs in the **Hardware Monitor**. Toggle manual overrides, tr
 
 Pealayer normally communicates with PCController over persistent loopback NDJSON JSON-RPC. PCController owns the serial port, converts semantic relay/PWM commands to its native COBS/CRC protocol, correlates board replies, and routes board-originated navigation back to registered applications. This prevents two desktop processes from opening the same UART or applying conflicting safety policies.
 
+When a packaged `pccontroller.dll`, `pccontroller.so`, or `pccontroller.dylib` is available beside Pealayer (or through `PEALAYER_PCCONTROLLER_LIBRARY`), Pealayer prefers the real in-process PCController Host. It keeps the Go shared runtime loaded for the process lifetime and executes the canonical `host_create` → `host_start` → `host_call` / `host_endpoints` lifecycle, followed by `host_stop` → `host_destroy` at shutdown. `PEALAYER_PCCONTROLLER_DATA_ROOT` overrides its private Host data directory, and `PEALAYER_PCCONTROLLER_HTTP_ADDRESS` optionally enables an HTTP/WebSocket listener. If the library is absent or another coordinator owns the Host identity/listener, Pealayer falls back to the external coordinator at the selected local endpoint; it never turns that failure into an implicit direct-UART open. The status bar reports the transport that actually connected.
+
 ### 1. PCController Coordinator API (Recommended)
 
 ```text

@@ -1,4 +1,5 @@
 use pealayer::four_d::controller::{ControllerClient, DEFAULT_ENDPOINT};
+use pealayer::four_d::embedded_host::{EmbeddedHost, EmbeddedHostOptions};
 use serde_json::json;
 use serde_json::Value;
 
@@ -30,6 +31,44 @@ fn pccontroller_json_rpc_and_board_cobs_roundtrip() {
         .call("controller.status", json!({}))
         .unwrap_or_else(|error| panic!("PCController/board status roundtrip: {error}"));
     assert!(status.is_object(), "board status must be a JSON object: {status}");
+}
+
+#[test]
+fn pccontroller_embedded_host_lifecycle_roundtrip() {
+    let Some(library_path) = std::env::var_os("PEALAYER_PCCONTROLLER_LIBRARY") else {
+        eprintln!(
+            "set PEALAYER_PCCONTROLLER_LIBRARY to exercise the real PCController DLL/SO Host lifecycle"
+        );
+        return;
+    };
+    let data_root = std::env::temp_dir().join(format!(
+        "pealayer-pccontroller-host-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&data_root).expect("create embedded Host test data root");
+    let options = EmbeddedHostOptions {
+        data_root: data_root.clone(),
+        app_id: format!("pealayer.integration-test.{}", std::process::id()),
+        app_name: "Pealayer integration test".to_string(),
+        disable_auto_connect: true,
+        disable_native: true,
+        enable_integrations: false,
+        http_address: None,
+    };
+    let mut host = EmbeddedHost::load_and_start(std::path::Path::new(&library_path), &options)
+        .unwrap_or_else(|error| panic!("load/start real PCController embedded Host: {error}"));
+    let ping = host
+        .call("controller.ping", json!({}))
+        .unwrap_or_else(|error| panic!("canonical in-process ping: {error}"));
+    assert_eq!(ping["ok"], true, "unexpected in-process ping: {ping}");
+    assert!(
+        !host.endpoints().is_null(),
+        "host_endpoints must return the listeners that actually started"
+    );
+    host.shutdown()
+        .unwrap_or_else(|error| panic!("host_stop then host_destroy: {error}"));
+    drop(host);
+    let _ = std::fs::remove_dir_all(data_root);
 }
 
 #[test]
