@@ -401,36 +401,77 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     };
                     let conn_btn = ui.add(egui::Button::new(conn_text).selected(app.is_connected));
                     if conn_btn.clicked() {
-                        {
-                            let mut port_guard = app.engine_handle.serial_port.lock().unwrap();
-                            *port_guard = app.serial_port.clone();
-                        }
-                        app.engine_handle
-                            .connection_requested
-                            .store(
-                                !(app.is_connected || connection_requested),
+                        let should_connect = !(app.is_connected || connection_requested);
+                        if should_connect {
+                            let endpoint = app.serial_port.trim().to_owned();
+                            if endpoint.is_empty() {
+                                app.connection_notice = Some(
+                                    app.tr("Enter a hardware endpoint before connecting."),
+                                );
+                            } else {
+                                app.serial_port = endpoint.clone();
+                                if let Ok(mut selected) = app.engine_handle.serial_port.lock() {
+                                    *selected = endpoint;
+                                }
+                                app.connection_notice = None;
+                                app.engine_handle.connection_requested.store(
+                                    true,
+                                    std::sync::atomic::Ordering::Relaxed,
+                                );
+                                app.save_config();
+                            }
+                        } else {
+                            app.engine_handle.connection_requested.store(
+                                false,
                                 std::sync::atomic::Ordering::Relaxed,
                             );
+                        }
                     }
 
-                    // PCController owns the board during normal operation. Direct serial is
-                    // deliberately labelled and additionally guarded by the engine.
+                    // PCController owns the board during normal operation. Keep discovered
+                    // devices convenient, but never make discovery the only way to choose a
+                    // coordinator or direct diagnostic path: remote hosts and stable OS device
+                    // paths are valid even when they are not visible to the local enumerator.
+                    let mut endpoint_changed = false;
                     ui.add_enabled_ui(!app.is_connected && !connection_requested, |ui| {
-                        ui.allocate_ui(egui::vec2(210.0, 20.0), |ui| {
-                            egui::ComboBox::from_id_salt("serial_port_select")
+                        ui.allocate_ui(egui::vec2(250.0, 20.0), |ui| {
+                            egui::ComboBox::from_id_salt("hardware_endpoint_select")
                                 .selected_text(&app.serial_port)
+                                .width(330.0)
+                                .height(240.0)
                                 .show_ui(ui, |ui| {
                                     for endpoint in crate::four_d::controller::available_endpoints()
                                     {
-                                        ui.selectable_value(
-                                            &mut app.serial_port,
-                                            endpoint.clone(),
-                                            endpoint,
-                                        );
+                                        endpoint_changed |= ui
+                                            .selectable_value(
+                                                &mut app.serial_port,
+                                                endpoint.clone(),
+                                                endpoint,
+                                            )
+                                            .changed();
                                     }
+
+                                    ui.separator();
+                                    ui.label(app.tr("Custom endpoint or hardware path"));
+                                    let endpoint_hint = app.tr(
+                                        "pccontroller://host:port, tcp://host:port, or direct:<device>",
+                                    );
+                                    endpoint_changed |= ui
+                                        .add_sized(
+                                            [330.0, 22.0],
+                                            egui::TextEdit::singleline(&mut app.serial_port)
+                                                .hint_text(endpoint_hint),
+                                        )
+                                        .on_hover_text(app.tr(
+                                            "Enter a PCController endpoint or an OS hardware path.",
+                                        ))
+                                        .changed();
                                 });
                         });
                     });
+                    if endpoint_changed {
+                        app.save_config();
+                    }
 
                     // Connection visual indicator dot
                     let dot_color = if app.is_connected {
