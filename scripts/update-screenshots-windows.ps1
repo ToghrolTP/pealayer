@@ -43,8 +43,23 @@ public static class PealayerScreenshotNative {
     [StructLayout(LayoutKind.Sequential)]
     public struct Rect { public int Left, Top, Right, Bottom; }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Point { public int X, Y; }
+
     [DllImport("user32.dll")]
     public static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
+
+    [DllImport("user32.dll")]
+    public static extern bool GetClientRect(IntPtr hwnd, out Rect rect);
+
+    [DllImport("user32.dll")]
+    public static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetDpiForWindow(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    public static extern int GetSystemMetricsForDpi(int index, uint dpi);
 
     [DllImport("user32.dll")]
     public static extern bool SetWindowPos(
@@ -128,16 +143,20 @@ function Save-WindowScreenshot([IntPtr]$Handle, [int]$ExpectedProcessId, [string
     if (-not [PealayerScreenshotNative]::GetWindowRect($Handle, [ref]$rect)) {
         throw 'Could not read the Pealayer window bounds.'
     }
-    $physicalRect = New-Object PealayerScreenshotNative+Rect
-    $dwmFrameBounds = 9 # DWMWA_EXTENDED_FRAME_BOUNDS, always physical pixels
-    if ([PealayerScreenshotNative]::DwmGetWindowAttribute(
-            $Handle,
-            $dwmFrameBounds,
-            [ref]$physicalRect,
-            [Runtime.InteropServices.Marshal]::SizeOf($physicalRect)
-        ) -eq 0) {
-        $rect = $physicalRect
+    $client = New-Object PealayerScreenshotNative+Rect
+    $clientOrigin = New-Object PealayerScreenshotNative+Point
+    if (-not [PealayerScreenshotNative]::GetClientRect($Handle, [ref]$client) -or
+        -not [PealayerScreenshotNative]::ClientToScreen($Handle, [ref]$clientOrigin)) {
+        throw 'Could not read the Pealayer client bounds.'
     }
+    $dpi = [PealayerScreenshotNative]::GetDpiForWindow($Handle)
+    if ($dpi -eq 0) { $dpi = 96 }
+    $border = [Math]::Max(1, [Math]::Round($dpi / 96.0))
+    $caption = [PealayerScreenshotNative]::GetSystemMetricsForDpi(4, $dpi) # SM_CYCAPTION
+    $rect.Left = $clientOrigin.X - $border
+    $rect.Top = $clientOrigin.Y - $caption - $border
+    $rect.Right = $clientOrigin.X + ($client.Right - $client.Left) + $border
+    $rect.Bottom = $clientOrigin.Y + ($client.Bottom - $client.Top) + $border
     $captureWidth = $rect.Right - $rect.Left
     $captureHeight = $rect.Bottom - $rect.Top
     $bitmap = New-Object Drawing.Bitmap $captureWidth, $captureHeight
