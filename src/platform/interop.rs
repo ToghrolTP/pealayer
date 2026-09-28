@@ -340,14 +340,13 @@ fn handle_client_connection<R: std::io::Read, W: Write>(
                     };
                     let response = if let Some(operation_id) = operation_id {
                         match launch_receipts.lock() {
-                            Ok(mut receipts) if !receipts.claim(&operation_id) => {
-                                format_interop_response(
-                                    id,
-                                    &serde_json::json!({"status": "accepted", "duplicate": true}),
-                                )
-                            }
                             Ok(mut receipts) => {
-                                if tx.send(cmd).is_ok() {
+                                if !receipts.claim(&operation_id) {
+                                    format_interop_response(
+                                        id,
+                                        &serde_json::json!({"status": "accepted", "duplicate": true}),
+                                    )
+                                } else if tx.send(cmd).is_ok() {
                                     egui_ctx.request_repaint();
                                     format_interop_response(
                                         id,
