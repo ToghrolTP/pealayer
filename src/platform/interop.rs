@@ -553,7 +553,7 @@ pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<Interop
     rx
 }
 
-const PCCONTROLLER_ACTIONS: &str = "app.page,pealayer.play,pealayer.pause,pealayer.toggle,pealayer.seek,pealayer.seek_absolute,pealayer.volume.set,pealayer.open";
+const PCCONTROLLER_ACTIONS: &str = "app.page,pealayer.play,pealayer.pause,pealayer.toggle,pealayer.seek,pealayer.seek_absolute,pealayer.volume.set,pealayer.open,pealayer.fullscreen.set,pealayer.fullscreen.toggle,pealayer.workspace.set";
 
 struct ControllerAction {
     command: Option<InteropCommand>,
@@ -619,6 +619,21 @@ fn controller_action_from_event(event: &Value, instance_id: &str) -> Option<Cont
             "pealayer.open" if !value.is_empty() => Some(InteropCommand::Open {
                 target: value.to_string(),
             }),
+            "pealayer.fullscreen.set" => match value.to_ascii_lowercase().as_str() {
+                "true" | "1" | "on" | "yes" => {
+                    Some(InteropCommand::SetFullscreen { enabled: true })
+                }
+                "false" | "0" | "off" | "no" => {
+                    Some(InteropCommand::SetFullscreen { enabled: false })
+                }
+                _ => None,
+            },
+            "pealayer.fullscreen.toggle" => Some(InteropCommand::ToggleFullscreen),
+            "pealayer.workspace.set" => match value.to_ascii_lowercase().as_str() {
+                "nle" | "editor" => Some(InteropCommand::SetWorkspace { nle: true }),
+                "simple" | "player" => Some(InteropCommand::SetWorkspace { nle: false }),
+                _ => None,
+            },
             "app.page" => match value.to_ascii_lowercase().as_str() {
                 "play" | "player.play" => Some(InteropCommand::Play),
                 "pause" | "player.pause" => Some(InteropCommand::Pause),
@@ -1175,6 +1190,71 @@ mod tests {
         assert_eq!(action.acknowledgement["state"], "applied");
         assert_eq!(action.acknowledgement["delivery_id"], "delivery-1");
         assert!(controller_action_from_event(&event, "pealayer:other").is_none());
+    }
+
+    #[test]
+    fn advertised_pccontroller_workspace_actions_are_executable() {
+        assert_eq!(
+            PCCONTROLLER_ACTIONS.split(',').collect::<Vec<_>>(),
+            vec![
+                "app.page",
+                "pealayer.play",
+                "pealayer.pause",
+                "pealayer.toggle",
+                "pealayer.seek",
+                "pealayer.seek_absolute",
+                "pealayer.volume.set",
+                "pealayer.open",
+                "pealayer.fullscreen.set",
+                "pealayer.fullscreen.toggle",
+                "pealayer.workspace.set",
+            ]
+        );
+
+        let action = |kind: &str, value: &str| {
+            controller_action_from_event(
+                &serde_json::json!({
+                    "kind": kind,
+                    "metadata": {
+                        "target_instance": "pealayer:test",
+                        "operation_id": format!("operation-{kind}-{value}"),
+                        "operation_delivery_id": format!("delivery-{kind}-{value}"),
+                        "operation_expires_at": "2099-01-01T00:00:00Z",
+                        "value": value,
+                    },
+                }),
+                "pealayer:test",
+            )
+            .unwrap()
+        };
+
+        assert!(matches!(
+            action("pealayer.fullscreen.set", "true").command,
+            Some(InteropCommand::SetFullscreen { enabled: true })
+        ));
+        assert!(matches!(
+            action("pealayer.fullscreen.set", "false").command,
+            Some(InteropCommand::SetFullscreen { enabled: false })
+        ));
+        assert!(matches!(
+            action("pealayer.fullscreen.toggle", "").command,
+            Some(InteropCommand::ToggleFullscreen)
+        ));
+        assert!(matches!(
+            action("pealayer.workspace.set", "nle").command,
+            Some(InteropCommand::SetWorkspace { nle: true })
+        ));
+        assert!(matches!(
+            action("pealayer.workspace.set", "simple").command,
+            Some(InteropCommand::SetWorkspace { nle: false })
+        ));
+        let invalid = action("pealayer.fullscreen.set", "sometimes");
+        assert!(invalid.command.is_none());
+        assert_eq!(invalid.acknowledgement["state"], "rejected");
+        assert_eq!(
+            invalid.acknowledgement["reason"],
+            "unsupported_or_invalid_pealayer_action"
+        );
     }
 
     #[test]

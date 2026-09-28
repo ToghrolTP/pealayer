@@ -300,6 +300,13 @@ impl eframe::App for PealayerApp {
             self.apply_interop_command(ui.ctx(), command, source);
         }
 
+        // Reconcile the workspace with the viewport before publishing status.
+        // A fullscreen request can be observed in this same frame; preserving
+        // the already-staged workspace prevents that observation from replacing
+        // an NLE restore target with the forced Simple workspace.
+        let is_fullscreen = ui.input(|input| input.viewport().fullscreen.unwrap_or(false));
+        self.observe_fullscreen_state(is_fullscreen);
+
         // Broadcast state JSON to Web-UI clients (throttled to 10Hz to save CPU / network spam)
         let now = std::time::Instant::now();
         let should_broadcast = match self.last_web_broadcast {
@@ -334,7 +341,7 @@ impl eframe::App for PealayerApp {
                     .current_video_path
                     .as_ref()
                     .map(|p| p.to_string_lossy().to_string()),
-                fullscreen: ui.input(|input| input.viewport().fullscreen.unwrap_or(false)),
+                fullscreen: is_fullscreen,
                 workspace: if self.show_four_d_editor { "nle" } else { "simple" }.to_string(),
                 controller_connected,
                 hardware_connected,
@@ -484,16 +491,6 @@ impl eframe::App for PealayerApp {
         }
         crate::platform::windows::set_window_theme(ui.style().visuals.dark_mode);
 
-        let is_fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
-        if is_fullscreen && !self.was_fullscreen {
-            self.workspace_before_fullscreen = Some(self.show_four_d_editor);
-            self.show_four_d_editor = false;
-        } else if !is_fullscreen && self.was_fullscreen {
-            if let Some(previous_workspace) = self.workspace_before_fullscreen.take() {
-                self.show_four_d_editor = previous_workspace;
-            }
-        }
-        self.was_fullscreen = is_fullscreen;
         if !is_fullscreen {
             crate::ui::menu::draw(self, ui);
             crate::ui::status_bar::draw(self, ui);
@@ -1245,7 +1242,7 @@ impl PealayerApp {
 
     pub fn set_fullscreen(&mut self, ctx: &egui::Context, enabled: bool) {
         if enabled {
-            if !self.was_fullscreen {
+            if !self.was_fullscreen && self.workspace_before_fullscreen.is_none() {
                 self.workspace_before_fullscreen = Some(self.show_four_d_editor);
             }
             self.show_four_d_editor = false;
@@ -1256,6 +1253,22 @@ impl PealayerApp {
         } else {
             self.tr("Exit fullscreen")
         });
+    }
+
+    fn observe_fullscreen_state(&mut self, is_fullscreen: bool) {
+        if is_fullscreen && !self.was_fullscreen {
+            // set_fullscreen() may already have staged the pre-fullscreen
+            // workspace before the viewport reports its new state.
+            if self.workspace_before_fullscreen.is_none() {
+                self.workspace_before_fullscreen = Some(self.show_four_d_editor);
+            }
+            self.show_four_d_editor = false;
+        } else if !is_fullscreen && self.was_fullscreen {
+            if let Some(previous_workspace) = self.workspace_before_fullscreen.take() {
+                self.show_four_d_editor = previous_workspace;
+            }
+        }
+        self.was_fullscreen = is_fullscreen;
     }
 
     /// Performs an exact relative seek by the given number of seconds.
@@ -2064,6 +2077,28 @@ mod tests {
         let app = PealayerApp::default();
         assert!(!app.was_fullscreen);
         assert!(app.show_four_d_editor);
+    }
+
+    #[test]
+    fn rpc_fullscreen_round_trip_restores_the_staged_nle_workspace() {
+        let mut app = PealayerApp::default();
+        let ctx = egui::Context::default();
+        app.show_four_d_editor = true;
+
+        // The RPC request stages NLE before the OS reports the viewport change.
+        app.set_fullscreen(&ctx, true);
+        assert!(!app.show_four_d_editor);
+        assert_eq!(app.workspace_before_fullscreen, Some(true));
+
+        // Observing entry must not replace that target with forced Simple mode.
+        app.observe_fullscreen_state(true);
+        assert_eq!(app.workspace_before_fullscreen, Some(true));
+        assert!(!app.show_four_d_editor);
+
+        app.set_fullscreen(&ctx, false);
+        app.observe_fullscreen_state(false);
+        assert!(app.show_four_d_editor);
+        assert_eq!(app.workspace_before_fullscreen, None);
     }
 
     #[test]
