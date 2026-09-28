@@ -22,6 +22,61 @@ impl Default for AppConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StorageMode {
+    Auto,
+    Portable,
+    System,
+}
+
+pub fn detect_executable_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+}
+
+pub fn detect_storage_mode(exe_dir: &std::path::Path) -> StorageMode {
+    if std::env::var("PEALAYER_PORTABLE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+        || exe_dir.join("portable.flag").exists()
+        || exe_dir.join("pealayer.json").exists()
+        || exe_dir.join("portable.dat").exists()
+    {
+        StorageMode::Portable
+    } else {
+        StorageMode::System
+    }
+}
+
+pub fn resolve_portable_config_path(exe_dir: &std::path::Path) -> PathBuf {
+    exe_dir.join("pealayer.json")
+}
+
+pub fn resolve_system_config_path() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            return PathBuf::from(appdata).join("pealayer").join("config.json");
+        }
+        if let Ok(userprofile) = std::env::var("USERPROFILE") {
+            return PathBuf::from(userprofile)
+                .join("AppData")
+                .join("Roaming")
+                .join("pealayer")
+                .join("config.json");
+        }
+    }
+
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        return PathBuf::from(xdg).join("pealayer").join("config.json");
+    }
+
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".config").join("pealayer").join("config.json")
+}
+
 impl AppConfig {
     pub fn get_config_path() -> PathBuf {
         // 1. Portable Mode check (local executable folder flag/file)
@@ -121,4 +176,82 @@ mod tests {
         assert_eq!(loaded.recent_media.len(), 1);
         assert_eq!(loaded.recent_media[0], PathBuf::from("/test/file.mp4"));
     }
+
+    #[test]
+    fn test_detect_storage_mode_portable_flag() {
+        let temp_dir = std::env::temp_dir().join(format!("pealayer_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        std::fs::write(temp_dir.join("portable.flag"), "").unwrap();
+
+        let mode = detect_storage_mode(&temp_dir);
+        assert_eq!(mode, StorageMode::Portable);
+
+        let portable_path = resolve_portable_config_path(&temp_dir);
+        assert_eq!(portable_path, temp_dir.join("pealayer.json"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_detect_storage_mode_system_default() {
+        let temp_dir = std::env::temp_dir().join(format!("pealayer_test_sys_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let mode = detect_storage_mode(&temp_dir);
+        assert_eq!(mode, StorageMode::System);
+
+        let sys_path = resolve_system_config_path();
+        assert!(sys_path.ends_with("config.json"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_detect_storage_mode_pealayer_json() {
+        let temp_dir = std::env::temp_dir().join(format!("pealayer_test_json_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        std::fs::write(temp_dir.join("pealayer.json"), "{}").unwrap();
+
+        let mode = detect_storage_mode(&temp_dir);
+        assert_eq!(mode, StorageMode::Portable);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_detect_storage_mode_portable_dat() {
+        let temp_dir = std::env::temp_dir().join(format!("pealayer_test_dat_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        std::fs::write(temp_dir.join("portable.dat"), "").unwrap();
+
+        let mode = detect_storage_mode(&temp_dir);
+        assert_eq!(mode, StorageMode::Portable);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_detect_storage_mode_env_var() {
+        let temp_dir = std::env::temp_dir().join(format!("pealayer_test_env_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        unsafe {
+            std::env::set_var("PEALAYER_PORTABLE", "1");
+        }
+        let mode = detect_storage_mode(&temp_dir);
+        assert_eq!(mode, StorageMode::Portable);
+
+        unsafe {
+            std::env::remove_var("PEALAYER_PORTABLE");
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_detect_executable_dir() {
+        let exe_dir = detect_executable_dir();
+        assert!(exe_dir.exists());
+    }
 }
+
