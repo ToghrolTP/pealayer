@@ -123,4 +123,26 @@ fn main() {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn main() {}
+fn main() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        if let Ok(output) = std::process::Command::new("brew").args(["--prefix", "mpv"]).output() {
+            if output.status.success() {
+                let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let lib_dir = std::path::PathBuf::from(&prefix).join("lib");
+                if lib_dir.exists() {
+                    println!("cargo:rustc-link-search=native={}", lib_dir.display());
+                }
+            }
+        }
+        for path in [
+            "/opt/homebrew/lib",
+            "/opt/homebrew/opt/mpv/lib",
+            "/usr/local/lib",
+            "/usr/local/opt/mpv/lib",
+        ] {
+            if std::path::Path::new(path).exists() {
+                println!("cargo:rustc-link-search=native={path}");
+            }
+        }
+    }
+}
