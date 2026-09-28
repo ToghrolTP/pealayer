@@ -51,17 +51,19 @@ fn normalized_application_identity(identity: &str) -> String {
     identity.trim().to_lowercase()
 }
 
-fn validate_launch_destination(request: &LaunchRequest) -> Result<(), String> {
-    let expected = crate::config::resolved_app_name(&crate::config::AppConfig::load());
+fn validate_launch_destination(
+    request: &LaunchRequest,
+    expected_identity: &str,
+    expected_session_id: Option<u32>,
+) -> Result<(), String> {
     if normalized_application_identity(&request.application_identity)
-        != normalized_application_identity(&expected)
+        != normalized_application_identity(expected_identity)
     {
         return Err("launch request targets a different application identity".to_string());
     }
     #[cfg(target_os = "windows")]
     {
-        let expected_session = crate::platform::windows::current_session_id()?;
-        if request.sender_session_id != Some(expected_session) {
+        if request.sender_session_id != expected_session_id {
             return Err("launch request targets a different Windows session".to_string());
         }
     }
@@ -308,6 +310,8 @@ fn handle_client_connection<R: std::io::Read, W: Write>(
     tx: std::sync::mpsc::Sender<InteropCommand>,
     egui_ctx: eframe::egui::Context,
     launch_receipts: Arc<Mutex<LaunchReceiptCache>>,
+    expected_identity: Arc<str>,
+    expected_session_id: Option<u32>,
 ) {
     let mut line = String::new();
     while let Ok(n) = reader.read_line(&mut line) {
@@ -327,7 +331,11 @@ fn handle_client_connection<R: std::io::Read, W: Write>(
                 Ok((id, cmd)) => {
                     let operation_id = match &cmd {
                         InteropCommand::Launch { request } => {
-                            if let Err(error) = validate_launch_destination(request) {
+                            if let Err(error) = validate_launch_destination(
+                                request,
+                                &expected_identity,
+                                expected_session_id,
+                            ) {
                                 let response = format_interop_error(id, -32600, &error);
                                 let _ = writer.write_all(response.as_bytes());
                                 let _ = writer.flush();
@@ -387,13 +395,23 @@ fn handle_client_connection<R: std::io::Read, W: Write>(
     }
 }
 
-pub fn spawn_interop_listener(tx: std::sync::mpsc::Sender<InteropCommand>, egui_ctx: eframe::egui::Context) {
+pub fn spawn_interop_listener(
+    tx: std::sync::mpsc::Sender<InteropCommand>,
+    egui_ctx: eframe::egui::Context,
+    application_identity: String,
+) {
     // 1. Cross-platform loopback TCP listener. The overridable port allows
     // isolated test and screenshot profiles without displacing a live app.
     let tx_tcp = tx.clone();
     let ctx_tcp = egui_ctx.clone();
     let launch_receipts = Arc::new(Mutex::new(LaunchReceiptCache::default()));
+    let application_identity: Arc<str> = Arc::from(application_identity);
+    #[cfg(target_os = "windows")]
+    let expected_session_id = crate::platform::windows::current_session_id().ok();
+    #[cfg(not(target_os = "windows"))]
+    let expected_session_id = None;
     let tcp_launch_receipts = launch_receipts.clone();
+    let tcp_identity = application_identity.clone();
     thread::spawn(move || {
         let ipc_port = crate::config::runtime_port("PEALAYER_IPC_PORT", 8082);
         let address = format!("127.0.0.1:{ipc_port}");
@@ -403,10 +421,19 @@ pub fn spawn_interop_listener(tx: std::sync::mpsc::Sender<InteropCommand>, egui_
                     let tx_conn = tx_tcp.clone();
                     let ctx_conn = ctx_tcp.clone();
                     let receipts_conn = tcp_launch_receipts.clone();
+                    let identity_conn = tcp_identity.clone();
                     thread::spawn(move || {
                         if let Ok(read_clone) = stream.try_clone() {
                             let reader = BufReader::new(read_clone);
-                            handle_client_connection(reader, stream, tx_conn, ctx_conn, receipts_conn);
+                            handle_client_connection(
+                                reader,
+                                stream,
+                                tx_conn,
+                                ctx_conn,
+                                receipts_conn,
+                                identity_conn,
+                                expected_session_id,
+                            );
                         }
                     });
                 }
@@ -422,6 +449,7 @@ pub fn spawn_interop_listener(tx: std::sync::mpsc::Sender<InteropCommand>, egui_
         let tx_unix = tx.clone();
         let ctx_unix = egui_ctx.clone();
         let unix_launch_receipts = launch_receipts.clone();
+        let unix_identity = application_identity.clone();
         thread::spawn(move || {
             let socket_path = get_socket_path();
             if socket_path.exists() {
@@ -434,10 +462,19 @@ pub fn spawn_interop_listener(tx: std::sync::mpsc::Sender<InteropCommand>, egui_
                         let tx_conn = tx_unix.clone();
                         let ctx_conn = ctx_unix.clone();
                         let receipts_conn = unix_launch_receipts.clone();
+                        let identity_conn = unix_identity.clone();
                         thread::spawn(move || {
                             if let Ok(read_clone) = stream.try_clone() {
                                 let reader = BufReader::new(read_clone);
-                                handle_client_connection(reader, stream, tx_conn, ctx_conn, receipts_conn);
+                                handle_client_connection(
+                                    reader,
+                                    stream,
+                                    tx_conn,
+                                    ctx_conn,
+                                    receipts_conn,
+                                    identity_conn,
+                                    expected_session_id,
+                                );
                             }
                         });
                     }
@@ -449,7 +486,9 @@ pub fn spawn_interop_listener(tx: std::sync::mpsc::Sender<InteropCommand>, egui_
 
 pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<InteropCommand> {
     let (tx, rx) = channel::<InteropCommand>();
-    spawn_interop_listener(tx, egui_ctx);
+    let application_identity =
+        crate::config::resolved_app_name(&crate::config::AppConfig::load());
+    spawn_interop_listener(tx, egui_ctx, application_identity);
     rx
 }
 
@@ -831,11 +870,22 @@ mod tests {
             volume: None,
         };
         let request = crate::cli::launch_request(&options);
-        assert!(validate_launch_destination(&request).is_ok());
+        let identity = request.application_identity.clone();
+        assert!(validate_launch_destination(
+            &request,
+            &identity,
+            request.sender_session_id,
+        )
+        .is_ok());
 
         let mut other_identity = request.clone();
         other_identity.application_identity = "Different Player".to_string();
-        assert!(validate_launch_destination(&other_identity).is_err());
+        assert!(validate_launch_destination(
+            &other_identity,
+            &identity,
+            request.sender_session_id,
+        )
+        .is_err());
 
         #[cfg(target_os = "windows")]
         {
@@ -845,7 +895,12 @@ mod tests {
                     .expect("current Windows session")
                     .wrapping_add(1),
             );
-            assert!(validate_launch_destination(&other_session).is_err());
+            assert!(validate_launch_destination(
+                &other_session,
+                &identity,
+                request.sender_session_id,
+            )
+            .is_err());
         }
     }
 

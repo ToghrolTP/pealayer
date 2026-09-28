@@ -10,7 +10,9 @@ use std::time::Duration;
 fn test_loopback_tcp_interop_commands_and_status() {
     let (tx, rx) = channel::<InteropCommand>();
     let ctx = eframe::egui::Context::default();
-    spawn_interop_listener(tx, ctx);
+    let application_identity =
+        pealayer::config::resolved_app_name(&pealayer::config::AppConfig::load());
+    spawn_interop_listener(tx, ctx, application_identity);
 
     // Give background TCP listener a moment to bind
     std::thread::sleep(Duration::from_millis(100));

@@ -7,7 +7,9 @@ use std::time::Duration;
 fn test_cli_remote_and_single_instance_forwarding() {
     let (tx, rx) = channel::<InteropCommand>();
     let ctx = eframe::egui::Context::default();
-    spawn_interop_listener(tx, ctx);
+    let application_identity =
+        pealayer::config::resolved_app_name(&pealayer::config::AppConfig::load());
+    spawn_interop_listener(tx, ctx, application_identity);
 
     std::thread::sleep(Duration::from_millis(100));
 

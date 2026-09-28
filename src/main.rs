@@ -344,6 +344,7 @@ fn main() -> eframe::Result {
             crate::platform::interop::spawn_interop_listener(
                 interop_tx.clone(),
                 cc.egui_ctx.clone(),
+                app_name.clone(),
             );
 
             let http_port = crate::config::runtime_port("PEALAYER_HTTP_PORT", 8080);
