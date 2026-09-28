@@ -459,6 +459,8 @@ fn main() -> eframe::Result {
                 last_web_broadcast: None,
                 media_controls: None,
                 media_cmd_tx: interop_tx,
+                window_handle: None,
+                shell_initialized: false,
             };
 
             if let Some(target) = cli_options.target {

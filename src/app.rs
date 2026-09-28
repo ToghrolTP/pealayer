@@ -133,7 +133,7 @@ pub struct PealayerApp {
     pub(crate) last_mouse_activity: std::time::Instant,
     pub(crate) pin_controls: bool,
 
-    pub(crate) show_error: Option<String>,
+    pub show_error: Option<String>,
 
     // Subtitle state
     pub(crate) show_sub_settings: bool,
@@ -198,6 +198,8 @@ pub struct PealayerApp {
     pub(crate) last_web_broadcast: Option<std::time::Instant>,
     pub(crate) media_controls: Option<crate::platform::media_controls::MediaControlsManager>,
     pub(crate) media_cmd_tx: std::sync::mpsc::Sender<crate::platform::interop::InteropCommand>,
+    pub window_handle: Option<isize>,
+    pub shell_initialized: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -222,16 +224,22 @@ impl eframe::App for PealayerApp {
             if crate::platform::windows::get_registered_hwnd() == 0 {
                 if let Ok(handle) = frame.window_handle() {
                     if let RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
-                        crate::platform::windows::register_window_hwnd(
-                            win32_handle.hwnd.get() as isize
-                        );
+                        let hwnd = win32_handle.hwnd.get() as isize;
+                        crate::platform::windows::register_window_hwnd(hwnd);
+                        self.window_handle = Some(hwnd);
                     }
                 }
+            } else if self.window_handle.is_none() {
+                self.window_handle = Some(crate::platform::windows::get_registered_hwnd());
             }
         }
 
+        self.ensure_shell_initialized();
+
         if self.media_controls.is_none() {
-            let hwnd = crate::platform::windows::get_registered_hwnd();
+            let hwnd = self
+                .window_handle
+                .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
             self.media_controls = Some(crate::platform::media_controls::MediaControlsManager::new(
                 hwnd,
                 self.media_cmd_tx.clone(),
@@ -371,11 +379,7 @@ impl eframe::App for PealayerApp {
         let ctx = ui.ctx().clone();
 
         self.process_events();
-        crate::platform::windows::update_windows_taskbar_state(
-            self.playback_time,
-            self.duration,
-            self.is_paused,
-        );
+        self.update_shell_state();
         if let Some(ref mut mc) = self.media_controls {
             mc.update_playback(self.is_paused, self.playback_time, self.duration);
         }
@@ -384,6 +388,7 @@ impl eframe::App for PealayerApp {
         if let Ok(mut err_guard) = self.engine_handle.connection_error.try_lock() {
             if let Some(err) = err_guard.take() {
                 self.show_error = Some(err);
+                self.update_shell_state();
             }
         }
         self.is_connected = self
@@ -769,11 +774,55 @@ impl eframe::App for PealayerApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if let Some(hwnd) = self.window_handle {
+            let _ = crate::platform::windows::remove_system_tray_icon(hwnd);
+        } else {
+            let hwnd = crate::platform::windows::get_registered_hwnd();
+            if hwnd != 0 {
+                let _ = crate::platform::windows::remove_system_tray_icon(hwnd);
+            }
+        }
         self.save_config();
     }
 }
 
 impl PealayerApp {
+    /// Ensures Windows Shell components (thumbnail toolbar and system tray icon)
+    /// are initialized once a valid window handle is registered.
+    pub fn ensure_shell_initialized(&mut self) {
+        if !self.shell_initialized {
+            let hwnd = self
+                .window_handle
+                .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
+            if hwnd != 0 {
+                let _ = crate::platform::windows::init_taskbar_thumbnail_toolbar(hwnd);
+                let _ = crate::platform::windows::register_system_tray_icon(hwnd, "Pealayer");
+                self.shell_initialized = true;
+            }
+        }
+    }
+
+    /// Synchronizes playback time, duration, pause state, and error condition
+    /// with the Windows taskbar progress state and thumbnail toolbar buttons.
+    pub fn update_shell_state(&self) {
+        crate::platform::windows::update_windows_taskbar_state_ext(
+            self.playback_time,
+            self.duration,
+            self.is_paused,
+            self.show_error.is_some(),
+        );
+        let hwnd = self
+            .window_handle
+            .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
+        if hwnd != 0 {
+            let _ = crate::platform::windows::update_taskbar_thumbnail_buttons(
+                hwnd,
+                self.is_paused,
+                self.current_video_path.is_some(),
+            );
+        }
+    }
+
     /// Replaces the controller-advertised hardware snapshot used by the UI and
     /// authoring engine. Embedded transports can feed the same authoritative
     /// snapshot without reaching into the engine implementation.
@@ -978,6 +1027,7 @@ impl PealayerApp {
                 _ => break,
             }
         }
+        self.update_shell_state();
     }
 
     /// Returns true if video playback has finished (at EOF or at duration limit while paused).
@@ -1665,6 +1715,8 @@ impl Default for PealayerApp {
             last_web_broadcast: None,
             media_controls: None,
             media_cmd_tx: interop_tx,
+            window_handle: None,
+            shell_initialized: false,
         }
     }
 }
