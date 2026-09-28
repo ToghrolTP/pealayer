@@ -2,7 +2,7 @@ use pealayer::mpv::seek::{SeekBackend, SeekController, SeekMode};
 use pealayer::ui::controls::resolve_display_time;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Default)]
 struct MockSeekBackend {
@@ -16,6 +16,26 @@ impl SeekBackend for MockSeekBackend {
             thread::sleep(delay);
         }
         self.seeks.lock().unwrap().push((target_time, mode));
+    }
+}
+
+fn wait_for_seek_target(seeks: &Mutex<Vec<(f64, SeekMode)>>, target: f64) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if seeks
+            .lock()
+            .unwrap()
+            .last()
+            .is_some_and(|seek| seek.0 == target)
+        {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for seek target {target}; observed {:?}",
+            seeks.lock().unwrap().as_slice()
+        );
+        thread::sleep(Duration::from_millis(5));
     }
 }
 
@@ -57,8 +77,10 @@ fn test_seek_controller_coalesces_rapid_scrub_requests() {
         thread::sleep(Duration::from_millis(1));
     }
 
-    // Wait for worker to finish processing
-    thread::sleep(Duration::from_millis(150));
+    // Wait for the observable result instead of assuming a fixed scheduling
+    // budget. Hosted macOS runners can occasionally starve the worker beyond
+    // 150ms even though the coalescer is behaving correctly.
+    wait_for_seek_target(&seeks, 10.0);
 
     let executed = seeks.lock().unwrap().clone();
     // Because the backend takes 25ms, 10 requests should coalesce to fewer than 10 seeks
