@@ -538,6 +538,12 @@ pub fn spawn_engine() -> EngineHandle {
                     match transport.refresh_capabilities() {
                         Ok(capabilities) => {
                             if let Ok(mut guard) = engine_capabilities.lock() {
+                                let mut capabilities = capabilities;
+                                if let (Some(current), Some(ref mut refreshed)) =
+                                    (guard.as_ref(), capabilities.as_mut())
+                                {
+                                    refreshed.preserve_newer_live_led_from(current);
+                                }
                                 *guard = capabilities;
                             }
                         }
