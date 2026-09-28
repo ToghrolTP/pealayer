@@ -126,9 +126,9 @@ pub fn get_live_status() -> PlayerStatusResponse {
         }
     }
     PlayerStatusResponse {
-        status: "ok".to_string(),
+        status: "initializing".to_string(),
         playing: false,
-        volume: 100.0,
+        volume: 0.0,
         playback_time: 0.0,
         duration: 0.0,
         current_video: None,
@@ -255,11 +255,14 @@ fn handle_client_connection<R: std::io::Read, W: Write>(
 }
 
 pub fn spawn_interop_listener(tx: std::sync::mpsc::Sender<InteropCommand>, egui_ctx: eframe::egui::Context) {
-    // 1. Cross-platform loopback TCP listener on 127.0.0.1:8082
+    // 1. Cross-platform loopback TCP listener. The overridable port allows
+    // isolated test and screenshot profiles without displacing a live app.
     let tx_tcp = tx.clone();
     let ctx_tcp = egui_ctx.clone();
     thread::spawn(move || {
-        if let Ok(listener) = TcpListener::bind("127.0.0.1:8082") {
+        let ipc_port = crate::config::runtime_port("PEALAYER_IPC_PORT", 8082);
+        let address = format!("127.0.0.1:{ipc_port}");
+        if let Ok(listener) = TcpListener::bind(&address) {
             for stream in listener.incoming() {
                 if let Ok(stream) = stream {
                     let tx_conn = tx_tcp.clone();
@@ -273,7 +276,7 @@ pub fn spawn_interop_listener(tx: std::sync::mpsc::Sender<InteropCommand>, egui_
                 }
             }
         } else {
-            log::warn!("Could not bind loopback IPC TCP listener to 127.0.0.1:8082");
+            log::warn!("Could not bind loopback IPC TCP listener to {address}");
         }
     });
 
@@ -449,9 +452,9 @@ fn report_controller_instance(
                     "kind": "native",
                     "vars": {
                         "pid": std::process::id().to_string(),
-                        "rpc": "http://127.0.0.1:8080/api/rpc",
-                        "websocket": "ws://127.0.0.1:8081",
-                        "ipc": "tcp://127.0.0.1:8082",
+                        "rpc": format!("http://127.0.0.1:{}/api/rpc", crate::config::runtime_port("PEALAYER_HTTP_PORT", 8080)),
+                        "websocket": format!("ws://127.0.0.1:{}", crate::config::runtime_port("PEALAYER_WS_PORT", 8081)),
+                        "ipc": format!("tcp://127.0.0.1:{}", crate::config::runtime_port("PEALAYER_IPC_PORT", 8082)),
                     },
                 },
                 "values": {

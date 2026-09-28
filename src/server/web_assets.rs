@@ -3,7 +3,7 @@ pub const INDEX_HTML: &str = r#"<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Pealayer Web Remote &amp; Media Explorer</title>
+  <title>Web Remote</title>
   <style>
     :root {
       --bg-dark: #000000;
@@ -122,7 +122,7 @@ pub const INDEX_HTML: &str = r#"<!DOCTYPE html>
   <header>
     <div class="brand">
       <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
-      <span>Pealayer</span>
+      <span id="app-brand">Application</span>
     </div>
     
     <nav class="nav-tabs">
@@ -137,7 +137,7 @@ pub const INDEX_HTML: &str = r#"<!DOCTYPE html>
     </nav>
 
     <div class="status-badge" id="net-status">
-      <span>●</span> Connecting...
+      <span>●</span> Initializing…
     </div>
   </header>
 
@@ -153,8 +153,8 @@ pub const INDEX_HTML: &str = r#"<!DOCTYPE html>
               <button class="nav-btn" style="margin-top: 0.5rem;" onclick="switchTab('explorer')">Open Media Explorer</button>
             </div>
           </div>
-          <div class="now-title" id="lbl-title">Idle</div>
-          <div class="now-time" id="lbl-time">00:00 / 00:00</div>
+          <div class="now-title" id="lbl-title">Initializing…</div>
+          <div class="now-time" id="lbl-time">— / —</div>
         </div>
 
         <div class="seek-container">
@@ -175,8 +175,8 @@ pub const INDEX_HTML: &str = r#"<!DOCTYPE html>
 
         <div class="vol-container">
           <svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
-          <input type="range" class="vol-bar" id="vol-slider" min="0" max="130" value="100" oninput="onVol(this.value)">
-          <span id="lbl-vol" style="font-size: 0.85rem; width: 45px; text-align: right; font-family: monospace;">100%</span>
+          <input type="range" class="vol-bar" id="vol-slider" min="0" max="130" value="0" disabled oninput="onVol(this.value)">
+          <span id="lbl-vol" style="font-size: 0.85rem; width: 45px; text-align: right; font-family: monospace;">—</span>
         </div>
       </div>
     </div>
@@ -229,9 +229,22 @@ pub const INDEX_HTML: &str = r#"<!DOCTYPE html>
     let searchQuery = '';
     let toastTimer = null;
 
-    function initWS() {
+    async function initWS() {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${proto}//${location.hostname}:8081`;
+      let runtime;
+      try {
+        const response = await fetch('/api/runtime/config');
+        if (!response.ok) return;
+        runtime = await response.json();
+        document.getElementById('app-brand').textContent = runtime.appName;
+        document.title = `${runtime.appName} Web Remote`;
+        document.documentElement.lang = runtime.locale;
+        document.documentElement.dir = runtime.direction;
+      } catch (_) {
+        setTimeout(initWS, 3000);
+        return;
+      }
+      const wsUrl = `${proto}//${location.hostname}:${runtime.wsPort}`;
       
       try {
         ws = new WebSocket(wsUrl);
@@ -530,8 +543,12 @@ pub const INDEX_HTML: &str = r#"<!DOCTYPE html>
         document.getElementById('seek-slider').value = 0;
       }
       
-      document.getElementById('vol-slider').value = s.volume || 100;
-      document.getElementById('lbl-vol').innerText = `${Math.round(s.volume || 100)}%`;
+      if (Number.isFinite(s.volume)) {
+        const slider = document.getElementById('vol-slider');
+        slider.disabled = false;
+        slider.value = s.volume;
+        document.getElementById('lbl-vol').innerText = `${Math.round(s.volume)}%`;
+      }
 
       const playIcon = document.getElementById('icon-play');
       if (s.playing) {

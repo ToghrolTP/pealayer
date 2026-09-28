@@ -22,7 +22,20 @@ it created. It never stops or replaces an installed Pealayer instance.
 
 ## Linux
 
-Run from the graphical session with `xdotool` and ImageMagick `import` present:
+Run from an X11 graphical session with `xdotool`, ImageMagick `import`,
+`sha256sum`, and Git present. On Ubuntu the first two tools are normally
+provided by the `xdotool` and `imagemagick` packages. Native Wayland sessions
+do not permit the X11 window discovery/capture flow; use an Xorg login session
+or an explicitly configured XWayland test session.
+
+Validate the environment without creating an output directory or launching the
+application:
+
+```bash
+scripts/update-screenshots-linux.sh --check "$PWD/target/release/pealayer"
+```
+
+Then capture from the same signed-in graphical session:
 
 ```bash
 scripts/update-screenshots-linux.sh "$PWD/target/release/pealayer"

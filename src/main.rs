@@ -287,12 +287,37 @@ fn main() -> eframe::Result {
             let (interop_tx, interop_rx) = std::sync::mpsc::channel();
             crate::platform::interop::spawn_interop_listener(interop_tx.clone(), cc.egui_ctx.clone());
 
-            let (web_state_tx, web_cmd_rx) = crate::server::spawn_web_server(8080, 8081, cc.egui_ctx.clone());
+            let http_port = crate::config::runtime_port("PEALAYER_HTTP_PORT", 8080);
+            let ws_port = crate::config::runtime_port("PEALAYER_WS_PORT", 8081);
+            let web_runtime = crate::server::WebRuntimeConfig::production(
+                app_name.clone(),
+                ws_port,
+                match language {
+                    crate::config::AppLanguage::Persian => "fa",
+                    _ => "en",
+                }
+                .to_string(),
+                if rtl { "rtl" } else { "ltr" }.to_string(),
+                match crate::config::resolved_theme(&loaded_config) {
+                    crate::config::AppTheme::Light => "light",
+                    crate::config::AppTheme::Dark => "dark",
+                    crate::config::AppTheme::System => "system",
+                }
+                .to_string(),
+            );
+            let (web_state_tx, web_cmd_rx) = crate::server::spawn_web_server_configured(
+                http_port,
+                ws_port,
+                cc.egui_ctx.clone(),
+                web_runtime,
+            );
             let controller_cmd_rx =
                 crate::platform::interop::spawn_pccontroller_action_bridge(cc.egui_ctx.clone());
 
             let mut app = PealayerApp {
                 app_name: app_name.clone(),
+                app_publisher: crate::config::resolved_app_publisher(&loaded_config),
+                app_copyright: crate::config::resolved_app_copyright(&loaded_config),
                 last_window_title: String::new(),
                 language_preference,
                 language,

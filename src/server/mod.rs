@@ -42,11 +42,58 @@ fn web_asset_path(root: &std::path::Path, request_path: &str) -> Option<std::pat
     Some(result)
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebRuntimeConfig {
+    pub app_name: String,
+    pub version: String,
+    pub ws_port: u16,
+    pub locale: String,
+    pub direction: String,
+    pub theme: String,
+}
+
+impl WebRuntimeConfig {
+    pub fn production(app_name: String, ws_port: u16, locale: String, direction: String, theme: String) -> Self {
+        Self {
+            app_name,
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            ws_port,
+            locale,
+            direction,
+            theme,
+        }
+    }
+}
+
 pub fn spawn_web_server(http_port: u16, ws_port: u16, egui_ctx: eframe::egui::Context) -> (Sender<String>, Receiver<crate::platform::interop::InteropCommand>) {
+    spawn_web_server_configured(
+        http_port,
+        ws_port,
+        egui_ctx,
+        WebRuntimeConfig::production(
+            "Pealayer".to_string(),
+            ws_port,
+            "en".to_string(),
+            "ltr".to_string(),
+            "system".to_string(),
+        ),
+    )
+}
+
+pub fn spawn_web_server_configured(
+    http_port: u16,
+    ws_port: u16,
+    egui_ctx: eframe::egui::Context,
+    runtime_config: WebRuntimeConfig,
+) -> (Sender<String>, Receiver<crate::platform::interop::InteropCommand>) {
     let (cmd_tx, cmd_rx) = channel::<crate::platform::interop::InteropCommand>();
     let (state_tx, state_rx) = channel::<String>();
 
-    let latest_status: Arc<Mutex<String>> = Arc::new(Mutex::new("{\"status\":\"ok\",\"playing\":false,\"volume\":100.0,\"playback_time\":0.0,\"duration\":0.0}".to_string()));
+    // No player state is authoritative until the UI thread publishes its first
+    // snapshot. Keeping this as None prevents new clients from observing an
+    // invented idle/volume state during startup.
+    let latest_status: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let latest_status_clone = latest_status.clone();
 
     let ws_clients: Arc<Mutex<Vec<Sender<String>>>> = Arc::new(Mutex::new(Vec::new()));
@@ -56,7 +103,7 @@ pub fn spawn_web_server(http_port: u16, ws_port: u16, egui_ctx: eframe::egui::Co
     thread::spawn(move || {
         while let Ok(state_json) = state_rx.recv() {
             if let Ok(mut status_guard) = latest_status_clone.lock() {
-                *status_guard = state_json.clone();
+                *status_guard = Some(state_json.clone());
             }
             let mut list = ws_clients_clone.lock().unwrap();
             list.retain(|tx| tx.send(state_json.clone()).is_ok());
@@ -110,8 +157,10 @@ pub fn spawn_web_server(http_port: u16, ws_port: u16, egui_ctx: eframe::egui::Co
                                             }
                                             Ok(None) => {
                                                 let status = latest_status_conn.lock().unwrap().clone();
-                                                let value = serde_json::from_str(&status)
-                                                    .unwrap_or_else(|_| serde_json::json!({"status":"unavailable"}));
+                                                let value = status
+                                                    .as_deref()
+                                                    .and_then(|status| serde_json::from_str(status).ok())
+                                                    .unwrap_or_else(|| serde_json::json!({"status":"initializing"}));
                                                 crate::platform::interop::json_rpc_result(&request.id, value)
                                             }
                                             Err(error) => crate::platform::interop::json_rpc_error(
@@ -142,13 +191,19 @@ pub fn spawn_web_server(http_port: u16, ws_port: u16, egui_ctx: eframe::egui::Co
     let cmd_tx_http = cmd_tx.clone();
     let egui_ctx_http = egui_ctx.clone();
     let web_dist_http = web_dist_root();
+    let runtime_config_json = serde_json::to_string(&runtime_config)
+        .expect("web runtime configuration must serialize");
     thread::spawn(move || {
         let server_addr = format!("0.0.0.0:{}", http_port);
         if let Ok(server) = tiny_http::Server::http(&server_addr) {
             for mut request in server.incoming_requests() {
                 let url = request.url().to_string();
 
-                if url == "/healthz" {
+                if url == "/api/runtime/config" {
+                    let response = tiny_http::Response::from_string(runtime_config_json.clone())
+                        .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+                    let _ = request.respond(response);
+                } else if url == "/healthz" {
                     let response = tiny_http::Response::from_string(
                         "{\"status\":\"ok\",\"service\":\"pealayer\",\"rpc\":\"2.0\"}",
                     )
@@ -156,7 +211,11 @@ pub fn spawn_web_server(http_port: u16, ws_port: u16, egui_ctx: eframe::egui::Co
                     let _ = request.respond(response);
                 } else if url.starts_with("/api/player/status") {
                     let json = latest_status_http.lock().unwrap().clone();
-                    let response = tiny_http::Response::from_string(json)
+                    let (body, status_code) = json
+                        .map(|body| (body, 200))
+                        .unwrap_or_else(|| ("{\"status\":\"initializing\"}".to_string(), 503));
+                    let response = tiny_http::Response::from_string(body)
+                        .with_status_code(status_code)
                         .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
                     let _ = request.respond(response);
                 } else if url.starts_with("/api/rpc") && request.method() == &tiny_http::Method::Post {
@@ -174,8 +233,10 @@ pub fn spawn_web_server(http_port: u16, ws_port: u16, egui_ctx: eframe::egui::Co
                             }
                             Ok(None) => {
                                 let status = latest_status_http.lock().unwrap().clone();
-                                let value = serde_json::from_str(&status)
-                                    .unwrap_or_else(|_| serde_json::json!({"status":"unavailable"}));
+                                let value = status
+                                    .as_deref()
+                                    .and_then(|status| serde_json::from_str(status).ok())
+                                    .unwrap_or_else(|| serde_json::json!({"status":"initializing"}));
                                 crate::platform::interop::json_rpc_result(&rpc.id, value)
                             }
                             Err(error) => crate::platform::interop::json_rpc_error(
@@ -217,9 +278,11 @@ pub fn spawn_web_server(http_port: u16, ws_port: u16, egui_ctx: eframe::egui::Co
                         }
                     }
                     if path_opt.is_none() {
-                        if let Ok(json) = serde_json::from_str::<crate::platform::interop::PlayerStatusResponse>(&latest_status_http.lock().unwrap()) {
-                            if let Some(v_path) = json.current_video {
-                                path_opt = Some(std::path::PathBuf::from(v_path));
+                        if let Some(status) = latest_status_http.lock().unwrap().as_deref() {
+                            if let Ok(json) = serde_json::from_str::<crate::platform::interop::PlayerStatusResponse>(status) {
+                                if let Some(v_path) = json.current_video {
+                                    path_opt = Some(std::path::PathBuf::from(v_path));
+                                }
                             }
                         }
                     }

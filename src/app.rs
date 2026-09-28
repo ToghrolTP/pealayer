@@ -110,6 +110,8 @@ pub fn dropped_file_kind(path: &std::path::Path) -> DroppedFileKind {
 
 pub struct PealayerApp {
     pub(crate) app_name: String,
+    pub(crate) app_publisher: Option<String>,
+    pub(crate) app_copyright: Option<String>,
     pub(crate) last_window_title: String,
     pub(crate) language_preference: crate::config::AppLanguage,
     pub(crate) language: crate::config::AppLanguage,
@@ -618,8 +620,9 @@ impl eframe::App for PealayerApp {
                 }
 
                 if self.show_about_dialog {
-                    let language = self.language;
                     let app_name = self.app_name.clone();
+                    let app_publisher = self.app_publisher.clone();
+                    let app_copyright = self.app_copyright.clone();
                     egui::Window::new(format!("ℹ {} {}", self.tr("About"), self.app_name))
                         .collapsible(false)
                         .resizable(false)
@@ -629,15 +632,13 @@ impl eframe::App for PealayerApp {
                         .show(ui.ctx(), |ui| {
                             ui.vertical_centered(|ui| {
                                 ui.add_space(8.0);
-                                ui.heading(format!("🎬 {app_name} v0.1.0"));
-                                ui.label(egui::RichText::new(crate::ui::i18n::tr(language, "Modern 4D Video & Haptic Player")).italics());
-                                ui.add_space(10.0);
-                                ui.separator();
-                                ui.add_space(8.0);
-                                ui.label(crate::ui::i18n::tr(language, "High-performance media playback powered by libmpv2, glow OpenGL, and egui."));
-                                ui.label(crate::ui::i18n::tr(language, "Featuring real-time 4D haptic timeline synchronization and multi-track relay control."));
-                                ui.add_space(12.0);
-                                ui.label(egui::RichText::new("Copyright © 2026 Pealayer Team").small().weak());
+                                ui.heading(format!("🎬 {app_name} v{}", env!("CARGO_PKG_VERSION")));
+                                if let Some(publisher) = &app_publisher {
+                                    ui.label(publisher);
+                                }
+                                if let Some(copyright) = &app_copyright {
+                                    ui.label(egui::RichText::new(copyright).small().weak());
+                                }
                             });
                         });
                 }
@@ -1334,6 +1335,8 @@ impl Default for PealayerApp {
 
         Self {
             app_name: crate::config::resolved_app_name(&crate::config::AppConfig::default()),
+            app_publisher: crate::config::resolved_app_publisher(&crate::config::AppConfig::default()),
+            app_copyright: crate::config::resolved_app_copyright(&crate::config::AppConfig::default()),
             last_window_title: String::new(),
             language_preference: crate::config::AppLanguage::System,
             language: crate::config::resolve_language(crate::config::AppLanguage::System),
