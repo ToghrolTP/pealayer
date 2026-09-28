@@ -54,7 +54,7 @@ fn normalized_application_identity(identity: &str) -> String {
 fn validate_launch_destination(
     request: &LaunchRequest,
     expected_identity: &str,
-    expected_session_id: Option<u32>,
+    _expected_session_id: Option<u32>,
 ) -> Result<(), String> {
     if normalized_application_identity(&request.application_identity)
         != normalized_application_identity(expected_identity)
@@ -63,7 +63,7 @@ fn validate_launch_destination(
     }
     #[cfg(target_os = "windows")]
     {
-        if request.sender_session_id != expected_session_id {
+        if request.sender_session_id != _expected_session_id {
             return Err("launch request targets a different Windows session".to_string());
         }
     }
