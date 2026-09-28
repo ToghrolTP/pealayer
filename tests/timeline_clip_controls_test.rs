@@ -1,4 +1,4 @@
-use pealayer::app::{classify_clip_drag_mode, update_effect_duration, DragMode, PealayerApp};
+use pealayer::app::{DragMode, PealayerApp, classify_clip_drag_mode, update_effect_duration};
 use pealayer::four_d::models::{AtomicAction, Effect, EffectInstance, HardwareTarget};
 use uuid::Uuid;
 
@@ -8,19 +8,46 @@ fn test_classify_clip_drag_mode_left_right_and_center() {
     let clip_right = 200.0;
 
     // Left edge (within 10px)
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 100.0), DragMode::ResizeLeft);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 108.0), DragMode::ResizeLeft);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 110.0), DragMode::ResizeLeft);
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 100.0),
+        DragMode::ResizeLeft
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 108.0),
+        DragMode::ResizeLeft
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 110.0),
+        DragMode::ResizeLeft
+    );
 
     // Right edge (within 10px)
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 200.0), DragMode::ResizeRight);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 192.0), DragMode::ResizeRight);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 190.0), DragMode::ResizeRight);
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 200.0),
+        DragMode::ResizeRight
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 192.0),
+        DragMode::ResizeRight
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 190.0),
+        DragMode::ResizeRight
+    );
 
     // Center (Move)
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 150.0), DragMode::Move);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 111.0), DragMode::Move);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 189.0), DragMode::Move);
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 150.0),
+        DragMode::Move
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 111.0),
+        DragMode::Move
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 189.0),
+        DragMode::Move
+    );
 }
 
 #[test]
@@ -28,9 +55,18 @@ fn test_classify_clip_drag_mode_short_clip() {
     let clip_left = 100.0;
     let clip_right = 110.0; // 10px wide clip
     // Dynamic handle clamping to 35% of width (3.5px)
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 101.0), DragMode::ResizeLeft);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 109.0), DragMode::ResizeRight);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 105.0), DragMode::Move);
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 101.0),
+        DragMode::ResizeLeft
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 109.0),
+        DragMode::ResizeRight
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 105.0),
+        DragMode::Move
+    );
 }
 
 #[test]
@@ -40,8 +76,12 @@ fn test_template_isolation_when_shared() {
         "Shared Effect".into(),
         "💧".into(),
         1000,
-        HardwareTarget::Water,
-        vec![AtomicAction { relay_id: 1, state: true, offset_ms: 0 }],
+        HardwareTarget::Relay(1),
+        vec![AtomicAction {
+            relay_id: 1,
+            state: true,
+            offset_ms: 0,
+        }],
     );
     let tmpl_id = template.id;
     app.timeline.templates.push(template);
@@ -57,16 +97,39 @@ fn test_template_isolation_when_shared() {
     assert_eq!(app.timeline.templates.len(), 1);
 
     // Isolate inst1
-    let new_tmpl_id = app.isolate_template_for_instance(inst1_id).expect("Should isolate");
+    let new_tmpl_id = app
+        .isolate_template_for_instance(inst1_id)
+        .expect("Should isolate");
     assert_ne!(new_tmpl_id, tmpl_id);
-    assert_eq!(app.timeline.instances.iter().find(|i| i.id == inst1_id).unwrap().effect_id, new_tmpl_id);
-    assert_eq!(app.timeline.instances.iter().find(|i| i.id == inst2_id).unwrap().effect_id, tmpl_id);
+    assert_eq!(
+        app.timeline
+            .instances
+            .iter()
+            .find(|i| i.id == inst1_id)
+            .unwrap()
+            .effect_id,
+        new_tmpl_id
+    );
+    assert_eq!(
+        app.timeline
+            .instances
+            .iter()
+            .find(|i| i.id == inst2_id)
+            .unwrap()
+            .effect_id,
+        tmpl_id
+    );
     assert_eq!(app.timeline.templates.len(), 2);
 
-    let cloned_template = app.timeline.templates.iter().find(|t| t.id == new_tmpl_id).expect("Cloned template exists");
+    let cloned_template = app
+        .timeline
+        .templates
+        .iter()
+        .find(|t| t.id == new_tmpl_id)
+        .expect("Cloned template exists");
     assert_eq!(cloned_template.name, "Shared Effect");
     assert_eq!(cloned_template.duration_ms, 1000);
-    assert_eq!(cloned_template.target, HardwareTarget::Water);
+    assert_eq!(cloned_template.target, HardwareTarget::Relay(1));
 }
 
 #[test]
@@ -76,8 +139,12 @@ fn test_template_isolation_when_not_shared() {
         "Solo Effect".into(),
         "⚡".into(),
         1000,
-        HardwareTarget::Auxiliary,
-        vec![AtomicAction { relay_id: 5, state: true, offset_ms: 0 }],
+        HardwareTarget::Relay(5),
+        vec![AtomicAction {
+            relay_id: 5,
+            state: true,
+            offset_ms: 0,
+        }],
     );
     let tmpl_id = template.id;
     app.timeline.templates.push(template);
@@ -86,7 +153,9 @@ fn test_template_isolation_when_not_shared() {
     let inst_id = inst.id;
     app.timeline.instances.push(inst);
 
-    let result_tmpl_id = app.isolate_template_for_instance(inst_id).expect("Should return existing template");
+    let result_tmpl_id = app
+        .isolate_template_for_instance(inst_id)
+        .expect("Should return existing template");
     assert_eq!(result_tmpl_id, tmpl_id);
     assert_eq!(app.timeline.templates.len(), 1);
     assert_eq!(app.timeline.instances[0].effect_id, tmpl_id);
@@ -105,12 +174,28 @@ fn test_pattern_rescaling_preserves_choreography() {
         "Strobe".into(),
         "⚡".into(),
         1000,
-        HardwareTarget::Auxiliary,
+        HardwareTarget::Relay(5),
         vec![
-            AtomicAction { relay_id: 5, state: true, offset_ms: 0 },
-            AtomicAction { relay_id: 5, state: false, offset_ms: 250 },
-            AtomicAction { relay_id: 5, state: true, offset_ms: 500 },
-            AtomicAction { relay_id: 5, state: false, offset_ms: 1000 },
+            AtomicAction {
+                relay_id: 5,
+                state: true,
+                offset_ms: 0,
+            },
+            AtomicAction {
+                relay_id: 5,
+                state: false,
+                offset_ms: 250,
+            },
+            AtomicAction {
+                relay_id: 5,
+                state: true,
+                offset_ms: 500,
+            },
+            AtomicAction {
+                relay_id: 5,
+                state: false,
+                offset_ms: 1000,
+            },
         ],
     );
 
@@ -129,10 +214,18 @@ fn test_pattern_rescaling_constant_effect() {
         "Constant".into(),
         "🌊".into(),
         1000,
-        HardwareTarget::Water,
+        HardwareTarget::Relay(1),
         vec![
-            AtomicAction { relay_id: 1, state: true, offset_ms: 0 },
-            AtomicAction { relay_id: 1, state: false, offset_ms: 1000 },
+            AtomicAction {
+                relay_id: 1,
+                state: true,
+                offset_ms: 0,
+            },
+            AtomicAction {
+                relay_id: 1,
+                state: false,
+                offset_ms: 1000,
+            },
         ],
     );
 
@@ -149,10 +242,12 @@ fn test_pattern_rescaling_single_action() {
         "Single".into(),
         "💨".into(),
         500,
-        HardwareTarget::Wind,
-        vec![
-            AtomicAction { relay_id: 2, state: true, offset_ms: 0 },
-        ],
+        HardwareTarget::Relay(2),
+        vec![AtomicAction {
+            relay_id: 2,
+            state: true,
+            offset_ms: 0,
+        }],
     );
 
     update_effect_duration(&mut effect, 1200);
@@ -167,11 +262,23 @@ fn test_pattern_rescaling_with_initial_delay() {
         "Delayed Pulse".into(),
         "⚡".into(),
         1000,
-        HardwareTarget::Auxiliary,
+        HardwareTarget::Relay(5),
         vec![
-            AtomicAction { relay_id: 5, state: true, offset_ms: 200 },
-            AtomicAction { relay_id: 5, state: false, offset_ms: 600 },
-            AtomicAction { relay_id: 5, state: false, offset_ms: 1000 },
+            AtomicAction {
+                relay_id: 5,
+                state: true,
+                offset_ms: 200,
+            },
+            AtomicAction {
+                relay_id: 5,
+                state: false,
+                offset_ms: 600,
+            },
+            AtomicAction {
+                relay_id: 5,
+                state: false,
+                offset_ms: 1000,
+            },
         ],
     );
 
@@ -197,18 +304,42 @@ fn test_classify_clip_drag_mode_outer_bounds_and_clamping() {
     let clip_right = 200.0;
 
     // Pointer dragged outward past the left edge
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 95.0), DragMode::ResizeLeft);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 50.0), DragMode::ResizeLeft);
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 95.0),
+        DragMode::ResizeLeft
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 50.0),
+        DragMode::ResizeLeft
+    );
 
     // Pointer dragged outward past the right edge
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 205.0), DragMode::ResizeRight);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 250.0), DragMode::ResizeRight);
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 205.0),
+        DragMode::ResizeRight
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 250.0),
+        DragMode::ResizeRight
+    );
 
     // Exact handle boundary transitions (handle_w = 10.0)
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 110.0), DragMode::ResizeLeft);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 110.001), DragMode::Move);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 189.999), DragMode::Move);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 190.0), DragMode::ResizeRight);
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 110.0),
+        DragMode::ResizeLeft
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 110.001),
+        DragMode::Move
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 189.999),
+        DragMode::Move
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 190.0),
+        DragMode::ResizeRight
+    );
 }
 
 #[test]
@@ -221,19 +352,34 @@ fn test_press_origin_drag_mode_resolution_outward_drag() {
     // Pointer drags outward past clip boundary before drag_started threshold is crossed
     let latest_pointer_right = 365.0;
     // Resolving from press_origin correctly determines ResizeRight
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, press_origin_right), DragMode::ResizeRight);
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, press_origin_right),
+        DragMode::ResizeRight
+    );
     // Note: Outward position also resolves to ResizeRight
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, latest_pointer_right), DragMode::ResizeRight);
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, latest_pointer_right),
+        DragMode::ResizeRight
+    );
 
     // Scenario 2: User presses down on the left handle (x = 203.0)
     let press_origin_left = 203.0;
     let latest_pointer_left = 185.0; // Outward past left boundary
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, press_origin_left), DragMode::ResizeLeft);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, latest_pointer_left), DragMode::ResizeLeft);
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, press_origin_left),
+        DragMode::ResizeLeft
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, latest_pointer_left),
+        DragMode::ResizeLeft
+    );
 
     // Scenario 3: User presses center body
     let press_origin_center = 275.0;
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, press_origin_center), DragMode::Move);
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, press_origin_center),
+        DragMode::Move
+    );
 }
 
 #[test]
@@ -264,10 +410,18 @@ fn test_undo_redo_clip_resize_restores_duration_and_template() {
         "Wind Gust".into(),
         "💨".into(),
         1000,
-        HardwareTarget::Wind,
+        HardwareTarget::Relay(2),
         vec![
-            AtomicAction { relay_id: 2, state: true, offset_ms: 0 },
-            AtomicAction { relay_id: 2, state: false, offset_ms: 1000 },
+            AtomicAction {
+                relay_id: 2,
+                state: true,
+                offset_ms: 0,
+            },
+            AtomicAction {
+                relay_id: 2,
+                state: false,
+                offset_ms: 1000,
+            },
         ],
     );
     let tmpl_id = template.id;
@@ -282,27 +436,80 @@ fn test_undo_redo_clip_resize_restores_duration_and_template() {
     app.isolate_template_for_instance(inst_id);
 
     // Resize to 3500ms
-    let effect_id = app.timeline.instances.iter().find(|i| i.id == inst_id).unwrap().effect_id;
-    let tmpl = app.timeline.templates.iter_mut().find(|t| t.id == effect_id).unwrap();
+    let effect_id = app
+        .timeline
+        .instances
+        .iter()
+        .find(|i| i.id == inst_id)
+        .unwrap()
+        .effect_id;
+    let tmpl = app
+        .timeline
+        .templates
+        .iter_mut()
+        .find(|t| t.id == effect_id)
+        .unwrap();
     update_effect_duration(tmpl, 3500);
 
-    assert_eq!(app.timeline.templates.iter().find(|t| t.id == tmpl_id).unwrap().duration_ms, 3500);
+    assert_eq!(
+        app.timeline
+            .templates
+            .iter()
+            .find(|t| t.id == tmpl_id)
+            .unwrap()
+            .duration_ms,
+        3500
+    );
 
     // Undo resize
     let current = app.snapshot_timeline();
     let prev = app.undo_stack.undo(current).expect("Should undo");
     app.restore_timeline_snapshot(prev);
 
-    assert_eq!(app.timeline.templates.iter().find(|t| t.id == tmpl_id).unwrap().duration_ms, 1000);
-    assert_eq!(app.timeline.templates.iter().find(|t| t.id == tmpl_id).unwrap().actions[1].offset_ms, 1000);
+    assert_eq!(
+        app.timeline
+            .templates
+            .iter()
+            .find(|t| t.id == tmpl_id)
+            .unwrap()
+            .duration_ms,
+        1000
+    );
+    assert_eq!(
+        app.timeline
+            .templates
+            .iter()
+            .find(|t| t.id == tmpl_id)
+            .unwrap()
+            .actions[1]
+            .offset_ms,
+        1000
+    );
 
     // Redo resize
     let current = app.snapshot_timeline();
     let next = app.undo_stack.redo(current).expect("Should redo");
     app.restore_timeline_snapshot(next);
 
-    assert_eq!(app.timeline.templates.iter().find(|t| t.id == tmpl_id).unwrap().duration_ms, 3500);
-    assert_eq!(app.timeline.templates.iter().find(|t| t.id == tmpl_id).unwrap().actions[1].offset_ms, 3500);
+    assert_eq!(
+        app.timeline
+            .templates
+            .iter()
+            .find(|t| t.id == tmpl_id)
+            .unwrap()
+            .duration_ms,
+        3500
+    );
+    assert_eq!(
+        app.timeline
+            .templates
+            .iter()
+            .find(|t| t.id == tmpl_id)
+            .unwrap()
+            .actions[1]
+            .offset_ms,
+        3500
+    );
 }
 
 #[test]
@@ -312,8 +519,12 @@ fn test_undo_redo_clip_move_restores_start_time() {
         "Water Splash".into(),
         "💧".into(),
         1200,
-        HardwareTarget::Water,
-        vec![AtomicAction { relay_id: 1, state: true, offset_ms: 0 }],
+        HardwareTarget::Relay(1),
+        vec![AtomicAction {
+            relay_id: 1,
+            state: true,
+            offset_ms: 0,
+        }],
     );
     let tmpl_id = template.id;
     app.timeline.templates.push(template);
@@ -326,7 +537,12 @@ fn test_undo_redo_clip_move_restores_start_time() {
     app.undo_stack.push(app.snapshot_timeline());
 
     // Move to 3200ms
-    app.timeline.instances.iter_mut().find(|i| i.id == inst_id).unwrap().start_time_ms = 3200;
+    app.timeline
+        .instances
+        .iter_mut()
+        .find(|i| i.id == inst_id)
+        .unwrap()
+        .start_time_ms = 3200;
     assert_eq!(app.timeline.instances[0].start_time_ms, 3200);
 
     // Undo move
@@ -351,12 +567,28 @@ fn test_undo_redo_multi_action_pulse_pattern_preservation() {
         "Strobe".into(),
         "⚡".into(),
         1000,
-        HardwareTarget::Auxiliary,
+        HardwareTarget::Relay(5),
         vec![
-            AtomicAction { relay_id: 5, state: true, offset_ms: 0 },
-            AtomicAction { relay_id: 5, state: false, offset_ms: 250 },
-            AtomicAction { relay_id: 5, state: true, offset_ms: 500 },
-            AtomicAction { relay_id: 5, state: false, offset_ms: 1000 },
+            AtomicAction {
+                relay_id: 5,
+                state: true,
+                offset_ms: 0,
+            },
+            AtomicAction {
+                relay_id: 5,
+                state: false,
+                offset_ms: 250,
+            },
+            AtomicAction {
+                relay_id: 5,
+                state: true,
+                offset_ms: 500,
+            },
+            AtomicAction {
+                relay_id: 5,
+                state: false,
+                offset_ms: 1000,
+            },
         ],
     );
     let tmpl_id = template.id;
@@ -374,11 +606,18 @@ fn test_undo_redo_multi_action_pulse_pattern_preservation() {
     // 1. Snapshot taken on drag start
     app.undo_stack.push(app.snapshot_timeline());
     // 2. Template isolated
-    let isolated_tmpl_id = app.isolate_template_for_instance(inst1_id).expect("Should isolate");
+    let isolated_tmpl_id = app
+        .isolate_template_for_instance(inst1_id)
+        .expect("Should isolate");
     assert_ne!(isolated_tmpl_id, tmpl_id);
 
     // 3. Update duration of isolated template to 2000ms
-    let isolated_tmpl = app.timeline.templates.iter_mut().find(|t| t.id == isolated_tmpl_id).unwrap();
+    let isolated_tmpl = app
+        .timeline
+        .templates
+        .iter_mut()
+        .find(|t| t.id == isolated_tmpl_id)
+        .unwrap();
     update_effect_duration(isolated_tmpl, 2000);
 
     // Verify inst1's isolated template has scaled offsets
@@ -389,7 +628,12 @@ fn test_undo_redo_multi_action_pulse_pattern_preservation() {
     assert_eq!(isolated_tmpl.actions[3].offset_ms, 2000);
 
     // Sibling inst2's original template must be untouched
-    let original_tmpl = app.timeline.templates.iter().find(|t| t.id == tmpl_id).unwrap();
+    let original_tmpl = app
+        .timeline
+        .templates
+        .iter()
+        .find(|t| t.id == tmpl_id)
+        .unwrap();
     assert_eq!(original_tmpl.duration_ms, 1000);
     assert_eq!(original_tmpl.actions[1].offset_ms, 250);
     assert_eq!(original_tmpl.actions[2].offset_ms, 500);
@@ -402,12 +646,27 @@ fn test_undo_redo_multi_action_pulse_pattern_preservation() {
 
     // Both instances should now point to the original template, with original choreography
     assert_eq!(app.timeline.templates.len(), 1);
-    let inst1_restored = app.timeline.instances.iter().find(|i| i.id == inst1_id).unwrap();
-    let inst2_restored = app.timeline.instances.iter().find(|i| i.id == inst2_id).unwrap();
+    let inst1_restored = app
+        .timeline
+        .instances
+        .iter()
+        .find(|i| i.id == inst1_id)
+        .unwrap();
+    let inst2_restored = app
+        .timeline
+        .instances
+        .iter()
+        .find(|i| i.id == inst2_id)
+        .unwrap();
     assert_eq!(inst1_restored.effect_id, tmpl_id);
     assert_eq!(inst2_restored.effect_id, tmpl_id);
 
-    let tmpl_restored = app.timeline.templates.iter().find(|t| t.id == tmpl_id).unwrap();
+    let tmpl_restored = app
+        .timeline
+        .templates
+        .iter()
+        .find(|t| t.id == tmpl_id)
+        .unwrap();
     assert_eq!(tmpl_restored.duration_ms, 1000);
     assert_eq!(tmpl_restored.actions[1].offset_ms, 250);
     assert_eq!(tmpl_restored.actions[2].offset_ms, 500);
@@ -421,10 +680,18 @@ fn test_inspector_duration_slider_range_up_to_60s() {
         "Long Wind".into(),
         "💨".into(),
         5000,
-        HardwareTarget::Wind,
+        HardwareTarget::Relay(2),
         vec![
-            AtomicAction { relay_id: 2, state: true, offset_ms: 0 },
-            AtomicAction { relay_id: 2, state: false, offset_ms: 5000 },
+            AtomicAction {
+                relay_id: 2,
+                state: true,
+                offset_ms: 0,
+            },
+            AtomicAction {
+                relay_id: 2,
+                state: false,
+                offset_ms: 5000,
+            },
         ],
     );
     let tmpl_id = template.id;
@@ -442,7 +709,12 @@ fn test_inspector_duration_slider_range_up_to_60s() {
 
     // Slider set to maximum 60,000ms (60s)
     let new_dur = 60000_u64;
-    let tmpl = app.timeline.templates.iter_mut().find(|t| t.id == tmpl_id).unwrap();
+    let tmpl = app
+        .timeline
+        .templates
+        .iter_mut()
+        .find(|t| t.id == tmpl_id)
+        .unwrap();
     update_effect_duration(tmpl, new_dur);
 
     assert_eq!(tmpl.duration_ms, 60000);
@@ -454,7 +726,12 @@ fn test_inspector_duration_slider_range_up_to_60s() {
     let prev = app.undo_stack.undo(current).expect("Should undo");
     app.restore_timeline_snapshot(prev);
 
-    let restored_tmpl = app.timeline.templates.iter().find(|t| t.id == tmpl_id).unwrap();
+    let restored_tmpl = app
+        .timeline
+        .templates
+        .iter()
+        .find(|t| t.id == tmpl_id)
+        .unwrap();
     assert_eq!(restored_tmpl.duration_ms, 5000);
     assert_eq!(restored_tmpl.actions[1].offset_ms, 5000);
 }
@@ -467,28 +744,70 @@ fn test_e2e_rapid_outward_drag_classification() {
     let clip_right = 500.0_f32; // 200px wide clip, handle_w = 10px
 
     // Rapid outward drag to the right: user clicks near right handle and swiftly flicks right
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, clip_right + 50.0), DragMode::ResizeRight);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, clip_right + 150.0), DragMode::ResizeRight);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, clip_right + 1000.0), DragMode::ResizeRight);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, clip_right + 0.1), DragMode::ResizeRight);
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, clip_right + 50.0),
+        DragMode::ResizeRight
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, clip_right + 150.0),
+        DragMode::ResizeRight
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, clip_right + 1000.0),
+        DragMode::ResizeRight
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, clip_right + 0.1),
+        DragMode::ResizeRight
+    );
 
     // Rapid outward drag to the left: user clicks near left handle and swiftly flicks left
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, clip_left - 50.0), DragMode::ResizeLeft);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, clip_left - 150.0), DragMode::ResizeLeft);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, clip_left - 1000.0), DragMode::ResizeLeft);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, clip_left - 0.1), DragMode::ResizeLeft);
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, clip_left - 50.0),
+        DragMode::ResizeLeft
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, clip_left - 150.0),
+        DragMode::ResizeLeft
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, clip_left - 1000.0),
+        DragMode::ResizeLeft
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, clip_left - 0.1),
+        DragMode::ResizeLeft
+    );
 
     // Inside center body: should classify as Move
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 350.0), DragMode::Move);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 400.0), DragMode::Move);
-    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 450.0), DragMode::Move);
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 350.0),
+        DragMode::Move
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 400.0),
+        DragMode::Move
+    );
+    assert_eq!(
+        classify_clip_drag_mode(clip_left, clip_right, 450.0),
+        DragMode::Move
+    );
 
     // Verify narrow clip with clamped handles (width = 16.0, handle_w = 5.6)
     let narrow_left = 100.0_f32;
     let narrow_right = 116.0_f32;
-    assert_eq!(classify_clip_drag_mode(narrow_left, narrow_right, narrow_right + 50.0), DragMode::ResizeRight);
-    assert_eq!(classify_clip_drag_mode(narrow_left, narrow_right, narrow_left - 50.0), DragMode::ResizeLeft);
-    assert_eq!(classify_clip_drag_mode(narrow_left, narrow_right, 108.0), DragMode::Move);
+    assert_eq!(
+        classify_clip_drag_mode(narrow_left, narrow_right, narrow_right + 50.0),
+        DragMode::ResizeRight
+    );
+    assert_eq!(
+        classify_clip_drag_mode(narrow_left, narrow_right, narrow_left - 50.0),
+        DragMode::ResizeLeft
+    );
+    assert_eq!(
+        classify_clip_drag_mode(narrow_left, narrow_right, 108.0),
+        DragMode::Move
+    );
 }
 
 #[test]
@@ -504,10 +823,18 @@ fn test_e2e_resize_snapping_boundaries_to_neighbors_and_playhead() {
         "Water Cue 1".into(),
         "💧".into(),
         1000,
-        HardwareTarget::Water,
+        HardwareTarget::Relay(1),
         vec![
-            AtomicAction { relay_id: 1, state: true, offset_ms: 0 },
-            AtomicAction { relay_id: 1, state: false, offset_ms: 1000 },
+            AtomicAction {
+                relay_id: 1,
+                state: true,
+                offset_ms: 0,
+            },
+            AtomicAction {
+                relay_id: 1,
+                state: false,
+                offset_ms: 1000,
+            },
         ],
     );
     let t1_id = t1.id;
@@ -518,10 +845,18 @@ fn test_e2e_resize_snapping_boundaries_to_neighbors_and_playhead() {
         "Water Cue 2".into(),
         "💧".into(),
         1000,
-        HardwareTarget::Water,
+        HardwareTarget::Relay(1),
         vec![
-            AtomicAction { relay_id: 1, state: true, offset_ms: 0 },
-            AtomicAction { relay_id: 1, state: false, offset_ms: 1000 },
+            AtomicAction {
+                relay_id: 1,
+                state: true,
+                offset_ms: 0,
+            },
+            AtomicAction {
+                relay_id: 1,
+                state: false,
+                offset_ms: 1000,
+            },
         ],
     );
     let t2_id = t2.id;
@@ -544,7 +879,12 @@ fn test_e2e_resize_snapping_boundaries_to_neighbors_and_playhead() {
             if inst.id == active_id {
                 continue;
             }
-            if let Some(tmpl) = app.timeline.templates.iter().find(|t| t.id == inst.effect_id) {
+            if let Some(tmpl) = app
+                .timeline
+                .templates
+                .iter()
+                .find(|t| t.id == inst.effect_id)
+            {
                 targets.push(inst.start_time_ms);
                 targets.push(inst.start_time_ms + tmpl.duration_ms);
             }
@@ -578,8 +918,19 @@ fn test_e2e_resize_snapping_boundaries_to_neighbors_and_playhead() {
     assert_eq!(new_dur, 1500);
 
     // Apply duration change to inst1's template
-    let effect_id = app.timeline.instances.iter().find(|i| i.id == inst1_id).unwrap().effect_id;
-    let tmpl = app.timeline.templates.iter_mut().find(|t| t.id == effect_id).unwrap();
+    let effect_id = app
+        .timeline
+        .instances
+        .iter()
+        .find(|i| i.id == inst1_id)
+        .unwrap()
+        .effect_id;
+    let tmpl = app
+        .timeline
+        .templates
+        .iter_mut()
+        .find(|t| t.id == effect_id)
+        .unwrap();
     update_effect_duration(tmpl, new_dur);
     assert_eq!(tmpl.duration_ms, 1500);
     assert_eq!(tmpl.actions[1].offset_ms, 1500);
@@ -603,7 +954,12 @@ fn test_e2e_resize_snapping_boundaries_to_neighbors_and_playhead() {
 
     // --- Scenario C: ResizeLeft of Instance 2 snaps to Instance 1's end ---
     // Reset inst1 template duration back to 1000 (ends at 2000)
-    let tmpl1 = app.timeline.templates.iter_mut().find(|t| t.id == t1_id).unwrap();
+    let tmpl1 = app
+        .timeline
+        .templates
+        .iter_mut()
+        .find(|t| t.id == t1_id)
+        .unwrap();
     update_effect_duration(tmpl1, 1000);
     let snap_targets_for_inst2 = build_snap_targets(&app, inst2_id, playback_time);
     // snap_targets_for_inst2 contains inst1 start (1000) and inst1 end (2000)
@@ -629,11 +985,29 @@ fn test_e2e_resize_snapping_boundaries_to_neighbors_and_playhead() {
     assert_eq!(new_dur2, 1500);
 
     // Apply to inst2
-    let inst2_mut = app.timeline.instances.iter_mut().find(|i| i.id == inst2_id).unwrap();
+    let inst2_mut = app
+        .timeline
+        .instances
+        .iter_mut()
+        .find(|i| i.id == inst2_id)
+        .unwrap();
     inst2_mut.start_time_ms = snapped_start;
-    let tmpl2 = app.timeline.templates.iter_mut().find(|t| t.id == t2_id).unwrap();
+    let tmpl2 = app
+        .timeline
+        .templates
+        .iter_mut()
+        .find(|t| t.id == t2_id)
+        .unwrap();
     update_effect_duration(tmpl2, new_dur2);
-    assert_eq!(app.timeline.instances.iter().find(|i| i.id == inst2_id).unwrap().start_time_ms, 2000);
+    assert_eq!(
+        app.timeline
+            .instances
+            .iter()
+            .find(|i| i.id == inst2_id)
+            .unwrap()
+            .start_time_ms,
+        2000
+    );
     assert_eq!(tmpl2.duration_ms, 1500);
 }
 
@@ -650,10 +1024,18 @@ fn test_e2e_complete_multi_step_undo_redo_cycle() {
         "Fog Burst".into(),
         "🌫".into(),
         1000,
-        HardwareTarget::Smoke,
+        HardwareTarget::Relay(4),
         vec![
-            AtomicAction { relay_id: 4, state: true, offset_ms: 0 },
-            AtomicAction { relay_id: 4, state: false, offset_ms: 1000 },
+            AtomicAction {
+                relay_id: 4,
+                state: true,
+                offset_ms: 0,
+            },
+            AtomicAction {
+                relay_id: 4,
+                state: false,
+                offset_ms: 1000,
+            },
         ],
     );
     let tmpl_id = template.id;
@@ -673,36 +1055,104 @@ fn test_e2e_complete_multi_step_undo_redo_cycle() {
     // Recorded before operation
     app.undo_stack.push(app.snapshot_timeline());
     app.isolate_template_for_instance(inst_id);
-    let eff_id_1 = app.timeline.instances.iter().find(|i| i.id == inst_id).unwrap().effect_id;
-    let tmpl_1 = app.timeline.templates.iter_mut().find(|t| t.id == eff_id_1).unwrap();
+    let eff_id_1 = app
+        .timeline
+        .instances
+        .iter()
+        .find(|i| i.id == inst_id)
+        .unwrap()
+        .effect_id;
+    let tmpl_1 = app
+        .timeline
+        .templates
+        .iter_mut()
+        .find(|t| t.id == eff_id_1)
+        .unwrap();
     update_effect_duration(tmpl_1, 2500);
 
     // Verify Step 2 state
     assert_eq!(app.timeline.instances[0].start_time_ms, 2000);
-    assert_eq!(app.timeline.templates.iter().find(|t| t.id == eff_id_1).unwrap().duration_ms, 2500);
-    assert_eq!(app.timeline.templates.iter().find(|t| t.id == eff_id_1).unwrap().actions[1].offset_ms, 2500);
+    assert_eq!(
+        app.timeline
+            .templates
+            .iter()
+            .find(|t| t.id == eff_id_1)
+            .unwrap()
+            .duration_ms,
+        2500
+    );
+    assert_eq!(
+        app.timeline
+            .templates
+            .iter()
+            .find(|t| t.id == eff_id_1)
+            .unwrap()
+            .actions[1]
+            .offset_ms,
+        2500
+    );
 
     // Step 3: Move Clip (move start from 2000ms to 3500ms)
     app.undo_stack.push(app.snapshot_timeline());
-    app.timeline.instances.iter_mut().find(|i| i.id == inst_id).unwrap().start_time_ms = 3500;
+    app.timeline
+        .instances
+        .iter_mut()
+        .find(|i| i.id == inst_id)
+        .unwrap()
+        .start_time_ms = 3500;
 
     // Verify Step 3 state
     assert_eq!(app.timeline.instances[0].start_time_ms, 3500);
-    assert_eq!(app.timeline.templates.iter().find(|t| t.id == eff_id_1).unwrap().duration_ms, 2500);
+    assert_eq!(
+        app.timeline
+            .templates
+            .iter()
+            .find(|t| t.id == eff_id_1)
+            .unwrap()
+            .duration_ms,
+        2500
+    );
 
     // Step 4: Resize Left (trim start from 3500ms to 4200ms -> duration shrinks from 2500ms to 1800ms)
     app.undo_stack.push(app.snapshot_timeline());
     app.isolate_template_for_instance(inst_id);
-    let inst_mut = app.timeline.instances.iter_mut().find(|i| i.id == inst_id).unwrap();
+    let inst_mut = app
+        .timeline
+        .instances
+        .iter_mut()
+        .find(|i| i.id == inst_id)
+        .unwrap();
     inst_mut.start_time_ms = 4200;
     let eff_id_2 = inst_mut.effect_id;
-    let tmpl_2 = app.timeline.templates.iter_mut().find(|t| t.id == eff_id_2).unwrap();
+    let tmpl_2 = app
+        .timeline
+        .templates
+        .iter_mut()
+        .find(|t| t.id == eff_id_2)
+        .unwrap();
     update_effect_duration(tmpl_2, 1800);
 
     // Verify Step 4 state
     assert_eq!(app.timeline.instances[0].start_time_ms, 4200);
-    assert_eq!(app.timeline.templates.iter().find(|t| t.id == eff_id_2).unwrap().duration_ms, 1800);
-    assert_eq!(app.timeline.templates.iter().find(|t| t.id == eff_id_2).unwrap().actions[1].offset_ms, 1800);
+    assert_eq!(
+        app.timeline
+            .templates
+            .iter()
+            .find(|t| t.id == eff_id_2)
+            .unwrap()
+            .duration_ms,
+        1800
+    );
+    assert_eq!(
+        app.timeline
+            .templates
+            .iter()
+            .find(|t| t.id == eff_id_2)
+            .unwrap()
+            .actions[1]
+            .offset_ms,
+        1800
+    );
 
     // -------------------------------------------------------------
     // Undo Sequence (Ctrl+Z x3)
@@ -714,7 +1164,12 @@ fn test_e2e_complete_multi_step_undo_redo_cycle() {
     app.restore_timeline_snapshot(snap_step3);
     assert_eq!(app.timeline.instances[0].start_time_ms, 3500);
     let eff_id = app.timeline.instances[0].effect_id;
-    let tmpl = app.timeline.templates.iter().find(|t| t.id == eff_id).unwrap();
+    let tmpl = app
+        .timeline
+        .templates
+        .iter()
+        .find(|t| t.id == eff_id)
+        .unwrap();
     assert_eq!(tmpl.duration_ms, 2500);
     assert_eq!(tmpl.actions[1].offset_ms, 2500);
 
@@ -724,7 +1179,12 @@ fn test_e2e_complete_multi_step_undo_redo_cycle() {
     app.restore_timeline_snapshot(snap_step2);
     assert_eq!(app.timeline.instances[0].start_time_ms, 2000);
     let eff_id = app.timeline.instances[0].effect_id;
-    let tmpl = app.timeline.templates.iter().find(|t| t.id == eff_id).unwrap();
+    let tmpl = app
+        .timeline
+        .templates
+        .iter()
+        .find(|t| t.id == eff_id)
+        .unwrap();
     assert_eq!(tmpl.duration_ms, 2500);
     assert_eq!(tmpl.actions[1].offset_ms, 2500);
 
@@ -734,7 +1194,12 @@ fn test_e2e_complete_multi_step_undo_redo_cycle() {
     app.restore_timeline_snapshot(snap_step1);
     assert_eq!(app.timeline.instances[0].start_time_ms, 2000);
     let eff_id = app.timeline.instances[0].effect_id;
-    let tmpl = app.timeline.templates.iter().find(|t| t.id == eff_id).unwrap();
+    let tmpl = app
+        .timeline
+        .templates
+        .iter()
+        .find(|t| t.id == eff_id)
+        .unwrap();
     assert_eq!(tmpl.duration_ms, 1000);
     assert_eq!(tmpl.actions[1].offset_ms, 1000);
 
@@ -752,7 +1217,12 @@ fn test_e2e_complete_multi_step_undo_redo_cycle() {
     app.restore_timeline_snapshot(redo_step2);
     assert_eq!(app.timeline.instances[0].start_time_ms, 2000);
     let eff_id = app.timeline.instances[0].effect_id;
-    let tmpl = app.timeline.templates.iter().find(|t| t.id == eff_id).unwrap();
+    let tmpl = app
+        .timeline
+        .templates
+        .iter()
+        .find(|t| t.id == eff_id)
+        .unwrap();
     assert_eq!(tmpl.duration_ms, 2500);
     assert_eq!(tmpl.actions[1].offset_ms, 2500);
 
@@ -762,7 +1232,12 @@ fn test_e2e_complete_multi_step_undo_redo_cycle() {
     app.restore_timeline_snapshot(redo_step3);
     assert_eq!(app.timeline.instances[0].start_time_ms, 3500);
     let eff_id = app.timeline.instances[0].effect_id;
-    let tmpl = app.timeline.templates.iter().find(|t| t.id == eff_id).unwrap();
+    let tmpl = app
+        .timeline
+        .templates
+        .iter()
+        .find(|t| t.id == eff_id)
+        .unwrap();
     assert_eq!(tmpl.duration_ms, 2500);
     assert_eq!(tmpl.actions[1].offset_ms, 2500);
 
@@ -772,7 +1247,12 @@ fn test_e2e_complete_multi_step_undo_redo_cycle() {
     app.restore_timeline_snapshot(redo_step4);
     assert_eq!(app.timeline.instances[0].start_time_ms, 4200);
     let eff_id = app.timeline.instances[0].effect_id;
-    let tmpl = app.timeline.templates.iter().find(|t| t.id == eff_id).unwrap();
+    let tmpl = app
+        .timeline
+        .templates
+        .iter()
+        .find(|t| t.id == eff_id)
+        .unwrap();
     assert_eq!(tmpl.duration_ms, 1800);
     assert_eq!(tmpl.actions[1].offset_ms, 1800);
 
@@ -796,12 +1276,28 @@ fn test_e2e_template_isolation_under_repeated_operations() {
         "Seat Pulse".into(),
         "💺".into(),
         1200,
-        HardwareTarget::SeatVibration,
+        HardwareTarget::Relay(3),
         vec![
-            AtomicAction { relay_id: 3, state: true, offset_ms: 0 },
-            AtomicAction { relay_id: 3, state: false, offset_ms: 600 },
-            AtomicAction { relay_id: 3, state: true, offset_ms: 900 },
-            AtomicAction { relay_id: 3, state: false, offset_ms: 1200 },
+            AtomicAction {
+                relay_id: 3,
+                state: true,
+                offset_ms: 0,
+            },
+            AtomicAction {
+                relay_id: 3,
+                state: false,
+                offset_ms: 600,
+            },
+            AtomicAction {
+                relay_id: 3,
+                state: true,
+                offset_ms: 900,
+            },
+            AtomicAction {
+                relay_id: 3,
+                state: false,
+                offset_ms: 1200,
+            },
         ],
     );
     let t1_id = t1.id;
@@ -819,14 +1315,37 @@ fn test_e2e_template_isolation_under_repeated_operations() {
 
     // --- Op 1: First resize on Instance A (isolate T1 -> T2) ---
     app.undo_stack.push(app.snapshot_timeline());
-    let t2_id = app.isolate_template_for_instance(id_a).expect("Must isolate instance A");
+    let t2_id = app
+        .isolate_template_for_instance(id_a)
+        .expect("Must isolate instance A");
     assert_ne!(t2_id, t1_id);
     assert_eq!(app.timeline.templates.len(), 2);
-    assert_eq!(app.timeline.instances.iter().find(|i| i.id == id_a).unwrap().effect_id, t2_id);
-    assert_eq!(app.timeline.instances.iter().find(|i| i.id == id_b).unwrap().effect_id, t1_id);
+    assert_eq!(
+        app.timeline
+            .instances
+            .iter()
+            .find(|i| i.id == id_a)
+            .unwrap()
+            .effect_id,
+        t2_id
+    );
+    assert_eq!(
+        app.timeline
+            .instances
+            .iter()
+            .find(|i| i.id == id_b)
+            .unwrap()
+            .effect_id,
+        t1_id
+    );
 
     // Scale T2 duration to 2400ms (2x)
-    let t2 = app.timeline.templates.iter_mut().find(|t| t.id == t2_id).unwrap();
+    let t2 = app
+        .timeline
+        .templates
+        .iter_mut()
+        .find(|t| t.id == t2_id)
+        .unwrap();
     update_effect_duration(t2, 2400);
     assert_eq!(t2.duration_ms, 2400);
     assert_eq!(t2.actions[1].offset_ms, 1200); // 600 * 2
@@ -834,18 +1353,37 @@ fn test_e2e_template_isolation_under_repeated_operations() {
     assert_eq!(t2.actions[3].offset_ms, 2400);
 
     // Verify T1 is completely untouched
-    let t1_check = app.timeline.templates.iter().find(|t| t.id == t1_id).unwrap();
+    let t1_check = app
+        .timeline
+        .templates
+        .iter()
+        .find(|t| t.id == t1_id)
+        .unwrap();
     assert_eq!(t1_check.duration_ms, 1200);
     assert_eq!(t1_check.actions[1].offset_ms, 600);
     assert_eq!(t1_check.actions[3].offset_ms, 1200);
 
     // --- Op 2: Repeated resize on Instance A (already exclusive owner of T2) ---
     app.undo_stack.push(app.snapshot_timeline());
-    let t2_again = app.isolate_template_for_instance(id_a).expect("Must return T2");
-    assert_eq!(t2_again, t2_id, "Should reuse existing template when exclusive");
-    assert_eq!(app.timeline.templates.len(), 2, "No redundant template cloned");
+    let t2_again = app
+        .isolate_template_for_instance(id_a)
+        .expect("Must return T2");
+    assert_eq!(
+        t2_again, t2_id,
+        "Should reuse existing template when exclusive"
+    );
+    assert_eq!(
+        app.timeline.templates.len(),
+        2,
+        "No redundant template cloned"
+    );
 
-    let t2 = app.timeline.templates.iter_mut().find(|t| t.id == t2_id).unwrap();
+    let t2 = app
+        .timeline
+        .templates
+        .iter_mut()
+        .find(|t| t.id == t2_id)
+        .unwrap();
     update_effect_duration(t2, 3600); // 3x
     assert_eq!(t2.duration_ms, 3600);
     assert_eq!(t2.actions[1].offset_ms, 1800); // 600 * 3
@@ -860,21 +1398,68 @@ fn test_e2e_template_isolation_under_repeated_operations() {
 
     // Resize Instance C -> must isolate T2 into T3
     app.undo_stack.push(app.snapshot_timeline());
-    let t3_id = app.isolate_template_for_instance(id_c).expect("Must isolate instance C");
+    let t3_id = app
+        .isolate_template_for_instance(id_c)
+        .expect("Must isolate instance C");
     assert_ne!(t3_id, t2_id);
     assert_ne!(t3_id, t1_id);
     assert_eq!(app.timeline.templates.len(), 3);
-    assert_eq!(app.timeline.instances.iter().find(|i| i.id == id_c).unwrap().effect_id, t3_id);
-    assert_eq!(app.timeline.instances.iter().find(|i| i.id == id_a).unwrap().effect_id, t2_id);
+    assert_eq!(
+        app.timeline
+            .instances
+            .iter()
+            .find(|i| i.id == id_c)
+            .unwrap()
+            .effect_id,
+        t3_id
+    );
+    assert_eq!(
+        app.timeline
+            .instances
+            .iter()
+            .find(|i| i.id == id_a)
+            .unwrap()
+            .effect_id,
+        t2_id
+    );
 
-    let t3 = app.timeline.templates.iter_mut().find(|t| t.id == t3_id).unwrap();
+    let t3 = app
+        .timeline
+        .templates
+        .iter_mut()
+        .find(|t| t.id == t3_id)
+        .unwrap();
     update_effect_duration(t3, 4800);
     assert_eq!(t3.duration_ms, 4800);
 
     // Verify all 3 templates remain isolated with their respective durations
-    assert_eq!(app.timeline.templates.iter().find(|t| t.id == t1_id).unwrap().duration_ms, 1200);
-    assert_eq!(app.timeline.templates.iter().find(|t| t.id == t2_id).unwrap().duration_ms, 3600);
-    assert_eq!(app.timeline.templates.iter().find(|t| t.id == t3_id).unwrap().duration_ms, 4800);
+    assert_eq!(
+        app.timeline
+            .templates
+            .iter()
+            .find(|t| t.id == t1_id)
+            .unwrap()
+            .duration_ms,
+        1200
+    );
+    assert_eq!(
+        app.timeline
+            .templates
+            .iter()
+            .find(|t| t.id == t2_id)
+            .unwrap()
+            .duration_ms,
+        3600
+    );
+    assert_eq!(
+        app.timeline
+            .templates
+            .iter()
+            .find(|t| t.id == t3_id)
+            .unwrap()
+            .duration_ms,
+        4800
+    );
 
     // --- Op 4: Multi-step undo reverses isolation ---
     // Undo Op 3 (isolate and resize C)
@@ -882,20 +1467,52 @@ fn test_e2e_template_isolation_under_repeated_operations() {
     let snap3 = app.undo_stack.undo(cur).unwrap();
     app.restore_timeline_snapshot(snap3);
     assert_eq!(app.timeline.templates.len(), 2);
-    assert_eq!(app.timeline.instances.iter().find(|i| i.id == id_c).unwrap().effect_id, t2_id);
+    assert_eq!(
+        app.timeline
+            .instances
+            .iter()
+            .find(|i| i.id == id_c)
+            .unwrap()
+            .effect_id,
+        t2_id
+    );
 
     // Undo Op 2 (second resize on A)
     let cur = app.snapshot_timeline();
     let snap2 = app.undo_stack.undo(cur).unwrap();
     app.restore_timeline_snapshot(snap2);
-    assert_eq!(app.timeline.templates.iter().find(|t| t.id == t2_id).unwrap().duration_ms, 2400);
+    assert_eq!(
+        app.timeline
+            .templates
+            .iter()
+            .find(|t| t.id == t2_id)
+            .unwrap()
+            .duration_ms,
+        2400
+    );
 
     // Undo Op 1 (first resize on A, restoring single shared template)
     let cur = app.snapshot_timeline();
     let snap1 = app.undo_stack.undo(cur).unwrap();
     app.restore_timeline_snapshot(snap1);
     assert_eq!(app.timeline.templates.len(), 1);
-    assert_eq!(app.timeline.instances.iter().find(|i| i.id == id_a).unwrap().effect_id, t1_id);
-    assert_eq!(app.timeline.instances.iter().find(|i| i.id == id_b).unwrap().effect_id, t1_id);
+    assert_eq!(
+        app.timeline
+            .instances
+            .iter()
+            .find(|i| i.id == id_a)
+            .unwrap()
+            .effect_id,
+        t1_id
+    );
+    assert_eq!(
+        app.timeline
+            .instances
+            .iter()
+            .find(|i| i.id == id_b)
+            .unwrap()
+            .effect_id,
+        t1_id
+    );
     assert_eq!(app.timeline.templates[0].duration_ms, 1200);
 }

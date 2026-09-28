@@ -205,16 +205,18 @@ const App: React.FC = () => {
                 state={state}
                 sendCmd={sendCmd}
                 onOpenLibraryTab={() => setActiveTab('library')}
+                locale={runtime?.locale || 'en'}
               />
             )}
             {activeTab === 'library' && (
               <MediaLibraryTab
                 sendCmd={sendCmd}
                 onMediaPlayStarted={() => setActiveTab('remote')}
+                locale={runtime?.locale || 'en'}
               />
             )}
             {activeTab === 'info' && (
-              <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} />
+              <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} locale={runtime?.locale || 'en'} />
             )}
           </Content>
         </Layout>

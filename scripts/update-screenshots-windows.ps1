@@ -52,6 +52,12 @@ public static class PealayerScreenshotNative {
 
     [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+
+    [DllImport("user32.dll")]
+    public static extern bool PrintWindow(IntPtr hwnd, IntPtr deviceContext, uint flags);
 }
 '@
 
@@ -70,7 +76,13 @@ function Wait-MainWindow([Diagnostics.Process]$Process, [int]$TimeoutSeconds) {
     throw "Pealayer did not expose a main window within $TimeoutSeconds seconds. Run this script in the signed-in interactive desktop session."
 }
 
-function Save-WindowScreenshot([IntPtr]$Handle, [string]$Path) {
+function Save-WindowScreenshot([IntPtr]$Handle, [int]$ExpectedProcessId, [string]$Path) {
+    [uint32]$windowProcessId = 0
+    [void][PealayerScreenshotNative]::GetWindowThreadProcessId($Handle, [ref]$windowProcessId)
+    if ($windowProcessId -ne $ExpectedProcessId) {
+        throw "Refusing to capture window owned by PID $windowProcessId; expected $ExpectedProcessId."
+    }
+
     $flags = 0x0040 # SWP_SHOWWINDOW
     if (-not [PealayerScreenshotNative]::SetWindowPos($Handle, [IntPtr]::Zero, 32, 32, $Width, $Height, $flags)) {
         throw 'Could not resize the Pealayer window.'
@@ -85,16 +97,30 @@ function Save-WindowScreenshot([IntPtr]$Handle, [string]$Path) {
     $captureWidth = $rect.Right - $rect.Left
     $captureHeight = $rect.Bottom - $rect.Top
     $bitmap = New-Object Drawing.Bitmap $captureWidth, $captureHeight
+    $captureMethod = 'user32.PrintWindow(PW_RENDERFULLCONTENT)'
     try {
         $graphics = [Drawing.Graphics]::FromImage($bitmap)
         try {
-            $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
+            $deviceContext = $graphics.GetHdc()
+            try {
+                if (-not [PealayerScreenshotNative]::PrintWindow($Handle, $deviceContext, 2)) {
+                    throw 'PrintWindow did not capture the Pealayer window.'
+                }
+            } finally {
+                $graphics.ReleaseHdc($deviceContext)
+            }
         } finally {
             $graphics.Dispose()
         }
         $bitmap.Save($Path, [Drawing.Imaging.ImageFormat]::Png)
     } finally {
         $bitmap.Dispose()
+    }
+    return [ordered]@{
+        width = $captureWidth
+        height = $captureHeight
+        method = $captureMethod
+        process_id = $ExpectedProcessId
     }
 }
 
@@ -129,16 +155,17 @@ for ($localeIndex = 0; $localeIndex -lt $Locale.Count; $localeIndex++) {
         $handle = Wait-MainWindow $process $StartupTimeoutSeconds
         $fileName = "pealayer-$language-$Theme.png"
         $path = Join-Path $resolvedOutput $fileName
-        Save-WindowScreenshot $handle $path
+        $capture = Save-WindowScreenshot $handle $process.Id $path
         $captures += [ordered]@{
             file = $fileName
             locale = $language
             direction = if ($language -eq 'fa') { 'rtl' } else { 'ltr' }
             theme = $Theme
-            width = $Width
-            height = $Height
+            width = $capture.width
+            height = $capture.height
             sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant()
-            capture_method = 'System.Drawing.Graphics.CopyFromScreen'
+            capture_method = $capture.method
+            process_id = $capture.process_id
             session = 'signed-in-interactive-desktop'
         }
     } finally {
@@ -168,7 +195,7 @@ $manifest = [ordered]@{
     executable_sha256 = $executableHash
     application_name = $effectiveAppName
     isolated_profile = $true
-    capture_method = 'System.Drawing.Graphics.CopyFromScreen'
+    capture_method = 'user32.PrintWindow(PW_RENDERFULLCONTENT)'
     captures = $captures
 }
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $resolvedOutput 'manifest.json') -Encoding utf8

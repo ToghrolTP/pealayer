@@ -132,11 +132,11 @@ pub fn apply_windows_window_decorations(hwnd_raw: isize) {
             std::mem::size_of::<u32>() as u32,
         ).is_err() {
             // Fallback for Windows 11 22000: DWMWA_MICA_EFFECT = 1029
-            let mica_legacy = BOOL::from(true);
+            let mica_compat = BOOL::from(true);
             let _ = DwmSetWindowAttribute(
                 hwnd,
                 DWMWINDOWATTRIBUTE(1029),
-                &mica_legacy as *const _ as *const _,
+                &mica_compat as *const _ as *const _,
                 std::mem::size_of::<BOOL>() as u32,
             );
         }

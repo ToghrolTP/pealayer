@@ -24,7 +24,7 @@ pub struct HardwareCapabilities {
     pub board_connected: bool,
     pub board_name: String,
     pub capability_bits: u32,
-    pub active_relays: u8,
+    pub active_relays: std::collections::BTreeSet<u8>,
     pub relays: Vec<HardwareOutput>,
     pub pwm_channels: Vec<HardwareOutput>,
     pub macros: Vec<HardwareMacro>,
@@ -199,13 +199,11 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let active_relays = snapshot
+    let active_relay_bits = snapshot
         .pointer("/status/active_relays")
         .and_then(Value::as_u64)
-        .unwrap_or(0) as u8;
-    let custom_names = catalog
-        .get("peripheral_names")
-        .and_then(Value::as_object);
+        .unwrap_or(0);
+    let custom_names = catalog.get("peripheral_names").and_then(Value::as_object);
 
     let mut outputs = catalog
         .get("peripherals")
@@ -214,7 +212,10 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
         .flatten()
         .filter_map(|entry| {
             let key = entry.get("key")?.as_str()?.to_string();
-            let id = entry.get("index")?.as_u64().and_then(|id| u8::try_from(id).ok())?;
+            let id = entry
+                .get("index")?
+                .as_u64()
+                .and_then(|id| u8::try_from(id).ok())?;
             let name = custom_names
                 .and_then(|names| names.get(&key))
                 .and_then(Value::as_str)
@@ -246,9 +247,7 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
     let relays = if board_connected && capability_bits & CAPABILITY_RELAY_MOTION != 0 {
         outputs
             .iter()
-            .filter(|(kind, output)| {
-                kind == "relay" && output.control == "relay" && (1..=8).contains(&output.id)
-            })
+            .filter(|(kind, output)| kind == "relay" && output.control == "relay" && output.id != 0)
             .map(|(_, output)| output.clone())
             .collect()
     } else {
@@ -257,9 +256,7 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
     let pwm_channels = if board_connected && capability_bits & CAPABILITY_PWM != 0 {
         outputs
             .iter()
-            .filter(|(kind, output)| {
-                kind == "pwm" && output.control == "pwm-user" && output.id < 16
-            })
+            .filter(|(kind, output)| kind == "pwm" && output.control == "pwm-user")
             .map(|(_, output)| output.clone())
             .collect()
     } else {
@@ -303,6 +300,15 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
                 steps,
             })
         })
+        .collect();
+
+    let active_relays = relays
+        .iter()
+        .filter(|relay| {
+            relay.id <= u64::BITS as u8
+                && active_relay_bits & (1_u64 << u32::from(relay.id - 1)) != 0
+        })
+        .map(|relay| relay.id)
         .collect();
 
     HardwareCapabilities {
@@ -355,7 +361,10 @@ mod tests {
     #[test]
     fn discovered_endpoints_never_invent_serial_devices() {
         let endpoints = available_endpoints();
-        assert_eq!(endpoints.first().map(String::as_str), Some(DEFAULT_ENDPOINT));
+        assert_eq!(
+            endpoints.first().map(String::as_str),
+            Some(DEFAULT_ENDPOINT)
+        );
         assert!(
             endpoints
                 .iter()
@@ -406,6 +415,7 @@ mod tests {
         assert!(parsed.board_connected);
         assert_eq!(parsed.board_name, "Cinema");
         assert_eq!(parsed.relays[0].name, "Left Air");
+        assert!(parsed.active_relays.contains(&5));
         assert_eq!(parsed.pwm_channels.len(), 1);
         assert_eq!(parsed.macros[0].name, "Thunder");
     }
