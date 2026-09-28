@@ -1207,7 +1207,7 @@ mod tests {
             });
         let target = handle.controller_push_target();
         let mut ready = false;
-        let mut pending = VecDeque::new();
+        let mut pending = std::collections::VecDeque::new();
         let state = serde_json::json!({
             "jsonrpc": "2.0",
             "method": "controller.state",
