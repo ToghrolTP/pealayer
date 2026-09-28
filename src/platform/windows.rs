@@ -510,6 +510,58 @@ pub fn update_taskbar_thumbnail_buttons(
     Ok(())
 }
 
+pub fn compute_thumbnail_clip_ratio(
+    window_width: f32,
+    window_height: f32,
+    video_rect: [f32; 4],
+) -> [f32; 4] {
+    if window_width <= 0.0 || window_height <= 0.0 || window_width.is_nan() || window_height.is_nan() {
+        return [0.0, 0.0, 1.0, 1.0];
+    }
+
+    let clamp_ratio = |val: f32| -> f32 {
+        if val.is_nan() {
+            0.0
+        } else {
+            val.clamp(0.0, 1.0)
+        }
+    };
+
+    [
+        clamp_ratio(video_rect[0] / window_width),
+        clamp_ratio(video_rect[1] / window_height),
+        clamp_ratio(video_rect[2] / window_width),
+        clamp_ratio(video_rect[3] / window_height),
+    ]
+}
+
+#[cfg(target_os = "windows")]
+pub fn configure_video_taskbar_thumbnail(hwnd_raw: isize) -> Result<(), String> {
+    use windows::Win32::Foundation::{BOOL, HWND};
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_FORCE_ICONIC_REPRESENTATION};
+
+    if hwnd_raw == 0 {
+        return Err("invalid window handle (HWND is 0)".to_string());
+    }
+    let hwnd = HWND(hwnd_raw as *mut _);
+    let enable = BOOL::from(true);
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_FORCE_ICONIC_REPRESENTATION,
+            &enable as *const _ as *const _,
+            std::mem::size_of::<BOOL>() as u32,
+        )
+        .map_err(|e| format!("DwmSetWindowAttribute DWMWA_FORCE_ICONIC_REPRESENTATION failed: {e}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn configure_video_taskbar_thumbnail(_hwnd_raw: isize) -> Result<(), String> {
+    Ok(())
+}
+
 pub const WM_TRAYICON: u32 = 0x8000 + 101; // WM_APP + 101
 pub const TRAY_CMD_PLAYPAUSE: u32 = 2001;
 pub const TRAY_CMD_MUTE: u32 = 2002;
@@ -888,4 +940,37 @@ mod tests {
             assert_eq!(show_tray_popup_menu(0, false, false), None);
         }
     }
+
+    #[test]
+    fn test_compute_thumbnail_clip_ratio() {
+        let win_w = 1920.0;
+        let win_h = 1080.0;
+        let video_rect = [0.0, 100.0, 1920.0, 900.0]; // letterboxed: [min_x, min_y, max_x, max_y]
+        let ratio = compute_thumbnail_clip_ratio(win_w, win_h, video_rect);
+        assert_eq!(ratio[0], 0.0);
+        assert!((ratio[1] - (100.0 / 1080.0)).abs() < 1e-4);
+        assert_eq!(ratio[2], 1.0);
+
+        // Non-positive dimensions return default full frame
+        assert_eq!(compute_thumbnail_clip_ratio(0.0, 1080.0, video_rect), [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(compute_thumbnail_clip_ratio(1920.0, -10.0, video_rect), [0.0, 0.0, 1.0, 1.0]);
+
+        // Clamping bounds
+        let out_of_bounds = [-100.0, -50.0, 2500.0, 2000.0];
+        assert_eq!(compute_thumbnail_clip_ratio(win_w, win_h, out_of_bounds), [0.0, 0.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn test_configure_video_taskbar_thumbnail_stubs() {
+        #[cfg(target_os = "windows")]
+        {
+            assert!(configure_video_taskbar_thumbnail(0).is_err());
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(configure_video_taskbar_thumbnail(0).is_ok());
+            assert!(configure_video_taskbar_thumbnail(12345).is_ok());
+        }
+    }
 }
+
