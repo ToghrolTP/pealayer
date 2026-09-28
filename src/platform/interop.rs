@@ -722,6 +722,44 @@ fn send_action_ack(
     Ok(())
 }
 
+fn gate_controller_subscription_message(
+    message: Value,
+    subscription_ready: &mut bool,
+    pending: &mut std::collections::VecDeque<Value>,
+    push_target: &crate::four_d::engine::ControllerPushTarget,
+) -> Result<Vec<Value>, String> {
+    if *subscription_ready {
+        return Ok(vec![message]);
+    }
+    if message.get("id").and_then(Value::as_u64) == Some(1) {
+        if let Some(error) = message.get("error").filter(|value| !value.is_null()) {
+            return Err(format!("PCController subscription failed: {error}"));
+        }
+        let result = message
+            .get("result")
+            .filter(|value| value.is_object())
+            .ok_or_else(|| "PCController subscription returned no result".to_string())?;
+        if result.get("subscribed").and_then(Value::as_bool) != Some(true) {
+            return Err("PCController did not confirm the subscription".to_string());
+        }
+        let instance_id = result
+            .get("instance_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "PCController subscription omitted its host identity".to_string())?;
+        push_target.observe_source_instance(instance_id);
+        *subscription_ready = true;
+        return Ok(pending.drain(..).collect());
+    }
+    if message.get("method").and_then(Value::as_str).is_some() {
+        if pending.len() >= 256 {
+            pending.pop_front();
+        }
+        pending.push_back(message);
+    }
+    Ok(Vec::new())
+}
+
 fn run_pccontroller_action_bridge(
     tx: &std::sync::mpsc::Sender<ControllerDelivery>,
     egui_ctx: &eframe::egui::Context,
@@ -764,6 +802,8 @@ fn run_pccontroller_action_bridge(
     let mut last_report = Instant::now();
     let mut receipts = HashSet::new();
     let mut receipt_order = VecDeque::new();
+    let mut subscription_ready = false;
+    let mut pending_pre_ack = VecDeque::new();
     loop {
         if !push_target.is_alive() || push_target.websocket_endpoint().as_deref() != Some(endpoint) {
             let _ = socket.close(None);
@@ -782,56 +822,57 @@ fn run_pccontroller_action_bridge(
                 let Ok(message) = serde_json::from_str::<Value>(&text) else {
                     continue;
                 };
-                if message.get("id").and_then(Value::as_u64) == Some(1) {
-                    if let Some(instance_id) = message
-                        .pointer("/result/instance_id")
-                        .and_then(Value::as_str)
-                        && push_target.observe_source_instance(instance_id)
-                    {
-                        egui_ctx.request_repaint();
-                    }
-                    continue;
-                }
-                let Some(method) = message.get("method").and_then(Value::as_str) else {
-                    continue;
-                };
-                let params = message.get("params").unwrap_or(&Value::Null);
-                if push_target.apply_notification(method, params) {
+                let ready_messages = gate_controller_subscription_message(
+                    message,
+                    &mut subscription_ready,
+                    &mut pending_pre_ack,
+                    push_target,
+                )?;
+                if subscription_ready {
                     egui_ctx.request_repaint();
                 }
-                if !matches!(method, "controller.state" | "controller.event") {
-                    continue;
-                }
-                let Some(action) = message
-                    .get("params")
-                    .and_then(|event| controller_action_from_event(event, &instance_id))
-                else {
-                    continue;
-                };
-                let first_delivery = receipts.insert(action.receipt_key.clone());
-                if first_delivery {
-                    receipt_order.push_back(action.receipt_key.clone());
-                    if receipt_order.len() > 256 {
-                        if let Some(oldest) = receipt_order.pop_front() {
-                            receipts.remove(&oldest);
-                        }
-                    }
-                    if let Some(command) = action.command {
-                        tx.send(ControllerDelivery {
-                            command,
-                            acknowledgement: action.acknowledgement,
-                            acknowledgement_tx: acknowledgement_tx.clone(),
-                        })
-                        .map_err(|error| {
-                            format!("deliver PCController action to player: {error}")
-                        })?;
+                for message in ready_messages {
+                    let Some(method) = message.get("method").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let params = message.get("params").unwrap_or(&Value::Null);
+                    if push_target.apply_notification(method, params) {
                         egui_ctx.request_repaint();
-                    } else {
-                        send_action_ack(
-                            &mut socket,
-                            &mut next_id,
-                            action.acknowledgement,
-                        )?;
+                    }
+                    if !matches!(method, "controller.state" | "controller.event") {
+                        continue;
+                    }
+                    let Some(action) = message
+                        .get("params")
+                        .and_then(|event| controller_action_from_event(event, &instance_id))
+                    else {
+                        continue;
+                    };
+                    let first_delivery = receipts.insert(action.receipt_key.clone());
+                    if first_delivery {
+                        receipt_order.push_back(action.receipt_key.clone());
+                        if receipt_order.len() > 256 {
+                            if let Some(oldest) = receipt_order.pop_front() {
+                                receipts.remove(&oldest);
+                            }
+                        }
+                        if let Some(command) = action.command {
+                            tx.send(ControllerDelivery {
+                                command,
+                                acknowledgement: action.acknowledgement,
+                                acknowledgement_tx: acknowledgement_tx.clone(),
+                            })
+                            .map_err(|error| {
+                                format!("deliver PCController action to player: {error}")
+                            })?;
+                            egui_ctx.request_repaint();
+                        } else {
+                            send_action_ack(
+                                &mut socket,
+                                &mut next_id,
+                                action.acknowledgement,
+                            )?;
+                        }
                     }
                 }
             }
@@ -1151,5 +1192,76 @@ mod tests {
         assert!(action.command.is_none());
         assert_eq!(action.acknowledgement["state"], "rejected");
         assert_eq!(action.acknowledgement["reason"], "expired");
+    }
+
+    #[test]
+    fn controller_state_waits_for_subscription_identity_before_applying() {
+        let handle = crate::four_d::engine::spawn_engine();
+        *handle.hardware_capabilities.lock().unwrap() =
+            Some(crate::four_d::controller::HardwareCapabilities {
+                board_connected: true,
+                host_instance_id: "old-host".to_string(),
+                status_led_revision: 100,
+                status_led: Some(crate::four_d::controller::HardwareStatusLed::default()),
+                ..Default::default()
+            });
+        let target = handle.controller_push_target();
+        let mut ready = false;
+        let mut pending = VecDeque::new();
+        let state = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "controller.state",
+            "params": {
+                "kind": "status_led.changed",
+                "metadata": {
+                    "red": "1", "green": "2", "blue": "3",
+                    "brightness": "255", "effect": "0", "condition": "0",
+                    "revision": "1"
+                }
+            }
+        });
+
+        assert!(gate_controller_subscription_message(
+            state,
+            &mut ready,
+            &mut pending,
+            &target,
+        )
+        .unwrap()
+        .is_empty());
+        assert!(!ready);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            handle
+                .hardware_capabilities
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .status_led_revision,
+            100
+        );
+
+        let buffered = gate_controller_subscription_message(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"subscribed": true, "instance_id": "new-host"}
+            }),
+            &mut ready,
+            &mut pending,
+            &target,
+        )
+        .unwrap();
+        assert!(ready);
+        assert_eq!(buffered.len(), 1);
+        let params = buffered[0].get("params").unwrap();
+        assert!(target.apply_notification("controller.state", params));
+
+        let capabilities = handle.hardware_capabilities.lock().unwrap();
+        let capabilities = capabilities.as_ref().unwrap();
+        assert_eq!(capabilities.host_instance_id, "new-host");
+        assert_eq!(capabilities.status_led_revision, 1);
+        assert_eq!(capabilities.status_led.as_ref().unwrap().red, 1);
     }
 }
