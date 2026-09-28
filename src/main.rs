@@ -92,7 +92,7 @@ fn main() -> eframe::Result {
     env_logger::init();
 
     #[cfg(target_os = "windows")]
-    let mut gui_ownership = None;
+    let gui_ownership;
 
     let args: Vec<String> = std::env::args().collect();
     let cli_options = match crate::cli::parse_cli_args(args) {
@@ -157,7 +157,7 @@ fn main() -> eframe::Result {
                 loop {
                     match crate::platform::windows::acquire_gui_ownership(&app_identity) {
                         Ok(crate::platform::windows::GuiOwnership::Primary(owner)) => {
-                            gui_ownership = Some(owner);
+                            gui_ownership = owner;
                             break;
                         }
                         Ok(crate::platform::windows::GuiOwnership::Existing) => {
