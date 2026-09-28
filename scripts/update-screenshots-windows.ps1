@@ -56,6 +56,9 @@ public static class PealayerScreenshotNative {
     public static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
 
     [DllImport("user32.dll")]
+    public static extern bool LogicalToPhysicalPointForPerMonitorDPI(IntPtr hwnd, ref Point point);
+
+    [DllImport("user32.dll")]
     public static extern uint GetDpiForWindow(IntPtr hwnd);
 
     [DllImport("user32.dll")]
@@ -168,6 +171,21 @@ function Save-WindowScreenshot([IntPtr]$Handle, [int]$ExpectedProcessId, [string
     $rect.Top = $clientOrigin.Y - $caption - $border
     $rect.Right = $clientOrigin.X + ($client.Right - $client.Left) + $border
     $rect.Bottom = $clientOrigin.Y + ($client.Bottom - $client.Top) + $border
+    $physicalTopLeft = New-Object PealayerScreenshotNative+Point
+    $physicalTopLeft.X = $rect.Left
+    $physicalTopLeft.Y = $rect.Top
+    $physicalBottomRight = New-Object PealayerScreenshotNative+Point
+    $physicalBottomRight.X = $rect.Right
+    $physicalBottomRight.Y = $rect.Bottom
+    if ([PealayerScreenshotNative]::LogicalToPhysicalPointForPerMonitorDPI(
+            $Handle, [ref]$physicalTopLeft) -and
+        [PealayerScreenshotNative]::LogicalToPhysicalPointForPerMonitorDPI(
+            $Handle, [ref]$physicalBottomRight)) {
+        $rect.Left = $physicalTopLeft.X
+        $rect.Top = $physicalTopLeft.Y
+        $rect.Right = $physicalBottomRight.X
+        $rect.Bottom = $physicalBottomRight.Y
+    }
     $captureWidth = $rect.Right - $rect.Left
     $captureHeight = $rect.Bottom - $rect.Top
     $bitmap = New-Object Drawing.Bitmap $captureWidth, $captureHeight
