@@ -656,6 +656,14 @@ impl eframe::App for PealayerApp {
                 }
             });
     }
+
+    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        self.save_config();
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.save_config();
+    }
 }
 
 impl PealayerApp {
@@ -1221,6 +1229,8 @@ impl Default for PealayerApp {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn test_recent_media_deduplication_and_cap() {
         let mut list: Vec<std::path::PathBuf> = Vec::new();
@@ -1260,5 +1270,24 @@ mod tests {
         let active_drag = true;
         let is_operating = pointer_down && active_drag;
         assert!(is_operating);
+    }
+
+    struct DummyStorage;
+    impl eframe::Storage for DummyStorage {
+        fn get_string(&self, _key: &str) -> Option<String> {
+            None
+        }
+        fn set_string(&mut self, _key: &str, _value: String) {}
+        fn flush(&mut self) {}
+    }
+
+    #[test]
+    fn test_lifecycle_hooks_invoke_save_config() {
+        use eframe::App;
+        let mut app = PealayerApp::default();
+        app.volume = 95.0;
+        let mut storage = DummyStorage;
+        app.save(&mut storage);
+        app.on_exit(None);
     }
 }

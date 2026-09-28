@@ -136,6 +136,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         if ui.button(pin_title).clicked() {
             ui.close();
             app.pin_controls = !app.pin_controls;
+            app.save_config();
         }
     });
 
