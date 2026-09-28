@@ -223,6 +223,9 @@ pub fn get_live_status() -> PlayerStatusResponse {
 }
 
 pub fn get_socket_path() -> PathBuf {
+    if let Ok(path) = std::env::var("PEALAYER_SOCKET_PATH") {
+        return PathBuf::from(path);
+    }
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
         PathBuf::from(runtime_dir).join("pealayer.sock")
     } else {

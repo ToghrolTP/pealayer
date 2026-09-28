@@ -3,8 +3,11 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
+static PLAYBACK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn test_app_playback_finish_replay_and_seek() {
+    let _lock = PLAYBACK_TEST_LOCK.lock().unwrap();
     let mut app = PealayerApp::default();
     let video_path = PathBuf::from("test-data/jellyfish.mp4");
     assert!(video_path.exists(), "test video must exist");
@@ -80,6 +83,7 @@ fn test_app_playback_finish_replay_and_seek() {
 
 #[test]
 fn test_app_playback_finish_scrub_and_move_around() {
+    let _lock = PLAYBACK_TEST_LOCK.lock().unwrap();
     let mut app = PealayerApp::default();
     let video_path = PathBuf::from("test-data/jellyfish.mp4");
     assert!(video_path.exists(), "test video must exist");

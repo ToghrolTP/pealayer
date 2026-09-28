@@ -8,6 +8,10 @@ use std::time::Duration;
 
 #[test]
 fn test_loopback_tcp_interop_commands_and_status() {
+    unsafe {
+        std::env::set_var("PEALAYER_IPC_PORT", "18085");
+        std::env::set_var("PEALAYER_SOCKET_PATH", format!("/tmp/pealayer_tcp_{}.sock", std::process::id()));
+    }
     let (tx, rx) = channel::<InteropCommand>();
     let ctx = eframe::egui::Context::default();
     let application_identity =
@@ -15,9 +19,9 @@ fn test_loopback_tcp_interop_commands_and_status() {
     spawn_interop_listener(tx, ctx, application_identity);
 
     // Give background TCP listener a moment to bind
-    std::thread::sleep(Duration::from_millis(100));
+    std::thread::sleep(Duration::from_millis(150));
 
-    let mut stream = TcpStream::connect("127.0.0.1:8082").expect("Failed to connect to loopback IPC");
+    let mut stream = TcpStream::connect("127.0.0.1:18085").expect("Failed to connect to loopback IPC");
     stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
 
     // 1. Send JSON-RPC Play command
