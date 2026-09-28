@@ -214,6 +214,8 @@ jobs:
           fi
           cp "${binary_path}" "${DIST_DIR}/"
           cp README.md LICENSE "${DIST_DIR}/"
+          mkdir -p "${DIST_DIR}/assets/fonts"
+          cp assets/fonts/Vazirmatn-Regular.ttf "${DIST_DIR}/assets/fonts/"
 
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
             dll_source="${MPV_DLL_PATH//\\//}"

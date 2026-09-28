@@ -49,9 +49,9 @@ Whether designing an immersive theme park ride, an experiential 4D theater, or h
 * **Template Isolation (Copy-on-Write)**: Modifying a placed cue automatically clones the template, protecting shared library presets from unintended edits.
 * **Deep Multi-Level Undo/Redo**: Full history tracking across all moves, trims, deletions, and track relocations (`Ctrl+Z` / `Ctrl+Y`).
 * **Lasso Marquee Selection**: Click-and-drag rubber-band selection across multiple cues and keyframes simultaneously.
-* **Smart Track Auto-Routing**: Validates hardware actuator compatibility upon dropping clips (e.g., routing Water to Water or Aux relays) and alerts on track mismatches with 1-click relocation.
+* **Capability-Driven Track Routing**: Accepts and relocates cues only against the exact output IDs and names advertised by the connected PCController. No actuator roles or fallback relay mappings are invented locally.
 
-### 📈 Continuous Analog Curve Automation (PWM 0–15)
+### 📈 Continuous Analog Curve Automation
 * **High-Precision Actuator Curves**: Smooth intensity automation for variable-speed fans, proportional valves, vibration rumblers, and lighting.
 * **Three Interpolation Algorithms**:
   * **Step**: Holds value until the next keyframe.
@@ -61,9 +61,10 @@ Whether designing an immersive theme park ride, an experiential 4D theater, or h
 
 ### ⚡ Industrial Hardware Protocol Support
 * **Coordinator-First Control**: Normal output uses persistent NDJSON JSON-RPC 2.0 to PCController at `127.0.0.1:8787`; PCController remains the sole UART owner, safety authority, and board coordinator.
-* **Native Board Wire Contract**: The explicit diagnostic/fallback path uses the PCController COBS envelope (`0xA5 0x01 ... CRC-8/ATM`) with sequence correlation and 12-bit PWM values (0–4095).
+* **Native Board Wire Contract**: The explicit diagnostic/fallback path follows PCController's living COBS/TLV feature contract; PCController remains the protocol authority.
 * **Ownership Arbitration**: Direct serial is rejected while PCController is reachable unless `PEALAYER_ALLOW_DIRECT_SERIAL=1` is deliberately set for diagnostics.
-* **Live F1–F8 Digital Macro Recording**: Hold hotkeys during playback to burn physical cue activations directly into the timeline on the fly.
+* **Capability-Bound Digital Recording Shortcuts**: During playback, the available F-key positions bind in catalog order to at most the first eight outputs actually advertised by PCController. Missing outputs have no shortcut and recorded cues retain the advertised output ID and name.
+* **Controller-Owned Strip Effects**: LED-strip streams and named effects are consumed only when advertised through PCController's living capability/RPC surface. Pealayer does not carry a duplicate effect-name list or board renderer; implementation and physical proof are tracked in [PCController #390](https://github.com/atomicdeploy/PCController/issues/390).
 
 ### 🛡 Hardware Monitor & Mission-Critical Safety
 * **Emergency Stop (E-STOP)**: Global hardware software latch locking all relays and PWM lines low instantaneously.
@@ -71,19 +72,20 @@ Whether designing an immersive theme park ride, an experiential 4D theater, or h
 * **Live Actuator Telemetry**: Real-time status LEDs and manual "Force ON" overrides in the Hardware Monitor panel.
 
 ### 🌐 Built-In Web Remote Control & REST/WebSocket APIs
-* **Headless Server Engine**: Built-in HTTP server (`tiny_http` on `:8080`) and WebSocket server (`tungstenite` on `:8081`).
+* **Headless Server Engine**: Built-in loopback-only HTTP server (`tiny_http` on `127.0.0.1:8080`) and WebSocket server (`tungstenite` on `127.0.0.1:8081`). Set `PEALAYER_WEB_BIND` to a specific interface address only when remote access is intended.
 * **Mobile-Responsive Remote Web App**: Standalone SPA built with **React 19**, **TypeScript**, **Vite**, and **Ant Design 6** (`web_ui/dist`). Control playback, seek, adjust volume, and trigger E-STOP from any phone, tablet, or secondary monitor.
 * **Remote Media Library & Thumbnail Caching**: Browse server directories, inspect media durations, and view dynamically cached video thumbnails over HTTP.
 
 ### 🖥 Operating System Integration & IPC
 * **Unix Domain Socket IPC**: Direct headless automation on Linux via `/tmp/pealayer.sock` or `$XDG_RUNTIME_DIR/pealayer.sock`.
-* **Windows Loopback IPC**: Newline-delimited JSON commands and JSON-RPC 2.0 on `127.0.0.1:8082` for local automation without exposing a named pipe ACL surface.
+* **Pealayer Automation Endpoint**: Pealayer's own newline-delimited command and JSON-RPC endpoint listens on `127.0.0.1:8082`. This is distinct from the PCController coordinator endpoint on `:8787`; native local IPC/embedded transport support is tracked separately and `:8787` remains the controller fallback.
 * **Desktop File Associations**: 1-click registration as default system player for 9+ media formats (`.mp4`, `.mkv`, `.avi`, `.webm`, `.mov`, `.flv`, `.mp3`, `.flac`, `.wav`) via Windows Registry (`winreg`) and Linux FreeDesktop XDG desktop entries (`xdg-mime`).
 * **Automatic Sidecar Mounting**: Automatically discovers and loads `<video>.4d.json` timeline projects saved alongside movie files.
 * **Native Multi-File Drop**: Dropped media is opened or queued, external subtitles are attached, and timeline JSON is imported according to the actual file type.
 * **System-Aware Desktop UI**: Uses the host UI font and light/dark preference, keeps the Windows caption synchronized, and updates the window title from the active media and hardware state. `APP_NAME`, `APP_ICON` (PNG path), `APP_THEME=system|light|dark`, `APP_LOCALE=system|en|fa`, and `APP_DIRECTION=auto|ltr|rtl` override deployment branding and appearance without recompilation. These locale, direction, and theme values intentionally match PCController WebUI's appearance contract. Persian uses a bundled Vazirmatn fallback and right-to-left application chrome; live PCController board, relay, effect, and macro names remain exactly as advertised instead of being replaced with translated samples.
 * **Portable Mode**: Automatic detection of `portable.flag` or local `pealayer.json` for self-contained, configuration-free deployments on USB drives.
 * **Reproducible visual QA**: Windows and Linux screenshot update commands, artifact hashes, and stale-image checks are documented in [`docs/SCREENSHOTS.md`](docs/SCREENSHOTS.md).
+* **Documentation**: Operator, integration, packaging, localization, and troubleshooting guidance lives in the [Pealayer Wiki](https://github.com/ToghrolTP/pealayer/wiki).
 
 ---
 
@@ -121,8 +123,8 @@ flowchart TD
     end
 
     subgraph Network ["Remote Control & Network Server"]
-        HTTP["HTTP Server (tiny_http :8080)\nREST API & Thumbnail Cache"]
-        WS["WebSocket Server (tungstenite :8081)\nReal-time State Broadcast"]
+        HTTP["HTTP Server (tiny_http 127.0.0.1:8080)\nREST API & Thumbnail Cache"]
+        WS["WebSocket Server (tungstenite 127.0.0.1:8081)\nReal-time State Broadcast"]
         WebUI["React 19 Web Remote SPA\n(web_ui / Mobile & Tablet UI)"]
         IPC["Unix Domain Socket IPC\n(pealayer.sock)"]
     end
@@ -203,7 +205,8 @@ When the coordinator is unavailable, selecting a `direct:` endpoint uses:
 Pealayer embeds a high-performance web service to control playback and view media libraries over local networks.
 
 <div align="center">
-  <b>Web Remote URL:</b> <code>http://&lt;player-ip&gt;:8080/</code> &nbsp;•&nbsp; <b>WebSocket Endpoint:</b> <code>ws://&lt;player-ip&gt;:8081</code>
+  <b>Local Web Remote:</b> <code>http://127.0.0.1:8080/</code> &nbsp;•&nbsp; <b>WebSocket Endpoint:</b> <code>ws://127.0.0.1:8081</code><br>
+  For an intentionally shared LAN remote, set <code>PEALAYER_WEB_BIND</code> to the machine's interface address and use that address from the client.
 </div>
 
 ### REST Endpoints
@@ -217,7 +220,7 @@ Pealayer embeds a high-performance web service to control playback and view medi
 | `GET` | `/api/fs/browse?dir=<path>` | Lists directory entries, folders, video files, and metadata |
 | `GET` | `/api/fs/thumbnail?path=<path>` | Returns extracted, cached thumbnail image (JPEG/PNG) for media files |
 
-### WebSocket Protocol (`ws://localhost:8081`)
+### WebSocket Protocol (`ws://127.0.0.1:8081`)
 Send and receive JSON command packets in real time:
 
 ```json
@@ -275,7 +278,7 @@ To bridge virtual PTYs directly to a TCP socket:
 | `Ctrl` + `Z` | Undo last timeline edit / move / trim |
 | `Ctrl` + `Y` / `Ctrl` + `Shift` + `Z` | Redo last reverted edit |
 | `Delete` / `Backspace` | Delete selected timeline instances or keyframes |
-| `F1` to `F8` | Hold during playback to record digital macro on Relays 1 to 8 |
+| Available `F1` to `F8` positions | Hold during playback to record the correspondingly ordered PCController-advertised output; unavailable positions do nothing |
 | `W` / `S` or `Up` / `Down` | Ramp analog throttle up / down during curve recording |
 
 ---

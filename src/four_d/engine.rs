@@ -46,9 +46,8 @@ impl HardwareTransport {
                                     continue;
                                 }
                                 encoded.push(0);
-                                let decoded = crate::four_d::protocol::decode_pccontroller_frame(
-                                    &encoded,
-                                );
+                                let decoded =
+                                    crate::four_d::protocol::decode_pccontroller_frame(&encoded);
                                 encoded.clear();
                                 let Ok((opcode, response_sequence, payload)) = decoded else {
                                     continue;
@@ -74,8 +73,7 @@ impl HardwareTransport {
                         Err(error)
                             if matches!(
                                 error.kind(),
-                                std::io::ErrorKind::TimedOut
-                                    | std::io::ErrorKind::WouldBlock
+                                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
                             ) => {}
                         Err(error) => {
                             return Err(format!("direct COBS serial read failed: {error}"));
@@ -138,8 +136,7 @@ pub struct EngineHandle {
     pub serial_port: Arc<Mutex<String>>,
     pub active_transport: Arc<Mutex<Option<String>>>,
     pub connection_error: Arc<Mutex<Option<String>>>,
-    pub hardware_capabilities:
-        Arc<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
+    pub hardware_capabilities: Arc<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
     pub sender: mpsc::Sender<EngineMessage>,
 }
 
@@ -163,9 +160,9 @@ pub fn spawn_engine() -> EngineHandle {
     let active_transport_description = Arc::new(Mutex::new(None));
     let connection_error = Arc::new(Mutex::new(None));
     let hardware_capabilities = Arc::new(Mutex::new(None));
-    
+
     let (tx, rx) = mpsc::channel();
-    
+
     let engine_time = Arc::clone(&playback_time_ms);
     let engine_playing = Arc::clone(&is_playing);
     let engine_estop = Arc::clone(&estop_active);
@@ -175,7 +172,7 @@ pub fn spawn_engine() -> EngineHandle {
     let engine_transport_description = Arc::clone(&active_transport_description);
     let engine_conn_error = Arc::clone(&connection_error);
     let engine_capabilities = Arc::clone(&hardware_capabilities);
-    
+
     thread::spawn(move || {
         let mut queue: Vec<CompiledAction> = Vec::new();
         let mut current_queue_index = 0;
@@ -186,15 +183,15 @@ pub fn spawn_engine() -> EngineHandle {
         let mut last_ping = std::time::Instant::now();
         let mut last_owner_check = std::time::Instant::now();
         let mut last_capability_refresh = std::time::Instant::now();
-        
+
         let mut active_transport: Option<HardwareTransport> = None;
-        
+
         loop {
             let estop_now = engine_estop.load(Ordering::Relaxed);
             let requested = engine_connection_requested.load(Ordering::Relaxed);
             let mut connected = active_transport.is_some();
             engine_connected.store(connected, Ordering::Relaxed);
-            
+
             // Handle connection/disconnection transitions
             if requested && active_transport.is_none() {
                 let endpoint = {
@@ -205,7 +202,8 @@ pub fn spawn_engine() -> EngineHandle {
                     crate::four_d::controller::ControllerClient::connect_preferred(&endpoint)
                         .map(HardwareTransport::Controller)
                 } else {
-                    let direct_override = std::env::var_os("PEALAYER_ALLOW_DIRECT_SERIAL").is_some();
+                    let direct_override =
+                        std::env::var_os("PEALAYER_ALLOW_DIRECT_SERIAL").is_some();
                     if !direct_override
                         && crate::four_d::controller::ControllerClient::connect(
                             crate::four_d::controller::DEFAULT_ENDPOINT,
@@ -219,7 +217,9 @@ pub fn spawn_engine() -> EngineHandle {
                             .timeout(Duration::from_millis(15))
                             .open()
                             .map(|port| HardwareTransport::DirectSerial { port, sequence: 1 })
-                            .map_err(|error| format!("open direct serial endpoint {port_name}: {error}"))
+                            .map_err(|error| {
+                                format!("open direct serial endpoint {port_name}: {error}")
+                            })
                     }
                 };
                 match transport {
@@ -282,7 +282,7 @@ pub fn spawn_engine() -> EngineHandle {
                 connected = false;
                 println!("[Engine] Disconnected hardware transport");
             }
-            
+
             // Check for new messages (non-blocking)
             while let Ok(msg) = rx.try_recv() {
                 match msg {
@@ -306,7 +306,8 @@ pub fn spawn_engine() -> EngineHandle {
                                         if let Ok(mut err_guard) = engine_conn_error.lock() {
                                             *err_guard = Some(e);
                                         }
-                                        engine_connected.store(false, std::sync::atomic::Ordering::Relaxed);
+                                        engine_connected
+                                            .store(false, std::sync::atomic::Ordering::Relaxed);
                                         connected = false;
                                         active_transport = None;
                                         if let Ok(mut guard) = engine_transport_description.lock() {
@@ -376,9 +377,9 @@ pub fn spawn_engine() -> EngineHandle {
                 last_owner_check = std::time::Instant::now();
                 let coordinator_reachable =
                     crate::four_d::controller::ControllerClient::is_reachable(
-                    crate::four_d::controller::DEFAULT_ENDPOINT,
-                    Duration::from_millis(200),
-                );
+                        crate::four_d::controller::DEFAULT_ENDPOINT,
+                        Duration::from_millis(200),
+                    );
                 if should_yield_direct_transport(true, false, coordinator_reachable) {
                     if let Some(ref mut transport) = active_transport {
                         let _ = transport.send(Command::AllOff);
@@ -415,13 +416,14 @@ pub fn spawn_engine() -> EngineHandle {
                         }
                         Err(error) => {
                             if let Ok(mut guard) = engine_conn_error.lock() {
-                                *guard = Some(format!("refresh PCController capabilities: {error}"));
+                                *guard =
+                                    Some(format!("refresh PCController capabilities: {error}"));
                             }
                         }
                     }
                 }
             }
-            
+
             if estop_now && !was_estop {
                 last_pwm_values.fill(0);
                 if connected {
@@ -436,9 +438,9 @@ pub fn spawn_engine() -> EngineHandle {
                 }
             }
             was_estop = estop_now;
-            
+
             let is_playing_now = engine_playing.load(Ordering::Relaxed) && !estop_now;
-            
+
             // Handle pause state transition
             if was_playing && !is_playing_now {
                 last_pwm_values.fill(0);
@@ -454,10 +456,10 @@ pub fn spawn_engine() -> EngineHandle {
                 }
             }
             was_playing = is_playing_now;
-            
+
             if is_playing_now {
                 let current_time = engine_time.load(Ordering::Relaxed);
-                
+
                 // Process all actions that are due
                 while current_queue_index < queue.len() {
                     let action = &queue[current_queue_index];
@@ -469,7 +471,7 @@ pub fn spawn_engine() -> EngineHandle {
                             };
                             let state_str = if action.state { "ON" } else { "OFF" };
                             println!("[{}] {}:{}", port_name, action.relay_id, state_str);
-                            
+
                             if let Some(ref mut transport) = active_transport {
                                 let cmd = Command::RelaySet {
                                     id: action.relay_id,
@@ -514,7 +516,7 @@ pub fn spawn_engine() -> EngineHandle {
                     }
                 }
             }
-            
+
             // Periodic watchdog heartbeat (every 50ms when connected)
             if connected
                 && active_transport
@@ -527,7 +529,7 @@ pub fn spawn_engine() -> EngineHandle {
                 }
                 last_ping = std::time::Instant::now();
             }
-            
+
             thread::sleep(Duration::from_millis(5));
         }
     });
@@ -546,59 +548,78 @@ pub fn spawn_engine() -> EngineHandle {
     }
 }
 
-pub fn compile_timeline(timeline: &Timeline, muted: &[bool; 9], soloed: &[bool; 9]) -> Vec<CompiledAction> {
+pub fn compile_timeline(
+    timeline: &Timeline,
+    muted: &std::collections::BTreeSet<u8>,
+    soloed: &std::collections::BTreeSet<u8>,
+) -> Vec<CompiledAction> {
     let mut compiled = Vec::new();
-    
+
     let mut interesting_times: Vec<u64> = Vec::new();
-    
+
     for instance in &timeline.instances {
-        if let Some(effect) = timeline.templates.iter().find(|t| t.id == instance.effect_id) {
+        if let Some(effect) = timeline
+            .templates
+            .iter()
+            .find(|t| t.id == instance.effect_id)
+        {
             interesting_times.push(instance.start_time_ms);
             interesting_times.push(instance.start_time_ms + effect.duration_ms);
-            
+
             for action in &effect.actions {
                 interesting_times.push(instance.start_time_ms + action.offset_ms);
             }
         }
     }
-    
+
     interesting_times.sort_unstable();
     interesting_times.dedup();
-    
-    // Track the currently emitted state of each relay (1-8)
-    let mut current_relay_states = [false; 9]; // index 0 is unused
-    
-    let has_solo = soloed.iter().any(|&s| s);
-    
+
+    let relay_ids = timeline
+        .templates
+        .iter()
+        .flat_map(|effect| effect.actions.iter().map(|action| action.relay_id))
+        .filter(|relay_id| *relay_id != 0)
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut current_relay_states = std::collections::BTreeMap::<u8, bool>::new();
+
+    let has_solo = !soloed.is_empty();
+
     for &t in &interesting_times {
         // Evaluate desired state based on Z-Index
-        for relay_id in 1..=8 {
+        for relay_id in relay_ids.iter().copied() {
             let mut desired_state = false;
-            
-            let is_ignored = muted[relay_id as usize] || (has_solo && !soloed[relay_id as usize]);
-            
+
+            let is_ignored = muted.contains(&relay_id) || (has_solo && !soloed.contains(&relay_id));
+
             if !is_ignored {
                 // Reverse order = highest Z-index first
                 for instance in timeline.instances.iter().rev() {
-                    if let Some(effect) = timeline.templates.iter().find(|tmpl| tmpl.id == instance.effect_id) {
+                    if let Some(effect) = timeline
+                        .templates
+                        .iter()
+                        .find(|tmpl| tmpl.id == instance.effect_id)
+                    {
                         let end_time = instance.start_time_ms + effect.duration_ms;
-                        
+
                         if t >= instance.start_time_ms && t < end_time {
                             let offset_t = t - instance.start_time_ms;
-                            
+
                             let mut latest_action_state = None;
                             let mut max_offset = 0;
-                            
+
                             for action in &effect.actions {
                                 if action.relay_id == relay_id && action.offset_ms <= offset_t {
                                     // Find the action closest to the current time within this effect
-                                    if latest_action_state.is_none() || action.offset_ms >= max_offset {
+                                    if latest_action_state.is_none()
+                                        || action.offset_ms >= max_offset
+                                    {
                                         max_offset = action.offset_ms;
                                         latest_action_state = Some(action.state);
                                     }
                                 }
                             }
-                            
+
                             if let Some(state) = latest_action_state {
                                 desired_state = state;
                                 break; // Stop looking at lower layers
@@ -607,40 +628,55 @@ pub fn compile_timeline(timeline: &Timeline, muted: &[bool; 9], soloed: &[bool; 
                     }
                 }
             }
-            
-            if desired_state != current_relay_states[relay_id as usize] {
+
+            if desired_state
+                != current_relay_states
+                    .get(&relay_id)
+                    .copied()
+                    .unwrap_or(false)
+            {
                 compiled.push(CompiledAction {
                     time_ms: t,
                     relay_id,
                     state: desired_state,
                 });
-                current_relay_states[relay_id as usize] = desired_state;
+                current_relay_states.insert(relay_id, desired_state);
             }
         }
     }
-    
+
     compiled
 }
 
-pub fn evaluate_relay_state(timeline: &Timeline, relay_id: u8, t_ms: u64, muted: &[bool; 9], soloed: &[bool; 9]) -> bool {
-    let has_solo = soloed.iter().any(|&s| s);
-    if muted[relay_id as usize] || (has_solo && !soloed[relay_id as usize]) {
+pub fn evaluate_relay_state(
+    timeline: &Timeline,
+    relay_id: u8,
+    t_ms: u64,
+    muted: &std::collections::BTreeSet<u8>,
+    soloed: &std::collections::BTreeSet<u8>,
+) -> bool {
+    let has_solo = !soloed.is_empty();
+    if muted.contains(&relay_id) || (has_solo && !soloed.contains(&relay_id)) {
         return false;
     }
-    
+
     let mut desired_state = false;
-    
+
     // Reverse order = highest Z-index first
     for instance in timeline.instances.iter().rev() {
-        if let Some(effect) = timeline.templates.iter().find(|tmpl| tmpl.id == instance.effect_id) {
+        if let Some(effect) = timeline
+            .templates
+            .iter()
+            .find(|tmpl| tmpl.id == instance.effect_id)
+        {
             let end_time = instance.start_time_ms + effect.duration_ms;
-            
+
             if t_ms >= instance.start_time_ms && t_ms < end_time {
                 let offset_t = t_ms - instance.start_time_ms;
-                
+
                 let mut latest_action_state = None;
                 let mut max_offset = 0;
-                
+
                 for action in &effect.actions {
                     if action.relay_id == relay_id && action.offset_ms <= offset_t {
                         if latest_action_state.is_none() || action.offset_ms >= max_offset {
@@ -649,7 +685,7 @@ pub fn evaluate_relay_state(timeline: &Timeline, relay_id: u8, t_ms: u64, muted:
                         }
                     }
                 }
-                
+
                 if let Some(state) = latest_action_state {
                     desired_state = state;
                     break; // Stop looking at lower layers
@@ -657,14 +693,14 @@ pub fn evaluate_relay_state(timeline: &Timeline, relay_id: u8, t_ms: u64, muted:
             }
         }
     }
-    
+
     desired_state
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::four_d::models::{Timeline, Effect, EffectInstance, AtomicAction};
+    use crate::four_d::models::{AtomicAction, Effect, EffectInstance, Timeline};
 
     #[test]
     fn test_compile_timeline_basic() {
@@ -674,25 +710,33 @@ mod tests {
             "🧪".to_string(),
             1000,
             vec![
-                AtomicAction { relay_id: 1, state: true, offset_ms: 0 },
-                AtomicAction { relay_id: 1, state: false, offset_ms: 1000 },
+                AtomicAction {
+                    relay_id: 1,
+                    state: true,
+                    offset_ms: 0,
+                },
+                AtomicAction {
+                    relay_id: 1,
+                    state: false,
+                    offset_ms: 1000,
+                },
             ],
         );
         let effect_id = effect.id;
         timeline.templates.push(effect);
-        
+
         let instance = EffectInstance::new(effect_id, 500);
         timeline.instances.push(instance);
-        
-        let muted = [false; 9];
-        let soloed = [false; 9];
+
+        let muted = std::collections::BTreeSet::new();
+        let soloed = std::collections::BTreeSet::new();
         let compiled = compile_timeline(&timeline, &muted, &soloed);
-        
+
         assert_eq!(compiled.len(), 2);
         assert_eq!(compiled[0].time_ms, 500);
         assert_eq!(compiled[0].relay_id, 1);
         assert_eq!(compiled[0].state, true);
-        
+
         assert_eq!(compiled[1].time_ms, 1500);
         assert_eq!(compiled[1].relay_id, 1);
         assert_eq!(compiled[1].state, false);
@@ -701,49 +745,69 @@ mod tests {
     #[test]
     fn test_compile_timeline_overlap() {
         let mut timeline = Timeline::new();
-        
+
         // Effect A: relay 1 ON at 0, OFF at 1000
         let effect_a = Effect::new(
             "Effect A".to_string(),
             "A".to_string(),
             1000,
             vec![
-                AtomicAction { relay_id: 1, state: true, offset_ms: 0 },
-                AtomicAction { relay_id: 1, state: false, offset_ms: 1000 },
+                AtomicAction {
+                    relay_id: 1,
+                    state: true,
+                    offset_ms: 0,
+                },
+                AtomicAction {
+                    relay_id: 1,
+                    state: false,
+                    offset_ms: 1000,
+                },
             ],
         );
         let id_a = effect_a.id;
         timeline.templates.push(effect_a);
-        
+
         // Effect B: relay 1 OFF at 0, ON at 500, OFF at 1000 (effectively starts OFF then turns ON)
         let effect_b = Effect::new(
             "Effect B".to_string(),
             "B".to_string(),
             1000,
             vec![
-                AtomicAction { relay_id: 1, state: false, offset_ms: 0 },
-                AtomicAction { relay_id: 1, state: true, offset_ms: 500 },
-                AtomicAction { relay_id: 1, state: false, offset_ms: 1000 },
+                AtomicAction {
+                    relay_id: 1,
+                    state: false,
+                    offset_ms: 0,
+                },
+                AtomicAction {
+                    relay_id: 1,
+                    state: true,
+                    offset_ms: 500,
+                },
+                AtomicAction {
+                    relay_id: 1,
+                    state: false,
+                    offset_ms: 1000,
+                },
             ],
         );
         let id_b = effect_b.id;
         timeline.templates.push(effect_b);
-        
+
         // Instance A placed at 0ms.
         timeline.instances.push(EffectInstance::new(id_a, 0));
         // Instance B placed at 200ms. Since it is pushed later, it has higher Z-index.
         timeline.instances.push(EffectInstance::new(id_b, 200));
-        
-        let muted = [false; 9];
-        let soloed = [false; 9];
-        
+
+        let muted = std::collections::BTreeSet::new();
+        let soloed = std::collections::BTreeSet::new();
+
         // Let's verify state at 300ms.
         // For Instance A (offset 300): it should be ON.
         // For Instance B (offset 100): it should be OFF.
         // Since Instance B has higher Z-index, the state at 300ms should be OFF.
         let state_300 = evaluate_relay_state(&timeline, 1, 300, &muted, &soloed);
         assert_eq!(state_300, false);
-        
+
         // At 800ms:
         // Instance A (offset 800): ON
         // Instance B (offset 600): ON
@@ -759,29 +823,35 @@ mod tests {
             "🧪".to_string(),
             1000,
             vec![
-                AtomicAction { relay_id: 1, state: true, offset_ms: 0 },
-                AtomicAction { relay_id: 2, state: true, offset_ms: 0 },
+                AtomicAction {
+                    relay_id: 1,
+                    state: true,
+                    offset_ms: 0,
+                },
+                AtomicAction {
+                    relay_id: 2,
+                    state: true,
+                    offset_ms: 0,
+                },
             ],
         );
         let effect_id = effect.id;
         timeline.templates.push(effect);
         timeline.instances.push(EffectInstance::new(effect_id, 500));
-        
+
         // Mute Relay 1
-        let mut muted = [false; 9];
-        muted[1] = true;
-        let soloed = [false; 9];
-        
+        let muted = std::collections::BTreeSet::from([1]);
+        let soloed = std::collections::BTreeSet::new();
+
         let compiled = compile_timeline(&timeline, &muted, &soloed);
         // Only Relay 2 should produce compiled actions
         assert!(compiled.iter().all(|act| act.relay_id != 1));
         assert!(compiled.iter().any(|act| act.relay_id == 2));
-        
+
         // Solo Relay 1
-        let muted = [false; 9];
-        let mut soloed = [false; 9];
-        soloed[1] = true;
-        
+        let muted = std::collections::BTreeSet::new();
+        let soloed = std::collections::BTreeSet::from([1]);
+
         let compiled = compile_timeline(&timeline, &muted, &soloed);
         // Only Relay 1 should produce compiled actions since it is soloed
         assert!(compiled.iter().any(|act| act.relay_id == 1));
@@ -793,9 +863,16 @@ mod tests {
         let handle = spawn_engine();
         assert!(!handle.connection_requested.load(Ordering::Relaxed));
         assert!(!handle.is_connected.load(Ordering::Relaxed));
-        let res = handle.sender.send(EngineMessage::SendCommand(Command::PwmSet { channel: 1, value: 200 }));
+        let res = handle
+            .sender
+            .send(EngineMessage::SendCommand(Command::PwmSet {
+                channel: 1,
+                value: 200,
+            }));
         assert!(res.is_ok());
-        let res_all_off = handle.sender.send(EngineMessage::SendCommand(Command::AllOff));
+        let res_all_off = handle
+            .sender
+            .send(EngineMessage::SendCommand(Command::AllOff));
         assert!(res_all_off.is_ok());
     }
 
@@ -808,7 +885,9 @@ mod tests {
             0.5,
             crate::four_d::curve::Interpolation::Linear,
         ));
-        let res = handle.sender.send(EngineMessage::UpdateAnalogTracks(vec![track]));
+        let res = handle
+            .sender
+            .send(EngineMessage::UpdateAnalogTracks(vec![track]));
         assert!(res.is_ok());
     }
 

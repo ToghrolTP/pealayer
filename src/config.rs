@@ -279,22 +279,7 @@ impl AppConfig {
             }
         }
 
-        // Transparent Migration from legacy recent.json if present
-        let legacy_path = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
-            .join(".config")
-            .join("pealayer")
-            .join("recent.json");
-
-        let mut config = Self::default();
-        if legacy_path.exists() {
-            if let Ok(data) = std::fs::read_to_string(&legacy_path) {
-                if let Ok(list) = serde_json::from_str::<Vec<PathBuf>>(&data) {
-                    config.recent_media = list;
-                }
-            }
-        }
-
-        config
+        Self::default()
     }
 
     pub fn save(&self) {

@@ -10,6 +10,7 @@ import {
   VideoCameraOutlined,
   FieldTimeOutlined,
 } from '@ant-design/icons';
+import { tr, UiLocale } from '../i18n';
 
 const { Title, Text } = Typography;
 
@@ -26,12 +27,14 @@ interface RemoteControlTabProps {
   state: PlayerState;
   sendCmd: (command: string, payload?: Record<string, any>) => void;
   onOpenLibraryTab?: () => void;
+  locale: UiLocale;
 }
 
 export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
   state,
   sendCmd,
   onOpenLibraryTab,
+  locale,
 }) => {
   const [frameTimestamp, setFrameTimestamp] = useState<number>(Date.now());
   const [isMuted, setIsMuted] = useState<boolean>(false);
@@ -46,15 +49,18 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
     }
   }, [state.playing]);
 
-  const formatTime = (sec: number = 0) => {
+  const formatTime = (sec?: number) => {
+    if (sec === undefined) return '—';
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60);
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
   const videoName = state.current_video
-    ? state.current_video.split('/').pop()?.split('\\').pop() || 'Untitled'
-    : 'No Media Playing';
+    ? state.current_video.split('/').pop()?.split('\\').pop() || tr(locale, 'Untitled')
+    : state.current_video === null
+      ? tr(locale, 'No Media Playing')
+      : tr(locale, 'Initializing…');
 
   const [isDraggingSeek, setIsDraggingSeek] = useState<boolean>(false);
   const [dragSeekVal, setDragSeekVal] = useState<number>(0);
@@ -69,7 +75,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
     sendCmd('seek_abs', { percentage: val });
     if (state.duration && state.duration > 0) {
       const targetSec = (val / 100) * state.duration;
-      message.info(`Seeked to ${formatTime(targetSec)}`);
+      message.info(`${tr(locale, 'Seeked to')} ${formatTime(targetSec)}`);
     }
   };
 
@@ -84,13 +90,13 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
       if (previousVolume === undefined) return;
       sendCmd('set_volume', { level: previousVolume });
       setIsMuted(false);
-      message.info(`Volume unmuted to ${Math.round(previousVolume)}%`);
+      message.info(`${tr(locale, 'Volume unmuted to')} ${Math.round(previousVolume)}%`);
     } else {
       if (state.volume === undefined) return;
       setPreviousVolume(state.volume);
       sendCmd('set_volume', { level: 0 });
       setIsMuted(true);
-      message.info('Volume muted');
+      message.info(tr(locale, 'Volume muted'));
     }
   };
 
@@ -131,7 +137,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
             {state.current_video ? (
               <img
                 src={`/api/player/frame?t=${frameTimestamp}`}
-                alt="Video Preview"
+                alt={tr(locale, 'Video Preview')}
                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 onError={(e) => {
                   (e.target as HTMLElement).style.display = 'none';
@@ -141,11 +147,11 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
               <Space direction="vertical" align="center">
                 <VideoCameraOutlined style={{ fontSize: 48, color: '#53a2be' }} />
                 <Text type="secondary" style={{ fontSize: 14 }}>
-                  No Media Active
+                  {state.current_video === null ? tr(locale, 'No Media Active') : tr(locale, 'Initializing…')}
                 </Text>
                 {onOpenLibraryTab && (
                   <Button type="primary" size="small" onClick={onOpenLibraryTab} style={{ marginTop: 8, backgroundColor: '#1d84b5' }}>
-                    Browse Media Library
+                    {tr(locale, 'Browse Media Library')}
                   </Button>
                 )}
               </Space>
@@ -167,7 +173,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
             <Col span={8}>
               <Card size="small" style={{ background: '#0a2239', border: '1px solid rgba(23, 96, 135, 0.2)' }}>
                 <Statistic
-                  title={<Text type="secondary" style={{ fontSize: 12 }}>Time</Text>}
+                  title={<Text type="secondary" style={{ fontSize: 12 }}>{tr(locale, 'Time')}</Text>}
                   value={formatTime(state.playback_time)}
                   prefix={<FieldTimeOutlined style={{ color: '#53a2be' }} />}
                   valueStyle={{ fontSize: 16, color: '#f8fafc', fontFamily: 'monospace' }}
@@ -177,8 +183,8 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
             <Col span={8}>
               <Card size="small" style={{ background: '#0a2239', border: '1px solid rgba(23, 96, 135, 0.2)' }}>
                 <Statistic
-                  title={<Text type="secondary" style={{ fontSize: 12 }}>Status</Text>}
-                  value={state.playing ? 'Playing' : 'Paused'}
+                  title={<Text type="secondary" style={{ fontSize: 12 }}>{tr(locale, 'Status')}</Text>}
+                  value={state.playing === true ? tr(locale, 'Playing') : state.playing === false ? tr(locale, 'Paused') : tr(locale, 'Initializing…')}
                   valueStyle={{ fontSize: 16, color: state.playing ? '#22c55e' : '#f59e0b' }}
                 />
               </Card>
@@ -186,7 +192,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
             <Col span={8}>
               <Card size="small" style={{ background: '#0a2239', border: '1px solid rgba(23, 96, 135, 0.2)' }}>
                 <Statistic
-                  title={<Text type="secondary" style={{ fontSize: 12 }}>Volume</Text>}
+                  title={<Text type="secondary" style={{ fontSize: 12 }}>{tr(locale, 'Volume')}</Text>}
                   value={state.volume === undefined ? '—' : Math.round(state.volume)}
                   suffix="%"
                   prefix={<SoundOutlined style={{ color: '#1d84b5' }} />}
@@ -200,6 +206,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
           <div style={{ marginBottom: 24, padding: '0 4px' }}>
             <Slider
               value={isDraggingSeek ? dragSeekVal : seekPercent}
+              disabled={state.duration === undefined || state.playback_time === undefined}
               onChange={handleSeekChange}
               onAfterChange={handleSeekAfterChange}
               tooltip={{ formatter: (val) => `${val?.toFixed(0)}%` }}
@@ -211,21 +218,21 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
           {/* Control Buttons */}
           <Row justify="center" align="middle" gutter={24} style={{ marginBottom: 24 }}>
             <Col>
-              <Tooltip title="Seek -10s">
+              <Tooltip title={tr(locale, 'Seek -10s')}>
                 <Button
                   shape="circle"
                   size="large"
                   icon={<FastBackwardOutlined />}
                   onClick={() => {
                     sendCmd('seek', { seconds: -10 });
-                    message.info('Seeked -10 seconds');
+                    message.info(tr(locale, 'Seeked -10 seconds'));
                   }}
                   style={{ background: '#0a2239', borderColor: '#176087', color: '#f8fafc' }}
                 />
               </Tooltip>
             </Col>
             <Col>
-              <Tooltip title={state.playing ? 'Pause' : 'Play'}>
+              <Tooltip title={state.playing ? tr(locale, 'Pause') : tr(locale, 'Play')}>
                 <Button
                   shape="circle"
                   style={{
@@ -245,20 +252,20 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
                   }
                   onClick={() => {
                     sendCmd('toggle_pause');
-                    message.success(state.playing ? 'Paused' : 'Playing');
+                    message.success(state.playing ? tr(locale, 'Paused') : tr(locale, 'Playing'));
                   }}
                 />
               </Tooltip>
             </Col>
             <Col>
-              <Tooltip title="Seek +10s">
+              <Tooltip title={tr(locale, 'Seek +10s')}>
                 <Button
                   shape="circle"
                   size="large"
                   icon={<FastForwardOutlined />}
                   onClick={() => {
                     sendCmd('seek', { seconds: 10 });
-                    message.info('Seeked +10 seconds');
+                    message.info(tr(locale, 'Seeked +10 seconds'));
                   }}
                   style={{ background: '#0a2239', borderColor: '#176087', color: '#f8fafc' }}
                 />

@@ -38,8 +38,17 @@ $systemRustBin = Join-Path $env:ProgramFiles 'Rust\bin'
 if (Test-Path -LiteralPath (Join-Path $systemRustBin 'cargo.exe')) {
     $env:Path = $systemRustBin + ';' + $env:Path
 }
-$releaseDirectory = Join-Path $repositoryRoot 'target\release'
-$stagingDirectory = Join-Path $repositoryRoot 'target\package-windows'
+$cargoTargetDirectory = if ($env:CARGO_TARGET_DIR) {
+    if ([System.IO.Path]::IsPathRooted($env:CARGO_TARGET_DIR)) {
+        [System.IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
+    } else {
+        [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot $env:CARGO_TARGET_DIR))
+    }
+} else {
+    Join-Path $repositoryRoot 'target'
+}
+$releaseDirectory = Join-Path $cargoTargetDirectory 'release'
+$stagingDirectory = Join-Path $cargoTargetDirectory 'package-windows'
 $sourceDirectory = Split-Path -Parent $repositoryRoot
 $outputDirectory = if ((Split-Path -Leaf $sourceDirectory) -ieq 'source') {
     Join-Path (Split-Path -Parent $sourceDirectory) 'bin'
@@ -135,6 +144,14 @@ if ($smoke.ExitCode -ne 0) { throw "Packaged Pealayer/libmpv smoke test failed w
 
 Copy-Item -LiteralPath $stagedExecutable -Destination $outputDirectory -Force
 Copy-Item -LiteralPath $stagedRuntime -Destination $outputDirectory -Force
+$fontSource = Join-Path $repositoryRoot 'assets\fonts\Vazirmatn-Regular.ttf'
+if (-not (Test-Path -LiteralPath $fontSource -PathType Leaf)) {
+    throw "Bundled Persian fallback font is missing: $fontSource"
+}
+$fontDirectory = Join-Path $outputDirectory 'assets\fonts'
+New-Item -ItemType Directory -Force -Path $fontDirectory | Out-Null
+$packagedFont = Join-Path $fontDirectory 'Vazirmatn-Regular.ttf'
+Copy-Item -LiteralPath $fontSource -Destination $packagedFont -Force
 $webDistribution = Join-Path $repositoryRoot 'web_ui\dist'
 $webUiPackaged = $false
 if (Test-Path -LiteralPath (Join-Path $webDistribution 'index.html')) {
@@ -144,7 +161,7 @@ if (Test-Path -LiteralPath (Join-Path $webDistribution 'index.html')) {
     $webUiPackaged = $true
 }
 
-$artifacts = @($effectiveExecutableFile,'libmpv-2.dll') | ForEach-Object {
+$artifacts = @($effectiveExecutableFile,'libmpv-2.dll','assets/fonts/Vazirmatn-Regular.ttf') | ForEach-Object {
     $path = Join-Path $outputDirectory $_
     [ordered]@{
         path = $_

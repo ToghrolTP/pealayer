@@ -3,11 +3,11 @@
 pub mod app;
 pub mod cli;
 pub mod config;
+pub mod four_d;
 pub mod mpv;
 pub mod platform;
 pub mod server;
 pub mod ui;
-pub mod four_d;
 
 use app::PealayerApp;
 use eframe::egui;
@@ -40,7 +40,7 @@ fn configure_ui_fonts(context: &egui::Context) {
     fonts.font_data.insert(
         "pealayer-vazirmatn".to_owned(),
         Arc::new(egui::FontData::from_static(include_bytes!(
-            "../test-data/vazirmatn/Vazirmatn-Regular.ttf"
+            "../assets/fonts/Vazirmatn-Regular.ttf"
         ))),
     );
     let proportional = fonts
@@ -58,6 +58,24 @@ fn configure_ui_fonts(context: &egui::Context) {
     }
 
     context.set_fonts(fonts);
+}
+
+fn subtitle_font_directory() -> Option<std::path::PathBuf> {
+    let packaged = std::env::current_exe()
+        .ok()
+        .and_then(|executable| {
+            executable
+                .parent()
+                .map(|directory| directory.join("assets/fonts"))
+        })
+        .filter(|directory| directory.join("Vazirmatn-Regular.ttf").is_file());
+    packaged.or_else(|| {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/fonts");
+        source
+            .join("Vazirmatn-Regular.ttf")
+            .is_file()
+            .then_some(source)
+    })
 }
 
 fn main() -> eframe::Result {
@@ -83,22 +101,23 @@ fn main() -> eframe::Result {
             println!("{}", ver);
             return Ok(());
         }
-        Ok(crate::cli::CliAction::SendRemote(cmd)) => {
-            match crate::cli::send_remote_command(&cmd) {
-                Ok(resp) => {
-                    println!("{}", resp);
-                    return Ok(());
-                }
-                Err(e) => {
-                    eprintln!("{}", e);
-                    std::process::exit(1);
-                }
+        Ok(crate::cli::CliAction::SendRemote(cmd)) => match crate::cli::send_remote_command(&cmd) {
+            Ok(resp) => {
+                println!("{}", resp);
+                return Ok(());
             }
-        }
+            Err(e) => {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+        },
         Ok(crate::cli::CliAction::RegisterAssociations) => {
             match crate::platform::associations::register_file_associations(None) {
                 Ok(count) => {
-                    println!("Successfully registered Pealayer for {} media file types.", count);
+                    println!(
+                        "Successfully registered Pealayer for {} media file types.",
+                        count
+                    );
                     return Ok(());
                 }
                 Err(e) => {
@@ -110,7 +129,10 @@ fn main() -> eframe::Result {
         Ok(crate::cli::CliAction::UnregisterAssociations) => {
             match crate::platform::associations::unregister_file_associations() {
                 Ok(count) => {
-                    println!("Successfully unregistered Pealayer media file associations ({} processed).", count);
+                    println!(
+                        "Successfully unregistered Pealayer media file associations ({} processed).",
+                        count
+                    );
                     return Ok(());
                 }
                 Err(e) => {
@@ -179,8 +201,7 @@ fn main() -> eframe::Result {
             let mut dark_visuals = egui::Visuals::dark();
             dark_visuals.panel_fill = egui::Color32::from_rgb(33, 33, 33);
             dark_visuals.window_fill = egui::Color32::from_rgb(26, 26, 26);
-            cc.egui_ctx
-                .set_visuals_of(egui::Theme::Dark, dark_visuals);
+            cc.egui_ctx.set_visuals_of(egui::Theme::Dark, dark_visuals);
             cc.egui_ctx
                 .set_visuals_of(egui::Theme::Light, egui::Visuals::light());
             crate::platform::windows::set_window_theme(
@@ -200,15 +221,16 @@ fn main() -> eframe::Result {
                 .clone()
                 .expect("Glow backend must provide get_proc_address");
 
-
+            let subtitle_font_directory = subtitle_font_directory();
             let mpv = Mpv::with_initializer(|init| {
                 init.set_property("vo", "libmpv")?;
                 init.set_property("keep-open", "always")?;
 
                 // Set up Arabic/Farsi Vazirmatn font for subtitles
-                let current_dir = std::env::current_dir().unwrap();
-                let font_dir = current_dir.join("test-data").join("vazirmatn");
-                if let Some(font_dir_str) = font_dir.to_str() {
+                if let Some(font_dir_str) = subtitle_font_directory
+                    .as_deref()
+                    .and_then(std::path::Path::to_str)
+                {
                     init.set_property("sub-fonts-dir", font_dir_str)?;
                 }
                 init.set_property("sub-font", "Vazirmatn")?;
@@ -285,7 +307,10 @@ fn main() -> eframe::Result {
             crate::platform::windows::sync_windows_jump_list(&loaded_config.recent_media);
 
             let (interop_tx, interop_rx) = std::sync::mpsc::channel();
-            crate::platform::interop::spawn_interop_listener(interop_tx.clone(), cc.egui_ctx.clone());
+            crate::platform::interop::spawn_interop_listener(
+                interop_tx.clone(),
+                cc.egui_ctx.clone(),
+            );
 
             let http_port = crate::config::runtime_port("PEALAYER_HTTP_PORT", 8080);
             let ws_port = crate::config::runtime_port("PEALAYER_WS_PORT", 8081);
@@ -343,7 +368,9 @@ fn main() -> eframe::Result {
                 current_aid: "no".to_string(),
                 audio_tracks: Vec::new(),
                 seek_pos: None,
-                seek_controller: crate::mpv::seek::SeekController::new(crate::mpv::seek::MpvSeekBackend::new(mpv_static)),
+                seek_controller: crate::mpv::seek::SeekController::new(
+                    crate::mpv::seek::MpvSeekBackend::new(mpv_static),
+                ),
                 was_playing_before_scrub: false,
                 is_scrubbing: false,
                 last_mouse_activity: std::time::Instant::now(),
@@ -370,11 +397,11 @@ fn main() -> eframe::Result {
                 active_keyframe_drag: None,
                 timeline_zoom: 100.0,
                 undo_stack: crate::four_d::history::UndoStack::default(),
-                relay_overrides: [None; 9],
+                relay_overrides: std::collections::BTreeSet::new(),
                 effects_search_query: String::new(),
-                track_muted: [false; 9],
-                track_soloed: [false; 9],
-                track_locked: [false; 9],
+                track_muted: std::collections::BTreeSet::new(),
+                track_soloed: std::collections::BTreeSet::new(),
+                track_locked: std::collections::BTreeSet::new(),
                 active_drag: None,
                 estop_active: false,
                 serial_port: crate::four_d::controller::DEFAULT_ENDPOINT.to_string(),
