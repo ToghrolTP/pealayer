@@ -782,6 +782,16 @@ fn run_pccontroller_action_bridge(
                 let Ok(message) = serde_json::from_str::<Value>(&text) else {
                     continue;
                 };
+                if message.get("id").and_then(Value::as_u64) == Some(1) {
+                    if let Some(instance_id) = message
+                        .pointer("/result/instance_id")
+                        .and_then(Value::as_str)
+                        && push_target.observe_source_instance(instance_id)
+                    {
+                        egui_ctx.request_repaint();
+                    }
+                    continue;
+                }
                 let Some(method) = message.get("method").and_then(Value::as_str) else {
                     continue;
                 };

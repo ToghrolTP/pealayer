@@ -223,6 +223,35 @@ impl ControllerPushTarget {
             _ => false,
         }
     }
+
+    /// Accepts the authoritative host identity from a fresh WebSocket
+    /// subscription. A PCController process restart resets LED revisions, so
+    /// the old process revision must not suppress the new process's first frame.
+    pub(crate) fn observe_source_instance(&self, instance_id: &str) -> bool {
+        let instance_id = instance_id.trim();
+        if instance_id.is_empty() {
+            return false;
+        }
+        let Some(capabilities) = self.hardware_capabilities.upgrade() else {
+            return false;
+        };
+        let Ok(mut capabilities) = capabilities.lock() else {
+            return false;
+        };
+        let Some(capabilities) = capabilities.as_mut() else {
+            return false;
+        };
+        if capabilities.host_instance_id == instance_id {
+            return false;
+        }
+        let source_changed = !capabilities.host_instance_id.is_empty();
+        capabilities.host_instance_id = instance_id.to_string();
+        if source_changed {
+            capabilities.status_led = None;
+            capabilities.status_led_revision = 0;
+        }
+        source_changed
+    }
 }
 
 fn should_yield_direct_transport(
@@ -1079,5 +1108,36 @@ mod tests {
         let capabilities = capabilities.as_ref().unwrap();
         assert!(!capabilities.board_connected);
         assert!(capabilities.status_led.is_none());
+    }
+
+    #[test]
+    fn restarted_controller_accepts_low_led_revisions_from_new_instance() {
+        let handle = spawn_engine();
+        *handle.hardware_capabilities.lock().unwrap() =
+            Some(crate::four_d::controller::HardwareCapabilities {
+                board_connected: true,
+                host_instance_id: "old-host".to_string(),
+                status_led_revision: 100,
+                status_led: Some(crate::four_d::controller::HardwareStatusLed::default()),
+                ..Default::default()
+            });
+        let target = handle.controller_push_target();
+        assert!(target.observe_source_instance("new-host"));
+        assert!(target.apply_notification(
+            "controller.state",
+            &serde_json::json!({
+                "kind": "status_led.changed",
+                "metadata": {
+                    "red": "1", "green": "2", "blue": "3",
+                    "brightness": "255", "effect": "0", "condition": "0",
+                    "revision": "1"
+                }
+            }),
+        ));
+        let capabilities = handle.hardware_capabilities.lock().unwrap();
+        let capabilities = capabilities.as_ref().unwrap();
+        assert_eq!(capabilities.host_instance_id, "new-host");
+        assert_eq!(capabilities.status_led_revision, 1);
+        assert_eq!(capabilities.status_led.as_ref().unwrap().red, 1);
     }
 }
