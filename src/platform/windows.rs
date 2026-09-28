@@ -175,6 +175,7 @@ pub fn set_window_theme(dark: bool) {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn decoration_colors(dark: bool) -> (u32, u32) {
     if dark {
         (0x00212121, 0x00FFFFFF)
@@ -344,6 +345,171 @@ pub fn sync_windows_jump_list(recent_media: &[std::path::PathBuf]) {
     }
 }
 
+pub const THUMB_BUTTON_PREV: u32 = 1001;
+pub const THUMB_BUTTON_PLAYPAUSE: u32 = 1002;
+pub const THUMB_BUTTON_NEXT: u32 = 1003;
+
+pub fn thumbnail_button_tooltip(button_id: u32, is_paused: bool) -> &'static str {
+    match button_id {
+        THUMB_BUTTON_PREV => "Previous",
+        THUMB_BUTTON_PLAYPAUSE => {
+            if is_paused {
+                "Play"
+            } else {
+                "Pause"
+            }
+        }
+        THUMB_BUTTON_NEXT => "Next",
+        _ => "",
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn str_to_u16_buf_260(text: &str) -> [u16; 260] {
+    let mut buf = [0u16; 260];
+    for (i, code_unit) in text.encode_utf16().take(259).enumerate() {
+        buf[i] = code_unit;
+    }
+    buf
+}
+
+#[cfg(target_os = "windows")]
+pub fn init_taskbar_thumbnail_toolbar(hwnd_raw: isize) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Shell::{
+        ITaskbarList3, TaskbarList, THB_FLAGS, THB_TOOLTIP, THBF_ENABLED, THUMBBUTTON,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::HICON;
+
+    if hwnd_raw == 0 {
+        return Err("invalid window handle (HWND is 0)".to_string());
+    }
+    let hwnd = HWND(hwnd_raw as *mut _);
+
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let taskbar: ITaskbarList3 = CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER)
+            .map_err(|e| format!("failed to instantiate ITaskbarList3: {e}"))?;
+
+        let buttons = [
+            THUMBBUTTON {
+                dwMask: THB_FLAGS | THB_TOOLTIP,
+                iId: THUMB_BUTTON_PREV,
+                iBitmap: 0,
+                hIcon: HICON(std::ptr::null_mut()),
+                szTip: str_to_u16_buf_260(thumbnail_button_tooltip(THUMB_BUTTON_PREV, false)),
+                dwFlags: THBF_ENABLED,
+            },
+            THUMBBUTTON {
+                dwMask: THB_FLAGS | THB_TOOLTIP,
+                iId: THUMB_BUTTON_PLAYPAUSE,
+                iBitmap: 0,
+                hIcon: HICON(std::ptr::null_mut()),
+                szTip: str_to_u16_buf_260(thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, true)),
+                dwFlags: THBF_ENABLED,
+            },
+            THUMBBUTTON {
+                dwMask: THB_FLAGS | THB_TOOLTIP,
+                iId: THUMB_BUTTON_NEXT,
+                iBitmap: 0,
+                hIcon: HICON(std::ptr::null_mut()),
+                szTip: str_to_u16_buf_260(thumbnail_button_tooltip(THUMB_BUTTON_NEXT, false)),
+                dwFlags: THBF_ENABLED,
+            },
+        ];
+
+        taskbar
+            .ThumbBarAddButtons(hwnd, &buttons)
+            .map_err(|e| format!("ThumbBarAddButtons failed: {e}"))?;
+
+        Ok(())
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn init_taskbar_thumbnail_toolbar(_hwnd_raw: isize) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub fn update_taskbar_thumbnail_buttons(
+    hwnd_raw: isize,
+    is_paused: bool,
+    has_media: bool,
+) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Shell::{
+        ITaskbarList3, TaskbarList, THB_FLAGS, THB_TOOLTIP, THBF_DISABLED, THBF_ENABLED,
+        THUMBBUTTON,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::HICON;
+
+    if hwnd_raw == 0 {
+        return Err("invalid window handle (HWND is 0)".to_string());
+    }
+    let hwnd = HWND(hwnd_raw as *mut _);
+
+    let flags = if has_media {
+        THBF_ENABLED
+    } else {
+        THBF_DISABLED
+    };
+
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let taskbar: ITaskbarList3 = CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER)
+            .map_err(|e| format!("failed to instantiate ITaskbarList3: {e}"))?;
+
+        let buttons = [
+            THUMBBUTTON {
+                dwMask: THB_FLAGS | THB_TOOLTIP,
+                iId: THUMB_BUTTON_PREV,
+                iBitmap: 0,
+                hIcon: HICON(std::ptr::null_mut()),
+                szTip: str_to_u16_buf_260(thumbnail_button_tooltip(THUMB_BUTTON_PREV, is_paused)),
+                dwFlags: flags,
+            },
+            THUMBBUTTON {
+                dwMask: THB_FLAGS | THB_TOOLTIP,
+                iId: THUMB_BUTTON_PLAYPAUSE,
+                iBitmap: 0,
+                hIcon: HICON(std::ptr::null_mut()),
+                szTip: str_to_u16_buf_260(thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, is_paused)),
+                dwFlags: flags,
+            },
+            THUMBBUTTON {
+                dwMask: THB_FLAGS | THB_TOOLTIP,
+                iId: THUMB_BUTTON_NEXT,
+                iBitmap: 0,
+                hIcon: HICON(std::ptr::null_mut()),
+                szTip: str_to_u16_buf_260(thumbnail_button_tooltip(THUMB_BUTTON_NEXT, is_paused)),
+                dwFlags: flags,
+            },
+        ];
+
+        taskbar
+            .ThumbBarUpdateButtons(hwnd, &buttons)
+            .map_err(|e| format!("ThumbBarUpdateButtons failed: {e}"))?;
+
+        Ok(())
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn update_taskbar_thumbnail_buttons(
+    _hwnd_raw: isize,
+    _is_paused: bool,
+    _has_media: bool,
+) -> Result<(), String> {
+    Ok(())
+}
+
 #[cfg(not(target_os = "windows"))]
 pub fn sync_windows_jump_list(_recent_media: &[std::path::PathBuf]) {
     // No-op on non-Windows platforms
@@ -440,5 +606,13 @@ mod tests {
             acquire_gui_ownership(&identity).expect("post-drop mutex acquisition"),
             GuiOwnership::Primary(_)
         ));
+    }
+
+    #[test]
+    fn test_thumbnail_button_tooltips() {
+        assert_eq!(thumbnail_button_tooltip(THUMB_BUTTON_PREV, false), "Previous");
+        assert_eq!(thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, true), "Play");
+        assert_eq!(thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, false), "Pause");
+        assert_eq!(thumbnail_button_tooltip(THUMB_BUTTON_NEXT, false), "Next");
     }
 }
