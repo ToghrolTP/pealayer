@@ -110,6 +110,19 @@ impl HardwareTransport {
             Self::DirectSerial { .. } => Ok(None),
         }
     }
+
+    fn call_controller(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        match self {
+            Self::Controller(client) => client.call(method, params),
+            Self::DirectSerial { .. } => Err(
+                "this hardware action requires the PCController coordinator".to_string(),
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -125,6 +138,10 @@ pub enum EngineMessage {
     LiveActuatorOverride { channel: u8, value: u8 },
     Seek(u64), // Emitted when user seeks, to clear current active queue and reset hardware
     SendCommand(Command), // Manual override or direct hardware command
+    ControllerCall {
+        method: String,
+        params: serde_json::Value,
+    },
 }
 
 pub struct EngineHandle {
@@ -183,6 +200,7 @@ pub fn spawn_engine() -> EngineHandle {
         let mut last_ping = std::time::Instant::now();
         let mut last_owner_check = std::time::Instant::now();
         let mut last_capability_refresh = std::time::Instant::now();
+        let mut last_connect_attempt: Option<std::time::Instant> = None;
 
         let mut active_transport: Option<HardwareTransport> = None;
 
@@ -193,7 +211,12 @@ pub fn spawn_engine() -> EngineHandle {
             engine_connected.store(connected, Ordering::Relaxed);
 
             // Handle connection/disconnection transitions
-            if requested && active_transport.is_none() {
+            if requested
+                && active_transport.is_none()
+                && last_connect_attempt
+                    .is_none_or(|attempt| attempt.elapsed() >= Duration::from_secs(1))
+            {
+                last_connect_attempt = Some(std::time::Instant::now());
                 let endpoint = {
                     let guard = engine_port.lock().unwrap();
                     guard.clone()
@@ -259,7 +282,6 @@ pub fn spawn_engine() -> EngineHandle {
                         if let Ok(mut guard) = engine_conn_error.lock() {
                             *guard = Some(error);
                         }
-                        engine_connection_requested.store(false, Ordering::Relaxed);
                         engine_connected.store(false, Ordering::Relaxed);
                         if let Ok(mut guard) = engine_transport_description.lock() {
                             *guard = None;
@@ -349,6 +371,18 @@ pub fn spawn_engine() -> EngineHandle {
                             }
                         }
                     }
+                    EngineMessage::ControllerCall { method, params } => {
+                        if connected {
+                            if let Some(ref mut transport) = active_transport {
+                                if let Err(error) = transport.call_controller(&method, params) {
+                                    if let Ok(mut guard) = engine_conn_error.lock() {
+                                        *guard = Some(format!("{method}: {error}"));
+                                    }
+                                    engine_connected.store(false, Ordering::Relaxed);
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -360,7 +394,6 @@ pub fn spawn_engine() -> EngineHandle {
                 if let Ok(mut guard) = engine_capabilities.lock() {
                     *guard = None;
                 }
-                engine_connection_requested.store(false, Ordering::Relaxed);
                 connected = false;
             }
 
@@ -401,7 +434,7 @@ pub fn spawn_engine() -> EngineHandle {
             }
 
             if connected
-                && last_capability_refresh.elapsed() >= Duration::from_secs(1)
+                && last_capability_refresh.elapsed() >= Duration::from_millis(100)
                 && active_transport
                     .as_ref()
                     .is_some_and(|transport| !transport.is_direct_serial())
@@ -419,6 +452,7 @@ pub fn spawn_engine() -> EngineHandle {
                                 *guard =
                                     Some(format!("refresh PCController capabilities: {error}"));
                             }
+                            engine_connected.store(false, Ordering::Relaxed);
                         }
                     }
                 }

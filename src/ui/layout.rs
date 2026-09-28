@@ -150,7 +150,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
             .tr("Add Keyframe\nInserts a keyframe at the current playhead position.");
         let timeline_ruler_help = self
             .app
-            .tr("Timeline Ruler\nClick or drag to scrub playhead. Ctrl+Scroll to zoom time.");
+            .tr("Timeline Ruler\nClick or drag to scrub playhead. Scroll to zoom time.");
         let linear_label = self.app.tr("Linear");
         let smooth_label = self.app.tr("Smooth (Hermite)");
         let step_label = self.app.tr("Step");
@@ -216,9 +216,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     }
                                     ui.separator();
 
-                                    // timecode HH:MM:SS:FF at 24fps
-                                    let tc = format_timecode(if has_video { self.app.playback_time } else { 0.0 });
-                                    ui.monospace(tc);
+                                    let elapsed = self.app.seek_pos.unwrap_or(self.app.playback_time);
+                                    let include_hours = self.app.duration >= 3600.0;
+                                    ui.monospace(crate::ui::controls::format_player_time(
+                                        if has_video { elapsed } else { 0.0 },
+                                        include_hours,
+                                        self.app.show_subseconds,
+                                    ));
 
                                     // seekbar
                                     let mut current_pos = if has_video {
@@ -235,7 +239,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         .show_value(false)
                                         .trailing_fill(true);
 
-                                    let seekbar_w = (ui.available_width() - 80.0).max(50.0);
+                                    let seekbar_w = (ui.available_width() - 180.0).max(50.0);
                                     let old_w = ui.spacing().slider_width;
                                     ui.spacing_mut().slider_width = seekbar_w;
                                     let response = ui.add(slider);
@@ -246,6 +250,36 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     }
                                     if has_video && response.drag_stopped() {
                                         self.app.finish_scrub(current_pos);
+                                    }
+
+                                    let displayed_total = if self.app.show_remaining_time {
+                                        -(self.app.duration - elapsed).max(0.0)
+                                    } else {
+                                        self.app.duration
+                                    };
+                                    if ui
+                                        .add(
+                                            egui::Label::new(
+                                                crate::ui::controls::format_player_time(
+                                                    displayed_total,
+                                                    include_hours,
+                                                    self.app.show_subseconds,
+                                                ),
+                                            )
+                                            .sense(egui::Sense::click()),
+                                        )
+                                        .on_hover_text(self.app.tr("Toggle duration / remaining time"))
+                                        .clicked()
+                                    {
+                                        self.app.show_remaining_time = !self.app.show_remaining_time;
+                                        self.app.save_config();
+                                    }
+                                    if ui
+                                        .button("⛶")
+                                        .on_hover_text(format!("{} (F)", self.app.tr("Fullscreen")))
+                                        .clicked()
+                                    {
+                                        self.app.set_fullscreen(ui.ctx(), true);
                                     }
                                 });
                             });
@@ -640,9 +674,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                                         // Hover state background
                                                         let bg_color = if is_dragged {
-                                                            egui::Color32::from_rgb(55, 55, 55)
+                                                            ui.visuals().widgets.hovered.bg_fill
                                                         } else if hovered {
-                                                            egui::Color32::from_rgb(45, 45, 45)
+                                                            ui.visuals().widgets.inactive.bg_fill
                                                         } else {
                                                             egui::Color32::TRANSPARENT
                                                         };
@@ -738,17 +772,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             ui.label(egui::RichText::new(
                                 self.app.tr("PCController is reachable, but no board is currently advertising live controls.")
                             ).weak());
-                        } else if capabilities
-                            .as_ref()
-                            .is_some_and(|capabilities| capabilities.relays.is_empty())
-                        {
-                            ui.label(egui::RichText::new(
-                                self.app.tr("The connected board advertises no relay controls.")
-                            ).weak());
                         }
 
                         if let Some(capabilities) = capabilities
-                            .filter(|capabilities| capabilities.board_connected && !capabilities.relays.is_empty())
+                            .filter(|capabilities| capabilities.board_connected)
                         {
                             let board_label = if capabilities.board_name.is_empty() {
                                 self.app.tr("Connected board").to_string()
@@ -764,11 +791,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             };
                             ui.label(board_label);
 
-                            egui::Grid::new("hardware_monitor_grid")
-                                .num_columns(3)
-                                .spacing([16.0, 12.0])
-                                .striped(true)
-                                .show(ui, |ui| {
+                            if !capabilities.relays.is_empty() {
+                                ui.label(egui::RichText::new(self.app.tr("Relay outputs")).strong());
+                                egui::Grid::new("hardware_monitor_grid")
+                                    .num_columns(3)
+                                    .spacing([16.0, 12.0])
+                                    .striped(true)
+                                    .show(ui, |ui| {
                                     for relay in &capabilities.relays {
                                         let id = relay.id;
                                         let board_active = capabilities.active_relays.contains(&id);
@@ -816,7 +845,142 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         });
                                         ui.end_row();
                                     }
+                                    });
+                            }
+
+                            if !capabilities.pwm_channels.is_empty() {
+                                ui.add_space(8.0);
+                                ui.label(egui::RichText::new(self.app.tr("PWM / MOSFET outputs")).strong());
+                                for channel in &capabilities.pwm_channels {
+                                    let value_id = ui.make_persistent_id(("pwm_value", channel.id));
+                                    let mut value = ui.data_mut(|data| {
+                                        data.get_temp::<u16>(value_id).unwrap_or_else(|| {
+                                            if capabilities.telemetry.pwm_channel == Some(channel.id) {
+                                                capabilities.telemetry.pwm_value.unwrap_or(0)
+                                            } else {
+                                                0
+                                            }
+                                        })
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label(crate::ui::i18n::visual_text(display_language, &channel.name))
+                                            .on_hover_text(format!("{} · {}", channel.key, channel.role));
+                                        let response = ui.add(
+                                            egui::Slider::new(&mut value, 0..=4095)
+                                                .show_value(true),
+                                        );
+                                        if response.changed() {
+                                            ui.data_mut(|data| data.insert_temp(value_id, value));
+                                        }
+                                        if response.drag_stopped() || response.lost_focus() {
+                                            let _ = self.app.engine_handle.sender.send(
+                                                crate::four_d::engine::EngineMessage::ControllerCall {
+                                                    method: "controller.pwm.set".to_string(),
+                                                    params: serde_json::json!({"channel": channel.id, "value": value}),
+                                                },
+                                            );
+                                        }
+                                    });
+                                }
+                            }
+
+                            ui.add_space(8.0);
+                            ui.label(egui::RichText::new(self.app.tr("Advertised capabilities")).strong());
+                            ui.horizontal_wrapped(|ui| {
+                                if capabilities.supports_addressable_led {
+                                    ui.label("◉ Addressable RGB strip");
+                                }
+                                if capabilities.supports_rf_transmit {
+                                    ui.label("⌁ RF transmitter");
+                                }
+                                if capabilities.supports_segment_display {
+                                    ui.label("▦ Segment display");
+                                }
+                                if capabilities.supports_lcd_display {
+                                    ui.label("▤ LCD text display");
+                                }
+                            });
+
+                            if capabilities.supports_segment_display || capabilities.supports_lcd_display {
+                                let text_id = ui.make_persistent_id("hardware_display_text");
+                                let mut text = ui.data_mut(|data| data.get_temp::<String>(text_id).unwrap_or_default());
+                                ui.horizontal(|ui| {
+                                    ui.label(self.app.tr("Display text"));
+                                    if ui.text_edit_singleline(&mut text).changed() {
+                                        ui.data_mut(|data| data.insert_temp(text_id, text.clone()));
+                                    }
+                                    if ui.add_enabled(!text.trim().is_empty(), egui::Button::new("▸ Send")).clicked() {
+                                        let target = if capabilities.supports_segment_display && capabilities.supports_lcd_display {
+                                            "both"
+                                        } else if capabilities.supports_lcd_display {
+                                            "lcd"
+                                        } else {
+                                            "segments"
+                                        };
+                                        let _ = self.app.engine_handle.sender.send(
+                                            crate::four_d::engine::EngineMessage::ControllerCall {
+                                                method: "controller.display.send".to_string(),
+                                                params: serde_json::json!({"target": target, "text": text, "duration_ms": 5000}),
+                                            },
+                                        );
+                                    }
                                 });
+                            }
+
+                            if capabilities.supports_addressable_led {
+                                ui.horizontal(|ui| {
+                                    ui.label(self.app.tr("RGB strip"));
+                                    for (label, command) in [
+                                        ("Red", "strip fill 255 0 0 255"),
+                                        ("White", "strip fill 255 255 255 255"),
+                                        ("Off", "strip clear"),
+                                    ] {
+                                        if ui.button(self.app.tr(label)).clicked() {
+                                            let _ = self.app.engine_handle.sender.send(
+                                                crate::four_d::engine::EngineMessage::ControllerCall {
+                                                    method: "controller.command.execute".to_string(),
+                                                    params: serde_json::json!({"command": command}),
+                                                },
+                                            );
+                                        }
+                                    }
+                                });
+                            }
+
+                            if capabilities.supports_rf_transmit {
+                                let rf_code_id = ui.make_persistent_id("hardware_rf_code");
+                                let mut code = ui.data_mut(|data| data.get_temp::<String>(rf_code_id).unwrap_or_default());
+                                ui.horizontal(|ui| {
+                                    ui.label(self.app.tr("RF code"));
+                                    if ui.text_edit_singleline(&mut code).changed() {
+                                        ui.data_mut(|data| data.insert_temp(rf_code_id, code.clone()));
+                                    }
+                                    let trimmed = code.trim();
+                                    let parsed = trimmed
+                                        .strip_prefix("0x")
+                                        .or_else(|| trimmed.strip_prefix("0X"))
+                                        .map(|hex| u32::from_str_radix(hex, 16).ok())
+                                        .unwrap_or_else(|| trimmed.parse::<u32>().ok());
+                                    if ui.add_enabled(parsed.is_some(), egui::Button::new("⌁ Send 24-bit")).clicked() {
+                                        let _ = self.app.engine_handle.sender.send(
+                                            crate::four_d::engine::EngineMessage::ControllerCall {
+                                                method: "controller.rf.transmit".to_string(),
+                                                params: serde_json::json!({"code": parsed, "bits": 24, "protocol": 1}),
+                                            },
+                                        );
+                                    }
+                                });
+                            }
+
+                            if !capabilities.warnings.is_empty() {
+                                ui.add_space(8.0);
+                                for warning in &capabilities.warnings {
+                                    ui.colored_label(
+                                        ui.visuals().warn_fg_color,
+                                        format!("⚠ {} — {}", warning.code, warning.message),
+                                    );
+                                }
+                            }
 
                             if !capabilities.macros.is_empty() {
                                 ui.add_space(8.0);
@@ -853,24 +1017,24 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                 // 26px spacer to align with the right-side ruler
                                 let (header_rect, _) = ui.allocate_exact_size(egui::vec2(250.0, 26.0), egui::Sense::hover());
-                                ui.painter().rect_filled(header_rect, 0.0, egui::Color32::from_rgb(33, 33, 33));
+                                ui.painter().rect_filled(header_rect, 0.0, ui.visuals().panel_fill);
                                 ui.painter().line_segment(
                                     [egui::pos2(header_rect.min.x, header_rect.max.y), egui::pos2(header_rect.max.x, header_rect.max.y)],
-                                    egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(45, 45, 45)),
+                                    ui.visuals().widgets.noninteractive.bg_stroke,
                                 );
                                 ui.painter().text(
                                     header_rect.left_center() + egui::vec2(6.0, 0.0),
                                     egui::Align2::LEFT_CENTER,
                                     self.app.tr("Tracks"),
                                     egui::FontId::proportional(11.0),
-                                    egui::Color32::from_rgb(150, 150, 150),
+                                    ui.visuals().weak_text_color(),
                                 );
 
                                 for track_row in &timeline_rows {
                                     let (rect, _response) = ui.allocate_exact_size(egui::vec2(250.0, 32.0), egui::Sense::hover());
                                     // Draw background with dark Premiere aesthetics
-                                    ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(26, 26, 26));
-                                    ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(45, 45, 45)), egui::StrokeKind::Inside);
+                                    ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
+                                    ui.painter().rect_stroke(rect, 0.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
 
                                     // Create a nested UI at this rect to place buttons
                                     let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
@@ -929,8 +1093,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let mut analog_tracks_changed = false;
                                 for track in self.app.timeline.analog_tracks.iter_mut() {
                                     let (rect, _response) = ui.allocate_exact_size(egui::vec2(250.0, 40.0), egui::Sense::hover());
-                                    ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(22, 28, 32));
-                                    ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(45, 45, 45)), egui::StrokeKind::Inside);
+                                    ui.painter().rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+                                    ui.painter().rect_stroke(rect, 0.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
 
                                     // Amplitude Y-axis tick labels on track header right margin
                                     let painter = ui.painter();
@@ -1051,7 +1215,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let painter = ui.painter();
 
                                         // Draw timeline tracks background
-                                        painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(33, 33, 33));
+                                        painter.rect_filled(rect, 0.0, ui.visuals().panel_fill);
 
                                         let tracks_top = rect.min.y + 26.0;
 
@@ -1064,7 +1228,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let pointer_pos = ui.ctx().pointer_latest_pos();
 
                                         if let Some(pos) = pointer_pos {
-                                            if rect.contains(pos) && (ui.input(|i| i.modifiers.ctrl || i.modifiers.command)) && scroll_delta.y != 0.0 {
+                                            if rect.contains(pos) && scroll_delta.y != 0.0 {
                                                 self.app.timeline_zoom = (self.app.timeline_zoom + scroll_delta.y * 0.2).clamp(20.0, 500.0);
                                             }
                                         }
@@ -1099,7 +1263,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             if grid_x <= rect.max.x {
                                                 painter.line_segment(
                                                     [egui::pos2(grid_x, rect.min.y), egui::pos2(grid_x, rect.max.y)],
-                                                    egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(50, 50, 50)),
+                                                    ui.visuals().widgets.noninteractive.bg_stroke,
                                                 );
                                             }
                                         }
@@ -1115,13 +1279,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         egui::pos2(rect.min.x, grid_y),
                                                         egui::pos2(rect.max.x, grid_y + 32.0),
                                                     );
-                                                    painter.rect_filled(track_rect, 0.0, egui::Color32::from_rgb(26, 26, 26));
+                                                    painter.rect_filled(track_rect, 0.0, ui.visuals().faint_bg_color);
                                                 }
                                             }
 
                                             painter.line_segment(
                                                 [egui::pos2(rect.min.x, grid_y), egui::pos2(rect.max.x, grid_y)],
-                                                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(45, 45, 45)),
+                                                ui.visuals().widgets.noninteractive.bg_stroke,
                                             );
                                         }
 
@@ -1130,7 +1294,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             let grid_y = tracks_top + track_area_height + ((t_idx + 1) as f32 * 40.0);
                                             painter.line_segment(
                                                 [egui::pos2(rect.min.x, grid_y), egui::pos2(rect.max.x, grid_y)],
-                                                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(45, 45, 45)),
+                                                ui.visuals().widgets.noninteractive.bg_stroke,
                                             );
                                         }
 
@@ -1709,7 +1873,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             );
 
                                             // Row background shading
-                                            painter.rect_filled(row_rect, 0.0, egui::Color32::from_rgb(20, 25, 29));
+                                            painter.rect_filled(row_rect, 0.0, ui.visuals().extreme_bg_color);
 
                                             // Centerline guide (50% intensity)
                                             painter.line_segment(
@@ -2092,7 +2256,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
 
                                         // Render Dedicated Time Ruler Bar Header
-                                        painter.rect_filled(ruler_rect, 0.0, egui::Color32::from_rgb(25, 25, 25));
+                                        painter.rect_filled(ruler_rect, 0.0, ui.visuals().panel_fill);
                                         painter.line_segment(
                                             [egui::pos2(ruler_rect.min.x, ruler_rect.max.y), egui::pos2(ruler_rect.max.x, ruler_rect.max.y)],
                                             egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(50, 50, 50)),
@@ -2392,6 +2556,40 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     }
                                 }
                             }
+
+                            response.context_menu(|ui| {
+                                ui.label(egui::RichText::new(self.app.tr("Timeline")).strong());
+                                ui.separator();
+                                if ui.button(format!("▣ {}", self.app.tr("Select all cues"))).clicked() {
+                                    self.app.selected_instance_ids = self.app.timeline.instances.iter().map(|instance| instance.id).collect();
+                                    self.app.selected_keyframes.clear();
+                                    for track in &self.app.timeline.analog_tracks {
+                                        for (index, _) in track.keyframes.iter().enumerate() {
+                                            self.app.selected_keyframes.insert((track.id, index));
+                                        }
+                                    }
+                                    ui.close();
+                                }
+                                if ui.button(format!("◇ {}", self.app.tr("Clear selection"))).clicked() {
+                                    self.app.selected_instance_ids.clear();
+                                    self.app.selected_keyframes.clear();
+                                    ui.close();
+                                }
+                                ui.separator();
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("⌕ {}", self.app.tr("Zoom")));
+                                    ui.add(egui::Slider::new(&mut self.app.timeline_zoom, 20.0..=500.0).suffix(" px/s"));
+                                });
+                                if ui.button(format!("↺ {}", self.app.tr("Reset zoom"))).clicked() {
+                                    self.app.timeline_zoom = 100.0;
+                                    ui.close();
+                                }
+                                ui.separator();
+                                if ui.button(format!("⚙ {}", self.app.tr("Preferences..."))).clicked() {
+                                    self.app.show_preferences_dialog = true;
+                                    ui.close();
+                                }
+                            });
 
                             if !ui.ctx().egui_wants_keyboard_input() {
                                 let delete_pressed = ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace));

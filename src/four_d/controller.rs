@@ -10,6 +10,10 @@ use crate::four_d::protocol::Command;
 pub const DEFAULT_ENDPOINT: &str = "pccontroller://127.0.0.1:8787";
 const CAPABILITY_PWM: u32 = 1 << 2;
 const CAPABILITY_RELAY_MOTION: u32 = 1 << 3;
+const CAPABILITY_RF: u32 = 1 << 4;
+const CAPABILITY_SEGMENTS: u32 = 1 << 5;
+const CAPABILITY_LCD: u32 = 1 << 6;
+const CAPABILITY_ADDRESSABLE_LED: u32 = 1 << 7;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HardwareOutput {
@@ -28,7 +32,45 @@ pub struct HardwareCapabilities {
     pub active_relays: std::collections::BTreeSet<u8>,
     pub relays: Vec<HardwareOutput>,
     pub pwm_channels: Vec<HardwareOutput>,
+    pub peripherals: Vec<HardwareOutput>,
+    pub supports_rf_transmit: bool,
+    pub supports_segment_display: bool,
+    pub supports_lcd_display: bool,
+    pub supports_addressable_led: bool,
+    pub status_led: Option<HardwareStatusLed>,
+    pub telemetry: HardwareTelemetry,
+    pub warnings: Vec<HardwareWarning>,
     pub macros: Vec<HardwareMacro>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HardwareStatusLed {
+    pub red: u8,
+    pub green: u8,
+    pub blue: u8,
+    pub brightness: u8,
+    pub effect: u8,
+    pub condition: u8,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HardwareTelemetry {
+    pub supply_mv: Option<i32>,
+    pub bus_mv: Option<i32>,
+    pub current_ma: Option<i32>,
+    pub power_mw: Option<i32>,
+    pub led_temperature_centi_c: Option<i32>,
+    pub audio_temperature_centi_c: Option<i32>,
+    pub pwm_channel: Option<u8>,
+    pub pwm_value: Option<u16>,
+    pub door_open: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HardwareWarning {
+    pub code: String,
+    pub severity: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -310,6 +352,61 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
     } else {
         Vec::new()
     };
+    let peripherals = if board_connected {
+        outputs.iter().map(|(_, output)| output.clone()).collect()
+    } else {
+        Vec::new()
+    };
+    let status_led = (board_connected
+        && snapshot
+            .get("have_status_led")
+            .and_then(Value::as_bool)
+            .unwrap_or(false))
+    .then(|| HardwareStatusLed {
+        red: snapshot.pointer("/status_led/red").and_then(Value::as_u64).unwrap_or(0) as u8,
+        green: snapshot.pointer("/status_led/green").and_then(Value::as_u64).unwrap_or(0) as u8,
+        blue: snapshot.pointer("/status_led/blue").and_then(Value::as_u64).unwrap_or(0) as u8,
+        brightness: snapshot.pointer("/status_led/brightness").and_then(Value::as_u64).unwrap_or(0) as u8,
+        effect: snapshot.pointer("/status_led/effect").and_then(Value::as_u64).unwrap_or(0) as u8,
+        condition: snapshot.pointer("/status_led/condition").and_then(Value::as_u64).unwrap_or(0) as u8,
+    });
+    let empty_status = Value::Null;
+    let status = snapshot.get("status").unwrap_or(&empty_status);
+    let telemetry = HardwareTelemetry {
+        supply_mv: status.get("ina219_available").and_then(Value::as_bool).unwrap_or(false)
+            .then(|| status.get("supply_mv").and_then(Value::as_i64).unwrap_or(0) as i32),
+        bus_mv: status.get("ina219_available").and_then(Value::as_bool).unwrap_or(false)
+            .then(|| status.get("bus_mv").and_then(Value::as_i64).unwrap_or(0) as i32),
+        current_ma: status.get("ina219_available").and_then(Value::as_bool).unwrap_or(false)
+            .then(|| status.get("current_ma").and_then(Value::as_i64).unwrap_or(0) as i32),
+        power_mw: status.get("ina219_available").and_then(Value::as_bool).unwrap_or(false)
+            .then(|| status.get("power_mw").and_then(Value::as_i64).unwrap_or(0) as i32),
+        led_temperature_centi_c: status.get("temperature_led_available").and_then(Value::as_bool).unwrap_or(false)
+            .then(|| status.get("temperature_led_centi_c").and_then(Value::as_i64).unwrap_or(0) as i32),
+        audio_temperature_centi_c: status.get("temperature_bt_audio_available").and_then(Value::as_bool).unwrap_or(false)
+            .then(|| status.get("temperature_bt_audio_centi_c").and_then(Value::as_i64).unwrap_or(0) as i32),
+        pwm_channel: status.get("pwm_available").and_then(Value::as_bool).unwrap_or(false)
+            .then(|| status.get("pwm_channel").and_then(Value::as_u64).unwrap_or(0) as u8),
+        pwm_value: status.get("pwm_available").and_then(Value::as_bool).unwrap_or(false)
+            .then(|| status.get("pwm_value").and_then(Value::as_u64).unwrap_or(0) as u16),
+        door_open: board_connected.then(|| status.get("door_open").and_then(Value::as_bool).unwrap_or(false)),
+    };
+    let warnings = snapshot
+        .get("hardware_problems")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|problem| HardwareWarning {
+            code: problem.get("code").and_then(Value::as_str).unwrap_or("hardware_problem").to_string(),
+            severity: problem.get("severity").and_then(Value::as_str).unwrap_or("warning").to_string(),
+            message: problem
+                .get("description")
+                .or_else(|| problem.get("impact"))
+                .and_then(Value::as_str)
+                .unwrap_or("Hardware requires attention")
+                .to_string(),
+        })
+        .collect();
     let macros = snapshot
         .pointer("/macros/library")
         .and_then(Value::as_array)
@@ -366,6 +463,14 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
         active_relays,
         relays,
         pwm_channels,
+        peripherals,
+        supports_rf_transmit: board_connected && capability_bits & CAPABILITY_RF != 0,
+        supports_segment_display: board_connected && capability_bits & CAPABILITY_SEGMENTS != 0,
+        supports_lcd_display: board_connected && capability_bits & CAPABILITY_LCD != 0,
+        supports_addressable_led: board_connected && capability_bits & CAPABILITY_ADDRESSABLE_LED != 0,
+        status_led,
+        telemetry,
+        warnings,
         macros,
     }
 }

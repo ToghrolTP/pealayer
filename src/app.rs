@@ -114,6 +114,7 @@ pub struct PealayerApp {
     pub(crate) language_preference: crate::config::AppLanguage,
     pub(crate) language: crate::config::AppLanguage,
     pub(crate) direction_preference: crate::config::AppDirection,
+    pub(crate) theme_preference: crate::config::AppTheme,
     pub(crate) rtl: bool,
     pub(crate) mpv: &'static Mpv,
     pub(crate) mpv_client: libmpv2::Mpv,
@@ -121,6 +122,7 @@ pub struct PealayerApp {
 
     pub playback_time: f64,
     pub duration: f64,
+    pub(crate) media_fps: f64,
     pub is_paused: bool,
     pub is_eof: bool,
     pub(crate) volume: f64,
@@ -190,6 +192,21 @@ pub struct PealayerApp {
     pub(crate) is_window_operating: bool,
     pub(crate) show_shortcuts_dialog: bool,
     pub(crate) show_about_dialog: bool,
+    pub(crate) show_preferences_dialog: bool,
+    pub(crate) preferences_tab: usize,
+    pub(crate) pause_on_hardware_disconnect: bool,
+    pub(crate) auto_connect_hardware: bool,
+    pub(crate) click_player_to_toggle: bool,
+    pub(crate) show_subseconds: bool,
+    pub(crate) wheel_seek_seconds: f64,
+    pub(crate) osd_position: crate::config::OsdPosition,
+    pub(crate) osd_timeout_seconds: f32,
+    pub(crate) paused_drag_action: crate::config::PlayerDragAction,
+    pub(crate) playing_drag_action: crate::config::PlayerDragAction,
+    pub(crate) was_hardware_connected: bool,
+    pub(crate) connection_notice: Option<String>,
+    pub(crate) workspace_before_fullscreen: Option<bool>,
+    pub(crate) was_fullscreen: bool,
     pub(crate) interop_rx: std::sync::mpsc::Receiver<crate::platform::interop::InteropCommand>,
     pub(crate) controller_cmd_rx:
         std::sync::mpsc::Receiver<crate::platform::interop::ControllerDelivery>,
@@ -384,17 +401,30 @@ impl eframe::App for PealayerApp {
             mc.update_playback(self.is_paused, self.playback_time, self.duration);
         }
 
-        // Sync connection state and check for errors from background thread
+        // Connection loss and retry are normal runtime states. Surface them in
+        // the status chrome instead of interrupting playback with a modal.
         if let Ok(mut err_guard) = self.engine_handle.connection_error.try_lock() {
             if let Some(err) = err_guard.take() {
-                self.show_error = Some(err);
-                self.update_shell_state();
+                self.connection_notice = Some(err);
             }
         }
-        self.is_connected = self
+        let connected_now = self
             .engine_handle
             .is_connected
             .load(std::sync::atomic::Ordering::Relaxed);
+        if self.was_hardware_connected && !connected_now && self.pause_on_hardware_disconnect {
+            self.pause();
+            self.set_osd(self.tr("Hardware disconnected — playback paused"));
+        }
+        if connected_now && !self.was_hardware_connected {
+            self.connection_notice = None;
+            self.save_config();
+        }
+        self.is_connected = connected_now;
+        self.was_hardware_connected = connected_now;
+        if connected_now {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
         let connection_requested = self
             .engine_handle
             .connection_requested
@@ -413,6 +443,15 @@ impl eframe::App for PealayerApp {
         crate::platform::windows::set_window_theme(ui.style().visuals.dark_mode);
 
         let is_fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+        if is_fullscreen && !self.was_fullscreen {
+            self.workspace_before_fullscreen = Some(self.show_four_d_editor);
+            self.show_four_d_editor = false;
+        } else if !is_fullscreen && self.was_fullscreen {
+            if let Some(previous_workspace) = self.workspace_before_fullscreen.take() {
+                self.show_four_d_editor = previous_workspace;
+            }
+        }
+        self.was_fullscreen = is_fullscreen;
         if !is_fullscreen {
             crate::ui::menu::draw(self, ui);
             crate::ui::status_bar::draw(self, ui);
@@ -433,8 +472,7 @@ impl eframe::App for PealayerApp {
             self.toggle_playback();
         }
         if ctx.input(|i| i.key_pressed(egui::Key::F)) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
-            self.set_osd("Fullscreen".to_string());
+            self.set_fullscreen(&ctx, !is_fullscreen);
         }
         if ctx.input(|i| i.key_pressed(egui::Key::M)) {
             let _ = self.mpv.command("cycle", &["mute"]);
@@ -581,6 +619,7 @@ impl eframe::App for PealayerApp {
                 crate::ui::error::draw(self, ui);
                 crate::ui::subtitles::draw_settings_dialog(self, ui);
                 crate::ui::audio::draw_settings_dialog(self, ui);
+                crate::ui::preferences::draw(self, ui);
 
                 if self.show_open_url_dialog {
                     let mut open_url = false;
@@ -899,7 +938,7 @@ impl PealayerApp {
                     }
                 }
                 if request.fullscreen {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+                    self.set_fullscreen(ctx, true);
                 }
                 if request.activate {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -927,6 +966,16 @@ impl PealayerApp {
                     self.load_url(&target);
                 } else {
                     self.load_video_file(std::path::PathBuf::from(&target));
+                }
+            }
+            InteropCommand::SetFullscreen { enabled } => self.set_fullscreen(ctx, enabled),
+            InteropCommand::ToggleFullscreen => {
+                let fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
+                self.set_fullscreen(ctx, !fullscreen);
+            }
+            InteropCommand::SetWorkspace { nle } => {
+                if !ctx.input(|input| input.viewport().fullscreen.unwrap_or(false)) {
+                    self.show_four_d_editor = nle;
                 }
             }
             InteropCommand::GetStatus => {}
@@ -996,6 +1045,9 @@ impl PealayerApp {
                     (11, PropertyData::OsdStr(v)) => self.current_aid = v.to_string(),
                     (12, PropertyData::Flag(v)) => {
                         self.is_eof = v;
+                    }
+                    (13, PropertyData::Double(v)) => {
+                        self.media_fps = v;
                     }
                     _ => {}
                 },
@@ -1103,6 +1155,21 @@ impl PealayerApp {
         } else {
             self.pause();
         }
+    }
+
+    pub fn set_fullscreen(&mut self, ctx: &egui::Context, enabled: bool) {
+        if enabled {
+            if !self.was_fullscreen {
+                self.workspace_before_fullscreen = Some(self.show_four_d_editor);
+            }
+            self.show_four_d_editor = false;
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(enabled));
+        self.set_osd(if enabled {
+            self.tr("Enter fullscreen")
+        } else {
+            self.tr("Exit fullscreen")
+        });
     }
 
     /// Performs an exact relative seek by the given number of seconds.
@@ -1371,8 +1438,8 @@ impl PealayerApp {
     }
 
     pub fn save_config(&self) {
-        // Preserve deployment-owned branding and theme settings while saving
-        // mutable player preferences.
+        // Preserve deployment-owned branding while saving mutable player
+        // preferences through one typed configuration contract.
         let mut cfg = crate::config::AppConfig::load();
         cfg.volume = self.volume;
         cfg.is_muted = self.is_muted;
@@ -1381,6 +1448,18 @@ impl PealayerApp {
         cfg.recent_media = self.recent_media.clone();
         cfg.language = self.language_preference;
         cfg.direction = self.direction_preference;
+        cfg.theme = self.theme_preference;
+        cfg.hardware_endpoint = (!self.serial_port.trim().is_empty())
+            .then(|| self.serial_port.clone());
+        cfg.auto_connect_hardware = self.auto_connect_hardware;
+        cfg.pause_on_hardware_disconnect = self.pause_on_hardware_disconnect;
+        cfg.click_player_to_toggle = self.click_player_to_toggle;
+        cfg.show_subseconds = self.show_subseconds;
+        cfg.wheel_seek_seconds = self.wheel_seek_seconds;
+        cfg.osd_position = self.osd_position;
+        cfg.osd_timeout_seconds = self.osd_timeout_seconds;
+        cfg.paused_drag_action = self.paused_drag_action;
+        cfg.playing_drag_action = self.playing_drag_action;
         cfg.save();
     }
 
@@ -1402,6 +1481,17 @@ impl PealayerApp {
     pub(crate) fn set_direction(&mut self, preference: crate::config::AppDirection) {
         self.direction_preference = preference;
         self.rtl = crate::config::resolve_rtl(preference, self.language);
+        self.save_config();
+    }
+
+    pub(crate) fn set_theme(&mut self, ctx: &egui::Context, theme: crate::config::AppTheme) {
+        self.theme_preference = theme;
+        ctx.set_theme(match theme {
+            crate::config::AppTheme::System => egui::ThemePreference::System,
+            crate::config::AppTheme::Light => egui::ThemePreference::Light,
+            crate::config::AppTheme::Dark => egui::ThemePreference::Dark,
+        });
+        crate::platform::windows::set_window_theme(ctx.global_style().visuals.dark_mode);
         self.save_config();
     }
 
@@ -1618,6 +1708,7 @@ impl Default for PealayerApp {
         let _ = mpv_client.observe_property("audio-delay", libmpv2::Format::Double, 10);
         let _ = mpv_client.observe_property("aid", libmpv2::Format::String, 11);
         let _ = mpv_client.observe_property("eof-reached", libmpv2::Format::Flag, 12);
+        let _ = mpv_client.observe_property("estimated-vf-fps", libmpv2::Format::Double, 13);
         let (interop_tx, interop_rx) = std::sync::mpsc::channel();
         let (_controller_cmd_tx, controller_cmd_rx) =
             std::sync::mpsc::channel::<crate::platform::interop::ControllerDelivery>();
@@ -1636,6 +1727,7 @@ impl Default for PealayerApp {
             language_preference: crate::config::AppLanguage::System,
             language: crate::config::resolve_language(crate::config::AppLanguage::System),
             direction_preference: crate::config::AppDirection::Auto,
+            theme_preference: crate::config::AppTheme::System,
             rtl: crate::config::resolve_rtl(
                 crate::config::AppDirection::Auto,
                 crate::config::resolve_language(crate::config::AppLanguage::System),
@@ -1645,6 +1737,7 @@ impl Default for PealayerApp {
             render_context: Arc::new(Mutex::new(None)),
             playback_time: 0.0,
             duration: 0.0,
+            media_fps: 0.0,
             is_paused: false,
             is_eof: false,
             volume: 100.0,
@@ -1708,6 +1801,21 @@ impl Default for PealayerApp {
             is_window_operating: false,
             show_shortcuts_dialog: false,
             show_about_dialog: false,
+            show_preferences_dialog: false,
+            preferences_tab: 0,
+            pause_on_hardware_disconnect: true,
+            auto_connect_hardware: true,
+            click_player_to_toggle: true,
+            show_subseconds: true,
+            wheel_seek_seconds: 5.0,
+            osd_position: crate::config::OsdPosition::TopLeft,
+            osd_timeout_seconds: 3.5,
+            paused_drag_action: crate::config::PlayerDragAction::MoveWindow,
+            playing_drag_action: crate::config::PlayerDragAction::TemporaryFastForward,
+            was_hardware_connected: false,
+            connection_notice: None,
+            workspace_before_fullscreen: None,
+            was_fullscreen: false,
             interop_rx,
             controller_cmd_rx,
             web_state_tx,

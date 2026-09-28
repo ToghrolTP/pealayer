@@ -10,11 +10,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         ui.with_layout(
             crate::ui::i18n::layout(app.rtl, egui::Align::Center),
             |ui| {
-                let dt = ui.input(|i| i.stable_dt);
-                let fps = if dt > 0.0 { 1.0 / dt } else { 0.0 };
-                ui.label(format!("FPS: {:.0}", fps));
-
-                ui.separator();
+                if app.current_video_path.is_some() && app.media_fps.is_finite() && app.media_fps > 0.0 {
+                    ui.label(format!("{:.3} fps", app.media_fps));
+                    ui.separator();
+                }
                 ui.horizontal(|ui| {
                     let connection_requested = app
                         .engine_handle
@@ -79,7 +78,70 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     } else {
                         "Hardware: Disconnected".to_string()
                     };
-                    ui.label(label_text);
+                    let connection_label = ui.label(label_text);
+                    if let Some(notice) = &app.connection_notice {
+                        connection_label.on_hover_text(notice);
+                    }
+
+                    if let Some(capabilities) = capabilities.as_ref().filter(|value| value.board_connected) {
+                        if let Some(status_led) = &capabilities.status_led {
+                            let brightness = f32::from(status_led.brightness) / 255.0;
+                            let color = egui::Color32::from_rgb(
+                                (f32::from(status_led.red) * brightness).round() as u8,
+                                (f32::from(status_led.green) * brightness).round() as u8,
+                                (f32::from(status_led.blue) * brightness).round() as u8,
+                            );
+                            let (led_rect, led_response) = ui.allocate_exact_size(
+                                egui::vec2(16.0, 16.0),
+                                egui::Sense::click(),
+                            );
+                            ui.painter().circle_filled(led_rect.center(), 6.0, color);
+                            ui.painter().circle_stroke(
+                                led_rect.center(),
+                                6.0,
+                                egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.fg_stroke.color),
+                            );
+                            if led_response
+                                .on_hover_text(format!(
+                                    "{} RGB({}, {}, {}) · {} {} · {} {}",
+                                    app.tr("Hardware status LED"),
+                                    status_led.red,
+                                    status_led.green,
+                                    status_led.blue,
+                                    app.tr("brightness"),
+                                    status_led.brightness,
+                                    app.tr("effect"),
+                                    status_led.effect,
+                                ))
+                                .clicked()
+                            {
+                                app.preferences_tab = 2;
+                                app.show_preferences_dialog = true;
+                            }
+                        }
+
+                        let telemetry = &capabilities.telemetry;
+                        if let Some(bus_mv) = telemetry.bus_mv {
+                            ui.label(format!("{:.2} V", f64::from(bus_mv) / 1000.0));
+                        }
+                        if let Some(current_ma) = telemetry.current_ma {
+                            ui.label(format!("{current_ma} mA"));
+                        }
+                        if let Some(temperature) = telemetry.led_temperature_centi_c {
+                            ui.label(format!("{:.1} °C", f64::from(temperature) / 100.0));
+                        }
+                        if !capabilities.warnings.is_empty() {
+                            let warning = &capabilities.warnings[0];
+                            let response = ui.colored_label(
+                                ui.visuals().warn_fg_color,
+                                format!("⚠ {}", warning.code),
+                            );
+                            if response.on_hover_text(&warning.message).clicked() {
+                                app.preferences_tab = 2;
+                                app.show_preferences_dialog = true;
+                            }
+                        }
+                    }
                 });
 
                 if app.estop_active {

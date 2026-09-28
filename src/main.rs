@@ -329,6 +329,9 @@ fn main() -> eframe::Result {
             mpv_client
                 .observe_property("eof-reached", libmpv2::Format::Flag, 12)
                 .unwrap();
+            mpv_client
+                .observe_property("estimated-vf-fps", libmpv2::Format::Double, 13)
+                .unwrap();
 
             let egui_ctx2 = cc.egui_ctx.clone();
             mpv_client.set_wakeup_callback(move || {
@@ -382,12 +385,14 @@ fn main() -> eframe::Result {
                 language_preference,
                 language,
                 direction_preference,
+                theme_preference: crate::config::resolved_theme(&loaded_config),
                 rtl,
                 mpv: mpv_static,
                 mpv_client,
                 render_context: Arc::new(Mutex::new(Some(RenderContextWrapper(render_context)))),
                 playback_time: 0.0,
                 duration: 0.0,
+                media_fps: 0.0,
                 is_paused: false,
                 is_eof: false,
                 volume: initial_volume,
@@ -439,19 +444,37 @@ fn main() -> eframe::Result {
                 track_locked: std::collections::BTreeSet::new(),
                 active_drag: None,
                 estop_active: false,
-                serial_port: crate::four_d::controller::DEFAULT_ENDPOINT.to_string(),
+                serial_port: loaded_config
+                    .hardware_endpoint
+                    .clone()
+                    .unwrap_or_else(|| crate::four_d::controller::DEFAULT_ENDPOINT.to_string()),
                 is_connected: false,
                 lasso_origin: None,
                 lasso_rect: None,
                 current_video_path: None,
                 show_remaining_time: loaded_config.show_remaining_time,
                 osd_message: None,
-                recent_media: loaded_config.recent_media,
+                recent_media: loaded_config.recent_media.clone(),
                 show_open_url_dialog: false,
                 url_input_buffer: String::new(),
                 is_window_operating: false,
                 show_shortcuts_dialog: false,
                 show_about_dialog: false,
+                show_preferences_dialog: false,
+                preferences_tab: 0,
+                pause_on_hardware_disconnect: loaded_config.pause_on_hardware_disconnect,
+                auto_connect_hardware: loaded_config.auto_connect_hardware,
+                click_player_to_toggle: loaded_config.click_player_to_toggle,
+                show_subseconds: loaded_config.show_subseconds,
+                wheel_seek_seconds: loaded_config.wheel_seek_seconds,
+                osd_position: loaded_config.osd_position,
+                osd_timeout_seconds: loaded_config.osd_timeout_seconds,
+                paused_drag_action: loaded_config.paused_drag_action,
+                playing_drag_action: loaded_config.playing_drag_action,
+                was_hardware_connected: false,
+                connection_notice: None,
+                workspace_before_fullscreen: None,
+                was_fullscreen: cli_options.fullscreen,
                 interop_rx,
                 controller_cmd_rx,
                 web_state_tx,
@@ -462,6 +485,40 @@ fn main() -> eframe::Result {
                 window_handle: None,
                 shell_initialized: false,
             };
+
+            if app.auto_connect_hardware {
+                let configured_endpoint = app.serial_port.clone();
+                let selected_endpoint = if crate::four_d::controller::is_controller_endpoint(
+                    &configured_endpoint,
+                ) && crate::four_d::controller::ControllerClient::is_reachable(
+                    &configured_endpoint,
+                    std::time::Duration::from_millis(250),
+                ) {
+                    Some(configured_endpoint)
+                } else if !crate::four_d::controller::is_controller_endpoint(&configured_endpoint)
+                    && crate::four_d::controller::available_endpoints()
+                        .iter()
+                        .any(|candidate| candidate == &configured_endpoint)
+                {
+                    Some(configured_endpoint)
+                } else if crate::four_d::controller::ControllerClient::is_reachable(
+                    crate::four_d::controller::DEFAULT_ENDPOINT,
+                    std::time::Duration::from_millis(250),
+                ) {
+                    Some(crate::four_d::controller::DEFAULT_ENDPOINT.to_string())
+                } else {
+                    None
+                };
+                if let Some(endpoint) = selected_endpoint {
+                    app.serial_port = endpoint.clone();
+                    if let Ok(mut selected) = app.engine_handle.serial_port.lock() {
+                        *selected = endpoint;
+                    }
+                    app.engine_handle
+                        .connection_requested
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
 
             if let Some(target) = cli_options.target {
                 if target.starts_with("http://") || target.starts_with("https://") {

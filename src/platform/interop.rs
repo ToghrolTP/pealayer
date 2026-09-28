@@ -113,6 +113,9 @@ pub enum InteropCommand {
         #[serde(alias = "path")]
         target: String,
     },
+    SetFullscreen { enabled: bool },
+    ToggleFullscreen,
+    SetWorkspace { nle: bool },
     GetStatus,
 }
 
@@ -181,6 +184,25 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
             Ok(Some(InteropCommand::Open {
                 target: string(&["target", "path"] )?,
             }))
+        }
+        "fullscreen" | "pealayer.fullscreen.set" | "pealayer.player.fullscreen.set" => {
+            let enabled = request
+                .params
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "missing boolean parameter: enabled".to_string())?;
+            Ok(Some(InteropCommand::SetFullscreen { enabled }))
+        }
+        "toggle_fullscreen" | "pealayer.fullscreen.toggle" => {
+            Ok(Some(InteropCommand::ToggleFullscreen))
+        }
+        "workspace" | "pealayer.workspace.set" => {
+            let workspace = string(&["workspace", "value"])?;
+            match workspace.trim().to_ascii_lowercase().as_str() {
+                "nle" | "editor" => Ok(Some(InteropCommand::SetWorkspace { nle: true })),
+                "simple" | "player" => Ok(Some(InteropCommand::SetWorkspace { nle: false })),
+                _ => Err("workspace must be nle or simple".to_string()),
+            }
         }
         "get_status" | "player.status" | "pealayer.status" | "pealayer.player.status" => {
             Ok(None)
@@ -258,6 +280,25 @@ pub fn parse_interop_request(line: &str) -> Result<(Option<serde_json::Value>, I
             "open" | "open_video" => {
                 let target = params.and_then(|p| p.get("target").or_else(|| p.get("path"))).and_then(|t| t.as_str()).unwrap_or("").to_string();
                 InteropCommand::Open { target }
+            }
+            "fullscreen" | "set_fullscreen" => {
+                let enabled = params
+                    .and_then(|p| p.get("enabled"))
+                    .and_then(|value| value.as_bool())
+                    .ok_or("Missing enabled boolean")?;
+                InteropCommand::SetFullscreen { enabled }
+            }
+            "toggle_fullscreen" => InteropCommand::ToggleFullscreen,
+            "workspace" | "set_workspace" => {
+                let workspace = params
+                    .and_then(|p| p.get("workspace").or_else(|| p.get("value")))
+                    .and_then(|value| value.as_str())
+                    .ok_or("Missing workspace")?;
+                match workspace.trim().to_ascii_lowercase().as_str() {
+                    "nle" | "editor" => InteropCommand::SetWorkspace { nle: true },
+                    "simple" | "player" => InteropCommand::SetWorkspace { nle: false },
+                    _ => return Err("workspace must be nle or simple".to_string()),
+                }
             }
             "get_status" | "player.status" => InteropCommand::GetStatus,
             other => return Err(format!("Unknown RPC method: {}", other)),

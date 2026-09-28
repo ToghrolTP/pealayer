@@ -189,6 +189,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 });
 
                 ui.menu_button(app.tr("Edit"), |ui| {
+                    if ui
+                        .button(format!("⚙ {}", app.tr("Preferences...")))
+                        .clicked()
+                    {
+                        app.show_preferences_dialog = true;
+                        ui.close();
+                    }
+                    ui.separator();
                     let mut undo_btn = egui::Button::new(app.tr("Undo"));
                     undo_btn = undo_btn.shortcut_text("Ctrl+Z");
                     if ui.add_enabled(false, undo_btn).clicked() {
@@ -355,7 +363,15 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     ui.add_space(8.0);
 
                     // 1. E-STOP Kill Switch Button
-                    let btn = estop_button(ui, app.estop_active, language);
+                    let board_ready = app
+                        .advertised_hardware()
+                        .is_some_and(|capabilities| capabilities.board_connected);
+                    let btn = ui
+                        .add_enabled_ui(board_ready, |ui| {
+                            estop_button(ui, app.estop_active, language)
+                        })
+                        .inner
+                        .on_disabled_hover_text(app.tr("E-STOP is available when a live board is connected"));
 
                     if btn.clicked() {
                         app.estop_active = !app.estop_active;
@@ -365,7 +381,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                         if app.estop_active {
                             // Pause video playback immediately
-                            let _ = app.mpv.set_property("pause", true);
+                            app.pause();
                         }
                     }
 
@@ -383,10 +399,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     } else {
                         app.tr("Connect")
                     };
-                    let conn_btn = ui.add_enabled(
-                        !connection_requested || app.is_connected,
-                        egui::Button::new(conn_text).selected(app.is_connected),
-                    );
+                    let conn_btn = ui.add(egui::Button::new(conn_text).selected(app.is_connected));
                     if conn_btn.clicked() {
                         {
                             let mut port_guard = app.engine_handle.serial_port.lock().unwrap();
@@ -394,7 +407,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         }
                         app.engine_handle
                             .connection_requested
-                            .store(!app.is_connected, std::sync::atomic::Ordering::Relaxed);
+                            .store(
+                                !(app.is_connected || connection_requested),
+                                std::sync::atomic::Ordering::Relaxed,
+                            );
                     }
 
                     // PCController owns the board during normal operation. Direct serial is

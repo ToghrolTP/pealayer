@@ -18,6 +18,7 @@ fn install_advertised_relay(app: &PealayerApp, id: u8, name: &str) {
         }],
         pwm_channels: vec![],
         macros: vec![],
+        ..Default::default()
     }));
 }
 

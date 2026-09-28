@@ -10,14 +10,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         return;
     }
 
-    let (rect, response) = ui.allocate_exact_size(video_size, egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(video_size, egui::Sense::click_and_drag());
 
-    if response.double_clicked() {
-        if app.current_video_path.is_some() {
-            let is_fullscreen = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
-        } else {
+    if response.clicked_by(egui::PointerButton::Primary) {
+        if app.current_video_path.is_some() && app.click_player_to_toggle {
+            app.toggle_playback();
+        } else if app.current_video_path.is_none() {
             if let Some(path) = rfd::FileDialog::new()
                 .add_filter(
                     &video_files_label,
@@ -26,10 +24,36 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 .pick_file()
             {
                 app.load_video_file(path);
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
             }
         }
+    }
+
+    if response.dragged() && app.current_video_path.is_some() {
+        let action = if app.is_paused {
+            app.paused_drag_action
+        } else {
+            app.playing_drag_action
+        };
+        match action {
+            crate::config::PlayerDragAction::MoveWindow => {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            crate::config::PlayerDragAction::Seek => {
+                let delta = ui.input(|input| input.pointer.delta().x) as f64 / 12.0;
+                if delta.abs() >= 0.01 {
+                    app.seek_relative(delta);
+                }
+            }
+            crate::config::PlayerDragAction::TemporaryFastForward => {
+                let speed = (1.0 + response.drag_delta().x.abs() as f64 / 160.0).clamp(1.0, 4.0);
+                let _ = app.mpv.set_property("speed", speed);
+                app.set_osd(format!("{}: {speed:.1}×", app.tr("Playback speed")));
+            }
+            crate::config::PlayerDragAction::None => {}
+        }
+    }
+    if response.drag_stopped() {
+        let _ = app.mpv.set_property("speed", 1.0_f64);
     }
 
     if response.hovered() {
@@ -44,26 +68,30 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             }
             d
         });
-        let is_shift = ui.input(|i| i.modifiers.shift);
+        let adjust_volume = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
 
-        if is_shift || scroll.x != 0.0 {
-            let delta = if scroll.x != 0.0 { scroll.x } else { scroll.y };
-            if delta != 0.0 && app.current_video_path.is_some() {
-                let seek_change = if delta > 0.0 { 5.0 } else { -5.0 };
-                app.seek_relative(seek_change);
-            }
-        } else if scroll.y != 0.0 {
+        if adjust_volume && scroll.y != 0.0 {
             let vol_change = if scroll.y > 0.0 { 2.0 } else { -2.0 };
             let new_vol = (app.volume + vol_change).clamp(0.0, 130.0);
             let _ = app.mpv.set_property("volume", new_vol);
             app.volume = new_vol;
             app.set_osd(format!("Volume: {:.0}%", new_vol));
+        } else {
+            let delta = if scroll.y != 0.0 { -scroll.y } else { scroll.x };
+            if delta != 0.0 && app.current_video_path.is_some() {
+                let seek_change = if delta > 0.0 {
+                    app.wheel_seek_seconds
+                } else {
+                    -app.wheel_seek_seconds
+                };
+                app.seek_relative(seek_change);
+            }
         }
     }
 
     response.context_menu(|ui| {
         if ui
-            .button(format!("📂 {}", app.tr("Open Video File...")))
+            .button(format!("▣ {}", app.tr("Open Video File...")))
             .clicked()
         {
             ui.close();
@@ -79,7 +107,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         }
 
         if ui
-            .button(format!("🔗 {}", app.tr("Open Location / URL...")))
+            .button(format!("↗ {}", app.tr("Open Location / URL...")))
             .clicked()
         {
             ui.close();
@@ -90,7 +118,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         if ui
             .add_enabled(
                 has_video,
-                egui::Button::new(format!("❌ {}", app.tr("Close Video"))),
+                egui::Button::new(format!("× {}", app.tr("Close Video"))),
             )
             .clicked()
         {
@@ -117,15 +145,13 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
         let is_fullscreen = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
         let fs_title = if is_fullscreen {
-            format!("🗗 {}", app.tr("Exit Fullscreen"))
+            format!("⤡ {}", app.tr("Exit Fullscreen"))
         } else {
             format!("⛶ {}", app.tr("Fullscreen"))
         };
         if ui.button(fs_title).clicked() {
             ui.close();
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen));
-            app.set_osd(app.tr("Fullscreen"));
+            app.set_fullscreen(ui.ctx(), !is_fullscreen);
         }
 
         let mute_title = if app.is_muted {
@@ -149,7 +175,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
         ui.separator();
 
-        ui.menu_button(format!("🕒 {}", app.tr("Open Recent")), |ui| {
+        ui.menu_button(format!("◷ {}", app.tr("Open Recent")), |ui| {
             if app.recent_media.is_empty() {
                 ui.label(app.tr("No recent media"));
             } else {
@@ -177,9 +203,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         });
 
         let pin_title = if app.pin_controls {
-            format!("📌 {}", app.tr("Unpin Controls"))
+            format!("◆ {}", app.tr("Unpin Controls"))
         } else {
-            format!("📍 {}", app.tr("Pin Controls"))
+            format!("◇ {}", app.tr("Pin Controls"))
         };
         if ui.button(pin_title).clicked() {
             ui.close();
@@ -234,21 +260,37 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     // 2.5 Draw OSD overlay if active
     if let Some((msg, timestamp)) = &app.osd_message {
         let elapsed = timestamp.elapsed().as_secs_f32();
-        if elapsed < 1.5 {
-            let alpha = if elapsed < 1.0 {
+        let timeout = app.osd_timeout_seconds.max(1.0);
+        let fade_start = (timeout - 0.6).max(0.4);
+        if elapsed < timeout {
+            let alpha = if elapsed < fade_start {
                 1.0
             } else {
-                ((1.5 - elapsed) / 0.5).clamp(0.0, 1.0)
+                ((timeout - elapsed) / (timeout - fade_start)).clamp(0.0, 1.0)
             };
             let text_color = egui::Color32::WHITE.linear_multiply(alpha);
             let bg_color = egui::Color32::from_black_alpha((180.0 * alpha) as u8);
 
-            let center = dest_rect.center();
+            let center = match app.osd_position {
+                crate::config::OsdPosition::TopLeft => {
+                    dest_rect.left_top() + egui::vec2(24.0, 24.0)
+                }
+                crate::config::OsdPosition::Center => dest_rect.center(),
+            };
             let font_id = egui::FontId::proportional(22.0);
             let galley = ui
                 .painter()
                 .layout_no_wrap(msg.clone(), font_id, text_color);
-            let rect = egui::Rect::from_center_size(center, galley.size() + egui::vec2(24.0, 16.0));
+            let rect = match app.osd_position {
+                crate::config::OsdPosition::TopLeft => egui::Rect::from_min_size(
+                    center,
+                    galley.size() + egui::vec2(24.0, 16.0),
+                ),
+                crate::config::OsdPosition::Center => egui::Rect::from_center_size(
+                    center,
+                    galley.size() + egui::vec2(24.0, 16.0),
+                ),
+            };
             ui.painter().rect_filled(rect, 8.0, bg_color);
             ui.painter().galley(
                 rect.min + egui::vec2(12.0, 8.0),
@@ -354,7 +396,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .rect_filled(rect, 0.0, egui::Color32::from_black_alpha(180));
         let font_id = egui::FontId::proportional(26.0);
         let galley = ui.painter().layout_no_wrap(
-            format!("📁 {}", app.tr("Drop video file here to play")),
+            format!("▣ {}", app.tr("Drop video file here to play")),
             font_id,
             egui::Color32::WHITE,
         );
