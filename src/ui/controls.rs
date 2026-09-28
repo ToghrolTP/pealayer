@@ -70,8 +70,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     };
 
                     let is_long_video = app.duration >= 3600.0;
+                    let show_subseconds = app.show_subseconds;
                     let format_time = |time| {
-                        format_player_time(time, is_long_video, app.show_subseconds)
+                        format_player_time(time, is_long_video, show_subseconds)
                     };
 
                     let elapsed_str = format_time(elapsed_time);

@@ -70,69 +70,80 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     });
                     ui.add_space(8.0);
                     ui.label(app.tr("On-screen display"));
+                    let top_left_label = app.tr("Top left");
+                    let center_label = app.tr("Center");
                     egui::ComboBox::from_id_salt("preferences_osd_position")
                         .selected_text(match app.osd_position {
-                            OsdPosition::TopLeft => app.tr("Top left"),
-                            OsdPosition::Center => app.tr("Center"),
+                            OsdPosition::TopLeft => top_left_label.clone(),
+                            OsdPosition::Center => center_label.clone(),
                         })
                         .show_ui(ui, |ui| {
                             changed |= ui
                                 .selectable_value(
                                     &mut app.osd_position,
                                     OsdPosition::TopLeft,
-                                    app.tr("Top left"),
+                                    top_left_label,
                                 )
                                 .changed();
                             changed |= ui
                                 .selectable_value(
                                     &mut app.osd_position,
                                     OsdPosition::Center,
-                                    app.tr("Center"),
+                                    center_label,
                                 )
                                 .changed();
                         });
+                    let osd_timeout_label = app.tr("OSD timeout (seconds)");
                     changed |= ui
                         .add(
                             egui::Slider::new(&mut app.osd_timeout_seconds, 1.0..=10.0)
-                                .text(app.tr("OSD timeout (seconds)")),
+                                .text(osd_timeout_label),
                         )
                         .changed();
                 }
                 1 => {
                     ui.heading(app.tr("Playback behavior"));
+                    let click_to_toggle_label =
+                        app.tr("Single-click the picture to play or pause");
                     changed |= ui
                         .checkbox(
                             &mut app.click_player_to_toggle,
-                            app.tr("Single-click the picture to play or pause"),
+                            click_to_toggle_label,
                         )
                         .changed();
+                    let subseconds_label = app.tr("Show milliseconds in time displays");
                     changed |= ui
                         .checkbox(
                             &mut app.show_subseconds,
-                            app.tr("Show milliseconds in time displays"),
+                            subseconds_label,
                         )
                         .changed();
+                    let wheel_seek_label = app.tr("Mouse-wheel seek step (seconds)");
                     changed |= ui
                         .add(
                             egui::Slider::new(&mut app.wheel_seek_seconds, 0.1..=60.0)
                                 .logarithmic(true)
-                                .text(app.tr("Mouse-wheel seek step (seconds)")),
+                                .text(wheel_seek_label),
                         )
                         .changed();
                     ui.label(app.tr("Click the duration display to toggle total and remaining time."));
                 }
                 2 => {
                     ui.heading(app.tr("PCController and hardware"));
+                    let reconnect_label =
+                        app.tr("Reconnect the last healthy hardware endpoint on startup");
                     changed |= ui
                         .checkbox(
                             &mut app.auto_connect_hardware,
-                            app.tr("Reconnect the last healthy hardware endpoint on startup"),
+                            reconnect_label,
                         )
                         .changed();
+                    let pause_disconnect_label =
+                        app.tr("Pause playback when hardware disconnects unexpectedly");
                     changed |= ui
                         .checkbox(
                             &mut app.pause_on_hardware_disconnect,
-                            app.tr("Pause playback when hardware disconnects unexpectedly"),
+                            pause_disconnect_label,
                         )
                         .changed();
                     ui.label(app.tr("Preferred endpoint"));
