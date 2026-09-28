@@ -9,23 +9,35 @@ import { HeaderBar } from './components/HeaderBar';
 import { RemoteControlTab, PlayerState } from './components/RemoteControlTab';
 import { MediaLibraryTab } from './components/MediaLibraryTab';
 import { PlayerInfoTab } from './components/PlayerInfoTab';
+import { tr } from './i18n';
 
 const { Sider, Content } = Layout;
+
+export interface RuntimeConfig {
+  appName: string;
+  version: string;
+  wsPort: number;
+  locale: 'en' | 'fa';
+  direction: 'ltr' | 'rtl';
+  theme: 'system' | 'light' | 'dark';
+}
 
 const App: React.FC = () => {
   const [collapsed, setCollapsed] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<string>('remote');
   const [connected, setConnected] = useState<boolean>(false);
   const [connectionMode, setConnectionMode] = useState<'ws' | 'http'>('http');
-  const [state, setState] = useState<PlayerState>({
-    playing: false,
-    volume: 100,
-    playback_time: 0,
-    duration: 0,
-    current_video: null,
-  });
+  const [state, setState] = useState<PlayerState>({ status: 'initializing' });
+  const [runtime, setRuntime] = useState<RuntimeConfig | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    if (!runtime) return;
+    document.documentElement.lang = runtime.locale;
+    document.documentElement.dir = runtime.direction;
+    document.title = `${runtime.appName} — ${tr(runtime.locale, 'Control Center')}`;
+  }, [runtime]);
 
   const sendCmd = (command: string, payload: Record<string, any> = {}) => {
     const body = JSON.stringify({ command, ...payload });
@@ -41,9 +53,26 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
+    let disposed = false;
+    fetch('/api/runtime/config')
+      .then((response) => {
+        if (!response.ok) throw new Error(`runtime config ${response.status}`);
+        return response.json();
+      })
+      .then((value: RuntimeConfig) => {
+        if (!disposed) setRuntime(value);
+      })
+      .catch(() => {
+        if (!disposed) setRuntime(null);
+      });
+    return () => { disposed = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!runtime) return;
     const connectWS = () => {
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${proto}//${window.location.hostname}:8081`;
+      const wsUrl = `${proto}//${window.location.hostname}:${runtime.wsPort}`;
 
       try {
         const ws = new WebSocket(wsUrl);
@@ -93,30 +122,30 @@ const App: React.FC = () => {
       clearInterval(httpInterval);
       if (wsRef.current) wsRef.current.close();
     };
-  }, []);
+  }, [runtime]);
 
   const menuItems = [
     {
       key: 'remote',
       icon: <ControlOutlined style={{ fontSize: 18 }} />,
-      label: 'Remote Control',
+      label: tr(runtime?.locale || 'en', 'Remote Control'),
     },
     {
       key: 'library',
       icon: <FolderOpenOutlined style={{ fontSize: 18 }} />,
-      label: 'Media Library',
+      label: tr(runtime?.locale || 'en', 'Media Library'),
     },
     {
       key: 'info',
       icon: <InfoCircleOutlined style={{ fontSize: 18 }} />,
-      label: 'System Info',
+      label: tr(runtime?.locale || 'en', 'System Info'),
     },
   ];
 
   return (
-    <ConfigProvider
+    <ConfigProvider direction={runtime?.direction}
       theme={{
-        algorithm: theme.darkAlgorithm,
+        algorithm: runtime?.theme === 'light' ? theme.defaultAlgorithm : theme.darkAlgorithm,
         token: {
           colorPrimary: '#1d84b5',
           colorBgContainer: '#132e32',
@@ -133,6 +162,8 @@ const App: React.FC = () => {
           onToggleCollapse={() => setCollapsed(!collapsed)}
           connected={connected}
           connectionMode={connectionMode}
+          appName={runtime?.appName}
+          locale={runtime?.locale || 'en'}
         />
 
         <Layout style={{ background: '#0a2239' }}>
@@ -174,16 +205,18 @@ const App: React.FC = () => {
                 state={state}
                 sendCmd={sendCmd}
                 onOpenLibraryTab={() => setActiveTab('library')}
+                locale={runtime?.locale || 'en'}
               />
             )}
             {activeTab === 'library' && (
               <MediaLibraryTab
                 sendCmd={sendCmd}
                 onMediaPlayStarted={() => setActiveTab('remote')}
+                locale={runtime?.locale || 'en'}
               />
             )}
             {activeTab === 'info' && (
-              <PlayerInfoTab state={state} connectionMode={connectionMode} />
+              <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} locale={runtime?.locale || 'en'} />
             )}
           </Content>
         </Layout>

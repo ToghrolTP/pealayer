@@ -9,6 +9,7 @@ import {
   DeleteOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
+import { tr, UiLocale } from '../i18n';
 
 const { Text } = Typography;
 
@@ -30,9 +31,10 @@ interface BrowseResponse {
 interface MediaLibraryTabProps {
   sendCmd: (command: string, payload?: Record<string, any>) => void;
   onMediaPlayStarted?: () => void;
+  locale: UiLocale;
 }
 
-export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMediaPlayStarted }) => {
+export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMediaPlayStarted, locale }) => {
   const [data, setData] = useState<BrowseResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -48,10 +50,10 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
         setData(json);
         setCurrentPath(json.current_path);
       } else {
-        message.error('Failed loading directory');
+        message.error(tr(locale, 'Failed loading directory'));
       }
     } catch {
-      message.error('Error connecting to file system API');
+      message.error(tr(locale, 'Error connecting to file system API'));
     } finally {
       setLoading(false);
     }
@@ -63,7 +65,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
 
   const handlePlayMedia = (filePath: string, fileName: string) => {
     sendCmd('open_video', { path: filePath });
-    message.success(`Playing: ${fileName}`);
+    message.success(`${tr(locale, 'Playing:')} ${fileName}`);
     if (onMediaPlayStarted) {
       onMediaPlayStarted();
     }
@@ -77,13 +79,13 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
         body: JSON.stringify({ target_path: filePath }),
       });
       if (res.ok) {
-        message.success('File deleted');
+        message.success(tr(locale, 'File deleted'));
         fetchDirectory(currentPath);
       } else {
-        message.error('Failed to delete file');
+        message.error(tr(locale, 'Failed to delete file'));
       }
     } catch {
-      message.error('Error deleting file');
+      message.error(tr(locale, 'Error deleting file'));
     }
   };
 
@@ -101,7 +103,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
 
   const columns = [
     {
-      title: 'Name',
+      title: tr(locale, 'Name'),
       dataIndex: 'name',
       key: 'name',
       render: (_: any, record: FileEntry) => (
@@ -136,20 +138,20 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
       ),
     },
     {
-      title: 'Type',
+      title: tr(locale, 'Type'),
       key: 'type',
       width: 120,
       render: (_: any, record: FileEntry) =>
         record.is_dir ? (
-          <Tag color="warning">Folder</Tag>
+          <Tag color="warning">{tr(locale, 'Folder')}</Tag>
         ) : record.is_media ? (
-          <Tag color="processing">Media Video</Tag>
+          <Tag color="processing">{tr(locale, 'Media Video')}</Tag>
         ) : (
-          <Tag color="default">File</Tag>
+          <Tag color="default">{tr(locale, 'File')}</Tag>
         ),
     },
     {
-      title: 'Size',
+      title: tr(locale, 'Size'),
       dataIndex: 'size_bytes',
       key: 'size_bytes',
       width: 120,
@@ -157,7 +159,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
         record.is_dir ? '-' : <Text type="secondary" style={{ fontFamily: 'monospace' }}>{formatSize(size)}</Text>,
     },
     {
-      title: 'Actions',
+      title: tr(locale, 'Actions'),
       key: 'actions',
       width: 140,
       render: (_: any, record: FileEntry) => (
@@ -170,17 +172,17 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
               onClick={() => handlePlayMedia(record.path, record.name)}
               style={{ borderRadius: 6, backgroundColor: '#1d84b5' }}
             >
-              Play
+              {tr(locale, 'Play')}
             </Button>
           )}
           {!record.is_dir && (
             <Popconfirm
-              title="Delete File"
-              description="Are you sure you want to delete this file?"
+              title={tr(locale, 'Delete File')}
+              description={tr(locale, 'Are you sure you want to delete this file?')}
               onConfirm={() => handleDeleteFile(record.path)}
-              okText="Delete"
+              okText={tr(locale, 'Delete')}
               okButtonProps={{ danger: true }}
-              cancelText="Cancel"
+              cancelText={tr(locale, 'Cancel')}
             >
               <Button type="text" danger size="small" icon={<DeleteOutlined />} />
             </Popconfirm>
@@ -196,7 +198,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
     {
       title: (
         <a onClick={() => fetchDirectory('/')} style={{ color: '#38bdf8' }}>
-          Root
+          {tr(locale, 'Root')}
         </a>
       ),
     },
@@ -231,19 +233,19 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
               <Button
                 icon={<ArrowUpOutlined />}
                 onClick={() => fetchDirectory(data.parent_path!)}
-                title="Go Up Directory"
+                title={tr(locale, 'Go Up Directory')}
               >
-                Up
+                {tr(locale, 'Up')}
               </Button>
             )}
             <Button icon={<ReloadOutlined />} onClick={() => fetchDirectory(currentPath)}>
-              Refresh
+              {tr(locale, 'Refresh')}
             </Button>
           </Space>
 
           <Input
             prefix={<SearchOutlined style={{ color: '#53a2be' }} />}
-            placeholder="Search media files..."
+            placeholder={tr(locale, 'Search media files...')}
             allowClear
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}

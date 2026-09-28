@@ -32,7 +32,7 @@ fn test_loopback_tcp_interop_commands_and_status() {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut response_line = String::new();
     reader.read_line(&mut response_line).unwrap();
-    assert!(response_line.contains("\"result\":{\"status\":\"ok\"}"));
+    assert!(response_line.contains("\"result\":{\"status\":\"accepted\"}"));
 
     // 2. Set mock live status and query via get_status
     let mock_status = PlayerStatusResponse {

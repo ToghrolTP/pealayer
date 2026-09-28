@@ -7,6 +7,7 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
 } from '@ant-design/icons';
+import { tr, UiLocale } from '../i18n';
 
 const { Header } = Layout;
 const { Title } = Typography;
@@ -16,6 +17,8 @@ interface HeaderBarProps {
   onToggleCollapse: () => void;
   connected: boolean;
   connectionMode: 'ws' | 'http';
+  appName?: string;
+  locale: UiLocale;
 }
 
 export const HeaderBar: React.FC<HeaderBarProps> = ({
@@ -23,6 +26,8 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   onToggleCollapse,
   connected,
   connectionMode,
+  appName,
+  locale,
 }) => {
   return (
     <Header
@@ -49,11 +54,11 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
         <Space size="middle" align="center">
           <img
             src="/pealayer-icon.svg"
-            alt="Pealayer Logo"
+            alt={appName ? `${appName} ${tr(locale, 'Application logo')}` : tr(locale, 'Application logo')}
             style={{ width: 28, height: 28, borderRadius: 6, objectFit: 'contain' }}
           />
           <Title level={4} style={{ margin: 0, color: '#f8fafc', fontWeight: 700 }}>
-            Pealayer Control Center
+            {appName ? `${appName} — ${tr(locale, 'Control Center')}` : tr(locale, 'Control Center')}
           </Title>
         </Space>
       </Space>
@@ -65,7 +70,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
             color="success"
             style={{ borderRadius: 12, padding: '4px 12px', fontSize: 13 }}
           >
-            {connectionMode === 'ws' ? 'WebSocket Live' : 'HTTP Polling'}
+            {connectionMode === 'ws' ? tr(locale, 'WebSocket Live') : tr(locale, 'HTTP Polling')}
           </Tag>
         ) : (
           <Tag
@@ -73,7 +78,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
             color="error"
             style={{ borderRadius: 12, padding: '4px 12px', fontSize: 13 }}
           >
-            Offline
+            {tr(locale, 'Offline')}
           </Tag>
         )}
       </div>

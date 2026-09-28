@@ -1,13 +1,56 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AppTheme {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum AppLanguage {
+    #[serde(rename = "system")]
+    #[default]
+    System,
+    #[serde(rename = "en")]
+    English,
+    #[serde(rename = "fa")]
+    Persian,
+}
+
+impl AppLanguage {
+    pub fn is_rtl(self) -> bool {
+        matches!(self, Self::Persian)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AppDirection {
+    #[default]
+    Auto,
+    Ltr,
+    Rtl,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
     pub volume: f64,
     pub is_muted: bool,
     pub pin_controls: bool,
     pub show_remaining_time: bool,
     pub recent_media: Vec<PathBuf>,
+    pub app_name: Option<String>,
+    pub app_icon: Option<PathBuf>,
+    pub app_publisher: Option<String>,
+    pub app_copyright: Option<String>,
+    pub theme: AppTheme,
+    pub language: AppLanguage,
+    pub direction: AppDirection,
 }
 
 impl Default for AppConfig {
@@ -18,6 +61,13 @@ impl Default for AppConfig {
             pin_controls: false,
             show_remaining_time: false,
             recent_media: Vec::new(),
+            app_name: None,
+            app_icon: None,
+            app_publisher: None,
+            app_copyright: None,
+            theme: AppTheme::System,
+            language: AppLanguage::System,
+            direction: AppDirection::Auto,
         }
     }
 }
@@ -77,8 +127,174 @@ pub fn resolve_system_config_path() -> PathBuf {
     PathBuf::from(home).join(".config").join("pealayer").join("config.json")
 }
 
+fn parse_language_tag(value: &str) -> Option<AppLanguage> {
+    let normalized = value.trim().replace('_', "-").to_ascii_lowercase();
+    match normalized.as_str() {
+        "system" | "auto" => Some(AppLanguage::System),
+        "en" | "english" => Some(AppLanguage::English),
+        "fa" | "fa-ir" | "persian" | "farsi" => Some(AppLanguage::Persian),
+        _ if normalized.starts_with("fa-") => Some(AppLanguage::Persian),
+        _ if normalized.starts_with("en-") => Some(AppLanguage::English),
+        _ => None,
+    }
+}
+
+fn system_language() -> AppLanguage {
+    for key in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+        if let Ok(value) = std::env::var(key) {
+            if let Some(language) = parse_language_tag(&value) {
+                if language != AppLanguage::System {
+                    return language;
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+        if let Ok(international) = RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey(r"Control Panel\International")
+        {
+            if let Ok(locale_name) = international.get_value::<String, _>("LocaleName") {
+                if let Some(language) = parse_language_tag(&locale_name) {
+                    if language != AppLanguage::System {
+                        return language;
+                    }
+                }
+            }
+        }
+    }
+
+    AppLanguage::English
+}
+
+pub fn resolved_language_preference(config: &AppConfig) -> AppLanguage {
+    std::env::var("APP_LOCALE")
+        .ok()
+        .and_then(|value| parse_language_tag(&value))
+        .unwrap_or(config.language)
+}
+
+pub fn resolve_language(preference: AppLanguage) -> AppLanguage {
+    match preference {
+        AppLanguage::System => system_language(),
+        language => language,
+    }
+}
+
+pub fn resolved_direction_preference(config: &AppConfig) -> AppDirection {
+    match std::env::var("APP_DIRECTION")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "ltr" => AppDirection::Ltr,
+        "rtl" => AppDirection::Rtl,
+        "auto" => AppDirection::Auto,
+        _ => config.direction,
+    }
+}
+
+pub fn resolve_rtl(preference: AppDirection, language: AppLanguage) -> bool {
+    match preference {
+        AppDirection::Auto => language.is_rtl(),
+        AppDirection::Ltr => false,
+        AppDirection::Rtl => true,
+    }
+}
+
+pub fn resolved_app_name(config: &AppConfig) -> String {
+    std::env::var("APP_NAME")
+        .ok()
+        .or_else(|| config.app_name.clone())
+        .or_else(|| application_brand_string("applicationName"))
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "Pealayer".to_string())
+}
+
+pub fn resolved_app_icon(config: &AppConfig) -> Option<PathBuf> {
+    std::env::var_os("APP_ICON")
+        .map(PathBuf::from)
+        .or_else(|| config.app_icon.clone())
+        .or_else(application_brand_app_icon)
+}
+
+fn application_brand() -> Option<(PathBuf, serde_json::Value)> {
+    let path = std::env::var_os("APPLICATION_BRAND").map(PathBuf::from)?;
+    let value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+    if value
+        .get("format")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|format| format != "application-brand")
+    {
+        return None;
+    }
+    Some((path, value))
+}
+
+fn application_brand_string(name: &str) -> Option<String> {
+    application_brand()?
+        .1
+        .get(name)?
+        .as_str()
+        .map(str::to_string)
+}
+
+fn application_brand_app_icon() -> Option<PathBuf> {
+    let (path, value) = application_brand()?;
+    let relative = value.get("windowsIcons")?.get("APP")?.as_str()?;
+    Some(path.parent().unwrap_or_else(|| std::path::Path::new(".")).join(relative))
+}
+
+fn resolved_optional_branding(env_name: &str, configured: Option<&str>) -> Option<String> {
+    std::env::var(env_name)
+        .ok()
+        .or_else(|| configured.map(str::to_string))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+pub fn resolved_app_publisher(config: &AppConfig) -> Option<String> {
+    resolved_optional_branding("APP_PUBLISHER", config.app_publisher.as_deref())
+        .or_else(|| application_brand_string("companyName"))
+}
+
+pub fn resolved_app_copyright(config: &AppConfig) -> Option<String> {
+    resolved_optional_branding("APP_COPYRIGHT", config.app_copyright.as_deref())
+        .or_else(|| application_brand_string("legalCopyright"))
+}
+
+pub fn resolved_theme(config: &AppConfig) -> AppTheme {
+    match std::env::var("APP_THEME")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "light" => AppTheme::Light,
+        "dark" => AppTheme::Dark,
+        "system" => AppTheme::System,
+        _ => config.theme,
+    }
+}
+
+pub fn runtime_port(env_name: &str, default: u16) -> u16 {
+    std::env::var(env_name)
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port != 0)
+        .unwrap_or(default)
+}
+
 impl AppConfig {
     pub fn get_config_path() -> PathBuf {
+        if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {
+            return PathBuf::from(path);
+        }
         let exe_dir = detect_executable_dir();
         match detect_storage_mode(&exe_dir) {
             StorageMode::Portable => resolve_portable_config_path(&exe_dir),
@@ -169,12 +385,33 @@ impl AppConfig {
     }
 
     pub fn load() -> Self {
+        if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {
+            let path = PathBuf::from(path);
+            if path.exists() {
+                if let Ok(data) = std::fs::read_to_string(&path) {
+                    if let Ok(cfg) = serde_json::from_str::<AppConfig>(&data) {
+                        return cfg;
+                    }
+                }
+            }
+            return Self::default();
+        }
         let exe_dir = detect_executable_dir();
         let mode = detect_storage_mode(&exe_dir);
         Self::load_with_mode(mode, &exe_dir)
     }
 
     pub fn save(&self) {
+        if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {
+            let path = PathBuf::from(path);
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Ok(json) = serde_json::to_string_pretty(self) {
+                let _ = std::fs::write(path, json);
+            }
+            return;
+        }
         let exe_dir = detect_executable_dir();
         let mode = detect_storage_mode(&exe_dir);
         self.save_with_mode(mode, &exe_dir);
@@ -193,6 +430,13 @@ mod tests {
         assert!(!cfg.pin_controls);
         assert!(!cfg.show_remaining_time);
         assert!(cfg.recent_media.is_empty());
+        assert!(cfg.app_name.is_none());
+        assert!(cfg.app_icon.is_none());
+        assert!(cfg.app_publisher.is_none());
+        assert!(cfg.app_copyright.is_none());
+        assert_eq!(cfg.theme, AppTheme::System);
+        assert_eq!(cfg.language, AppLanguage::System);
+        assert_eq!(cfg.direction, AppDirection::Auto);
     }
 
     #[test]
@@ -313,6 +557,45 @@ mod tests {
         assert_eq!(loaded.recent_media, vec![PathBuf::from("/media/video.mp4")]);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn empty_configured_name_uses_product_default() {
+        let mut cfg = AppConfig::default();
+        cfg.app_name = Some("   ".to_string());
+        if std::env::var_os("APP_NAME").is_none() {
+            assert_eq!(resolved_app_name(&cfg), "Pealayer");
+        }
+    }
+
+    #[test]
+    fn configured_branding_metadata_is_trimmed_and_optional() {
+        let mut cfg = AppConfig::default();
+        cfg.app_publisher = Some("  Example Studio  ".to_string());
+        cfg.app_copyright = Some("   ".to_string());
+        if std::env::var_os("APP_PUBLISHER").is_none()
+            && std::env::var_os("APP_COPYRIGHT").is_none()
+        {
+            assert_eq!(resolved_app_publisher(&cfg).as_deref(), Some("Example Studio"));
+            assert_eq!(resolved_app_copyright(&cfg), None);
+        }
+    }
+
+    #[test]
+    fn language_tags_support_web_contract_values() {
+        assert_eq!(parse_language_tag("en"), Some(AppLanguage::English));
+        assert_eq!(parse_language_tag("fa-IR"), Some(AppLanguage::Persian));
+        assert_eq!(parse_language_tag("farsi"), Some(AppLanguage::Persian));
+        assert_eq!(parse_language_tag("system"), Some(AppLanguage::System));
+        assert_eq!(parse_language_tag("de"), None);
+
+        let json = serde_json::to_string(&AppLanguage::Persian).unwrap();
+        assert_eq!(json, "\"fa\"");
+        assert_eq!(serde_json::from_str::<AppLanguage>("\"en\"").unwrap(), AppLanguage::English);
+        assert!(resolve_rtl(AppDirection::Auto, AppLanguage::Persian));
+        assert!(!resolve_rtl(AppDirection::Auto, AppLanguage::English));
+        assert!(resolve_rtl(AppDirection::Rtl, AppLanguage::English));
+        assert!(!resolve_rtl(AppDirection::Ltr, AppLanguage::Persian));
     }
 }
 

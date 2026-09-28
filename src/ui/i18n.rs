@@ -1,0 +1,358 @@
+use crate::config::AppLanguage;
+use eframe::egui;
+
+/// Translate application-owned copy. Values learned from media metadata or
+/// PCController are deliberately never passed through this table.
+pub fn tr(language: AppLanguage, english: &'static str) -> String {
+    if language != AppLanguage::Persian {
+        return english.to_owned();
+    }
+    let translated = match english {
+        "File" => "پرونده",
+        "Edit" => "ویرایش",
+        "Audio" => "صدا",
+        "Subtitles" => "زیرنویس",
+        "Workspace" => "فضای کاری",
+        "Help" => "راهنما",
+        "Language" => "زبان",
+        "System language" => "زبان سیستم",
+        "English" => "انگلیسی",
+        "Persian" => "فارسی",
+        "Direction" => "جهت",
+        "Automatic" => "خودکار",
+        "Left to right" => "چپ به راست",
+        "Right to left" => "راست به چپ",
+        "Open Video File..." => "باز کردن پروندهٔ ویدئو…",
+        "Open Location / URL..." => "باز کردن نشانی یا پیوند…",
+        "Open Recent" => "پرونده‌های اخیر",
+        "No recent media" => "رسانهٔ اخیری وجود ندارد",
+        "Clear Recent" => "پاک کردن فهرست اخیر",
+        "Close Video" => "بستن ویدئو",
+        "Open Timeline Project..." => "باز کردن پروژهٔ خط زمانی…",
+        "Save Timeline (Sidecar)" => "ذخیرهٔ خط زمانی کنار رسانه",
+        "Save Timeline As..." => "ذخیرهٔ خط زمانی با نام…",
+        "Register as Default Media Player..." => "تنظیم به‌عنوان پخش‌کنندهٔ پیش‌فرض…",
+        "Quit" => "خروج",
+        "Undo" => "واگرد",
+        "Redo" => "ازنو",
+        "Audio Track" => "ترک صوتی",
+        "None" => "هیچ‌کدام",
+        "Audio Settings..." => "تنظیمات صدا…",
+        "Audio Settings" => "تنظیمات صدا",
+        "Subtitle Track" => "ترک زیرنویس",
+        "Enable Subtitles" => "فعال‌سازی زیرنویس",
+        "Subtitle Settings..." => "تنظیمات زیرنویس…",
+        "Subtitle Settings" => "تنظیمات زیرنویس",
+        "NLE Layout (Docked)" => "چیدمان تدوین",
+        "Simple Player" => "پخش‌کنندهٔ ساده",
+        "Keyboard Shortcuts..." => "میان‌برهای صفحه‌کلید…",
+        "About" => "درباره",
+        "Modern 4D Video & Haptic Player" => "پخش‌کنندهٔ نوین ویدئوی چهاربعدی و بازخورد لمسی",
+        "High-performance media playback powered by libmpv2, glow OpenGL, and egui." => {
+            "پخش پرسرعت رسانه با libmpv2،‏ OpenGL و egui."
+        }
+        "Featuring real-time 4D haptic timeline synchronization and multi-track relay control." => {
+            "با همگام‌سازی بلادرنگ خط زمانی چهاربعدی و کنترل چندترکی رله‌ها."
+        }
+        "Connect" => "اتصال",
+        "Connecting…" => "در حال اتصال…",
+        "Disconnect" => "قطع اتصال",
+        "Hardware Disconnected" => "سخت‌افزار قطع است",
+        "PCController coordinator connected" => "هماهنگ‌کنندهٔ PCController متصل است",
+        "RESET E-STOP" => "بازنشانی توقف اضطراری",
+        "E-STOP" => "توقف اضطراری",
+        "E-STOP ACTIVE" => "توقف اضطراری فعال است",
+        "Program Monitor" => "نمایش برنامه",
+        "Effect Controls" => "کنترل جلوه‌ها",
+        "Identity" => "هویت",
+        "Timing constraints" => "محدودیت‌های زمانی",
+        "Start time:" => "زمان آغاز:",
+        "Duration:" => "مدت:",
+        "Hardware target" => "هدف سخت‌افزاری",
+        "Connect PCController to choose an available output." => {
+            "برای انتخاب خروجی در دسترس به PCController متصل شوید."
+        }
+        "Target output:" => "خروجی هدف:",
+        "Bulk effect controls" => "کنترل گروهی جلوه‌ها",
+        "Bulk hardware target override" => "تغییر گروهی هدف سخت‌افزاری",
+        "Bulk actions" => "عملیات گروهی",
+        "Tracks" => "ترک‌ها",
+        "Effects Library" => "کتابخانهٔ جلوه‌ها",
+        "Hardware Monitor" => "پایش سخت‌افزار",
+        "Timeline" => "خط زمانی",
+        "Hardware Monitor Dashboard" => "داشبورد پایش سخت‌افزار",
+        "Search" => "جست‌وجو",
+        "Search effects..." => "جست‌وجوی جلوه‌ها…",
+        "Connect to PCController to discover live board controls." => {
+            "برای دریافت کنترل‌های زندهٔ برد به PCController متصل شوید."
+        }
+        "PCController is connected; waiting for its capability catalog…" => {
+            "PCController متصل است؛ در انتظار فهرست قابلیت‌ها…"
+        }
+        "PCController is reachable, but no board is currently advertising live controls." => {
+            "PCController در دسترس است، اما هیچ بردی کنترل زنده اعلام نمی‌کند."
+        }
+        "The connected board advertises no relay controls." => {
+            "برد متصل هیچ کنترل رله‌ای اعلام نکرده است."
+        }
+        "Connected board" => "برد متصل",
+        "Connected board:" => "برد متصل:",
+        "Force ON" => "روشن‌کردن اجباری",
+        "Release" => "رهاسازی",
+        "Override requested" => "درخواست بازنویسی ارسال شد",
+        "Board reports ON" => "برد حالت روشن را گزارش می‌کند",
+        "Board reports OFF" => "برد حالت خاموش را گزارش می‌کند",
+        "PCController macro catalog" => "فهرست ماکروهای PCController",
+        "No compatible relay effects are advertised by the connected PCController." => {
+            "PCController متصل هیچ جلوهٔ رله‌ای سازگاری اعلام نکرده است."
+        }
+        "Connection problem" => "مشکل اتصال",
+        "Playback problem" => "مشکل پخش",
+        "Operation failed" => "عملیات ناموفق بود",
+        "Pealayer could not complete the requested operation." => {
+            "پی‌لیر نتوانست عملیات درخواستی را کامل کند."
+        }
+        "Technical details" => "جزئیات فنی",
+        "Copy details" => "رونوشت جزئیات",
+        "Close" => "بستن",
+        "Open Location / URL" => "باز کردن نشانی یا پیوند",
+        "Enter direct video URL, HTTP/HTTPS stream, or HLS link:" => {
+            "نشانی مستقیم ویدئو، جریان HTTP/HTTPS یا پیوند HLS را وارد کنید:"
+        }
+        "Paste" => "چسباندن",
+        "Open" => "باز کردن",
+        "Cancel" => "انصراف",
+        "Keyboard Shortcuts & Controls" => "میان‌برها و کنترل‌های صفحه‌کلید",
+        "Shortcut" => "میان‌بر",
+        "Action" => "عملکرد",
+        "Play / Pause video" => "پخش یا مکث ویدئو",
+        "Toggle Fullscreen mode" => "تغییر حالت تمام‌صفحه",
+        "Toggle Audio Mute" => "قطع یا وصل صدا",
+        "Seek -5s / +5s" => "پیمایش ۵ ثانیه عقب یا جلو",
+        "Volume -5% / +5%" => "کاهش یا افزایش ۵ درصدی صدا",
+        "Frame Step Forward (+1 frame)" => "یک قاب جلو",
+        "Frame Step Backward (-1 frame)" => "یک قاب عقب",
+        "Adjust Volume on player/bar" => "تنظیم صدا روی پخش‌کننده",
+        "Seek forward / backward" => "پیمایش جلو یا عقب",
+        "Toggle Fullscreen / Open Video" => "تمام‌صفحه یا باز کردن ویدئو",
+        "Open Player Context Menu" => "باز کردن منوی زمینه‌ای پخش‌کننده",
+        "Drop media file onto window to play" => "رسانه را برای پخش روی پنجره رها کنید",
+        "Track:" => "ترک:",
+        "Appearance" => "ظاهر",
+        "Font Size:" => "اندازهٔ قلم:",
+        "Synchronization" => "همگام‌سازی",
+        "Delay (s):" => "تأخیر (ثانیه):",
+        "Reset" => "بازنشانی",
+        "Load External Subtitle..." => "بارگیری زیرنویس بیرونی…",
+        "Load External Audio..." => "بارگیری صدای بیرونی…",
+        "Workspace: NLE Layout" => "فضای کاری: تدوین",
+        "Workspace: Simple Player" => "فضای کاری: پخش‌کنندهٔ ساده",
+        "4D Cinema Editor" => "ویرایشگر سینمای چهاربعدی",
+        "Active output status" => "وضعیت خروجی‌های فعال",
+        "Effect templates" => "الگوهای جلوه",
+        "Icon" => "نماد",
+        "Name" => "نام",
+        "Duration" => "مدت",
+        "Actions" => "عملیات",
+        "Add to timeline" => "افزودن به خط زمانی",
+        "Create custom template" => "ساخت الگوی سفارشی",
+        "Name:" => "نام:",
+        "Icon:" => "نماد:",
+        "Duration (ms):" => "مدت (میلی‌ثانیه):",
+        "Output:" => "خروجی:",
+        "No advertised output" => "هیچ خروجی‌ای اعلام نشده است",
+        "Create" => "ساختن",
+        "Timeline instances" => "نمونه‌های خط زمانی",
+        "Start time" => "زمان آغاز",
+        "Effect" => "جلوه",
+        "Unavailable project effect" => "جلوهٔ پروژه در دسترس نیست",
+        "Delete" => "حذف",
+        "No Cue Selected" => "هیچ نشانه‌ای انتخاب نشده است",
+        "Open media or connect PCController to populate the timeline." => {
+            "برای ساخت خط زمانی، رسانه‌ای باز کنید یا به PCController متصل شوید."
+        }
+        "No media or advertised hardware tracks are available." => {
+            "هیچ رسانه یا ترک سخت‌افزاری اعلام‌شده‌ای در دسترس نیست."
+        }
+        "Controls" => "کنترل‌ها",
+        "Replay" => "پخش دوباره",
+        "Play" => "پخش",
+        "Pause" => "مکث",
+        "Stop" => "توقف",
+        "Fullscreen" => "تمام‌صفحه",
+        "Exit Fullscreen" => "خروج از تمام‌صفحه",
+        "Controls Pinned" => "کنترل‌ها ثابت شدند",
+        "Controls Unpinned" => "کنترل‌ها از حالت ثابت خارج شدند",
+        "Pin Controls" => "ثابت کردن کنترل‌ها",
+        "Unpin Controls" => "آزاد کردن کنترل‌ها",
+        "Mute" => "قطع صدا",
+        "Unmute" => "وصل صدا",
+        "Video Files" => "پرونده‌های ویدئویی",
+        "Unknown" => "ناشناخته",
+        "Drop video file here to play" => "پروندهٔ ویدئو را برای پخش اینجا رها کنید",
+        "Invalid format. Use HH:MM:SS.cs (e.g., 00:01:23.45)" => {
+            "قالب نامعتبر است. از HH:MM:SS.cs استفاده کنید (برای نمونه 00:01:23.45)"
+        }
+        "Set to current playback position" => "تنظیم روی موقعیت کنونی پخش",
+        "Seek video to this event" => "رفتن به زمان این رویداد در ویدئو",
+        "Nudge back by" => "جابجایی به عقب به‌اندازهٔ",
+        "Nudge forward by" => "جابجایی به جلو به‌اندازهٔ",
+        "Hold Shift for 100ms, Ctrl for 1s" => "Shift برای ۱۰۰ms و Ctrl برای ۱s",
+        "Dur" => "مدت",
+        "End" => "پایان",
+        "Unavailable output" => "خروجی در دسترس نیست",
+        "Unavailable project output" => "خروجی پروژه در دسترس نیست",
+        "Delete Cue" => "حذف نشانه",
+        "Delete All Selected" => "حذف همهٔ انتخاب‌شده‌ها",
+        "EMERGENCY STOP ACTIVE - ALL HARDWARE OUTPUTS DISABLED" => {
+            "توقف اضطراری فعال است — همهٔ خروجی‌های سخت‌افزاری غیرفعال‌اند"
+        }
+        "Linear" => "خطی",
+        "Smooth (Hermite)" => "نرم (هرمیت)",
+        "Step" => "پله‌ای",
+        "Delete Keyframe" => "حذف فریم کلیدی",
+        "Video" => "ویدئو",
+        "Volume" => "صدا",
+        "Interpolation" => "درون‌یابی",
+        "Time" => "زمان",
+        "Value" => "مقدار",
+        "Analog Track" => "ترک آنالوگ",
+        "Port/Channel" => "درگاه/کانال",
+        "Mute Track (M)\nMutes physical output during playback." => {
+            "قطع ترک (M)\nخروجی فیزیکی را هنگام پخش غیرفعال می‌کند."
+        }
+        "Mute Track (M)\nMutes relay physical output during playback." => {
+            "قطع ترک (M)\nخروجی فیزیکی رله را هنگام پخش غیرفعال می‌کند."
+        }
+        "Mute Track (M)\nMutes actuator physical output during playback." => {
+            "قطع ترک (M)\nخروجی فیزیکی محرک را هنگام پخش غیرفعال می‌کند."
+        }
+        "Solo Track (S)\nSolos this relay track output during playback." => {
+            "تک‌نوازی ترک (S)\nفقط خروجی این رله را هنگام پخش فعال نگه می‌دارد."
+        }
+        "Solo Track (S)\nSolos this output during playback." => {
+            "تک‌نوازی ترک (S)\nفقط این خروجی را هنگام پخش فعال نگه می‌دارد."
+        }
+        "Lock Track (L)\nPrevents moving or modifying effects on this track." => {
+            "قفل ترک (L)\nجابجایی یا ویرایش جلوه‌های این ترک را متوقف می‌کند."
+        }
+        "Record Arm (R)\nArms this track for real-time motion capture gesture recording." => {
+            "آماده‌سازی ضبط (R)\nاین ترک را برای ضبط بلادرنگ حرکت آماده می‌کند."
+        }
+        "Live Actuator Fader\nControl actuator intensity in real time (0% - 100%)." => {
+            "فیدر زندهٔ محرک\nشدت محرک را بلادرنگ کنترل می‌کند (۰ تا ۱۰۰٪)."
+        }
+        "Add Keyframe\nInserts a keyframe at the current playhead position." => {
+            "افزودن فریم کلیدی\nیک فریم کلیدی در موقعیت کنونی نشانگر درج می‌کند."
+        }
+        "Timeline Ruler\nClick or drag to scrub playhead. Ctrl+Scroll to zoom time." => {
+            "خط‌کش خط زمانی\nبرای پیمایش کلیک یا درگ کنید؛ برای بزرگ‌نمایی Ctrl+اسکرول کنید."
+        }
+        _ => english,
+    };
+    visual_text(language, translated)
+}
+
+/// Egui's built-in painter positions Unicode scalar values without complex
+/// Arabic shaping or the Unicode bidirectional algorithm. Convert application
+/// copy to presentation forms and visual order at the UI boundary while
+/// retaining logical Unicode in source, configuration, and protocol data.
+pub fn visual_text(language: AppLanguage, logical: &str) -> String {
+    let contains_arabic_script = logical.chars().any(|character| {
+        matches!(
+            character,
+            '\u{0600}'..='\u{06FF}'
+                | '\u{0750}'..='\u{077F}'
+                | '\u{08A0}'..='\u{08FF}'
+                | '\u{FB50}'..='\u{FDFF}'
+                | '\u{FE70}'..='\u{FEFF}'
+        )
+    });
+    if language != AppLanguage::Persian && !contains_arabic_script {
+        return logical.to_owned();
+    }
+
+    let shaped = ar_reshaper::reshape_line(logical);
+    let bidi = unicode_bidi::BidiInfo::new(&shaped, None);
+    let mut visual = String::with_capacity(shaped.len());
+    for (index, paragraph) in bidi.paragraphs.iter().enumerate() {
+        if index > 0 {
+            visual.push('\n');
+        }
+        visual.push_str(&bidi.reorder_line(paragraph, paragraph.range.clone()));
+    }
+    visual
+}
+
+pub fn layout(rtl: bool, main_align: egui::Align) -> egui::Layout {
+    if rtl {
+        egui::Layout::right_to_left(main_align)
+    } else {
+        egui::Layout::left_to_right(main_align)
+    }
+}
+
+pub fn vertical_layout(rtl: bool) -> egui::Layout {
+    egui::Layout::top_down(if rtl {
+        egui::Align::Max
+    } else {
+        egui::Align::Min
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn translates_owned_copy_but_leaves_dynamic_names_untouched() {
+        let persian = tr(AppLanguage::Persian, "Connect");
+        assert_ne!(persian, "اتصال");
+        assert!(persian.chars().any(|character| {
+            ('\u{FB50}'..='\u{FDFF}').contains(&character)
+                || ('\u{FE70}'..='\u{FEFF}').contains(&character)
+        }));
+        assert_eq!(tr(AppLanguage::English, "Connect"), "Connect");
+        assert_eq!(tr(AppLanguage::Persian, "Cinema Relay A"), "Cinema Relay A");
+    }
+
+    #[test]
+    fn persian_copy_is_shaped_and_reordered_for_egui() {
+        let logical = "سلام دنیا".to_string();
+        let visual = visual_text(AppLanguage::Persian, &logical);
+        assert_eq!(logical, "سلام دنیا");
+        assert_eq!(visual, "ﺎﯿﻧﺩ ﻡﻼﺳ");
+    }
+
+    #[test]
+    fn dynamic_persian_name_is_shaped_even_in_english_ui() {
+        let logical = "PCController رلهٔ‌اصلی ۱۲۳".to_string();
+        let visual = visual_text(AppLanguage::English, &logical);
+        assert_eq!(logical, "PCController رلهٔ‌اصلی ۱۲۳");
+        assert_ne!(visual, logical);
+        assert!(visual.contains("PCController"));
+        assert!(visual.chars().any(|character| {
+            ('\u{FB50}'..='\u{FDFF}').contains(&character)
+                || ('\u{FE70}'..='\u{FEFF}').contains(&character)
+        }));
+        assert_eq!(
+            visual_text(AppLanguage::English, "PCController Relay A"),
+            "PCController Relay A"
+        );
+    }
+
+    #[test]
+    fn bundled_vazirmatn_covers_shaped_persian_presentation_forms() {
+        let font = include_bytes!("../../assets/fonts/Vazirmatn-Regular.ttf");
+        let face = ttf_parser::Face::parse(font, 0).expect("bundled Vazirmatn must parse");
+        for glyph in visual_text(AppLanguage::Persian, "سلام دنیا PCController ۱۲۳")
+            .chars()
+            .filter(|character| !character.is_whitespace() && !character.is_ascii())
+        {
+            assert!(
+                face.glyph_index(glyph).is_some(),
+                "font lacks shaped glyph {glyph:?}"
+            );
+        }
+    }
+}

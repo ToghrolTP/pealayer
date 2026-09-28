@@ -84,7 +84,37 @@ pub struct KeyframeDragState {
     pub group_originals: Vec<(uuid::Uuid, usize, u64, f32)>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DroppedFileKind {
+    Media,
+    Subtitle,
+    Timeline,
+}
+
+pub fn dropped_file_kind(path: &std::path::Path) -> DroppedFileKind {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "srt" | "vtt" | "ass" | "ssa" | "sub" | "idx" | "sup" => DroppedFileKind::Subtitle,
+        "json" => DroppedFileKind::Timeline,
+        // Let mpv make the final decision for its broad set of supported audio,
+        // video and playlist formats instead of maintaining a brittle allowlist.
+        _ => DroppedFileKind::Media,
+    }
+}
+
 pub struct PealayerApp {
+    pub(crate) app_name: String,
+    pub(crate) app_publisher: Option<String>,
+    pub(crate) app_copyright: Option<String>,
+    pub(crate) last_window_title: String,
+    pub(crate) language_preference: crate::config::AppLanguage,
+    pub(crate) language: crate::config::AppLanguage,
+    pub(crate) direction_preference: crate::config::AppDirection,
+    pub(crate) rtl: bool,
     pub(crate) mpv: &'static Mpv,
     pub(crate) mpv_client: libmpv2::Mpv,
     pub(crate) render_context: Arc<Mutex<Option<RenderContextWrapper>>>,
@@ -124,7 +154,7 @@ pub struct PealayerApp {
     pub(crate) dock_state: egui_dock::DockState<crate::ui::layout::PealayerTab>,
     pub timeline: crate::four_d::models::Timeline,
     pub(crate) engine_handle: crate::four_d::engine::EngineHandle,
-    
+
     pub(crate) recording_session: crate::four_d::curve_record::RecordingSession,
     pub(crate) input_capture: crate::four_d::input_capture::InputCaptureState,
     pub(crate) is_recording: bool,
@@ -135,15 +165,15 @@ pub struct PealayerApp {
     pub active_keyframe_drag: Option<KeyframeDragState>,
     pub timeline_zoom: f32,
     pub undo_stack: crate::four_d::history::UndoStack,
-    pub(crate) recording_keys: std::collections::HashMap<eframe::egui::Key, (uuid::Uuid, std::time::Instant)>,
-    pub(crate) relay_overrides: [Option<bool>; 9],
+    pub(crate) recording_keys:
+        std::collections::HashMap<eframe::egui::Key, (uuid::Uuid, std::time::Instant, u8)>,
+    pub(crate) relay_overrides: std::collections::BTreeSet<u8>,
 
     // Phase 6 Preset Library state
-    pub(crate) preset_library: Vec<EffectPreset>,
     pub(crate) effects_search_query: String,
-    pub(crate) track_muted: [bool; 9],
-    pub(crate) track_soloed: [bool; 9],
-    pub(crate) track_locked: [bool; 9],
+    pub(crate) track_muted: std::collections::BTreeSet<u8>,
+    pub(crate) track_soloed: std::collections::BTreeSet<u8>,
+    pub(crate) track_locked: std::collections::BTreeSet<u8>,
     pub(crate) active_drag: Option<ActiveDragState>,
     pub(crate) estop_active: bool,
     pub(crate) serial_port: String,
@@ -161,14 +191,14 @@ pub struct PealayerApp {
     pub(crate) show_shortcuts_dialog: bool,
     pub(crate) show_about_dialog: bool,
     pub(crate) interop_rx: std::sync::mpsc::Receiver<crate::platform::interop::InteropCommand>,
+    pub(crate) controller_cmd_rx:
+        std::sync::mpsc::Receiver<crate::platform::interop::ControllerDelivery>,
     pub(crate) web_state_tx: std::sync::mpsc::Sender<String>,
     pub(crate) web_cmd_rx: std::sync::mpsc::Receiver<crate::platform::interop::InteropCommand>,
     pub(crate) last_web_broadcast: Option<std::time::Instant>,
     pub(crate) media_controls: Option<crate::platform::media_controls::MediaControlsManager>,
     pub(crate) media_cmd_tx: std::sync::mpsc::Sender<crate::platform::interop::InteropCommand>,
 }
-
-
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SubtitleTrack {
@@ -192,7 +222,9 @@ impl eframe::App for PealayerApp {
             if crate::platform::windows::get_registered_hwnd() == 0 {
                 if let Ok(handle) = frame.window_handle() {
                     if let RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
-                        crate::platform::windows::register_window_hwnd(win32_handle.hwnd.get() as isize);
+                        crate::platform::windows::register_window_hwnd(
+                            win32_handle.hwnd.get() as isize
+                        );
                     }
                 }
             }
@@ -210,100 +242,36 @@ impl eframe::App for PealayerApp {
         // Track active window/panel drag operations safely without lock nesting
         let is_pointer_down = ui.input(|i| i.pointer.any_down());
         let is_using_pointer = ui.ctx().egui_is_using_pointer();
-        self.is_window_operating = is_pointer_down && (self.active_drag.is_some() || is_using_pointer);
+        self.is_window_operating =
+            is_pointer_down && (self.active_drag.is_some() || is_using_pointer);
 
         // Process drag and dropped files
-        let dropped_file_path = ui.input(|i| {
-            i.raw.dropped_files.first().and_then(|f| f.path.clone())
+        let dropped_file_paths = ui.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .filter_map(|file| file.path.clone())
+                .collect::<Vec<_>>()
         });
-        if let Some(path) = dropped_file_path {
-            self.load_video_file(path);
+        if !dropped_file_paths.is_empty() {
+            self.load_dropped_files(dropped_file_paths);
         }
 
-        // Process incoming IPC Inter-Op Commands
-        while let Ok(cmd) = self.interop_rx.try_recv() {
-            use crate::platform::interop::InteropCommand;
-            match cmd {
-                InteropCommand::Play => {
-                    self.play();
-                }
-                InteropCommand::Pause => {
-                    self.pause();
-                }
-                InteropCommand::TogglePause => {
-                    self.toggle_playback();
-                }
-                InteropCommand::Seek { seconds } => {
-                    self.seek_relative(seconds);
-                }
-                InteropCommand::SeekAbs { percentage } => {
-                    let clamped = percentage.clamp(0.0, 100.0);
-                    let target_sec = self.duration * (clamped / 100.0);
-                    self.scrub_to(target_sec);
-                    self.finish_scrub(target_sec);
-                    self.set_osd(format!("Seek: {:.0}%", clamped));
-                }
-                InteropCommand::SetVolume { value } => {
-                    let clamped = value.clamp(0.0, 130.0);
-                    let _ = self.mpv.set_property("volume", clamped);
-                    self.volume = clamped;
-                    self.set_osd(format!("IPC: Volume {:.0}%", clamped));
-                    self.save_config();
-                }
-                InteropCommand::Open { target } => {
-                    if target.starts_with("http://") || target.starts_with("https://") {
-                        self.load_url(&target);
-                    } else {
-                        self.load_video_file(std::path::PathBuf::from(&target));
-                    }
-                    self.set_osd(format!("IPC: Opened {}", target));
-                }
-                InteropCommand::GetStatus => {
-                    self.set_osd("IPC: Status Queried".to_string());
-                }
-            }
+        // Drain every command source before mutating player state. This keeps IPC,
+        // Web UI, media controls, and PCController actions on one behavior path.
+        let mut inbound_commands = Vec::new();
+        while let Ok(command) = self.interop_rx.try_recv() {
+            inbound_commands.push(("IPC", command));
         }
-
-        // Process Web-UI WebSocket commands
-        while let Ok(cmd) = self.web_cmd_rx.try_recv() {
-            use crate::platform::interop::InteropCommand;
-            match cmd {
-                InteropCommand::Play => {
-                    self.play();
-                }
-                InteropCommand::Pause => {
-                    self.pause();
-                }
-                InteropCommand::TogglePause => {
-                    self.toggle_playback();
-                }
-                InteropCommand::Seek { seconds } => {
-                    self.seek_relative(seconds);
-                }
-                InteropCommand::SeekAbs { percentage } => {
-                    let clamped = percentage.clamp(0.0, 100.0);
-                    let target_sec = self.duration * (clamped / 100.0);
-                    self.scrub_to(target_sec);
-                    self.finish_scrub(target_sec);
-                    self.set_osd(format!("Web-UI: Seek {:.0}%", clamped));
-                }
-                InteropCommand::SetVolume { value } => {
-                    let clamped = value.clamp(0.0, 130.0);
-                    let _ = self.mpv.set_property("volume", clamped);
-                    self.volume = clamped;
-                    self.set_osd(format!("Web-UI: Volume {:.0}%", clamped));
-                    self.save_config();
-                }
-                InteropCommand::Open { target } => {
-                    if target.starts_with("http://") || target.starts_with("https://") {
-                        self.load_url(&target);
-                    } else {
-                        self.load_video_file(std::path::PathBuf::from(&target));
-                    }
-                    self.set_osd(format!("Web-UI: Opened {}", target));
-                }
-                InteropCommand::GetStatus => {}
-            }
+        while let Ok(command) = self.web_cmd_rx.try_recv() {
+            inbound_commands.push(("Web UI", command));
+        }
+        while let Ok(delivery) = self.controller_cmd_rx.try_recv() {
+            self.apply_interop_command(ui.ctx(), delivery.command.clone(), "PCController");
+            delivery.acknowledge_applied();
+        }
+        for (source, command) in inbound_commands {
+            self.apply_interop_command(ui.ctx(), command, source);
         }
 
         // Broadcast state JSON to Web-UI clients (throttled to 10Hz to save CPU / network spam)
@@ -321,7 +289,10 @@ impl eframe::App for PealayerApp {
                 volume: self.volume,
                 playback_time: self.playback_time,
                 duration: self.duration,
-                current_video: self.current_video_path.as_ref().map(|p| p.to_string_lossy().to_string()),
+                current_video: self
+                    .current_video_path
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
             };
             crate::platform::interop::set_live_status(status_resp.clone());
             if let Ok(json) = serde_json::to_string(&status_resp) {
@@ -332,19 +303,19 @@ impl eframe::App for PealayerApp {
         // Initialize RTT texture once if not done yet
         let mut init_rtt = false;
         let mut rtt_data = None;
-        
+
         {
             let rtt = self.rtt_state.lock().unwrap();
             if rtt.video_texture.is_none() {
                 init_rtt = true;
             }
         }
-        
+
         if init_rtt {
             if let Some(gl) = frame.gl() {
                 unsafe {
                     use eframe::glow::HasContext;
-                    
+
                     let tex = gl.create_texture().unwrap();
                     gl.bind_texture(eframe::glow::TEXTURE_2D, Some(tex));
                     gl.tex_image_2d(
@@ -368,7 +339,7 @@ impl eframe::App for PealayerApp {
                         eframe::glow::TEXTURE_MAG_FILTER,
                         eframe::glow::LINEAR as i32,
                     );
-                    
+
                     let fbo = gl.create_framebuffer().unwrap();
                     gl.bind_framebuffer(eframe::glow::FRAMEBUFFER, Some(fbo));
                     gl.framebuffer_texture_2d(
@@ -378,17 +349,17 @@ impl eframe::App for PealayerApp {
                         Some(tex),
                         0,
                     );
-                    
+
                     gl.bind_framebuffer(eframe::glow::FRAMEBUFFER, None);
-                    
+
                     // Register the texture with eframe/egui
                     let texture_id = frame.register_native_glow_texture(tex);
-                    
+
                     rtt_data = Some((tex, fbo, texture_id));
                 }
             }
         }
-        
+
         if let Some((tex, fbo, texture_id)) = rtt_data {
             if let Ok(mut rtt) = self.rtt_state.try_lock() {
                 rtt.video_texture = Some(tex);
@@ -400,7 +371,11 @@ impl eframe::App for PealayerApp {
         let ctx = ui.ctx().clone();
 
         self.process_events();
-        crate::platform::windows::update_windows_taskbar_state(self.playback_time, self.duration, self.is_paused);
+        crate::platform::windows::update_windows_taskbar_state(
+            self.playback_time,
+            self.duration,
+            self.is_paused,
+        );
         if let Some(ref mut mc) = self.media_controls {
             mc.update_playback(self.is_paused, self.playback_time, self.duration);
         }
@@ -411,7 +386,26 @@ impl eframe::App for PealayerApp {
                 self.show_error = Some(err);
             }
         }
-        self.is_connected = self.engine_handle.is_connected.load(std::sync::atomic::Ordering::Relaxed);
+        self.is_connected = self
+            .engine_handle
+            .is_connected
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let connection_requested = self
+            .engine_handle
+            .connection_requested
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let window_title = contextual_window_title(
+            &self.app_name,
+            self.current_video_path.as_deref(),
+            self.is_connected,
+            connection_requested,
+        );
+        if self.last_window_title != window_title {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Title(window_title.clone()));
+            self.last_window_title = window_title;
+        }
+        crate::platform::windows::set_window_theme(ui.style().visuals.dark_mode);
 
         let is_fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
         if !is_fullscreen {
@@ -440,7 +434,11 @@ impl eframe::App for PealayerApp {
         if ctx.input(|i| i.key_pressed(egui::Key::M)) {
             let _ = self.mpv.command("cycle", &["mute"]);
             self.is_muted = !self.is_muted;
-            self.set_osd(if self.is_muted { "Mute".to_string() } else { "Unmute".to_string() });
+            self.set_osd(if self.is_muted {
+                "Mute".to_string()
+            } else {
+                "Unmute".to_string()
+            });
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
             self.seek_relative(-5.0);
@@ -448,7 +446,8 @@ impl eframe::App for PealayerApp {
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
             self.seek_relative(5.0);
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Period) || i.key_pressed(egui::Key::CloseBracket)) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Period) || i.key_pressed(egui::Key::CloseBracket))
+        {
             let _ = self.mpv.command("frame-step", &[]);
             if self.current_video_path.is_some() {
                 self.set_osd("Frame Step: +1".to_string());
@@ -471,62 +470,90 @@ impl eframe::App for PealayerApp {
             self.set_osd(format!("Volume: {:.0}%", self.volume));
         }
 
-        const MACRO_KEYS: [(egui::Key, u8); 8] = [
-            (egui::Key::F1, 1),
-            (egui::Key::F2, 2),
-            (egui::Key::F3, 3),
-            (egui::Key::F4, 4),
-            (egui::Key::F5, 5),
-            (egui::Key::F6, 6),
-            (egui::Key::F7, 7),
-            (egui::Key::F8, 8),
+        const MACRO_KEYS: [egui::Key; 8] = [
+            egui::Key::F1,
+            egui::Key::F2,
+            egui::Key::F3,
+            egui::Key::F4,
+            egui::Key::F5,
+            egui::Key::F6,
+            egui::Key::F7,
+            egui::Key::F8,
         ];
+        let shortcut_relays = self
+            .advertised_hardware()
+            .filter(|capabilities| capabilities.board_connected)
+            .map(|capabilities| capabilities.relays)
+            .unwrap_or_default();
 
         let mut timeline_dirty = false;
-        
-        for (key, relay_id) in MACRO_KEYS {
+
+        for (index, key) in MACRO_KEYS.into_iter().enumerate() {
             if ctx.input(|i| i.key_pressed(key)) && !self.recording_keys.contains_key(&key) {
+                let Some(relay) = shortcut_relays.get(index) else {
+                    continue;
+                };
                 let start_time = (self.playback_time * 1000.0) as u64;
-                
-                let actions = crate::four_d::patterns::generate_constant(relay_id, true, 100);
-                let template = crate::four_d::models::Effect::new(
-                    format!("Recorded Relay {}", relay_id),
-                    "🔴".to_string(),
+
+                let actions = crate::four_d::patterns::generate_constant(relay.id, true, 100);
+                let template = crate::four_d::models::Effect::with_target(
+                    relay.name.clone(),
+                    String::new(),
                     100,
-                    actions
+                    crate::four_d::models::HardwareTarget::Relay(relay.id),
+                    actions,
                 );
                 let template_id = template.id;
                 self.timeline.templates.push(template);
-                
+
                 let instance = crate::four_d::models::EffectInstance::new(template_id, start_time);
                 let instance_id = instance.id;
                 self.timeline.instances.push(instance);
-                
-                self.recording_keys.insert(key, (instance_id, std::time::Instant::now()));
+
+                self.recording_keys
+                    .insert(key, (instance_id, std::time::Instant::now(), relay.id));
                 timeline_dirty = true;
             }
-            
+
             if ctx.input(|i| i.key_released(key)) {
-                if let Some((instance_id, start_instant)) = self.recording_keys.remove(&key) {
-                    if let Some(instance) = self.timeline.instances.iter().find(|i| i.id == instance_id) {
+                if let Some((instance_id, start_instant, relay_id)) =
+                    self.recording_keys.remove(&key)
+                {
+                    if let Some(instance) =
+                        self.timeline.instances.iter().find(|i| i.id == instance_id)
+                    {
                         let mut duration = start_instant.elapsed().as_millis() as u64;
                         if duration < 100 {
                             duration = 100; // minimum duration
                         }
-                        
-                        if let Some(template) = self.timeline.templates.iter_mut().find(|t| t.id == instance.effect_id) {
+
+                        if let Some(template) = self
+                            .timeline
+                            .templates
+                            .iter_mut()
+                            .find(|t| t.id == instance.effect_id)
+                        {
                             template.duration_ms = duration;
-                            template.actions = crate::four_d::patterns::generate_constant(relay_id, true, duration);
+                            template.actions = crate::four_d::patterns::generate_constant(
+                                relay_id, true, duration,
+                            );
                         }
                         timeline_dirty = true;
                     }
                 }
             }
         }
-        
+
         if timeline_dirty {
-            let compiled = crate::four_d::engine::compile_timeline(&self.timeline, &self.track_muted, &self.track_soloed);
-            let _ = self.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+            let compiled = crate::four_d::engine::compile_timeline(
+                &self.timeline,
+                &self.track_muted,
+                &self.track_soloed,
+            );
+            let _ = self
+                .engine_handle
+                .sender
+                .send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
         }
 
         let mut frame = egui::Frame::central_panel(&ui.style());
@@ -536,10 +563,10 @@ impl eframe::App for PealayerApp {
             .frame(frame)
             .show_inside(ui, |ui| {
                 if self.show_four_d_editor {
-                    let mut dock_state = std::mem::replace(&mut self.dock_state, egui_dock::DockState::new(vec![]));
+                    let mut dock_state =
+                        std::mem::replace(&mut self.dock_state, egui_dock::DockState::new(vec![]));
                     let mut tab_viewer = crate::ui::layout::PealayerTabViewer { app: self };
-                    egui_dock::DockArea::new(&mut dock_state)
-                        .show_inside(ui, &mut tab_viewer);
+                    egui_dock::DockArea::new(&mut dock_state).show_inside(ui, &mut tab_viewer);
                     self.dock_state = dock_state;
                 } else {
                     crate::ui::video::draw(self, ui);
@@ -554,39 +581,59 @@ impl eframe::App for PealayerApp {
                     let mut open_url = false;
                     let mut close_dialog = false;
 
-                    egui::Window::new("🔗 Open Location / URL")
+                    egui::Window::new(format!("🔗 {}", self.tr("Open Location / URL")))
                         .collapsible(false)
                         .resizable(false)
                         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                         .show(ui.ctx(), |ui| {
-                            ui.label("Enter direct video URL, HTTP/HTTPS stream, or HLS link:");
-                            ui.add_space(6.0);
-                            
-                            ui.horizontal(|ui| {
-                                let text_edit = ui.add(
-                                    egui::TextEdit::singleline(&mut self.url_input_buffer)
-                                        .desired_width(340.0)
-                                        .hint_text("https://..."),
+                            ui.with_layout(crate::ui::i18n::vertical_layout(self.rtl), |ui| {
+                                ui.label(
+                                    self.tr(
+                                        "Enter direct video URL, HTTP/HTTPS stream, or HLS link:",
+                                    ),
                                 );
-                                if text_edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                    open_url = true;
-                                }
+                                ui.add_space(6.0);
 
-                                if ui.button("📋 Paste").clicked() {
-                                    if let Some(text) = ui.input(|i| i.raw.events.iter().find_map(|e| match e { egui::Event::Paste(t) => Some(t.clone()), _ => None })) {
-                                        self.url_input_buffer = text;
-                                    }
-                                }
-                            });
+                                ui.with_layout(
+                                    crate::ui::i18n::layout(self.rtl, egui::Align::Center),
+                                    |ui| {
+                                        let text_edit = ui.add(
+                                            egui::TextEdit::singleline(&mut self.url_input_buffer)
+                                                .desired_width(340.0)
+                                                .hint_text("https://..."),
+                                        );
+                                        if text_edit.lost_focus()
+                                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                        {
+                                            open_url = true;
+                                        }
 
-                            ui.add_space(10.0);
-                            ui.horizontal(|ui| {
-                                if ui.button("Open").clicked() {
-                                    open_url = true;
-                                }
-                                if ui.button("Cancel").clicked() {
-                                    close_dialog = true;
-                                }
+                                        if ui.button(format!("📋 {}", self.tr("Paste"))).clicked()
+                                        {
+                                            if let Some(text) = ui.input(|i| {
+                                                i.raw.events.iter().find_map(|e| match e {
+                                                    egui::Event::Paste(t) => Some(t.clone()),
+                                                    _ => None,
+                                                })
+                                            }) {
+                                                self.url_input_buffer = text;
+                                            }
+                                        }
+                                    },
+                                );
+
+                                ui.add_space(10.0);
+                                ui.with_layout(
+                                    crate::ui::i18n::layout(self.rtl, egui::Align::Center),
+                                    |ui| {
+                                        if ui.button(self.tr("Open")).clicked() {
+                                            open_url = true;
+                                        }
+                                        if ui.button(self.tr("Cancel")).clicked() {
+                                            close_dialog = true;
+                                        }
+                                    },
+                                );
                             });
                         });
 
@@ -601,7 +648,8 @@ impl eframe::App for PealayerApp {
                 }
 
                 if self.show_shortcuts_dialog {
-                    egui::Window::new("⌨ Keyboard Shortcuts & Controls")
+                    let language = self.language;
+                    egui::Window::new(format!("⌨ {}", self.tr("Keyboard Shortcuts & Controls")))
                         .collapsible(false)
                         .resizable(true)
                         .default_size([460.0, 360.0])
@@ -612,28 +660,89 @@ impl eframe::App for PealayerApp {
                                 .striped(true)
                                 .spacing([20.0, 8.0])
                                 .show(ui, |ui| {
-                                    ui.label(egui::RichText::new("Shortcut").strong());
-                                    ui.label(egui::RichText::new("Action").strong());
+                                    ui.label(
+                                        egui::RichText::new(crate::ui::i18n::tr(
+                                            language, "Shortcut",
+                                        ))
+                                        .strong(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(crate::ui::i18n::tr(
+                                            language, "Action",
+                                        ))
+                                        .strong(),
+                                    );
                                     ui.end_row();
 
-                                    ui.label("Space"); ui.label("Play / Pause video"); ui.end_row();
-                                    ui.label("F"); ui.label("Toggle Fullscreen mode"); ui.end_row();
-                                    ui.label("M"); ui.label("Toggle Audio Mute"); ui.end_row();
-                                    ui.label("Left / Right Arrows"); ui.label("Seek -5s / +5s"); ui.end_row();
-                                    ui.label("Up / Down Arrows"); ui.label("Volume -5% / +5%"); ui.end_row();
-                                    ui.label(".  or  ]"); ui.label("Frame Step Forward (+1 frame)"); ui.end_row();
-                                    ui.label(",  or  ["); ui.label("Frame Step Backward (-1 frame)"); ui.end_row();
-                                    ui.label("Mouse Wheel"); ui.label("Adjust Volume on player/bar"); ui.end_row();
-                                    ui.label("Shift + Mouse Wheel"); ui.label("Seek forward / backward"); ui.end_row();
-                                    ui.label("Double Click"); ui.label("Toggle Fullscreen / Open Video"); ui.end_row();
-                                    ui.label("Right Click"); ui.label("Open Player Context Menu"); ui.end_row();
-                                    ui.label("Drag & Drop"); ui.label("Drop media file onto window to play"); ui.end_row();
+                                    ui.label("Space");
+                                    ui.label(crate::ui::i18n::tr(language, "Play / Pause video"));
+                                    ui.end_row();
+                                    ui.label("F");
+                                    ui.label(crate::ui::i18n::tr(
+                                        language,
+                                        "Toggle Fullscreen mode",
+                                    ));
+                                    ui.end_row();
+                                    ui.label("M");
+                                    ui.label(crate::ui::i18n::tr(language, "Toggle Audio Mute"));
+                                    ui.end_row();
+                                    ui.label("← / →");
+                                    ui.label(crate::ui::i18n::tr(language, "Seek -5s / +5s"));
+                                    ui.end_row();
+                                    ui.label("↑ / ↓");
+                                    ui.label(crate::ui::i18n::tr(language, "Volume -5% / +5%"));
+                                    ui.end_row();
+                                    ui.label(".  or  ]");
+                                    ui.label(crate::ui::i18n::tr(
+                                        language,
+                                        "Frame Step Forward (+1 frame)",
+                                    ));
+                                    ui.end_row();
+                                    ui.label(",  or  [");
+                                    ui.label(crate::ui::i18n::tr(
+                                        language,
+                                        "Frame Step Backward (-1 frame)",
+                                    ));
+                                    ui.end_row();
+                                    ui.label("Mouse Wheel");
+                                    ui.label(crate::ui::i18n::tr(
+                                        language,
+                                        "Adjust Volume on player/bar",
+                                    ));
+                                    ui.end_row();
+                                    ui.label("Shift + Mouse Wheel");
+                                    ui.label(crate::ui::i18n::tr(
+                                        language,
+                                        "Seek forward / backward",
+                                    ));
+                                    ui.end_row();
+                                    ui.label("Double Click");
+                                    ui.label(crate::ui::i18n::tr(
+                                        language,
+                                        "Toggle Fullscreen / Open Video",
+                                    ));
+                                    ui.end_row();
+                                    ui.label("Right Click");
+                                    ui.label(crate::ui::i18n::tr(
+                                        language,
+                                        "Open Player Context Menu",
+                                    ));
+                                    ui.end_row();
+                                    ui.label("Drag & Drop");
+                                    ui.label(crate::ui::i18n::tr(
+                                        language,
+                                        "Drop media file onto window to play",
+                                    ));
+                                    ui.end_row();
                                 });
                         });
                 }
 
                 if self.show_about_dialog {
-                    egui::Window::new("ℹ About Pealayer")
+                    let app_name = self.app_name.clone();
+                    let app_publisher = self.app_publisher.clone();
+                    let app_copyright = self.app_copyright.clone();
+                    egui::Window::new(format!("ℹ {} {}", self.tr("About"), self.app_name))
                         .collapsible(false)
                         .resizable(false)
                         .default_size([380.0, 240.0])
@@ -642,15 +751,13 @@ impl eframe::App for PealayerApp {
                         .show(ui.ctx(), |ui| {
                             ui.vertical_centered(|ui| {
                                 ui.add_space(8.0);
-                                ui.heading("🎬 Pealayer v0.1.0");
-                                ui.label(egui::RichText::new("Modern 4D Video & Haptic Player").italics());
-                                ui.add_space(10.0);
-                                ui.separator();
-                                ui.add_space(8.0);
-                                ui.label("High-performance media playback powered by libmpv2, glow OpenGL, and egui.");
-                                ui.label("Featuring real-time 4D haptic timeline synchronization and multi-track relay control.");
-                                ui.add_space(12.0);
-                                ui.label(egui::RichText::new("Copyright © 2026 Pealayer Team").small().weak());
+                                ui.heading(format!("🎬 {app_name} v{}", env!("CARGO_PKG_VERSION")));
+                                if let Some(publisher) = &app_publisher {
+                                    ui.label(publisher);
+                                }
+                                if let Some(copyright) = &app_copyright {
+                                    ui.label(egui::RichText::new(copyright).small().weak());
+                                }
                             });
                         });
                 }
@@ -667,6 +774,117 @@ impl eframe::App for PealayerApp {
 }
 
 impl PealayerApp {
+    /// Replaces the controller-advertised hardware snapshot used by the UI and
+    /// authoring engine. Embedded transports can feed the same authoritative
+    /// snapshot without reaching into the engine implementation.
+    pub fn update_hardware_capabilities(
+        &self,
+        capabilities: Option<crate::four_d::controller::HardwareCapabilities>,
+    ) {
+        if let Ok(mut current) = self.engine_handle.hardware_capabilities.lock() {
+            *current = capabilities;
+        }
+    }
+
+    pub fn advertised_hardware(&self) -> Option<crate::four_d::controller::HardwareCapabilities> {
+        self.engine_handle
+            .hardware_capabilities
+            .lock()
+            .ok()
+            .and_then(|capabilities| capabilities.clone())
+    }
+
+    pub fn advertised_effect_presets(&self) -> Vec<EffectPreset> {
+        let Some(capabilities) = self
+            .advertised_hardware()
+            .filter(|capabilities| capabilities.board_connected)
+        else {
+            return Vec::new();
+        };
+
+        let available_relays = capabilities
+            .relays
+            .iter()
+            .map(|relay| relay.id)
+            .collect::<std::collections::BTreeSet<_>>();
+        capabilities
+            .macros
+            .iter()
+            .filter_map(|hardware_macro| {
+                controller_macro_effect_preset(hardware_macro, &available_relays)
+            })
+            .collect()
+    }
+
+    fn apply_interop_command(
+        &mut self,
+        ctx: &egui::Context,
+        command: crate::platform::interop::InteropCommand,
+        source: &str,
+    ) {
+        use crate::platform::interop::InteropCommand;
+
+        match command {
+            InteropCommand::Launch { request } => {
+                if let Some(value) = request.volume {
+                    let _ = self.mpv.set_property("volume", value);
+                    self.volume = value;
+                    self.save_config();
+                }
+                if let Some(target) = request.target {
+                    if target.starts_with("http://") || target.starts_with("https://") {
+                        self.load_url(&target);
+                    } else {
+                        let path = std::path::PathBuf::from(target);
+                        let resolved = if path.is_relative() {
+                            request
+                                .sender_working_directory
+                                .as_deref()
+                                .map(std::path::Path::new)
+                                .map(|directory| directory.join(&path))
+                                .unwrap_or(path)
+                        } else {
+                            path
+                        };
+                        self.load_video_file(resolved);
+                    }
+                }
+                if request.fullscreen {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+                }
+                if request.activate {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+            }
+            InteropCommand::Play => self.play(),
+            InteropCommand::Pause => self.pause(),
+            InteropCommand::TogglePause => self.toggle_playback(),
+            InteropCommand::Seek { seconds } => self.seek_relative(seconds),
+            InteropCommand::SeekAbs { percentage } => {
+                let clamped = percentage.clamp(0.0, 100.0);
+                let target = self.duration * (clamped / 100.0);
+                self.scrub_to(target);
+                self.finish_scrub(target);
+            }
+            InteropCommand::SetVolume { value } => {
+                let clamped = value.clamp(0.0, 130.0);
+                let _ = self.mpv.set_property("volume", clamped);
+                self.volume = clamped;
+                self.save_config();
+            }
+            InteropCommand::Open { target } => {
+                if target.starts_with("http://") || target.starts_with("https://") {
+                    self.load_url(&target);
+                } else {
+                    self.load_video_file(std::path::PathBuf::from(&target));
+                }
+            }
+            InteropCommand::GetStatus => {}
+        }
+        self.set_osd(format!("{source}: command applied"));
+    }
+
     /// Polls and processes all pending MPV events and updates application state.
     pub fn process_events(&mut self) {
         use libmpv2::events::{Event, PropertyData};
@@ -694,7 +912,11 @@ impl PealayerApp {
                             .is_playing
                             .store(!v, std::sync::atomic::Ordering::Relaxed);
                         if self.current_video_path.is_some() && prev_paused != v {
-                            self.set_osd(if v { "Pause".to_string() } else { "Play".to_string() });
+                            self.set_osd(if v {
+                                "Pause".to_string()
+                            } else {
+                                "Play".to_string()
+                            });
                         }
                     }
                     (4, PropertyData::Double(v)) => {
@@ -708,7 +930,11 @@ impl PealayerApp {
                         let prev_muted = self.is_muted;
                         self.is_muted = v;
                         if self.current_video_path.is_some() && prev_muted != v {
-                            self.set_osd(if v { "Mute: On".to_string() } else { "Mute: Off".to_string() });
+                            self.set_osd(if v {
+                                "Mute: On".to_string()
+                            } else {
+                                "Mute: Off".to_string()
+                            });
                         }
                     }
                     (6, PropertyData::Flag(v)) => self.sub_visibility = v,
@@ -735,13 +961,12 @@ impl PealayerApp {
                     if !self.is_scrubbing {
                         self.seek_pos = None;
                     }
-                    let current_pos_ms = (self.seek_pos.unwrap_or(self.playback_time) * 1000.0) as u64;
-                    let _ =
-                        self.engine_handle
-                            .sender
-                            .send(crate::four_d::engine::EngineMessage::Seek(
-                                current_pos_ms,
-                            ));
+                    let current_pos_ms =
+                        (self.seek_pos.unwrap_or(self.playback_time) * 1000.0) as u64;
+                    let _ = self
+                        .engine_handle
+                        .sender
+                        .send(crate::four_d::engine::EngineMessage::Seek(current_pos_ms));
                 }
                 Some(Ok(Event::StartFile)) => {
                     self.show_error = None;
@@ -858,7 +1083,9 @@ impl PealayerApp {
 
         if !self.is_scrubbing {
             self.is_scrubbing = true;
-            self.was_playing_before_scrub = !self.is_paused && self.current_video_path.is_some() && !self.is_playback_finished();
+            self.was_playing_before_scrub = !self.is_paused
+                && self.current_video_path.is_some()
+                && !self.is_playback_finished();
             if self.was_playing_before_scrub {
                 let _ = self.mpv.set_property("pause", true);
             }
@@ -954,12 +1181,15 @@ impl PealayerApp {
             self.playback_time = 0.0;
             self.seek_pos = None;
             self.add_recent_media(path.clone());
-            let title = path.file_name().and_then(|n| n.to_str()).unwrap_or(path_str);
+            let title = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(path_str);
             if let Some(ref mut mc) = self.media_controls {
                 mc.update_metadata(Some(title));
             }
             self.set_osd(format!("Loaded: {}", title));
-            
+
             // Auto-load matching sidecar timeline
             let mut sidecar = path.clone();
             sidecar.set_extension("4d.json");
@@ -969,10 +1199,90 @@ impl PealayerApp {
             if sidecar.exists() {
                 if let Ok(timeline) = crate::four_d::models::Timeline::load_from_file(&sidecar) {
                     self.timeline = timeline;
-                    let compiled = crate::four_d::engine::compile_timeline(&self.timeline, &self.track_muted, &self.track_soloed);
-                    let _ = self.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                    let compiled = crate::four_d::engine::compile_timeline(
+                        &self.timeline,
+                        &self.track_muted,
+                        &self.track_soloed,
+                    );
+                    let _ = self
+                        .engine_handle
+                        .sender
+                        .send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
                 }
             }
+        }
+    }
+
+    pub fn load_dropped_files(&mut self, paths: Vec<std::path::PathBuf>) {
+        let mut first_media = true;
+        let mut subtitle_added = false;
+        let mut queued_media = 0usize;
+
+        // Load/queue media before attaching subtitles so a mixed Windows drop
+        // reliably attaches subtitle files to the newly selected item.
+        for path in paths
+            .iter()
+            .filter(|path| dropped_file_kind(path) == DroppedFileKind::Media)
+        {
+            if first_media {
+                self.load_video_file(path.clone());
+                first_media = false;
+            } else if let Some(path_str) = path.to_str() {
+                if self
+                    .mpv
+                    .command("loadfile", &[path_str, "append-play"])
+                    .is_ok()
+                {
+                    self.add_recent_media(path.clone());
+                    queued_media += 1;
+                }
+            }
+        }
+
+        for path in paths
+            .iter()
+            .filter(|path| dropped_file_kind(path) == DroppedFileKind::Subtitle)
+        {
+            if let Some(path_str) = path.to_str() {
+                if self.mpv.command("sub-add", &[path_str]).is_ok() {
+                    subtitle_added = true;
+                }
+            }
+        }
+        if subtitle_added {
+            self.refresh_sub_tracks();
+        }
+
+        for path in paths
+            .iter()
+            .filter(|path| dropped_file_kind(path) == DroppedFileKind::Timeline)
+        {
+            match crate::four_d::models::Timeline::load_from_file(path) {
+                Ok(timeline) => {
+                    self.timeline = timeline;
+                    let compiled = crate::four_d::engine::compile_timeline(
+                        &self.timeline,
+                        &self.track_muted,
+                        &self.track_soloed,
+                    );
+                    let _ = self
+                        .engine_handle
+                        .sender
+                        .send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                }
+                Err(error) => {
+                    self.show_error = Some(format!(
+                        "Failed to load dropped timeline {}: {error}",
+                        path.display()
+                    ));
+                }
+            }
+        }
+
+        if queued_media > 0 {
+            self.set_osd(format!("Queued {queued_media} additional media file(s)"));
+        } else if subtitle_added {
+            self.set_osd("External subtitle loaded".to_string());
         }
     }
 
@@ -1011,14 +1321,38 @@ impl PealayerApp {
     }
 
     pub fn save_config(&self) {
-        let cfg = crate::config::AppConfig {
-            volume: self.volume,
-            is_muted: self.is_muted,
-            pin_controls: self.pin_controls,
-            show_remaining_time: self.show_remaining_time,
-            recent_media: self.recent_media.clone(),
-        };
+        // Preserve deployment-owned branding and theme settings while saving
+        // mutable player preferences.
+        let mut cfg = crate::config::AppConfig::load();
+        cfg.volume = self.volume;
+        cfg.is_muted = self.is_muted;
+        cfg.pin_controls = self.pin_controls;
+        cfg.show_remaining_time = self.show_remaining_time;
+        cfg.recent_media = self.recent_media.clone();
+        cfg.language = self.language_preference;
+        cfg.direction = self.direction_preference;
         cfg.save();
+    }
+
+    pub(crate) fn tr(&self, english: &'static str) -> String {
+        crate::ui::i18n::tr(self.language, english)
+    }
+
+    pub(crate) fn display_text(&self, logical: &str) -> String {
+        crate::ui::i18n::visual_text(self.language, logical)
+    }
+
+    pub(crate) fn set_language(&mut self, preference: crate::config::AppLanguage) {
+        self.language_preference = preference;
+        self.language = crate::config::resolve_language(preference);
+        self.rtl = crate::config::resolve_rtl(self.direction_preference, self.language);
+        self.save_config();
+    }
+
+    pub(crate) fn set_direction(&mut self, preference: crate::config::AppDirection) {
+        self.direction_preference = preference;
+        self.rtl = crate::config::resolve_rtl(preference, self.language);
+        self.save_config();
     }
 
     pub fn add_recent_media(&mut self, path: std::path::PathBuf) {
@@ -1071,7 +1405,10 @@ impl PealayerApp {
         }
     }
 
-    pub fn restore_timeline_snapshot(&mut self, snapshot: crate::four_d::history::TimelineSnapshot) {
+    pub fn restore_timeline_snapshot(
+        &mut self,
+        snapshot: crate::four_d::history::TimelineSnapshot,
+    ) {
         self.timeline.instances = snapshot.instances;
         self.timeline.analog_tracks = snapshot.analog_tracks;
         self.timeline.templates = snapshot.templates;
@@ -1085,39 +1422,123 @@ impl PealayerApp {
             &self.track_muted,
             &self.track_soloed,
         );
-        let _ = self.engine_handle.sender.send(
-            crate::four_d::engine::EngineMessage::UpdateQueue(compiled),
-        );
+        let _ = self
+            .engine_handle
+            .sender
+            .send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
     }
 
     pub fn isolate_template_for_instance(&mut self, instance_id: uuid::Uuid) -> Option<uuid::Uuid> {
         let (target_effect_id, is_shared) = {
-            let instance = self.timeline.instances.iter().find(|i| i.id == instance_id)?;
+            let instance = self
+                .timeline
+                .instances
+                .iter()
+                .find(|i| i.id == instance_id)?;
             let effect_id = instance.effect_id;
-            let count = self.timeline.instances.iter().filter(|i| i.effect_id == effect_id).count();
+            let count = self
+                .timeline
+                .instances
+                .iter()
+                .filter(|i| i.effect_id == effect_id)
+                .count();
             (effect_id, count > 1)
         };
 
         if !is_shared {
-            return if self.timeline.templates.iter().any(|t| t.id == target_effect_id) {
+            return if self
+                .timeline
+                .templates
+                .iter()
+                .any(|t| t.id == target_effect_id)
+            {
                 Some(target_effect_id)
             } else {
                 None
             };
         }
 
-        let template = self.timeline.templates.iter().find(|t| t.id == target_effect_id)?;
+        let template = self
+            .timeline
+            .templates
+            .iter()
+            .find(|t| t.id == target_effect_id)?;
         let mut new_template = template.clone();
         let new_id = uuid::Uuid::new_v4();
         new_template.id = new_id;
         self.timeline.templates.push(new_template);
 
-        if let Some(inst) = self.timeline.instances.iter_mut().find(|i| i.id == instance_id) {
+        if let Some(inst) = self
+            .timeline
+            .instances
+            .iter_mut()
+            .find(|i| i.id == instance_id)
+        {
             inst.effect_id = new_id;
         }
 
         Some(new_id)
     }
+}
+
+fn controller_macro_effect_preset(
+    hardware_macro: &crate::four_d::controller::HardwareMacro,
+    available_relays: &std::collections::BTreeSet<u8>,
+) -> Option<EffectPreset> {
+    let mut actions = Vec::new();
+    let mut used_relays = std::collections::BTreeSet::new();
+    for step in &hardware_macro.steps {
+        let offset_ms = step.at_us / 1_000;
+        match step.kind.as_str() {
+            "relay" => {
+                let relay_id = step
+                    .target
+                    .filter(|relay_id| available_relays.contains(relay_id))?;
+                used_relays.insert(relay_id);
+                actions.push(crate::four_d::models::AtomicAction {
+                    relay_id,
+                    state: step.value.unwrap_or(0) != 0,
+                    offset_ms,
+                });
+            }
+            "relays-off" => {
+                for relay_id in &used_relays {
+                    actions.push(crate::four_d::models::AtomicAction {
+                        relay_id: *relay_id,
+                        state: false,
+                        offset_ms,
+                    });
+                }
+            }
+            // Display, PWM, opcode, and other macros remain visible in the
+            // hardware catalog, but are not misrepresented as relay effects.
+            _ => return None,
+        }
+    }
+    if actions.is_empty() {
+        return None;
+    }
+    let target_relay = used_relays.iter().copied().next()?;
+    if used_relays.len() != 1 {
+        return None;
+    }
+    actions.sort_by_key(|action| action.offset_ms);
+    let duration_ms = actions
+        .iter()
+        .map(|action| action.offset_ms)
+        .max()
+        .unwrap_or(0)
+        .max(1);
+    Some(EffectPreset {
+        category: hardware_macro.category.clone(),
+        effect: crate::four_d::models::Effect::with_target(
+            hardware_macro.name.clone(),
+            String::new(),
+            duration_ms,
+            crate::four_d::models::HardwareTarget::Relay(target_relay),
+            actions,
+        ),
+    })
 }
 
 impl Default for PealayerApp {
@@ -1132,7 +1553,9 @@ impl Default for PealayerApp {
             .expect("Failed to initialize mpv"),
         ));
         let _ = mpv.set_property("keep-open", "always");
-        let mpv_client = mpv.create_client(None).expect("Failed to create mpv client");
+        let mpv_client = mpv
+            .create_client(None)
+            .expect("Failed to create mpv client");
         let _ = mpv_client.observe_property("time-pos", libmpv2::Format::Double, 1);
         let _ = mpv_client.observe_property("duration", libmpv2::Format::Double, 2);
         let _ = mpv_client.observe_property("pause", libmpv2::Format::Flag, 3);
@@ -1146,10 +1569,27 @@ impl Default for PealayerApp {
         let _ = mpv_client.observe_property("aid", libmpv2::Format::String, 11);
         let _ = mpv_client.observe_property("eof-reached", libmpv2::Format::Flag, 12);
         let (interop_tx, interop_rx) = std::sync::mpsc::channel();
+        let (_controller_cmd_tx, controller_cmd_rx) =
+            std::sync::mpsc::channel::<crate::platform::interop::ControllerDelivery>();
         let (web_state_tx, _web_state_rx) = std::sync::mpsc::channel();
         let (_web_cmd_tx, web_cmd_rx) = std::sync::mpsc::channel();
 
         Self {
+            app_name: crate::config::resolved_app_name(&crate::config::AppConfig::default()),
+            app_publisher: crate::config::resolved_app_publisher(
+                &crate::config::AppConfig::default(),
+            ),
+            app_copyright: crate::config::resolved_app_copyright(
+                &crate::config::AppConfig::default(),
+            ),
+            last_window_title: String::new(),
+            language_preference: crate::config::AppLanguage::System,
+            language: crate::config::resolve_language(crate::config::AppLanguage::System),
+            direction_preference: crate::config::AppDirection::Auto,
+            rtl: crate::config::resolve_rtl(
+                crate::config::AppDirection::Auto,
+                crate::config::resolve_language(crate::config::AppLanguage::System),
+            ),
             mpv,
             mpv_client,
             render_context: Arc::new(Mutex::new(None)),
@@ -1160,7 +1600,9 @@ impl Default for PealayerApp {
             volume: 100.0,
             is_muted: false,
             seek_pos: None,
-            seek_controller: crate::mpv::seek::SeekController::new(crate::mpv::seek::MpvSeekBackend::new(mpv)),
+            seek_controller: crate::mpv::seek::SeekController::new(
+                crate::mpv::seek::MpvSeekBackend::new(mpv),
+            ),
             was_playing_before_scrub: false,
             is_scrubbing: false,
             last_mouse_activity: std::time::Instant::now(),
@@ -1189,12 +1631,11 @@ impl Default for PealayerApp {
             timeline_zoom: 100.0,
             undo_stack: crate::four_d::history::UndoStack::default(),
             recording_keys: std::collections::HashMap::new(),
-            relay_overrides: [None; 9],
-            preset_library: Vec::new(),
+            relay_overrides: std::collections::BTreeSet::new(),
             effects_search_query: String::new(),
-            track_muted: [false; 9],
-            track_soloed: [false; 9],
-            track_locked: [false; 9],
+            track_muted: std::collections::BTreeSet::new(),
+            track_soloed: std::collections::BTreeSet::new(),
+            track_locked: std::collections::BTreeSet::new(),
             active_drag: None,
             estop_active: false,
             serial_port: String::new(),
@@ -1218,6 +1659,7 @@ impl Default for PealayerApp {
             show_shortcuts_dialog: false,
             show_about_dialog: false,
             interop_rx,
+            controller_cmd_rx,
             web_state_tx,
             web_cmd_rx,
             last_web_broadcast: None,
@@ -1227,9 +1669,30 @@ impl Default for PealayerApp {
     }
 }
 
+pub fn contextual_window_title(
+    app_name: &str,
+    media_path: Option<&std::path::Path>,
+    connected: bool,
+    connection_requested: bool,
+) -> String {
+    if let Some(media_name) = media_path.and_then(std::path::Path::file_name) {
+        return format!("{} — {}", media_name.to_string_lossy(), app_name);
+    }
+    if connected {
+        format!("{app_name} — Hardware connected")
+    } else if connection_requested {
+        format!("{app_name} — Connecting…")
+    } else {
+        app_name.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::{
+        DroppedFileKind, contextual_window_title, controller_macro_effect_preset, dropped_file_kind,
+    };
 
     #[test]
     fn test_recent_media_deduplication_and_cap() {
@@ -1243,7 +1706,10 @@ mod tests {
         };
 
         for i in 0..15 {
-            add(&mut list, std::path::PathBuf::from(format!("/video{}.mp4", i)));
+            add(
+                &mut list,
+                std::path::PathBuf::from(format!("/video{}.mp4", i)),
+            );
         }
 
         assert_eq!(list.len(), 10);
@@ -1289,5 +1755,92 @@ mod tests {
         let mut storage = DummyStorage;
         app.save(&mut storage);
         app.on_exit(None);
+    }
+    #[test]
+    fn window_title_reflects_media_and_connection_context() {
+        assert_eq!(
+            contextual_window_title("Studio", None, false, false),
+            "Studio"
+        );
+        assert_eq!(
+            contextual_window_title("Studio", None, false, true),
+            "Studio — Connecting…"
+        );
+        assert_eq!(
+            contextual_window_title("Studio", None, true, true),
+            "Studio — Hardware connected"
+        );
+        assert_eq!(
+            contextual_window_title(
+                "Studio",
+                Some(std::path::Path::new("C:/media/demo.mp4")),
+                true,
+                true,
+            ),
+            "demo.mp4 — Studio"
+        );
+    }
+
+    #[test]
+    fn dropped_files_are_routed_by_runtime_type() {
+        assert_eq!(
+            dropped_file_kind(std::path::Path::new("movie.MKV")),
+            DroppedFileKind::Media
+        );
+        assert_eq!(
+            dropped_file_kind(std::path::Path::new("captions.SRT")),
+            DroppedFileKind::Subtitle
+        );
+        assert_eq!(
+            dropped_file_kind(std::path::Path::new("show.4d.json")),
+            DroppedFileKind::Timeline
+        );
+        assert_eq!(
+            dropped_file_kind(std::path::Path::new("stream.m3u8")),
+            DroppedFileKind::Media
+        );
+    }
+
+    #[test]
+    fn controller_relay_macro_becomes_effect_without_invented_mapping() {
+        let hardware_macro = crate::four_d::controller::HardwareMacro {
+            name: "Live Air Burst".to_string(),
+            category: "Cinema".to_string(),
+            steps: vec![
+                crate::four_d::controller::HardwareMacroStep {
+                    at_us: 0,
+                    kind: "relay".to_string(),
+                    target: Some(6),
+                    value: Some(1),
+                },
+                crate::four_d::controller::HardwareMacroStep {
+                    at_us: 250_000,
+                    kind: "relays-off".to_string(),
+                    target: None,
+                    value: None,
+                },
+            ],
+        };
+        let preset = controller_macro_effect_preset(&hardware_macro, &[6].into()).unwrap();
+        assert_eq!(preset.effect.name, "Live Air Burst");
+        assert_eq!(preset.effect.actions[0].relay_id, 6);
+        assert!(preset.effect.actions[0].state);
+        assert!(!preset.effect.actions[1].state);
+        assert_eq!(preset.effect.duration_ms, 250);
+    }
+
+    #[test]
+    fn non_relay_controller_macro_is_not_misrepresented_as_effect() {
+        let hardware_macro = crate::four_d::controller::HardwareMacro {
+            name: "Display only".to_string(),
+            category: "Display".to_string(),
+            steps: vec![crate::four_d::controller::HardwareMacroStep {
+                at_us: 0,
+                kind: "display".to_string(),
+                target: None,
+                value: None,
+            }],
+        };
+        assert!(controller_macro_effect_preset(&hardware_macro, &[6].into()).is_none());
     }
 }

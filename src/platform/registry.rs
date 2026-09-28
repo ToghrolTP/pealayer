@@ -95,6 +95,7 @@ pub fn load_settings_from_registry() -> Result<Option<AppConfig>, String> {
         pin_controls: pin_controls != 0,
         show_remaining_time: show_remaining_time != 0,
         recent_media,
+        ..AppConfig::default()
     }))
 }
 
