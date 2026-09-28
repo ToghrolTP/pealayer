@@ -133,14 +133,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
         ui.separator();
         match tab {
             PealayerTab::ProgramMonitor => {
-                let is_fullscreen = ui.input(|input| input.viewport().fullscreen.unwrap_or(false));
+                let is_fullscreen = self.app.fullscreen_intent(ui.ctx());
                 let label = if is_fullscreen {
                     self.app.tr("Exit Fullscreen")
                 } else {
                     self.app.tr("Fullscreen")
                 };
                 if ui.button(format!("⛶ {label}")).clicked() {
-                    self.app.set_fullscreen(ui.ctx(), !is_fullscreen);
+                    self.app.toggle_fullscreen(ui.ctx());
                     ui.close();
                 }
             }

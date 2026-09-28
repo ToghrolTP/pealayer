@@ -143,7 +143,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             app.toggle_playback();
         }
 
-        let is_fullscreen = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
+        let is_fullscreen = app.fullscreen_intent(ui.ctx());
         let fs_title = if is_fullscreen {
             format!("⤡ {}", app.tr("Exit Fullscreen"))
         } else {
@@ -151,7 +151,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         };
         if ui.button(fs_title).clicked() {
             ui.close();
-            app.set_fullscreen(ui.ctx(), !is_fullscreen);
+            app.toggle_fullscreen(ui.ctx());
         }
 
         let mute_title = if app.is_muted {

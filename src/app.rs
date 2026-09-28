@@ -208,6 +208,7 @@ pub struct PealayerApp {
     pub(crate) connection_notice: Option<String>,
     pub(crate) workspace_before_fullscreen: Option<bool>,
     pub(crate) was_fullscreen: bool,
+    pub(crate) desired_fullscreen: Option<bool>,
     pub(crate) interop_rx: std::sync::mpsc::Receiver<crate::platform::interop::InteropCommand>,
     pub(crate) controller_cmd_rx:
         std::sync::mpsc::Receiver<crate::platform::interop::ControllerDelivery>,
@@ -511,7 +512,7 @@ impl eframe::App for PealayerApp {
             self.toggle_playback();
         }
         if ctx.input(|i| i.key_pressed(egui::Key::F)) {
-            self.set_fullscreen(&ctx, !is_fullscreen);
+            self.toggle_fullscreen(&ctx);
         }
         if ctx.input(|i| i.key_pressed(egui::Key::M)) {
             let _ = self.mpv.command("cycle", &["mute"]);
@@ -1052,14 +1053,10 @@ impl PealayerApp {
                 }
             }
             InteropCommand::SetFullscreen { enabled } => self.set_fullscreen(ctx, enabled),
-            InteropCommand::ToggleFullscreen => {
-                let fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
-                self.set_fullscreen(ctx, !fullscreen);
-            }
+            InteropCommand::ToggleFullscreen => self.toggle_fullscreen(ctx),
             InteropCommand::SetWorkspace { nle } => {
-                if !ctx.input(|input| input.viewport().fullscreen.unwrap_or(false)) {
-                    self.show_four_d_editor = nle;
-                }
+                let observed = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
+                self.apply_workspace_request(nle, observed);
             }
             InteropCommand::GetStatus => {}
         }
@@ -1241,18 +1238,45 @@ impl PealayerApp {
     }
 
     pub fn set_fullscreen(&mut self, ctx: &egui::Context, enabled: bool) {
+        let observed = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
+        self.request_fullscreen(ctx, enabled, observed);
+    }
+
+    pub fn toggle_fullscreen(&mut self, ctx: &egui::Context) {
+        let observed = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
+        let intended = self.desired_fullscreen.unwrap_or(observed);
+        self.request_fullscreen(ctx, !intended, observed);
+    }
+
+    pub fn fullscreen_intent(&self, ctx: &egui::Context) -> bool {
+        self.desired_fullscreen.unwrap_or_else(|| {
+            ctx.input(|input| input.viewport().fullscreen.unwrap_or(false))
+        })
+    }
+
+    fn apply_workspace_request(&mut self, nle: bool, observed_fullscreen: bool) {
+        if observed_fullscreen || self.was_fullscreen || self.desired_fullscreen == Some(true) {
+            self.workspace_before_fullscreen = Some(nle);
+            self.show_four_d_editor = false;
+        } else {
+            self.show_four_d_editor = nle;
+        }
+    }
+
+    fn request_fullscreen(&mut self, ctx: &egui::Context, enabled: bool, observed: bool) {
         if enabled {
             if !self.was_fullscreen && self.workspace_before_fullscreen.is_none() {
                 self.workspace_before_fullscreen = Some(self.show_four_d_editor);
             }
             self.show_four_d_editor = false;
-        } else if !self.was_fullscreen {
+        } else if !self.was_fullscreen && !observed {
             // The OS may not have observed a rapid ON request yet. Cancelling
             // that pending entry must restore the workspace staged above.
             if let Some(previous_workspace) = self.workspace_before_fullscreen.take() {
                 self.show_four_d_editor = previous_workspace;
             }
         }
+        self.desired_fullscreen = (enabled != observed).then_some(enabled);
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(enabled));
         self.set_osd(if enabled {
             self.tr("Enter fullscreen")
@@ -1275,6 +1299,9 @@ impl PealayerApp {
             }
         }
         self.was_fullscreen = is_fullscreen;
+        if self.desired_fullscreen == Some(is_fullscreen) {
+            self.desired_fullscreen = None;
+        }
     }
 
     /// Performs an exact relative seek by the given number of seconds.
@@ -1935,6 +1962,7 @@ impl Default for PealayerApp {
             connection_notice: None,
             workspace_before_fullscreen: None,
             was_fullscreen: false,
+            desired_fullscreen: None,
             interop_rx,
             controller_cmd_rx,
             web_state_tx,
@@ -2127,6 +2155,63 @@ mod tests {
         assert_eq!(app.workspace_before_fullscreen, Some(true));
         app.observe_fullscreen_state(false);
         assert!(app.show_four_d_editor);
+    }
+
+    #[test]
+    fn two_pending_fullscreen_toggles_cancel_each_other() {
+        let mut app = PealayerApp::default();
+        let ctx = egui::Context::default();
+        app.show_four_d_editor = true;
+
+        app.toggle_fullscreen(&ctx);
+        assert_eq!(app.desired_fullscreen, Some(true));
+        assert!(!app.show_four_d_editor);
+
+        app.toggle_fullscreen(&ctx);
+        assert_eq!(app.desired_fullscreen, None);
+        assert!(app.show_four_d_editor);
+        assert_eq!(app.workspace_before_fullscreen, None);
+    }
+
+    #[test]
+    fn external_fullscreen_and_workspace_requests_preserve_simple_in_fullscreen() {
+        let mut app = PealayerApp::default();
+        app.show_four_d_editor = false;
+
+        // Startup or an OS-native transition has no pending application intent.
+        app.observe_fullscreen_state(true);
+        assert_eq!(app.desired_fullscreen, None);
+        assert!(!app.show_four_d_editor);
+        assert_eq!(app.workspace_before_fullscreen, Some(false));
+
+        // A remote workspace request changes the post-exit target, never the
+        // fullscreen surface itself.
+        app.apply_workspace_request(true, true);
+        assert!(!app.show_four_d_editor);
+        assert_eq!(app.workspace_before_fullscreen, Some(true));
+
+        app.observe_fullscreen_state(false);
+        assert!(app.show_four_d_editor);
+        assert_eq!(app.workspace_before_fullscreen, None);
+    }
+
+    #[test]
+    fn workspace_request_during_pending_fullscreen_updates_the_exit_target() {
+        let mut app = PealayerApp::default();
+        let ctx = egui::Context::default();
+        app.show_four_d_editor = true;
+
+        app.toggle_fullscreen(&ctx);
+        assert_eq!(app.desired_fullscreen, Some(true));
+        app.apply_workspace_request(false, false);
+        assert!(!app.show_four_d_editor);
+        assert_eq!(app.workspace_before_fullscreen, Some(false));
+
+        app.observe_fullscreen_state(true);
+        assert!(!app.show_four_d_editor);
+        app.observe_fullscreen_state(false);
+        assert!(!app.show_four_d_editor);
+        assert_eq!(app.workspace_before_fullscreen, None);
     }
 
     #[test]
