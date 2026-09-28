@@ -322,7 +322,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 .selectable_label(app.language_preference == preference, label)
                                 .clicked()
                             {
-                                app.set_language(preference);
+                                    app.set_language(ui.ctx(), preference);
                                 ui.close();
                             }
                         }

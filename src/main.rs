@@ -19,7 +19,7 @@ use mpv::render::RenderContextWrapper;
 use mpv::render::mpv_get_proc_address;
 use std::sync::{Arc, Mutex};
 
-fn configure_ui_fonts(context: &egui::Context) {
+pub(crate) fn configure_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool) {
     let mut fonts = egui::FontDefinitions::default();
 
     // Prefer the platform UI face. Vazirmatn remains immediately behind it so
@@ -47,14 +47,20 @@ fn configure_ui_fonts(context: &egui::Context) {
         .families
         .get_mut(&egui::FontFamily::Proportional)
         .expect("egui provides a proportional font family");
-    proportional.insert(0, "pealayer-vazirmatn".to_owned());
-
     if let Some(bytes) = system_font {
         fonts.font_data.insert(
             "pealayer-system-ui".to_owned(),
             Arc::new(egui::FontData::from_owned(bytes)),
         );
-        proportional.insert(0, "pealayer-system-ui".to_owned());
+        if prefer_vazirmatn {
+            proportional.insert(0, "pealayer-system-ui".to_owned());
+            proportional.insert(0, "pealayer-vazirmatn".to_owned());
+        } else {
+            proportional.insert(0, "pealayer-vazirmatn".to_owned());
+            proportional.insert(0, "pealayer-system-ui".to_owned());
+        }
+    } else {
+        proportional.insert(0, "pealayer-vazirmatn".to_owned());
     }
 
     context.set_fonts(fonts);
@@ -225,7 +231,10 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let loaded_config = launch_config.clone();
-            configure_ui_fonts(&cc.egui_ctx);
+            configure_ui_fonts(
+                &cc.egui_ctx,
+                language == crate::config::AppLanguage::Persian,
+            );
             let theme_preference = match crate::config::resolved_theme(&loaded_config) {
                 crate::config::AppTheme::System => egui::ThemePreference::System,
                 crate::config::AppTheme::Light => egui::ThemePreference::Light,

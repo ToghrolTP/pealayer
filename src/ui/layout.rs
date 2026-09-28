@@ -108,11 +108,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
         match tab {
-            PealayerTab::ProgramMonitor => format!("{} 🎬", self.app.tr("Program Monitor")).into(),
+            PealayerTab::ProgramMonitor => format!("{} ▶", self.app.tr("Program Monitor")).into(),
             PealayerTab::EffectControls => format!("{} ⚙", self.app.tr("Effect Controls")).into(),
-            PealayerTab::EffectsLibrary => format!("{} 📚", self.app.tr("Effects Library")).into(),
-            PealayerTab::HardwareMonitor => format!("{} 🖥", self.app.tr("Hardware Monitor")).into(),
-            PealayerTab::Timeline => format!("{} ⏱", self.app.tr("Timeline")).into(),
+            PealayerTab::EffectsLibrary => format!("{} ◫", self.app.tr("Effects Library")).into(),
+            PealayerTab::HardwareMonitor => format!("{} ⌁", self.app.tr("Hardware Monitor")).into(),
+            PealayerTab::Timeline => format!("{} ━", self.app.tr("Timeline")).into(),
         }
     }
 
@@ -425,7 +425,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         ui.group(|ui| {
                                             ui.colored_label(
                                                 egui::Color32::from_rgb(245, 158, 11),
-                                                format!("⚠️ Track mismatch: configured for {configured_name}"),
+                                                format!("△ Track mismatch: configured for {configured_name}"),
                                             );
                                             if let Some(primary) = template.target.primary_relay_id() {
                                                 if advertised_relays.iter().any(|relay| relay.id == primary)
@@ -474,7 +474,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     });
 
                                     ui.add_space(12.0);
-                                    if ui.button(egui::RichText::new(format!("🗑 {delete_cue_label}")).color(egui::Color32::from_rgb(231, 76, 60))).clicked() {
+                                    if ui.button(egui::RichText::new(format!("× {delete_cue_label}")).color(egui::Color32::from_rgb(231, 76, 60))).clicked() {
                                         delete_cue = true;
                                     }
                                 }
@@ -575,7 +575,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 ui.strong(self.app.tr("Bulk actions"));
                                 ui.add_space(8.0);
 
-                                if ui.button(egui::RichText::new(format!("🗑 {delete_all_label}")).color(egui::Color32::from_rgb(231, 76, 60))).clicked() {
+                                if ui.button(egui::RichText::new(format!("× {delete_all_label}")).color(egui::Color32::from_rgb(231, 76, 60))).clicked() {
                                     delete_all = true;
                                 }
                             });
@@ -746,7 +746,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 };
                                 ui.colored_label(
                                     color,
-                                    egui::RichText::new(format!("⚠️ {estop_banner_label} ⚠️"))
+                                    egui::RichText::new(format!("△ {estop_banner_label} △"))
                                         .strong()
                                         .size(13.0)
                                 );
@@ -1419,7 +1419,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                             ui.separator();
                                                         }
                                                     }
-                                                    if ui.button(egui::RichText::new(format!("🗑 {timeline_delete_cue_label}")).color(egui::Color32::from_rgb(231, 76, 60))).clicked() {
+                                                    if ui.button(egui::RichText::new(format!("× {timeline_delete_cue_label}")).color(egui::Color32::from_rgb(231, 76, 60))).clicked() {
                                                         delete_cue_id = Some(instance.id);
                                                         ui.close();
                                                     }
@@ -1522,7 +1522,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 // Clip name label
                                                 let displayed_effect_name = crate::ui::i18n::visual_text(display_language, &effect.name);
                                                 let title = if is_mismatched {
-                                                    format!("⚠️ {} {}", effect.icon, displayed_effect_name)
+                                                    format!("△ {} {}", effect.icon, displayed_effect_name)
                                                 } else {
                                                     format!("{} {}", effect.icon, displayed_effect_name)
                                                 };
@@ -1565,7 +1565,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             // Clip name label
                                             let displayed_effect_name = crate::ui::i18n::visual_text(display_language, &effect.name);
                                             let title = if is_mismatched {
-                                                format!("⚠️ {} {}", effect.icon, displayed_effect_name)
+                                                format!("△ {} {}", effect.icon, displayed_effect_name)
                                             } else {
                                                 format!("{} {}", effect.icon, displayed_effect_name)
                                             };

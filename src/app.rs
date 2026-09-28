@@ -625,7 +625,7 @@ impl eframe::App for PealayerApp {
                     let mut open_url = false;
                     let mut close_dialog = false;
 
-                    egui::Window::new(format!("🔗 {}", self.tr("Open Location / URL")))
+                    egui::Window::new(format!("↗ {}", self.tr("Open Location / URL")))
                         .collapsible(false)
                         .resizable(false)
                         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
@@ -795,7 +795,7 @@ impl eframe::App for PealayerApp {
                         .show(ui.ctx(), |ui| {
                             ui.vertical_centered(|ui| {
                                 ui.add_space(8.0);
-                                ui.heading(format!("🎬 {app_name} v{}", env!("CARGO_PKG_VERSION")));
+                                ui.heading(format!("▣ {app_name} v{}", env!("CARGO_PKG_VERSION")));
                                 if let Some(publisher) = &app_publisher {
                                     ui.label(publisher);
                                 }
@@ -1471,10 +1471,18 @@ impl PealayerApp {
         crate::ui::i18n::visual_text(self.language, logical)
     }
 
-    pub(crate) fn set_language(&mut self, preference: crate::config::AppLanguage) {
+    pub(crate) fn set_language(
+        &mut self,
+        ctx: &egui::Context,
+        preference: crate::config::AppLanguage,
+    ) {
         self.language_preference = preference;
         self.language = crate::config::resolve_language(preference);
         self.rtl = crate::config::resolve_rtl(self.direction_preference, self.language);
+        crate::configure_ui_fonts(
+            ctx,
+            self.language == crate::config::AppLanguage::Persian,
+        );
         self.save_config();
     }
 

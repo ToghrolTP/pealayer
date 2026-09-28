@@ -8,7 +8,7 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
     let mut open = app.show_audio_settings;
 
-    egui::Window::new(format!("🎵 {}", app.tr("Audio Settings")))
+    egui::Window::new(format!("♫ {}", app.tr("Audio Settings")))
         .open(&mut open)
         .collapsible(true)
         .resizable(true)

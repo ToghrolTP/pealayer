@@ -64,7 +64,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 )
                                 .clicked()
                             {
-                                app.set_language(language);
+                                app.set_language(ui.ctx(), language);
                             }
                         }
                     });
@@ -208,4 +208,3 @@ fn drag_action_name(action: PlayerDragAction) -> &'static str {
         PlayerDragAction::None => "No action",
     }
 }
-
