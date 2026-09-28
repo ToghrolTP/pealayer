@@ -9,10 +9,6 @@ param(
     [string]$Theme = 'dark',
     [ValidateSet('en', 'fa')]
     [string[]]$Locale = @('en', 'fa'),
-    [ValidateRange(800, 3840)]
-    [int]$Width = 1280,
-    [ValidateRange(600, 2160)]
-    [int]$Height = 800,
     [ValidateRange(1, 30)]
     [int]$StartupTimeoutSeconds = 15
 )
@@ -148,11 +144,6 @@ function Save-WindowScreenshot([IntPtr]$Handle, [int]$ExpectedProcessId, [string
         throw "Refusing to capture window owned by PID $windowProcessId; expected $ExpectedProcessId."
     }
 
-    $flags = 0x0040 # SWP_SHOWWINDOW
-    if (-not [PealayerScreenshotNative]::SetWindowPos($Handle, [IntPtr]::Zero, 32, 32, $Width, $Height, $flags)) {
-        throw 'Could not resize the Pealayer window.'
-    }
-    [void][PealayerScreenshotNative]::ShowWindow($Handle, 3) # SW_MAXIMIZE
     [void][PealayerScreenshotNative]::BringWindowToTop($Handle)
     [void][PealayerScreenshotNative]::SetForegroundWindow($Handle)
     Start-Sleep -Milliseconds 900
@@ -161,34 +152,15 @@ function Save-WindowScreenshot([IntPtr]$Handle, [int]$ExpectedProcessId, [string
     if (-not [PealayerScreenshotNative]::GetWindowRect($Handle, [ref]$rect)) {
         throw 'Could not read the Pealayer window bounds.'
     }
-    $client = New-Object PealayerScreenshotNative+Rect
-    $clientOrigin = New-Object PealayerScreenshotNative+Point
-    if (-not [PealayerScreenshotNative]::GetClientRect($Handle, [ref]$client) -or
-        -not [PealayerScreenshotNative]::ClientToScreen($Handle, [ref]$clientOrigin)) {
-        throw 'Could not read the Pealayer client bounds.'
-    }
-    $dpi = [PealayerScreenshotNative]::GetDpiForWindow($Handle)
-    if ($dpi -eq 0) { $dpi = 96 }
-    $border = [Math]::Max(1, [Math]::Round($dpi / 96.0))
-    $caption = [PealayerScreenshotNative]::GetSystemMetricsForDpi(4, $dpi) # SM_CYCAPTION
-    $rect.Left = $clientOrigin.X - $border
-    $rect.Top = $clientOrigin.Y - $caption - $border
-    $rect.Right = $clientOrigin.X + ($client.Right - $client.Left) + $border
-    $rect.Bottom = $clientOrigin.Y + ($client.Bottom - $client.Top) + $border
-    $physicalTopLeft = New-Object PealayerScreenshotNative+Point
-    $physicalTopLeft.X = $rect.Left
-    $physicalTopLeft.Y = $rect.Top
-    $physicalBottomRight = New-Object PealayerScreenshotNative+Point
-    $physicalBottomRight.X = $rect.Right
-    $physicalBottomRight.Y = $rect.Bottom
-    if ([PealayerScreenshotNative]::LogicalToPhysicalPointForPerMonitorDPI(
-            $Handle, [ref]$physicalTopLeft) -and
-        [PealayerScreenshotNative]::LogicalToPhysicalPointForPerMonitorDPI(
-            $Handle, [ref]$physicalBottomRight)) {
-        $rect.Left = $physicalTopLeft.X
-        $rect.Top = $physicalTopLeft.Y
-        $rect.Right = $physicalBottomRight.X
-        $rect.Bottom = $physicalBottomRight.Y
+    $physicalRect = New-Object PealayerScreenshotNative+Rect
+    $dwmFrameBounds = 9 # DWMWA_EXTENDED_FRAME_BOUNDS
+    if ([PealayerScreenshotNative]::DwmGetWindowAttribute(
+            $Handle,
+            $dwmFrameBounds,
+            [ref]$physicalRect,
+            [Runtime.InteropServices.Marshal]::SizeOf($physicalRect)
+        ) -eq 0) {
+        $rect = $physicalRect
     }
     $captureWidth = $rect.Right - $rect.Left
     $captureHeight = $rect.Bottom - $rect.Top
