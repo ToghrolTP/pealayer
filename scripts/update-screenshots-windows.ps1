@@ -72,6 +72,9 @@ public static class PealayerScreenshotNative {
     public static extern bool SetForegroundWindow(IntPtr hwnd);
 
     [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hwnd, int command);
+
+    [DllImport("user32.dll")]
     public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
 
     [DllImport("user32.dll")]
@@ -149,6 +152,7 @@ function Save-WindowScreenshot([IntPtr]$Handle, [int]$ExpectedProcessId, [string
     if (-not [PealayerScreenshotNative]::SetWindowPos($Handle, [IntPtr]::Zero, 32, 32, $Width, $Height, $flags)) {
         throw 'Could not resize the Pealayer window.'
     }
+    [void][PealayerScreenshotNative]::ShowWindow($Handle, 3) # SW_MAXIMIZE
     [void][PealayerScreenshotNative]::BringWindowToTop($Handle)
     [void][PealayerScreenshotNative]::SetForegroundWindow($Handle)
     Start-Sleep -Milliseconds 900
