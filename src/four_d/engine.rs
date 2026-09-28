@@ -97,6 +97,13 @@ impl HardwareTransport {
         matches!(self, Self::DirectSerial { .. })
     }
 
+    fn description(&self) -> String {
+        match self {
+            Self::Controller(client) => client.transport_description(),
+            Self::DirectSerial { .. } => "direct:serial-diagnostic".to_string(),
+        }
+    }
+
     fn refresh_capabilities(
         &mut self,
     ) -> Result<Option<crate::four_d::controller::HardwareCapabilities>, String> {
@@ -129,6 +136,7 @@ pub struct EngineHandle {
     pub connection_requested: Arc<AtomicBool>,
     pub is_connected: Arc<AtomicBool>,
     pub serial_port: Arc<Mutex<String>>,
+    pub active_transport: Arc<Mutex<Option<String>>>,
     pub connection_error: Arc<Mutex<Option<String>>>,
     pub hardware_capabilities:
         Arc<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
@@ -152,6 +160,7 @@ pub fn spawn_engine() -> EngineHandle {
     let serial_port = Arc::new(Mutex::new(
         crate::four_d::controller::DEFAULT_ENDPOINT.to_string(),
     ));
+    let active_transport_description = Arc::new(Mutex::new(None));
     let connection_error = Arc::new(Mutex::new(None));
     let hardware_capabilities = Arc::new(Mutex::new(None));
     
@@ -163,6 +172,7 @@ pub fn spawn_engine() -> EngineHandle {
     let engine_connection_requested = Arc::clone(&connection_requested);
     let engine_connected = Arc::clone(&is_connected);
     let engine_port = Arc::clone(&serial_port);
+    let engine_transport_description = Arc::clone(&active_transport_description);
     let engine_conn_error = Arc::clone(&connection_error);
     let engine_capabilities = Arc::clone(&hardware_capabilities);
     
@@ -192,7 +202,7 @@ pub fn spawn_engine() -> EngineHandle {
                     guard.clone()
                 };
                 let transport = if crate::four_d::controller::is_controller_endpoint(&endpoint) {
-                    crate::four_d::controller::ControllerClient::connect(&endpoint)
+                    crate::four_d::controller::ControllerClient::connect_preferred(&endpoint)
                         .map(HardwareTransport::Controller)
                 } else {
                     let direct_override = std::env::var_os("PEALAYER_ALLOW_DIRECT_SERIAL").is_some();
@@ -214,7 +224,14 @@ pub fn spawn_engine() -> EngineHandle {
                 };
                 match transport {
                     Ok(transport) => {
-                        println!("[Engine] Connected hardware transport: {endpoint}");
+                        let description = transport.description();
+                        println!(
+                            "[Engine] Connected hardware transport: {}",
+                            description
+                        );
+                        if let Ok(mut guard) = engine_transport_description.lock() {
+                            *guard = Some(description);
+                        }
                         active_transport = Some(transport);
                         if let Some(ref mut transport) = active_transport {
                             match transport.refresh_capabilities() {
@@ -244,6 +261,9 @@ pub fn spawn_engine() -> EngineHandle {
                         }
                         engine_connection_requested.store(false, Ordering::Relaxed);
                         engine_connected.store(false, Ordering::Relaxed);
+                        if let Ok(mut guard) = engine_transport_description.lock() {
+                            *guard = None;
+                        }
                     }
                 }
             } else if !requested && active_transport.is_some() {
@@ -252,6 +272,9 @@ pub fn spawn_engine() -> EngineHandle {
                     let _ = transport.send(Command::AllOff);
                 }
                 active_transport = None;
+                if let Ok(mut guard) = engine_transport_description.lock() {
+                    *guard = None;
+                }
                 if let Ok(mut guard) = engine_capabilities.lock() {
                     *guard = None;
                 }
@@ -286,6 +309,9 @@ pub fn spawn_engine() -> EngineHandle {
                                         engine_connected.store(false, std::sync::atomic::Ordering::Relaxed);
                                         connected = false;
                                         active_transport = None;
+                                        if let Ok(mut guard) = engine_transport_description.lock() {
+                                            *guard = None;
+                                        }
                                     }
                                 }
                             }
@@ -327,6 +353,9 @@ pub fn spawn_engine() -> EngineHandle {
 
             if !engine_connected.load(Ordering::Relaxed) && active_transport.is_some() {
                 active_transport = None;
+                if let Ok(mut guard) = engine_transport_description.lock() {
+                    *guard = None;
+                }
                 if let Ok(mut guard) = engine_capabilities.lock() {
                     *guard = None;
                 }
@@ -355,6 +384,9 @@ pub fn spawn_engine() -> EngineHandle {
                         let _ = transport.send(Command::AllOff);
                     }
                     active_transport = None;
+                    if let Ok(mut guard) = engine_transport_description.lock() {
+                        *guard = None;
+                    }
                     connected = false;
                     engine_connected.store(false, Ordering::Relaxed);
                     engine_connection_requested.store(false, Ordering::Relaxed);
@@ -507,6 +539,7 @@ pub fn spawn_engine() -> EngineHandle {
         connection_requested,
         is_connected,
         serial_port,
+        active_transport: active_transport_description,
         connection_error,
         hardware_capabilities,
         sender: tx,

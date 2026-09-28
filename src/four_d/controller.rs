@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::four_d::embedded_host::EmbeddedHost;
 use crate::four_d::protocol::Command;
 
 pub const DEFAULT_ENDPOINT: &str = "pccontroller://127.0.0.1:8787";
@@ -61,15 +62,45 @@ pub fn available_endpoints() -> Vec<String> {
     endpoints
 }
 
+enum ControllerBackend {
+    Embedded(EmbeddedHost),
+    Tcp {
+        writer: TcpStream,
+        reader: BufReader<TcpStream>,
+        next_id: u64,
+    },
+}
+
 pub struct ControllerClient {
-    writer: TcpStream,
-    reader: BufReader<TcpStream>,
-    next_id: u64,
+    backend: ControllerBackend,
 }
 
 impl ControllerClient {
     pub fn connect(endpoint: &str) -> Result<Self, String> {
         Self::connect_with_timeouts(endpoint, Duration::from_secs(2), Duration::from_secs(3))
+    }
+
+    /// Prefer the packaged in-process Host for the canonical local endpoint.
+    /// If the library is absent or another coordinator already owns the Host,
+    /// fall back to the requested external coordinator without opening UART.
+    pub fn connect_preferred(endpoint: &str) -> Result<Self, String> {
+        if is_default_controller_endpoint(endpoint) {
+            match EmbeddedHost::discover_and_start() {
+                Ok(host) => {
+                    return Ok(Self {
+                        backend: ControllerBackend::Embedded(host),
+                    });
+                }
+                Err(embedded_error) => {
+                    return Self::connect(endpoint).map_err(|external_error| {
+                        format!(
+                            "embedded PCController unavailable ({embedded_error}); external coordinator unavailable ({external_error})"
+                        )
+                    });
+                }
+            }
+        }
+        Self::connect(endpoint)
     }
 
     fn connect_with_timeouts(
@@ -100,9 +131,11 @@ impl ControllerClient {
                 .map_err(|error| format!("clone PCController TCP stream: {error}"))?,
         );
         let mut client = Self {
-            writer,
-            reader,
-            next_id: 1,
+            backend: ControllerBackend::Tcp {
+                writer,
+                reader,
+                next_id: 1,
+            },
         };
         client.call("controller.ping", json!({}))?;
         Ok(client)
@@ -113,25 +146,33 @@ impl ControllerClient {
     }
 
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1).max(1);
+        let (writer, reader, next_id) = match &mut self.backend {
+            ControllerBackend::Embedded(host) => return host.call(method, params),
+            ControllerBackend::Tcp {
+                writer,
+                reader,
+                next_id,
+            } => (writer, reader, next_id),
+        };
+
+        let id = *next_id;
+        *next_id = next_id.wrapping_add(1).max(1);
         let request = json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": method,
             "params": params,
         });
-        serde_json::to_writer(&mut self.writer, &request)
+        serde_json::to_writer(&mut *writer, &request)
             .map_err(|error| format!("encode PCController JSON-RPC request: {error}"))?;
-        self.writer
+        writer
             .write_all(b"\n")
-            .and_then(|_| self.writer.flush())
+            .and_then(|_| writer.flush())
             .map_err(|error| format!("write PCController JSON-RPC request: {error}"))?;
 
         loop {
             let mut line = String::new();
-            let read = self
-                .reader
+            let read = reader
                 .read_line(&mut line)
                 .map_err(|error| format!("read PCController JSON-RPC response: {error}"))?;
             if read == 0 {
@@ -146,6 +187,20 @@ impl ControllerClient {
                 return Err(format!("PCController JSON-RPC error: {error}"));
             }
             return Ok(response.get("result").cloned().unwrap_or(Value::Null));
+        }
+    }
+
+    pub fn transport_description(&self) -> String {
+        match &self.backend {
+            ControllerBackend::Embedded(host) => {
+                let endpoints = host.endpoints();
+                if endpoints.is_null() {
+                    host.description()
+                } else {
+                    format!("{} endpoints={endpoints}", host.description())
+                }
+            }
+            ControllerBackend::Tcp { .. } => "external:tcp".to_string(),
         }
     }
 
@@ -330,6 +385,10 @@ pub fn normalize_endpoint(endpoint: &str) -> Result<&str, String> {
 
 pub fn is_controller_endpoint(endpoint: &str) -> bool {
     endpoint.starts_with("pccontroller://") || endpoint.starts_with("tcp://")
+}
+
+fn is_default_controller_endpoint(endpoint: &str) -> bool {
+    normalize_endpoint(endpoint).ok() == normalize_endpoint(DEFAULT_ENDPOINT).ok()
 }
 
 pub fn direct_serial_name(endpoint: &str) -> &str {
