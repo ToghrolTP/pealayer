@@ -131,6 +131,7 @@ fn main() {
                 let lib_dir = std::path::PathBuf::from(&prefix).join("lib");
                 if lib_dir.exists() {
                     println!("cargo:rustc-link-search=native={}", lib_dir.display());
+                    println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
                 }
             }
         }
@@ -142,6 +143,7 @@ fn main() {
         ] {
             if std::path::Path::new(path).exists() {
                 println!("cargo:rustc-link-search=native={path}");
+                println!("cargo:rustc-link-arg=-Wl,-rpath={path}");
             }
         }
     }

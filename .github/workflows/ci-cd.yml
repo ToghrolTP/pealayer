@@ -91,9 +91,8 @@ jobs:
           fi
           echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/mpv/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "DYLD_FALLBACK_LIBRARY_PATH=${BREW_PREFIX}/lib:${BREW_PREFIX}/opt/mpv/lib" >> "$GITHUB_ENV"
-          echo "DYLD_LIBRARY_PATH=${BREW_PREFIX}/lib:${BREW_PREFIX}/opt/mpv/lib" >> "$GITHUB_ENV"
           echo "LIBRARY_PATH=${BREW_PREFIX}/lib:${BREW_PREFIX}/opt/mpv/lib" >> "$GITHUB_ENV"
-          echo "RUSTFLAGS=-L native=${BREW_PREFIX}/lib -L native=${BREW_PREFIX}/opt/mpv/lib -C link-arg=-L${BREW_PREFIX}/lib -C link-arg=-L${BREW_PREFIX}/opt/mpv/lib" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=-L native=${BREW_PREFIX}/lib -L native=${BREW_PREFIX}/opt/mpv/lib -C link-arg=-L${BREW_PREFIX}/lib -C link-arg=-L${BREW_PREFIX}/opt/mpv/lib -C link-arg=-Wl,-rpath,${BREW_PREFIX}/lib -C link-arg=-Wl,-rpath,${BREW_PREFIX}/opt/mpv/lib" >> "$GITHUB_ENV"
           echo "${BREW_PREFIX}/bin" >> "$GITHUB_PATH"
 
       - name: Run tests (Linux)
