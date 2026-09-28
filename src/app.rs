@@ -1709,17 +1709,22 @@ fn controller_macro_effect_preset(
     })
 }
 
+fn get_shared_mpv() -> &'static libmpv2::Mpv {
+    static GLOBAL_MPV: std::sync::OnceLock<libmpv2::Mpv> = std::sync::OnceLock::new();
+    GLOBAL_MPV.get_or_init(|| {
+        libmpv2::Mpv::with_initializer(|init| {
+            let _ = init.set_option("vo", "null");
+            let _ = init.set_option("ao", "null");
+            let _ = init.set_option("keep-open", "always");
+            Ok(())
+        })
+        .expect("Failed to initialize mpv")
+    })
+}
+
 impl Default for PealayerApp {
     fn default() -> Self {
-        let mpv = Box::leak(Box::new(
-            libmpv2::Mpv::with_initializer(|init| {
-                let _ = init.set_option("vo", "null");
-                let _ = init.set_option("ao", "null");
-                let _ = init.set_option("keep-open", "always");
-                Ok(())
-            })
-            .expect("Failed to initialize mpv"),
-        ));
+        let mpv = get_shared_mpv();
         let _ = mpv.set_property("keep-open", "always");
         let mpv_client = mpv
             .create_client(None)

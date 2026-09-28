@@ -5,6 +5,11 @@ use std::time::Duration;
 
 #[test]
 fn test_cli_remote_and_single_instance_forwarding() {
+    let sock = format!("/tmp/pealayer_fwd_{}.sock", std::process::id());
+    unsafe {
+        std::env::set_var("PEALAYER_IPC_PORT", "18084");
+        std::env::set_var("PEALAYER_SOCKET_PATH", &sock);
+    }
     let (tx, rx) = channel::<InteropCommand>();
     let ctx = eframe::egui::Context::default();
     let application_identity =
