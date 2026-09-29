@@ -64,6 +64,7 @@ pub struct EffectDragPayload {
     pub duration_ms: u64,
     pub target: crate::four_d::models::HardwareTarget,
     pub actions: Vec<crate::four_d::models::AtomicAction>,
+    pub controller_macro: Option<crate::four_d::models::ControllerMacroCue>,
 }
 
 pub struct RttState {
@@ -628,15 +629,7 @@ impl eframe::App for PealayerApp {
         }
 
         if timeline_dirty {
-            let compiled = crate::four_d::engine::compile_timeline(
-                &self.timeline,
-                &self.track_muted,
-                &self.track_soloed,
-            );
-            let _ = self
-                .engine_handle
-                .sender
-                .send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+            self.sync_timeline_engine();
         }
 
         let mut frame = egui::Frame::central_panel(&ui.style());
@@ -974,17 +967,10 @@ impl PealayerApp {
             return Vec::new();
         };
 
-        let available_relays = capabilities
-            .relays
-            .iter()
-            .map(|relay| relay.id)
-            .collect::<std::collections::BTreeSet<_>>();
         capabilities
             .macros
             .iter()
-            .filter_map(|hardware_macro| {
-                controller_macro_effect_preset(hardware_macro, &available_relays)
-            })
+            .map(controller_macro_effect_preset)
             .collect()
     }
 
@@ -1448,15 +1434,7 @@ impl PealayerApp {
             if sidecar.exists() {
                 if let Ok(timeline) = crate::four_d::models::Timeline::load_from_file(&sidecar) {
                     self.timeline = timeline;
-                    let compiled = crate::four_d::engine::compile_timeline(
-                        &self.timeline,
-                        &self.track_muted,
-                        &self.track_soloed,
-                    );
-                    let _ = self
-                        .engine_handle
-                        .sender
-                        .send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                    self.sync_timeline_engine();
                 }
             }
         }
@@ -1509,15 +1487,7 @@ impl PealayerApp {
             match crate::four_d::models::Timeline::load_from_file(path) {
                 Ok(timeline) => {
                     self.timeline = timeline;
-                    let compiled = crate::four_d::engine::compile_timeline(
-                        &self.timeline,
-                        &self.track_muted,
-                        &self.track_soloed,
-                    );
-                    let _ = self
-                        .engine_handle
-                        .sender
-                        .send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                    self.sync_timeline_engine();
                 }
                 Err(error) => {
                     self.show_error = Some(format!(
@@ -1685,6 +1655,25 @@ impl PealayerApp {
         }
     }
 
+    /// Rebuilds every hardware lane from the authoritative project timeline.
+    /// Keeping relay edges and controller-owned macro cues together prevents
+    /// load, undo, delete, and drag operations from updating only one lane.
+    pub fn sync_timeline_engine(&self) {
+        let relays = crate::four_d::engine::compile_timeline(
+            &self.timeline,
+            &self.track_muted,
+            &self.track_soloed,
+        );
+        let macros = crate::four_d::engine::compile_controller_macros(&self.timeline);
+        let _ = self
+            .engine_handle
+            .sender
+            .send(crate::four_d::engine::EngineMessage::UpdateQueue(relays));
+        let _ = self.engine_handle.sender.send(
+            crate::four_d::engine::EngineMessage::UpdateControllerMacros(macros),
+        );
+    }
+
     pub fn restore_timeline_snapshot(
         &mut self,
         snapshot: crate::four_d::history::TimelineSnapshot,
@@ -1697,15 +1686,7 @@ impl PealayerApp {
                 self.timeline.analog_tracks.clone(),
             ),
         );
-        let compiled = crate::four_d::engine::compile_timeline(
-            &self.timeline,
-            &self.track_muted,
-            &self.track_soloed,
-        );
-        let _ = self
-            .engine_handle
-            .sender
-            .send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+        self.sync_timeline_engine();
     }
 
     pub fn isolate_template_for_instance(&mut self, instance_id: uuid::Uuid) -> Option<uuid::Uuid> {
@@ -1763,62 +1744,17 @@ impl PealayerApp {
 
 fn controller_macro_effect_preset(
     hardware_macro: &crate::four_d::controller::HardwareMacro,
-    available_relays: &std::collections::BTreeSet<u8>,
-) -> Option<EffectPreset> {
-    let mut actions = Vec::new();
-    let mut used_relays = std::collections::BTreeSet::new();
-    for step in &hardware_macro.steps {
-        let offset_ms = step.at_us / 1_000;
-        match step.kind.as_str() {
-            "relay" => {
-                let relay_id = step
-                    .target
-                    .filter(|relay_id| available_relays.contains(relay_id))?;
-                used_relays.insert(relay_id);
-                actions.push(crate::four_d::models::AtomicAction {
-                    relay_id,
-                    state: step.value.unwrap_or(0) != 0,
-                    offset_ms,
-                });
-            }
-            "relays-off" => {
-                for relay_id in &used_relays {
-                    actions.push(crate::four_d::models::AtomicAction {
-                        relay_id: *relay_id,
-                        state: false,
-                        offset_ms,
-                    });
-                }
-            }
-            // Display, PWM, opcode, and other macros remain visible in the
-            // hardware catalog, but are not misrepresented as relay effects.
-            _ => return None,
-        }
-    }
-    if actions.is_empty() {
-        return None;
-    }
-    let target_relay = used_relays.iter().copied().next()?;
-    if used_relays.len() != 1 {
-        return None;
-    }
-    actions.sort_by_key(|action| action.offset_ms);
-    let duration_ms = actions
-        .iter()
-        .map(|action| action.offset_ms)
-        .max()
-        .unwrap_or(0)
-        .max(1);
-    Some(EffectPreset {
+) -> EffectPreset {
+    EffectPreset {
         category: hardware_macro.category.clone(),
-        effect: crate::four_d::models::Effect::with_target(
+        effect: crate::four_d::models::Effect::controller_macro(
             hardware_macro.name.clone(),
             String::new(),
-            duration_ms,
-            crate::four_d::models::HardwareTarget::Relay(target_relay),
-            actions,
+            hardware_macro.duration_ms,
+            hardware_macro.id,
+            hardware_macro.mode.clone(),
         ),
-    })
+    }
 }
 
 fn get_shared_mpv() -> &'static libmpv2::Mpv {
@@ -2235,10 +2171,13 @@ mod tests {
     }
 
     #[test]
-    fn controller_relay_macro_becomes_effect_without_invented_mapping() {
+    fn controller_relay_macro_remains_an_opaque_controller_cue() {
         let hardware_macro = crate::four_d::controller::HardwareMacro {
+            id: 12,
             name: "Live Air Burst".to_string(),
             category: "Cinema".to_string(),
+            mode: "mcu".to_string(),
+            duration_ms: 250,
             steps: vec![
                 crate::four_d::controller::HardwareMacroStep {
                     at_us: 0,
@@ -2254,19 +2193,22 @@ mod tests {
                 },
             ],
         };
-        let preset = controller_macro_effect_preset(&hardware_macro, &[6].into()).unwrap();
+        let preset = controller_macro_effect_preset(&hardware_macro);
         assert_eq!(preset.effect.name, "Live Air Burst");
-        assert_eq!(preset.effect.actions[0].relay_id, 6);
-        assert!(preset.effect.actions[0].state);
-        assert!(!preset.effect.actions[1].state);
+        assert!(preset.effect.actions.is_empty());
+        assert_eq!(preset.effect.target, crate::four_d::models::HardwareTarget::ControllerMacro);
+        assert_eq!(preset.effect.controller_macro.as_ref().unwrap().id, 12);
         assert_eq!(preset.effect.duration_ms, 250);
     }
 
     #[test]
-    fn non_relay_controller_macro_is_not_misrepresented_as_effect() {
+    fn non_relay_controller_macro_is_available_without_relay_flattening() {
         let hardware_macro = crate::four_d::controller::HardwareMacro {
+            id: 7,
             name: "Display only".to_string(),
             category: "Display".to_string(),
+            mode: "host".to_string(),
+            duration_ms: 1,
             steps: vec![crate::four_d::controller::HardwareMacroStep {
                 at_us: 0,
                 kind: "display".to_string(),
@@ -2274,6 +2216,8 @@ mod tests {
                 value: None,
             }],
         };
-        assert!(controller_macro_effect_preset(&hardware_macro, &[6].into()).is_none());
+        let preset = controller_macro_effect_preset(&hardware_macro);
+        assert_eq!(preset.effect.controller_macro.as_ref().unwrap().id, 7);
+        assert!(preset.effect.actions.is_empty());
     }
 }
