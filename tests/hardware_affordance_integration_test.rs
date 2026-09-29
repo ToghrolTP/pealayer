@@ -32,6 +32,7 @@ fn effect_drop_uses_only_the_live_advertised_output() {
         duration_ms: 500,
         target: HardwareTarget::Relay(42),
         actions: generate_constant(42, true, 500),
+        controller_macro: None,
     };
 
     assert!(app.handle_effect_drop(&payload, 0, 1.0));
@@ -64,6 +65,7 @@ fn a_different_advertised_output_rejects_the_payload() {
         duration_ms: 500,
         target: HardwareTarget::Relay(42),
         actions: generate_constant(42, true, 500),
+        controller_macro: None,
     };
     assert!(!app.handle_effect_drop(&payload, 0, 1.0));
     assert!(app.timeline.instances.is_empty());

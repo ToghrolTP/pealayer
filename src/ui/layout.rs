@@ -1481,7 +1481,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     painter.rect_stroke(
                                                         clip_rect,
                                                         4.0,
-                                                        egui::Stroke::new(if selected { 2.0 } else { 1.0 }, egui::Color32::WHITE),
+                                                        egui::Stroke::new(if selected { 2.0_f32 } else { 1.0_f32 }, egui::Color32::WHITE),
                                                         egui::StrokeKind::Inside,
                                                     );
                                                     painter.text(
@@ -2479,7 +2479,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 if hovered_track_index == i as i32 {
                                                                     ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
                                                                     painter.rect_filled(track_rect, 0.0, egui::Color32::from_rgba_unmultiplied(108, 76, 170, 55));
-                                                                    painter.rect_stroke(track_rect, 0.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(170, 130, 255)), egui::StrokeKind::Inside);
+                                                                    painter.rect_stroke(track_rect, 0.0, egui::Stroke::new(1.5_f32, egui::Color32::from_rgb(170, 130, 255)), egui::StrokeKind::Inside);
                                                                 }
                                                             }
                                                             continue;
