@@ -22,12 +22,13 @@ pub type Action = AtomicAction;
 pub enum HardwareTarget {
     Any,
     Relay(u8),
+    ControllerMacro,
 }
 
 impl HardwareTarget {
     pub fn primary_relay_id(&self) -> Option<u8> {
         match self {
-            Self::Any => None,
+            Self::Any | Self::ControllerMacro => None,
             Self::Relay(relay_id) => Some(*relay_id),
         }
     }
@@ -36,6 +37,7 @@ impl HardwareTarget {
         match self {
             Self::Any => relay_id != 0,
             Self::Relay(target_id) => *target_id == relay_id,
+            Self::ControllerMacro => false,
         }
     }
 
@@ -44,6 +46,15 @@ impl HardwareTarget {
             .then_some(Self::Relay(relay_id))
             .unwrap_or(Self::Any)
     }
+}
+
+/// Durable reference to a PCController-owned macro. Pealayer schedules the
+/// reference against video while PCController retains execution timing and
+/// hardware-specific steps.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ControllerMacroCue {
+    pub id: u64,
+    pub mode: String,
 }
 
 pub fn default_hardware_target() -> HardwareTarget {
@@ -66,6 +77,9 @@ pub struct Effect {
     pub target: HardwareTarget,
     /// List of actions that make up this effect
     pub actions: Vec<AtomicAction>,
+    /// Opaque controller-owned macro executed as one synchronized cue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_macro: Option<ControllerMacroCue>,
 }
 
 impl Effect {
@@ -77,6 +91,7 @@ impl Effect {
             duration_ms,
             target: HardwareTarget::Any,
             actions,
+            controller_macro: None,
         }
     }
 
@@ -94,6 +109,25 @@ impl Effect {
             duration_ms,
             target,
             actions,
+            controller_macro: None,
+        }
+    }
+
+    pub fn controller_macro(
+        name: String,
+        icon: String,
+        duration_ms: u64,
+        macro_id: u64,
+        mode: String,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name,
+            icon,
+            duration_ms: duration_ms.max(1),
+            target: HardwareTarget::ControllerMacro,
+            actions: Vec::new(),
+            controller_macro: Some(ControllerMacroCue { id: macro_id, mode }),
         }
     }
 }

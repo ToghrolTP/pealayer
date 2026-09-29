@@ -85,8 +85,11 @@ pub struct HardwareMacroStep {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HardwareMacro {
+    pub id: u64,
     pub name: String,
     pub category: String,
+    pub mode: String,
+    pub duration_ms: u64,
     pub steps: Vec<HardwareMacroStep>,
 }
 
@@ -613,13 +616,14 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
         .into_iter()
         .flatten()
         .filter_map(|entry| {
+            let id = entry.get("id").and_then(Value::as_u64)?;
             let name = entry.get("name")?.as_str()?.to_string();
             let category = entry
                 .get("category")
                 .and_then(Value::as_str)
                 .unwrap_or("PCController")
                 .to_string();
-            let steps = entry
+            let steps: Vec<HardwareMacroStep> = entry
                 .get("steps")
                 .and_then(Value::as_array)
                 .into_iter()
@@ -639,9 +643,29 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
                     })
                 })
                 .collect();
+            let mode = entry
+                .get("mode")
+                .and_then(Value::as_str)
+                .unwrap_or("mcu")
+                .to_string();
+            let duration_ms = entry
+                .get("duration_us")
+                .and_then(Value::as_u64)
+                .map(|duration| duration.div_ceil(1_000))
+                .unwrap_or_else(|| {
+                    steps
+                        .iter()
+                        .map(|step: &HardwareMacroStep| step.at_us.div_ceil(1_000))
+                        .max()
+                        .unwrap_or(1)
+                })
+                .max(1);
             Some(HardwareMacro {
+                id,
                 name,
                 category,
+                mode,
+                duration_ms,
                 steps,
             })
         })
@@ -772,7 +796,7 @@ mod tests {
             "connected": true,
             "hello": {"name": "Cinema", "capabilities": CAPABILITY_PWM | CAPABILITY_RELAY_MOTION},
             "status": {"active_relays": 16},
-            "macros": {"library": [{"name": "Thunder"}]}
+            "macros": {"library": [{"id": 3, "name": "Thunder", "mode": "mcu", "steps": [{"at_us": 250000, "kind": "relay-mask"}]}]}
         });
         let catalog = json!({
             "peripheral_names": {"relay.5": "Left Air"},
@@ -789,6 +813,8 @@ mod tests {
         assert!(parsed.active_relays.contains(&5));
         assert_eq!(parsed.pwm_channels.len(), 1);
         assert_eq!(parsed.macros[0].name, "Thunder");
+        assert_eq!(parsed.macros[0].id, 3);
+        assert_eq!(parsed.macros[0].duration_ms, 250);
     }
 
     #[test]

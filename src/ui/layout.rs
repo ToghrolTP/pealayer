@@ -6,6 +6,7 @@ use egui_dock::TabViewer;
 enum TimelineTrackKind {
     Video,
     Audio,
+    ControllerMacros,
     Relay(u8),
 }
 
@@ -41,6 +42,12 @@ fn timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
         .advertised_hardware()
         .filter(|capabilities| capabilities.board_connected)
     {
+        if !capabilities.macros.is_empty() {
+            rows.push(TimelineTrackRow {
+                name: app.tr("Controller effects"),
+                kind: TimelineTrackKind::ControllerMacros,
+            });
+        }
         rows.extend(
             capabilities
                 .relays
@@ -693,7 +700,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         if categorized.is_empty() {
                             ui.centered_and_justified(|ui| {
                                 ui.label(egui::RichText::new(
-                                    self.app.tr("No compatible relay effects are advertised by the connected PCController.")
+                                    self.app.tr("No effects are advertised by the connected PCController.")
                                 ).weak().size(12.0));
                             });
                         } else {
@@ -720,6 +727,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         duration_ms: preset.effect.duration_ms,
                                                         target: preset.effect.target,
                                                         actions: preset.effect.actions.clone(),
+                                                        controller_macro: preset.effect.controller_macro.clone(),
                                                     };
 
                                                     // Wrap item in drag source
@@ -1045,14 +1053,20 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             if !capabilities.macros.is_empty() {
                                 ui.add_space(8.0);
                                 ui.label(egui::RichText::new(self.app.tr("PCController macro catalog")).strong());
-                                ui.label(
-                                    capabilities
-                                        .macros
-                                        .iter()
-                                        .map(|hardware_macro| crate::ui::i18n::visual_text(display_language, &hardware_macro.name))
-                                        .collect::<Vec<_>>()
-                                        .join(" · "),
-                                );
+                                for hardware_macro in &capabilities.macros {
+                                    ui.horizontal(|ui| {
+                                        ui.label(crate::ui::i18n::visual_text(display_language, &hardware_macro.name));
+                                        if ui.button(self.app.tr("Play")).clicked() {
+                                            let command = format!("macro play {} {}", hardware_macro.id, hardware_macro.mode);
+                                            let _ = self.app.engine_handle.sender.send(
+                                                crate::four_d::engine::EngineMessage::ControllerCall {
+                                                    method: "controller.command.execute".to_string(),
+                                                    params: serde_json::json!({"command": command}),
+                                                },
+                                            );
+                                        }
+                                    });
+                                }
                             }
                         }
 
@@ -1402,7 +1416,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let (label, color) = match track_row.kind {
                                                     TimelineTrackKind::Video => (&track_row.name, egui::Color32::from_rgb(41, 128, 185)),
                                                     TimelineTrackKind::Audio => (&track_row.name, egui::Color32::from_rgb(39, 174, 96)),
-                                                    TimelineTrackKind::Relay(_) => continue,
+                                                    TimelineTrackKind::ControllerMacros | TimelineTrackKind::Relay(_) => continue,
                                                 };
                                                 let row_y = tracks_top + row_index as f32 * 32.0;
                                                 let clip_rect = egui::Rect::from_min_max(
@@ -1432,6 +1446,53 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         for instance in &self.app.timeline.instances {
                                             if let Some(effect) = self.app.timeline.templates.iter().find(|t| t.id == instance.effect_id) {
+                                                if effect.controller_macro.is_some() {
+                                                    let Some(track_index) = timeline_rows
+                                                        .iter()
+                                                        .position(|row| row.kind == TimelineTrackKind::ControllerMacros)
+                                                    else {
+                                                        continue;
+                                                    };
+                                                    let track_y = tracks_top + track_index as f32 * 32.0;
+                                                    let start_x = rect.min.x + (instance.start_time_ms as f32 * px_per_ms);
+                                                    let end_x = start_x + (effect.duration_ms.max(1) as f32 * px_per_ms);
+                                                    let clip_rect = egui::Rect::from_min_max(
+                                                        egui::pos2(start_x, track_y + 4.0),
+                                                        egui::pos2(end_x.max(start_x + 8.0), track_y + 28.0),
+                                                    );
+                                                    let response = ui.interact(
+                                                        clip_rect,
+                                                        egui::Id::new(instance.id),
+                                                        egui::Sense::click(),
+                                                    );
+                                                    response.context_menu(|ui| {
+                                                        if ui.button(egui::RichText::new(format!("× {timeline_delete_cue_label}")).color(egui::Color32::from_rgb(231, 76, 60))).clicked() {
+                                                            delete_cue_id = Some(instance.id);
+                                                            ui.close();
+                                                        }
+                                                    });
+                                                    if response.clicked() {
+                                                        clicked_any_clip = true;
+                                                        self.app.selected_instance_ids.clear();
+                                                        self.app.selected_instance_ids.insert(instance.id);
+                                                    }
+                                                    let selected = self.app.selected_instance_ids.contains(&instance.id);
+                                                    painter.rect_filled(clip_rect, 4.0, egui::Color32::from_rgb(108, 76, 170));
+                                                    painter.rect_stroke(
+                                                        clip_rect,
+                                                        4.0,
+                                                        egui::Stroke::new(if selected { 2.0 } else { 1.0 }, egui::Color32::WHITE),
+                                                        egui::StrokeKind::Inside,
+                                                    );
+                                                    painter.text(
+                                                        clip_rect.left_center() + egui::vec2(8.0, 0.0),
+                                                        egui::Align2::LEFT_CENTER,
+                                                        &effect.name,
+                                                        egui::FontId::proportional(10.0),
+                                                        egui::Color32::WHITE,
+                                                    );
+                                                    continue;
+                                                }
                                                 // Find the relay used by this template's actions
                                                 let Some(relay_id) = effect.actions.first().map(|a| a.relay_id) else {
                                                     continue;
@@ -1653,8 +1714,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             self.app.undo_stack.push(self.app.snapshot_timeline());
                                             self.app.timeline.instances.retain(|inst| inst.id != cue_id);
                                             self.app.selected_instance_ids.remove(&cue_id);
-                                            let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
-                                            let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                                            self.app.sync_timeline_engine();
                                             ui.ctx().request_repaint();
                                         }
 
@@ -2409,6 +2469,21 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     let hovered_track_index = (relative_y / 32.0).floor() as i32;
 
                                                     for (i, track_row) in timeline_rows.iter().enumerate() {
+                                                        if payload.controller_macro.is_some() {
+                                                            if track_row.kind == TimelineTrackKind::ControllerMacros {
+                                                                let row_y = tracks_top + (i as f32 * 32.0);
+                                                                let track_rect = egui::Rect::from_min_max(
+                                                                    egui::pos2(rect.min.x, row_y),
+                                                                    egui::pos2(rect.max.x, row_y + 32.0),
+                                                                );
+                                                                if hovered_track_index == i as i32 {
+                                                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
+                                                                    painter.rect_filled(track_rect, 0.0, egui::Color32::from_rgba_unmultiplied(108, 76, 170, 55));
+                                                                    painter.rect_stroke(track_rect, 0.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(170, 130, 255)), egui::StrokeKind::Inside);
+                                                                }
+                                                            }
+                                                            continue;
+                                                        }
                                                         let TimelineTrackKind::Relay(relay_id) = track_row.kind else {
                                                             continue;
                                                         };
@@ -2481,7 +2556,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                                     if timeline_rows
                                                         .get(usize::try_from(hovered_track_index).unwrap_or(usize::MAX))
-                                                        .is_some_and(|row| !matches!(row.kind, TimelineTrackKind::Relay(_)))
+                                                        .is_some_and(|row| {
+                                                            if payload.controller_macro.is_some() {
+                                                                row.kind != TimelineTrackKind::ControllerMacros
+                                                            } else {
+                                                                !matches!(row.kind, TimelineTrackKind::Relay(_))
+                                                            }
+                                                        })
                                                     {
                                                         ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
                                                         let row_y = tracks_top + (hovered_track_index as f32 * 32.0);
@@ -2521,18 +2602,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     if rect.contains(mouse_pos) {
                                         let relative_y = mouse_pos.y - tracks_top;
                                         let visible_row = (relative_y / 32.0).floor() as i32;
-                                        let track_index = relay_for_timeline_row(&timeline_rows, visible_row)
-                                            .map(|relay_id| relay_id as i32 + 1)
-                                            .or_else(|| {
-                                                timeline_rows
-                                                    .get(usize::try_from(visible_row).ok()?)
-                                                    .map(|_| 0)
-                                            })
-                                            .unwrap_or(10);
                                         let relative_x = mouse_pos.x - rect.min.x;
                                         let drop_time_secs = (relative_x / zoom) as f64;
 
-                                        self.app.handle_effect_drop(payload, track_index, drop_time_secs);
+                                        self.app.handle_effect_drop(payload, visible_row, drop_time_secs);
                                     }
                                 }
                             }
@@ -2675,8 +2748,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         self.app.restore_timeline_snapshot(prev);
                                         self.app.selected_instance_ids.clear();
                                         self.app.selected_keyframes.clear();
-                                        let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
-                                        let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                                        self.app.sync_timeline_engine();
                                         let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateAnalogTracks(self.app.timeline.analog_tracks.clone()));
                                     }
                                 } else if redo_pressed {
@@ -2857,6 +2929,51 @@ impl PealayerApp {
         drop_time_secs: f64,
     ) -> bool {
         let timeline_rows = timeline_track_rows(self);
+        if let Some(controller_macro) = payload.controller_macro.as_ref() {
+            let valid_track = usize::try_from(track_index)
+                .ok()
+                .and_then(|index| timeline_rows.get(index))
+                .is_some_and(|row| row.kind == TimelineTrackKind::ControllerMacros);
+            if !valid_track {
+                self.set_osd(format!(
+                    "Place '{}' on the Controller effects track",
+                    payload.name
+                ));
+                return false;
+            }
+            let mut snapped_secs = drop_time_secs;
+            if (snapped_secs - self.playback_time).abs() < 0.15 {
+                snapped_secs = self.playback_time;
+            } else {
+                snapped_secs = (snapped_secs * 10.0).round() / 10.0;
+            }
+            self.undo_stack.push(self.snapshot_timeline());
+            let template_id = if let Some(existing) = self.timeline.templates.iter().find(|effect| {
+                effect.controller_macro.as_ref() == Some(controller_macro)
+            }) {
+                existing.id
+            } else {
+                let effect = crate::four_d::models::Effect::controller_macro(
+                    payload.name.clone(),
+                    payload.icon.clone(),
+                    payload.duration_ms,
+                    controller_macro.id,
+                    controller_macro.mode.clone(),
+                );
+                let id = effect.id;
+                self.timeline.templates.push(effect);
+                id
+            };
+            let instance = crate::four_d::models::EffectInstance::new(
+                template_id,
+                (snapped_secs.max(0.0) * 1000.0) as u64,
+            );
+            self.selected_instance_ids.clear();
+            self.selected_instance_ids.insert(instance.id);
+            self.timeline.instances.push(instance);
+            self.sync_timeline_engine();
+            return true;
+        }
         let target_relay = if let Some(track_row) = usize::try_from(track_index)
             .ok()
             .and_then(|index| timeline_rows.get(index))
@@ -2960,15 +3077,7 @@ impl PealayerApp {
         self.selected_keyframes.clear();
 
         // Recompile timeline
-        let compiled = crate::four_d::engine::compile_timeline(
-            &self.timeline,
-            &self.track_muted,
-            &self.track_soloed,
-        );
-        let _ = self
-            .engine_handle
-            .sender
-            .send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+        self.sync_timeline_engine();
 
         true
     }

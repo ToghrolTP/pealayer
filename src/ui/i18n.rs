@@ -169,6 +169,9 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "No compatible relay effects are advertised by the connected PCController." => {
             "PCController متصل هیچ جلوهٔ رله‌ای سازگاری اعلام نکرده است."
         }
+        "No effects are advertised by the connected PCController." => {
+            "PCController متصل هیچ جلوه‌ای اعلام نکرده است."
+        }
         "Connection problem" => "مشکل اتصال",
         "Playback problem" => "مشکل پخش",
         "Operation failed" => "عملیات ناموفق بود",

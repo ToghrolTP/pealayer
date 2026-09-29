@@ -132,8 +132,16 @@ pub struct CompiledAction {
     pub state: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledControllerMacro {
+    pub time_ms: u64,
+    pub id: u64,
+    pub mode: String,
+}
+
 pub enum EngineMessage {
     UpdateQueue(Vec<CompiledAction>),
+    UpdateControllerMacros(Vec<CompiledControllerMacro>),
     UpdateAnalogTracks(Vec<crate::four_d::curve::AnalogTrack>),
     LiveActuatorOverride { channel: u8, value: u8 },
     Seek(u64), // Emitted when user seeks, to clear current active queue and reset hardware
@@ -291,6 +299,8 @@ pub fn spawn_engine() -> EngineHandle {
     thread::spawn(move || {
         let mut queue: Vec<CompiledAction> = Vec::new();
         let mut current_queue_index = 0;
+        let mut controller_macros = Vec::<CompiledControllerMacro>::new();
+        let mut current_controller_macro_index = 0;
         let mut analog_tracks: Vec<crate::four_d::curve::AnalogTrack> = Vec::new();
         let mut last_pwm_values = [0u8; 16];
         let mut was_playing = false;
@@ -433,6 +443,12 @@ pub fn spawn_engine() -> EngineHandle {
                         let current_time = engine_time.load(Ordering::Relaxed);
                         current_queue_index = queue.partition_point(|x| x.time_ms < current_time);
                     }
+                    EngineMessage::UpdateControllerMacros(new_queue) => {
+                        controller_macros = new_queue;
+                        let current_time = engine_time.load(Ordering::Relaxed);
+                        current_controller_macro_index = controller_macros
+                            .partition_point(|cue| cue.time_ms < current_time);
+                    }
                     EngineMessage::UpdateAnalogTracks(tracks) => {
                         analog_tracks = tracks;
                         last_pwm_values.fill(0);
@@ -463,6 +479,10 @@ pub fn spawn_engine() -> EngineHandle {
                     EngineMessage::Seek(time) => {
                         if connected {
                             if let Some(ref mut transport) = active_transport {
+                                let _ = transport.call_controller(
+                                    "controller.command.execute",
+                                    serde_json::json!({"command": "macro cancel"}),
+                                );
                                 if let Err(e) = transport.send(Command::AllOff) {
                                     if let Ok(mut guard) = engine_conn_error.lock() {
                                         *guard = Some(e);
@@ -477,6 +497,8 @@ pub fn spawn_engine() -> EngineHandle {
                             println!("[{}] ALL_OFF (Seek to {}ms)", port_name, time);
                         }
                         current_queue_index = queue.partition_point(|x| x.time_ms < time);
+                        current_controller_macro_index =
+                            controller_macros.partition_point(|cue| cue.time_ms < time);
                         last_pwm_values.fill(0);
                     }
                     EngineMessage::SendCommand(cmd) => {
@@ -609,6 +631,10 @@ pub fn spawn_engine() -> EngineHandle {
                 last_pwm_values.fill(0);
                 if connected {
                     if let Some(ref mut transport) = active_transport {
+                        let _ = transport.call_controller(
+                            "controller.command.execute",
+                            serde_json::json!({"command": "macro cancel"}),
+                        );
                         let _ = transport.send(Command::AllOff);
                     }
                     let port_name = {
@@ -622,6 +648,28 @@ pub fn spawn_engine() -> EngineHandle {
 
             if is_playing_now {
                 let current_time = engine_time.load(Ordering::Relaxed);
+
+                while current_controller_macro_index < controller_macros.len() {
+                    let cue = &controller_macros[current_controller_macro_index];
+                    if cue.time_ms > current_time {
+                        break;
+                    }
+                    if connected {
+                        if let Some(ref mut transport) = active_transport {
+                            let command = format!("macro play {} {}", cue.id, cue.mode);
+                            if let Err(error) = transport.call_controller(
+                                "controller.command.execute",
+                                serde_json::json!({"command": command}),
+                            ) {
+                                if let Ok(mut guard) = engine_conn_error.lock() {
+                                    *guard = Some(format!("start controller macro {}: {error}", cue.id));
+                                }
+                                engine_connected.store(false, Ordering::Relaxed);
+                            }
+                        }
+                    }
+                    current_controller_macro_index += 1;
+                }
 
                 // Process all actions that are due
                 while current_queue_index < queue.len() {
@@ -812,6 +860,27 @@ pub fn compile_timeline(
     compiled
 }
 
+pub fn compile_controller_macros(timeline: &Timeline) -> Vec<CompiledControllerMacro> {
+    let mut compiled = timeline
+        .instances
+        .iter()
+        .filter_map(|instance| {
+            let effect = timeline
+                .templates
+                .iter()
+                .find(|template| template.id == instance.effect_id)?;
+            let controller_macro = effect.controller_macro.as_ref()?;
+            Some(CompiledControllerMacro {
+                time_ms: instance.start_time_ms,
+                id: controller_macro.id,
+                mode: controller_macro.mode.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    compiled.sort_by_key(|cue| cue.time_ms);
+    compiled
+}
+
 pub fn evaluate_relay_state(
     timeline: &Timeline,
     relay_id: u8,
@@ -865,6 +934,31 @@ pub fn evaluate_relay_state(
 mod tests {
     use super::*;
     use crate::four_d::models::{AtomicAction, Effect, EffectInstance, Timeline};
+
+    #[test]
+    fn compiles_controller_macro_as_one_video_synchronized_cue() {
+        let mut timeline = Timeline::new();
+        let effect = Effect::controller_macro(
+            "Seat sweep".to_string(),
+            String::new(),
+            1_500,
+            9,
+            "mcu".to_string(),
+        );
+        let effect_id = effect.id;
+        timeline.templates.push(effect);
+        timeline.instances.push(EffectInstance::new(effect_id, 2_250));
+
+        assert_eq!(
+            compile_controller_macros(&timeline),
+            vec![CompiledControllerMacro {
+                time_ms: 2_250,
+                id: 9,
+                mode: "mcu".to_string(),
+            }]
+        );
+        assert!(compile_timeline(&timeline, &Default::default(), &Default::default()).is_empty());
+    }
 
     #[test]
     fn test_compile_timeline_basic() {
