@@ -263,7 +263,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             });
 
         if time_since_activity < 3.0 && !app.pin_controls {
-            ctx.request_repaint();
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
     }
 }

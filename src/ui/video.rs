@@ -337,7 +337,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             );
 
             // Request a repaint to animate the fade-out
-            ui.ctx().request_repaint();
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(16));
         }
     }
 

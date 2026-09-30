@@ -2693,9 +2693,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
                         }
 
-                        if !self.app.is_paused {
-                            ui.ctx().request_repaint();
-                        }
+                        // mpv's render callback requests frames while video is
+                        // advancing. An unconditional repaint here turned the
+                        // no-media state (which starts unpaused) into an
+                        // unlimited GPU render loop when V-Sync was disabled.
                     }
                     PealayerTab::Timeline => {
                         let timeline_rows = timeline_track_rows(self.app);
