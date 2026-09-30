@@ -137,3 +137,37 @@ fn test_app_save_dock_layout_persists_to_config() {
     let deserialized: DockState<PealayerTab> = serde_json::from_str(&layout_json).expect("valid dock state JSON");
     assert!(deserialized.find_tab(&PealayerTab::ProgramMonitor).is_some());
 }
+
+#[test]
+fn test_pealayer_tab_icons_not_empty() {
+    for tab in PealayerTab::ALL {
+        assert!(!tab.icon().is_empty());
+    }
+}
+
+#[test]
+fn test_workspace_window_menu_translations() {
+    let app = pealayer::app::PealayerApp::default();
+    assert_eq!(app.tr("Window"), "Window");
+    assert_eq!(app.tr("Panels"), "Panels");
+    assert_eq!(app.tr("Reset Workspace to Default"), "Reset Workspace to Default");
+
+    let fa = pealayer::config::AppLanguage::Persian;
+    assert_eq!(
+        pealayer::ui::i18n::tr(fa, "Window"),
+        pealayer::ui::i18n::visual_text(fa, "پنجره")
+    );
+    assert_eq!(
+        pealayer::ui::i18n::tr(fa, "Panels"),
+        pealayer::ui::i18n::visual_text(fa, "پنل‌ها")
+    );
+    assert_eq!(
+        pealayer::ui::i18n::tr(fa, "Reset Workspace to Default"),
+        pealayer::ui::i18n::visual_text(fa, "بازنشانی فضای کاری به حالت پیش‌فرض")
+    );
+    assert_eq!(
+        pealayer::ui::i18n::tr(fa, "All workspace panels are closed"),
+        pealayer::ui::i18n::visual_text(fa, "همه پنل‌های فضای کاری بسته شده‌اند")
+    );
+}
+

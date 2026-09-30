@@ -398,6 +398,33 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
             _ => {}
         }
         ui.separator();
+        ui.menu_button(self.app.tr("Panels"), |ui| {
+            for t in PealayerTab::ALL {
+                let is_open = self.app.is_tab_open(t);
+                let icon = t.icon();
+                let name = t.title(self.app);
+                let label = format!("{icon}  {name}");
+                let mut checked = is_open;
+                if ui.checkbox(&mut checked, label).clicked() {
+                    self.app.toggle_tab(t);
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if ui
+                .button(format!(
+                    "{}  {}",
+                    crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                    self.app.tr("Reset Workspace to Default")
+                ))
+                .clicked()
+            {
+                self.app.dock_state = create_initial_layout();
+                self.app.save_dock_layout();
+                ui.close();
+            }
+        });
+        ui.separator();
         if ui.button(format!("{} {}", crate::ui::icons::GEAR, self.app.tr("Preferences..."))).clicked() {
             self.app.show_preferences_dialog = true;
             ui.close();

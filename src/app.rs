@@ -704,6 +704,33 @@ impl eframe::App for PealayerApp {
                         dock_response.response.context_menu(|ui| {
                             ui.label(egui::RichText::new(self.tr("Workspace")).strong());
                             ui.separator();
+                            ui.menu_button(self.tr("Panels"), |ui| {
+                                for tab in crate::ui::layout::PealayerTab::ALL {
+                                    let is_open = self.is_tab_open(tab);
+                                    let icon = tab.icon();
+                                    let name = tab.title(self);
+                                    let label = format!("{icon}  {name}");
+
+                                    let mut checked = is_open;
+                                    if ui.checkbox(&mut checked, label).clicked() {
+                                        self.toggle_tab(tab);
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                                if ui
+                                    .button(format!(
+                                        "{}  {}",
+                                        crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                                        self.tr("Reset Workspace to Default")
+                                    ))
+                                    .clicked()
+                                {
+                                    self.dock_state = crate::ui::layout::create_initial_layout();
+                                    self.save_dock_layout();
+                                    ui.close();
+                                }
+                            });
                             if ui
                                 .button(format!(
                                     "{} {}",
@@ -1848,7 +1875,7 @@ impl PealayerApp {
         cfg.save();
     }
 
-    pub(crate) fn tr(&self, english: &'static str) -> String {
+    pub fn tr(&self, english: &'static str) -> String {
         crate::ui::i18n::tr(self.language, english)
     }
 
