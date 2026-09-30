@@ -606,6 +606,8 @@ pub fn spawn_engine() -> EngineHandle {
                         }
                     }
                     EngineMessage::Seek(time) => {
+                        let resume_strip = engine_playing.load(Ordering::Relaxed)
+                            && !engine_estop.load(Ordering::Relaxed);
                         if connected {
                             if let Some(ref mut transport) = active_transport {
                                 let _ = transport.call_controller(
@@ -622,6 +624,21 @@ pub fn spawn_engine() -> EngineHandle {
                                         *guard = Some(e);
                                     }
                                     engine_connected.store(false, Ordering::Relaxed);
+                                } else if resume_strip {
+                                    if let Some(id) = active_controller_strip_effect_at(
+                                        &controller_strip_effects,
+                                        time,
+                                    ) {
+                                        if transport
+                                            .call_controller(
+                                                "controller.command.execute",
+                                                serde_json::json!({"command": format!("strip effect play {id}")}),
+                                            )
+                                            .is_ok()
+                                        {
+                                            active_strip_effect = Some(id.to_string());
+                                        }
+                                    }
                                 }
                             }
                             let port_name = {
@@ -633,8 +650,11 @@ pub fn spawn_engine() -> EngineHandle {
                         current_queue_index = queue.partition_point(|x| x.time_ms < time);
                         current_controller_macro_index =
                             controller_macros.partition_point(|cue| cue.time_ms < time);
-                        current_controller_strip_effect_index = controller_strip_effects
-                            .partition_point(|cue| cue.time_ms < time);
+                        current_controller_strip_effect_index = if resume_strip {
+                            controller_strip_effects.partition_point(|cue| cue.time_ms <= time)
+                        } else {
+                            controller_strip_effects.partition_point(|cue| cue.time_ms < time)
+                        };
                         last_pwm_values.fill(0);
                     }
                     EngineMessage::SendCommand(cmd) => {
@@ -860,19 +880,19 @@ pub fn spawn_engine() -> EngineHandle {
             // Handle pause state transition
             if was_playing && !is_playing_now {
                 last_pwm_values.fill(0);
-                    if connected {
-                        if let Some(ref mut transport) = active_transport {
-                            let _ = transport.call_controller(
-                                "controller.command.execute",
-                                serde_json::json!({"command": "macro cancel"}),
-                            );
-                            let _ = transport.call_controller(
-                                "controller.command.execute",
-                                serde_json::json!({"command": "strip stop"}),
-                            );
-                            active_strip_effect = None;
-                            let _ = transport.send(Command::AllOff);
-                        }
+                if connected {
+                    if let Some(ref mut transport) = active_transport {
+                        let _ = transport.call_controller(
+                            "controller.command.execute",
+                            serde_json::json!({"command": "macro cancel"}),
+                        );
+                        let _ = transport.call_controller(
+                            "controller.command.execute",
+                            serde_json::json!({"command": "strip stop"}),
+                        );
+                        active_strip_effect = None;
+                        let _ = transport.send(Command::AllOff);
+                    }
                     let port_name = {
                         let guard = engine_port.lock().unwrap();
                         guard.clone()
