@@ -453,6 +453,14 @@ pub fn spawn_engine() -> EngineHandle {
                                     }
                                 }
                             }
+                            // A coordinator-side renderer can outlive a dropped
+                            // client socket. Reconnect starts from a known idle
+                            // strip state; playback will issue the next cue.
+                            let _ = transport.call_controller(
+                                "controller.command.execute",
+                                serde_json::json!({"command": "strip stop"}),
+                            );
+                            active_strip_effect = None;
                         }
                         engine_connected.store(true, Ordering::Relaxed);
                         connected = true;
@@ -495,8 +503,17 @@ pub fn spawn_engine() -> EngineHandle {
             } else if !requested && active_transport.is_some() {
                 // Graceful disconnect: send AllOff
                 if let Some(ref mut transport) = active_transport {
+                    let _ = transport.call_controller(
+                        "controller.command.execute",
+                        serde_json::json!({"command": "macro cancel"}),
+                    );
+                    let _ = transport.call_controller(
+                        "controller.command.execute",
+                        serde_json::json!({"command": "strip stop"}),
+                    );
                     let _ = transport.send(Command::AllOff);
                 }
+                active_strip_effect = None;
                 active_transport = None;
                 if let Ok(mut guard) = engine_transport_description.lock() {
                     *guard = None;
@@ -524,10 +541,42 @@ pub fn spawn_engine() -> EngineHandle {
                             .partition_point(|cue| cue.time_ms < current_time);
                     }
                     EngineMessage::UpdateControllerStripEffects(new_queue) => {
-                        controller_strip_effects = new_queue;
                         let current_time = engine_time.load(Ordering::Relaxed);
-                        current_controller_strip_effect_index = controller_strip_effects
-                            .partition_point(|cue| cue.time_ms < current_time);
+                        let playing = engine_playing.load(Ordering::Relaxed);
+                        let desired = playing
+                            .then(|| active_controller_strip_effect_at(&new_queue, current_time))
+                            .flatten()
+                            .map(str::to_owned);
+                        if active_strip_effect != desired {
+                            if let Some(ref mut transport) = active_transport {
+                                if active_strip_effect.is_some() {
+                                    let _ = transport.call_controller(
+                                        "controller.command.execute",
+                                        serde_json::json!({"command": "strip stop"}),
+                                    );
+                                }
+                                active_strip_effect = None;
+                                if let Some(id) = desired.as_deref() {
+                                    if transport
+                                        .call_controller(
+                                            "controller.command.execute",
+                                            serde_json::json!({"command": format!("strip effect play {id}")}),
+                                        )
+                                        .is_ok()
+                                    {
+                                        active_strip_effect = Some(id.to_string());
+                                    }
+                                }
+                            }
+                        }
+                        controller_strip_effects = new_queue;
+                        current_controller_strip_effect_index = if playing {
+                            controller_strip_effects
+                                .partition_point(|cue| cue.time_ms <= current_time)
+                        } else {
+                            controller_strip_effects
+                                .partition_point(|cue| cue.time_ms < current_time)
+                        };
                     }
                     EngineMessage::UpdateAnalogTracks(tracks) => {
                         analog_tracks = tracks;
@@ -1144,6 +1193,21 @@ pub fn compile_controller_strip_effects(
     compiled
 }
 
+fn active_controller_strip_effect_at(
+    cues: &[CompiledControllerStripEffect],
+    time_ms: u64,
+) -> Option<&str> {
+    let mut active = None;
+    for cue in cues.iter().take_while(|cue| cue.time_ms <= time_ms) {
+        if cue.start {
+            active = Some(cue.id.as_str());
+        } else if active == Some(cue.id.as_str()) {
+            active = None;
+        }
+    }
+    active
+}
+
 pub fn evaluate_relay_state(
     timeline: &Timeline,
     relay_id: u8,
@@ -1250,6 +1314,10 @@ mod tests {
                 },
             ]
         );
+        let compiled = compile_controller_strip_effects(&timeline);
+        assert_eq!(active_controller_strip_effect_at(&compiled, 2_249), None);
+        assert_eq!(active_controller_strip_effect_at(&compiled, 2_250), Some("police"));
+        assert_eq!(active_controller_strip_effect_at(&compiled, 7_250), None);
     }
 
     #[test]

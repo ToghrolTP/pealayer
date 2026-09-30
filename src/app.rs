@@ -2150,6 +2150,15 @@ mod tests {
     };
 
     #[test]
+    fn extracts_saved_controller_macro_id_for_catalog_reconciliation() {
+        assert_eq!(
+            super::saved_macro_id("macro 6/seat-motion saved with 7 mcu-timed steps"),
+            Some(6)
+        );
+        assert_eq!(super::saved_macro_id("recording is empty"), None);
+    }
+
+    #[test]
     fn test_recent_media_deduplication_and_cap() {
         let mut list: Vec<std::path::PathBuf> = Vec::new();
         let add = |l: &mut Vec<std::path::PathBuf>, p: std::path::PathBuf| {
