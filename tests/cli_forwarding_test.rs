@@ -1,20 +1,27 @@
 use pealayer::cli::{launch_request, send_remote_command, try_forward_launch_request, CliOptions};
-use pealayer::platform::interop::{spawn_interop_listener, InteropCommand};
-use std::sync::mpsc::channel;
+use pealayer::platform::interop::InteropCommand;
 use std::time::Duration;
 
 #[test]
 fn test_cli_remote_and_single_instance_forwarding() {
     let sock = format!("/tmp/pealayer_fwd_{}.sock", std::process::id());
     unsafe {
-        std::env::set_var("PEALAYER_IPC_PORT", "18084");
+        std::env::set_var("PEALAYER_PORT", "18084");
         std::env::set_var("PEALAYER_SOCKET_PATH", &sock);
     }
-    let (tx, rx) = channel::<InteropCommand>();
     let ctx = eframe::egui::Context::default();
     let application_identity =
         pealayer::config::resolved_app_name(&pealayer::config::AppConfig::load());
-    spawn_interop_listener(tx, ctx, application_identity);
+    let (_state_tx, rx) = pealayer::server::spawn_web_server_configured(
+        18084,
+        ctx,
+        pealayer::server::WebRuntimeConfig::production(
+            application_identity,
+            "en".to_string(),
+            "ltr".to_string(),
+            "system".to_string(),
+        ),
+    );
 
     std::thread::sleep(Duration::from_millis(100));
 

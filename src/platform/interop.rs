@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+#[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
-use std::net::TcpListener;
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
@@ -47,10 +48,12 @@ impl LaunchRequest {
     }
 }
 
+#[cfg(any(unix, test))]
 fn normalized_application_identity(identity: &str) -> String {
     identity.trim().to_lowercase()
 }
 
+#[cfg(any(unix, test))]
 fn validate_launch_destination(
     request: &LaunchRequest,
     expected_identity: &str,
@@ -70,11 +73,13 @@ fn validate_launch_destination(
     Ok(())
 }
 
+#[cfg(any(unix, test))]
 #[derive(Default)]
 struct LaunchReceiptCache {
     operation_ids: std::collections::VecDeque<String>,
 }
 
+#[cfg(any(unix, test))]
 impl LaunchReceiptCache {
     const CAPACITY: usize = 1024;
 
@@ -373,6 +378,7 @@ pub fn format_interop_error(id: Option<serde_json::Value>, code: i32, message: &
     }
 }
 
+#[cfg(unix)]
 fn handle_client_connection<R: std::io::Read, W: Write>(
     mut reader: BufReader<R>,
     mut writer: W,
@@ -469,52 +475,12 @@ pub fn spawn_interop_listener(
     egui_ctx: eframe::egui::Context,
     application_identity: String,
 ) {
-    // 1. Cross-platform loopback TCP listener. The overridable port allows
-    // isolated test and screenshot profiles without displacing a live app.
-    let tx_tcp = tx.clone();
-    let ctx_tcp = egui_ctx.clone();
-    let launch_receipts = Arc::new(Mutex::new(LaunchReceiptCache::default()));
-    let application_identity: Arc<str> = Arc::from(application_identity);
-    #[cfg(target_os = "windows")]
-    let expected_session_id = crate::platform::windows::current_session_id().ok();
-    #[cfg(not(target_os = "windows"))]
-    let expected_session_id = None;
-    let tcp_launch_receipts = launch_receipts.clone();
-    let tcp_identity = application_identity.clone();
-    thread::spawn(move || {
-        let ipc_port = crate::config::runtime_port("PEALAYER_IPC_PORT", 8082);
-        let address = format!("127.0.0.1:{ipc_port}");
-        if let Ok(listener) = TcpListener::bind(&address) {
-            for stream in listener.incoming() {
-                if let Ok(stream) = stream {
-                    let tx_conn = tx_tcp.clone();
-                    let ctx_conn = ctx_tcp.clone();
-                    let receipts_conn = tcp_launch_receipts.clone();
-                    let identity_conn = tcp_identity.clone();
-                    thread::spawn(move || {
-                        if let Ok(read_clone) = stream.try_clone() {
-                            let reader = BufReader::new(read_clone);
-                            handle_client_connection(
-                                reader,
-                                stream,
-                                tx_conn,
-                                ctx_conn,
-                                receipts_conn,
-                                identity_conn,
-                                expected_session_id,
-                            );
-                        }
-                    });
-                }
-            }
-        } else {
-            log::warn!("Could not bind loopback IPC TCP listener to {address}");
-        }
-    });
-
-    // 2. Native Unix domain socket listener on Unix targets
+    // TCP automation now shares the unified HTTP/WebSocket listener at
+    // `/api/ipc`. Keep the native Unix socket because it consumes no TCP port.
     #[cfg(unix)]
     {
+        let launch_receipts = Arc::new(Mutex::new(LaunchReceiptCache::default()));
+        let application_identity: Arc<str> = Arc::from(application_identity);
         let tx_unix = tx.clone();
         let ctx_unix = egui_ctx.clone();
         let unix_launch_receipts = launch_receipts.clone();
@@ -542,7 +508,7 @@ pub fn spawn_interop_listener(
                                     ctx_conn,
                                     receipts_conn,
                                     identity_conn,
-                                    expected_session_id,
+                                None,
                                 );
                             }
                         });
@@ -551,13 +517,30 @@ pub fn spawn_interop_listener(
             }
         });
     }
+    #[cfg(not(unix))]
+    let _ = (tx, egui_ctx, application_identity);
 }
 
 pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<InteropCommand> {
     let (tx, rx) = channel::<InteropCommand>();
     let application_identity =
         crate::config::resolved_app_name(&crate::config::AppConfig::load());
-    spawn_interop_listener(tx, egui_ctx, application_identity);
+    spawn_interop_listener(tx.clone(), egui_ctx.clone(), application_identity.clone());
+    let state_tx = crate::server::spawn_control_server_configured(
+        crate::config::control_port(),
+        egui_ctx,
+        crate::server::WebRuntimeConfig::production(
+            application_identity.clone(),
+            "en".to_string(),
+            "ltr".to_string(),
+            "system".to_string(),
+        ),
+        tx,
+        application_identity,
+    );
+    // This compatibility helper has no owner for the state sender; keeping it
+    // alive preserves the same process-lifetime server semantics as before.
+    std::mem::forget(state_tx);
     rx
 }
 
@@ -707,9 +690,9 @@ fn report_controller_instance(
                     "kind": "native",
                     "vars": {
                         "pid": std::process::id().to_string(),
-                        "rpc": format!("http://127.0.0.1:{}/api/rpc", crate::config::runtime_port("PEALAYER_HTTP_PORT", 8080)),
-                        "websocket": format!("ws://127.0.0.1:{}", crate::config::runtime_port("PEALAYER_WS_PORT", 8081)),
-                        "ipc": format!("tcp://127.0.0.1:{}", crate::config::runtime_port("PEALAYER_IPC_PORT", 8082)),
+                        "rpc": format!("http://127.0.0.1:{}/api/rpc", crate::config::control_port()),
+                        "websocket": format!("ws://127.0.0.1:{}/ws", crate::config::control_port()),
+                        "ipc": format!("http://127.0.0.1:{}/api/ipc", crate::config::control_port()),
                     },
                 },
                 "values": {

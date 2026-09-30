@@ -333,11 +333,9 @@ fn main() -> eframe::Result {
                 app_name.clone(),
             );
 
-            let http_port = crate::config::runtime_port("PEALAYER_HTTP_PORT", 8080);
-            let ws_port = crate::config::runtime_port("PEALAYER_WS_PORT", 8081);
+            let control_port = crate::config::control_port();
             let web_runtime = crate::server::WebRuntimeConfig::production(
                 app_name.clone(),
-                ws_port,
                 match language {
                     crate::config::AppLanguage::Persian => "fa",
                     _ => "en",
@@ -351,12 +349,14 @@ fn main() -> eframe::Result {
                 }
                 .to_string(),
             );
-            let (web_state_tx, web_cmd_rx) = crate::server::spawn_web_server_configured(
-                http_port,
-                ws_port,
+            let web_state_tx = crate::server::spawn_control_server_configured(
+                control_port,
                 cc.egui_ctx.clone(),
                 web_runtime,
+                interop_tx.clone(),
+                app_name.clone(),
             );
+            let (_web_cmd_tx, web_cmd_rx) = std::sync::mpsc::channel();
             let engine_handle = crate::four_d::engine::spawn_engine();
             let controller_cmd_rx = crate::platform::interop::spawn_pccontroller_action_bridge(
                 cc.egui_ctx.clone(),
