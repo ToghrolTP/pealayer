@@ -112,16 +112,26 @@ fn main() {
     }
     res.compile().expect("failed to compile Windows resources");
 
-    // This package exposes both a library and a binary.  GNU ld can discard
-    // winres' otherwise-unreferenced static archive while linking the binary
-    // through the library, so attach the COFF resource object to the executable
-    // explicitly.  (MSVC consumes winres' emitted library in the usual way.)
-    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu") {
-        let resource = std::path::PathBuf::from(
-            std::env::var_os("OUT_DIR").expect("Cargo did not provide OUT_DIR"),
-        )
-        .join("resource.o");
-        println!("cargo:rustc-link-arg-bin=pealayer={}", resource.display());
+    // This package exposes both a library and a binary. Resource-only archives
+    // have no symbols for the executable to reference, so both GNU ld and
+    // MSVC's linker may discard them. Attach the generated resource object on
+    // GNU and retain the entire resource library on MSVC explicitly.
+    let out_dir = std::path::PathBuf::from(
+        std::env::var_os("OUT_DIR").expect("Cargo did not provide OUT_DIR"),
+    );
+    match std::env::var("CARGO_CFG_TARGET_ENV").as_deref() {
+        Ok("gnu") => {
+            let resource = out_dir.join("resource.o");
+            println!("cargo:rustc-link-arg-bin=pealayer={}", resource.display());
+        }
+        Ok("msvc") => {
+            // winres names the rc.exe output resource.lib, but it is a COFF
+            // resource object rather than an archive. Pass it directly to
+            // link.exe; treating it as an archive lets /OPT:REF discard it.
+            let resource = out_dir.join("resource.lib");
+            println!("cargo:rustc-link-arg-bin=pealayer={}", resource.display());
+        }
+        _ => {}
     }
     println!("cargo:rerun-if-changed=assets/icon.ico");
     if icon != "assets/icon.ico" {
