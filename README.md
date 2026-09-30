@@ -7,6 +7,7 @@
 ### **High-Performance, Hardware-Accelerated 4D Cinema Player & Haptic Timeline Workstation**
 
 [![CI/CD](https://github.com/ToghrolTP/pealayer/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/ToghrolTP/pealayer/actions/workflows/ci-cd.yml)
+[![CodeQL](https://github.com/ToghrolTP/pealayer/actions/workflows/codeql.yml/badge.svg)](https://github.com/ToghrolTP/pealayer/actions/workflows/codeql.yml)
 [![Release](https://img.shields.io/github/v/release/ToghrolTP/pealayer?color=blue&label=Release)](https://github.com/ToghrolTP/pealayer/releases/latest)
 [![Rust](https://img.shields.io/badge/Rust-2024_Edition-orange?logo=rust)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
