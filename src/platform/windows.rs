@@ -659,7 +659,11 @@ pub fn install_shell_message_hook(hwnd_raw: isize) -> Result<(), String> {
         return Ok(());
     }
     let previous = unsafe {
-        SetWindowLongPtrW(HWND(hwnd_raw as *mut _), GWLP_WNDPROC, shell_window_proc as isize)
+        SetWindowLongPtrW(
+            HWND(hwnd_raw as *mut _),
+            GWLP_WNDPROC,
+            shell_window_proc as *const () as isize,
+        )
     };
     if previous == 0 {
         return Err("SetWindowLongPtrW GWLP_WNDPROC failed".to_string());
