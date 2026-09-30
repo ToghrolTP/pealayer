@@ -216,10 +216,9 @@ When the coordinator is unavailable, selecting a `direct:` endpoint uses:
 Pealayer embeds a high-performance web service to control playback and view media libraries over local networks.
 
 All TCP-facing interfaces share one listener. `PEALAYER_PORT` selects that
-listener (default `8080`); `PEALAYER_HTTP_PORT` is accepted as a compatibility
-fallback. The former `PEALAYER_WS_PORT` and `PEALAYER_IPC_PORT` split-port
-settings are no longer used. Unix builds may additionally expose their native
-domain socket, which does not consume a TCP port.
+listener (default `8080`). There are no protocol-specific port settings. Unix
+builds may additionally expose their native domain socket, which does not
+consume a TCP port.
 
 <div align="center">
   <b>Local Web Remote:</b> <code>http://127.0.0.1:8080/</code> &nbsp;•&nbsp; <b>WebSocket Endpoint:</b> <code>ws://127.0.0.1:8080/ws</code><br>

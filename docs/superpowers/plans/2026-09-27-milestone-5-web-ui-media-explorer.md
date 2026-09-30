@@ -9,12 +9,12 @@
 2. Add full Media Explorer capabilities (folder browsing, breadcrumbs, search, thumbnail previews, one-click play) to `src/server/web_assets.rs` embedded fallback so the zero-dependency embedded server matches the React SPA feature parity.
 3. Verify `web_ui` production build and add an end-to-end integration test `tests/web_media_explorer_test.rs`.
 
-**Tech Stack:** Rust 2024 edition, Serde, tiny_http, tungstenite, React/Vite.
+**Tech Stack:** Rust 2024 edition, Serde, httparse, tungstenite, React/Vite.
 
 **Spec:** GitHub Issue #2 ("Player UX feedback" - Milestone 5: Web UI Media Explorer)
 
 ## Global Constraints
-- Preserve backward compatibility with existing CLI and NDJSON/JSON-RPC protocols.
+- Use the canonical shared control listener for HTTP, WebSocket, and IPC.
 - Ensure all tests pass on both Linux and Windows.
 - Zero extra runtime dependencies.
 
@@ -53,7 +53,7 @@ use std::time::Duration;
 #[test]
 fn test_web_command_aliases_and_browsing() {
     let ctx = eframe::egui::Context::default();
-    let (_state_tx, cmd_rx) = spawn_web_server(18080, 18081, ctx);
+    let (_state_tx, cmd_rx) = spawn_web_server(18080, ctx);
 
     std::thread::sleep(Duration::from_millis(100));
 
@@ -153,7 +153,7 @@ In `tests/web_media_explorer_test.rs`:
 #[test]
 fn test_web_fs_browse_endpoint() {
     let ctx = eframe::egui::Context::default();
-    let (_state_tx, _cmd_rx) = spawn_web_server(18082, 18083, ctx);
+    let (_state_tx, _cmd_rx) = spawn_web_server(18082, ctx);
 
     std::thread::sleep(Duration::from_millis(100));
 

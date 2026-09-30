@@ -365,9 +365,8 @@ pub fn runtime_port(env_name: &str, default: u16) -> u16 {
 }
 
 /// The single TCP port used by Pealayer's HTTP, WebSocket, and local IPC APIs.
-/// `PEALAYER_HTTP_PORT` remains a compatibility fallback for existing launchers.
 pub fn control_port() -> u16 {
-    runtime_port("PEALAYER_PORT", runtime_port("PEALAYER_HTTP_PORT", 8080))
+    runtime_port("PEALAYER_PORT", 8080)
 }
 
 impl AppConfig {
