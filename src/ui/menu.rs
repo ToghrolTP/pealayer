@@ -399,7 +399,15 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     } else {
                         app.tr("Connect")
                     };
-                    let conn_btn = ui.add(egui::Button::new(conn_text).selected(app.is_connected));
+                    let connection_icon = if app.is_connected {
+                        crate::ui::icons::X
+                    } else {
+                        crate::ui::icons::PLUG
+                    };
+                    let conn_btn = ui.add(
+                        egui::Button::new(format!("{connection_icon} {conn_text}"))
+                            .selected(app.is_connected),
+                    );
                     if conn_btn.clicked() {
                         let should_connect = !(app.is_connected || connection_requested);
                         if should_connect {
@@ -434,10 +442,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     // paths are valid even when they are not visible to the local enumerator.
                     let mut endpoint_changed = false;
                     ui.add_enabled_ui(!app.is_connected && !connection_requested, |ui| {
-                        ui.allocate_ui(egui::vec2(250.0, 20.0), |ui| {
+                        ui.allocate_ui(egui::vec2(188.0, 20.0), |ui| {
                             egui::ComboBox::from_id_salt("hardware_endpoint_select")
                                 .selected_text(&app.serial_port)
-                                .width(330.0)
+                                .width(240.0)
                                 .height(240.0)
                                 .show_ui(ui, |ui| {
                                     for endpoint in crate::four_d::controller::available_endpoints()
@@ -458,7 +466,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     );
                                     endpoint_changed |= ui
                                         .add_sized(
-                                            [330.0, 22.0],
+                                            [240.0, 22.0],
                                             egui::TextEdit::singleline(&mut app.serial_port)
                                                 .hint_text(endpoint_hint),
                                         )

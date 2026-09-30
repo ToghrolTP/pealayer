@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 pub(crate) fn configure_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool) {
     let mut fonts = egui::FontDefinitions::default();
+    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
 
     // Prefer the platform UI face. Vazirmatn remains immediately behind it so
     // Persian and Arabic text has a bundled, release-safe fallback. For a

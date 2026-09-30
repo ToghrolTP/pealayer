@@ -216,6 +216,8 @@ pub struct PealayerApp {
     pub(crate) osd_timeout_seconds: f32,
     pub(crate) paused_drag_action: crate::config::PlayerDragAction,
     pub(crate) playing_drag_action: crate::config::PlayerDragAction,
+    pub(crate) fullscreen_video_background: crate::config::VideoBackground,
+    pub(crate) status_bar: crate::config::StatusBarConfig,
     pub(crate) was_hardware_connected: bool,
     pub(crate) was_board_connected: bool,
     pub(crate) connection_notice: Option<String>,
@@ -660,20 +662,13 @@ impl eframe::App for PealayerApp {
                             .show_inside(ui, &mut tab_viewer);
                     });
                     self.dock_state = dock_state;
-                    let pointer_is_in_primary_tab_header = ui
-                        .ctx()
-                        .pointer_latest_pos()
-                        .is_some_and(|pointer| {
-                            pointer.y >= dock_response.response.rect.top()
-                                && pointer.y <= dock_response.response.rect.top() + 32.0
-                        });
-                    if pointer_is_in_primary_tab_header {
-                        dock_response.response.context_menu(|ui| {
+                    dock_response.response.context_menu(|ui| {
                             ui.label(egui::RichText::new(self.tr("Workspace")).strong());
                             ui.separator();
                             if ui
                                 .button(format!(
-                                    "▦ {}",
+                                    "{} {}",
+                                    crate::ui::icons::TABS,
                                     self.tr("Reset workspace layout")
                                 ))
                                 .clicked()
@@ -683,7 +678,8 @@ impl eframe::App for PealayerApp {
                             }
                             if ui
                                 .button(format!(
-                                    "▶ {}",
+                                    "{} {}",
+                                    crate::ui::icons::PLAY,
                                     self.tr("Switch to Simple Player")
                                 ))
                                 .clicked()
@@ -693,14 +689,13 @@ impl eframe::App for PealayerApp {
                             }
                             ui.separator();
                             if ui
-                                .button(format!("⚙ {}", self.tr("Preferences...")))
+                                .button(format!("{} {}", crate::ui::icons::GEAR, self.tr("Preferences...")))
                                 .clicked()
                             {
                                 self.show_preferences_dialog = true;
                                 ui.close();
                             }
                         });
-                    }
                 } else {
                     crate::ui::video::draw(self, ui);
                     crate::ui::controls::draw(self, ui);
@@ -1736,6 +1731,8 @@ impl PealayerApp {
         cfg.osd_timeout_seconds = self.osd_timeout_seconds;
         cfg.paused_drag_action = self.paused_drag_action;
         cfg.playing_drag_action = self.playing_drag_action;
+        cfg.fullscreen_video_background = self.fullscreen_video_background;
+        cfg.status_bar = self.status_bar;
         cfg.save();
     }
 
@@ -2095,6 +2092,8 @@ impl Default for PealayerApp {
             osd_timeout_seconds: 3.5,
             paused_drag_action: crate::config::PlayerDragAction::MoveWindow,
             playing_drag_action: crate::config::PlayerDragAction::TemporaryFastForward,
+            fullscreen_video_background: crate::config::VideoBackground::Black,
+            status_bar: crate::config::StatusBarConfig::default(),
             was_hardware_connected: false,
             was_board_connected: false,
             connection_notice: None,

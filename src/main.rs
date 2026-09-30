@@ -437,6 +437,8 @@ fn main() -> eframe::Result {
                 osd_timeout_seconds: loaded_config.osd_timeout_seconds,
                 paused_drag_action: loaded_config.paused_drag_action,
                 playing_drag_action: loaded_config.playing_drag_action,
+                fullscreen_video_background: loaded_config.fullscreen_video_background,
+                status_bar: loaded_config.status_bar,
                 was_hardware_connected: false,
                 was_board_connected: false,
                 connection_notice: None,

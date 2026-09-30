@@ -54,6 +54,35 @@ pub enum PlayerDragAction {
     None,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoBackground {
+    #[default]
+    Black,
+    DarkGray,
+    Theme,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct StatusBarConfig {
+    pub media_rate: bool,
+    pub hardware: bool,
+    pub telemetry: bool,
+    pub workspace: bool,
+}
+
+impl Default for StatusBarConfig {
+    fn default() -> Self {
+        Self {
+            media_rate: true,
+            hardware: true,
+            telemetry: true,
+            workspace: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -79,6 +108,8 @@ pub struct AppConfig {
     pub osd_timeout_seconds: f32,
     pub paused_drag_action: PlayerDragAction,
     pub playing_drag_action: PlayerDragAction,
+    pub fullscreen_video_background: VideoBackground,
+    pub status_bar: StatusBarConfig,
 }
 
 impl Default for AppConfig {
@@ -106,6 +137,8 @@ impl Default for AppConfig {
             osd_timeout_seconds: 3.5,
             paused_drag_action: PlayerDragAction::MoveWindow,
             playing_drag_action: PlayerDragAction::TemporaryFastForward,
+            fullscreen_video_background: VideoBackground::Black,
+            status_bar: StatusBarConfig::default(),
         }
     }
 }
