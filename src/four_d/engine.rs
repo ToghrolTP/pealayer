@@ -1428,7 +1428,7 @@ mod tests {
         let mut timeline = Timeline::new();
         let effect = Effect::new(
             "Test Constant".to_string(),
-            "🧪".to_string(),
+            "Test".to_string(),
             1000,
             vec![
                 AtomicAction {
@@ -1541,7 +1541,7 @@ mod tests {
         let mut timeline = Timeline::new();
         let effect = Effect::new(
             "Test Constant".to_string(),
-            "🧪".to_string(),
+            "Test".to_string(),
             1000,
             vec![
                 AtomicAction {
