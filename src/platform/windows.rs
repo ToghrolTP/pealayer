@@ -710,13 +710,13 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
     let hwnd = HWND(hwnd_raw as *mut _);
 
     unsafe {
-        let mut hicon = HICON(GetClassLongPtrW(hwnd, GCLP_HICON) as *mut _);
+        let module = GetModuleHandleW(None)
+            .map_err(|error| format!("GetModuleHandleW failed: {error}"))?;
+        let instance: windows::Win32::Foundation::HINSTANCE = module.into();
+        let hicon = LoadIconW(Some(&instance), PCWSTR(1usize as *const u16))
+            .unwrap_or_else(|_| HICON(GetClassLongPtrW(hwnd, GCLP_HICON) as *mut _));
         if hicon.0.is_null() {
-            let module = GetModuleHandleW(None)
-                .map_err(|error| format!("GetModuleHandleW failed: {error}"))?;
-            let instance: windows::Win32::Foundation::HINSTANCE = module.into();
-            hicon = LoadIconW(Some(&instance), PCWSTR(1usize as *const u16))
-                .map_err(|error| format!("load packaged application icon: {error}"))?;
+            return Err("packaged application icon is unavailable".to_string());
         }
 
         let mut nid = NOTIFYICONDATAW {
