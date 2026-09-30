@@ -87,7 +87,7 @@ impl Default for StatusBarConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AppConfig {
     pub volume: f64,
@@ -194,12 +194,26 @@ pub fn resolve_system_config_path() -> PathBuf {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("Pealayer")
+                .join("config.json");
+        }
+    }
+
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         return PathBuf::from(xdg).join("pealayer").join("config.json");
     }
 
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".config").join("pealayer").join("config.json")
+    PathBuf::from(home)
+        .join(".config")
+        .join("pealayer")
+        .join("config.json")
 }
 
 fn parse_language_tag(value: &str) -> Option<AppLanguage> {
@@ -227,10 +241,10 @@ fn system_language() -> AppLanguage {
 
     #[cfg(target_os = "windows")]
     {
-        use winreg::enums::HKEY_CURRENT_USER;
         use winreg::RegKey;
-        if let Ok(international) = RegKey::predef(HKEY_CURRENT_USER)
-            .open_subkey(r"Control Panel\International")
+        use winreg::enums::HKEY_CURRENT_USER;
+        if let Ok(international) =
+            RegKey::predef(HKEY_CURRENT_USER).open_subkey(r"Control Panel\International")
         {
             if let Ok(locale_name) = international.get_value::<String, _>("LocaleName") {
                 if let Some(language) = parse_language_tag(&locale_name) {
@@ -300,7 +314,8 @@ pub fn resolved_app_icon(config: &AppConfig) -> Option<PathBuf> {
 
 fn application_brand() -> Option<(PathBuf, serde_json::Value)> {
     let path = std::env::var_os("APPLICATION_BRAND").map(PathBuf::from)?;
-    let value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
     if value
         .get("format")
         .and_then(serde_json::Value::as_str)
@@ -322,7 +337,11 @@ fn application_brand_string(name: &str) -> Option<String> {
 fn application_brand_app_icon() -> Option<PathBuf> {
     let (path, value) = application_brand()?;
     let relative = value.get("windowsIcons")?.get("APP")?.as_str()?;
-    Some(path.parent().unwrap_or_else(|| std::path::Path::new(".")).join(relative))
+    Some(
+        path.parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(relative),
+    )
 }
 
 fn resolved_optional_branding(env_name: &str, configured: Option<&str>) -> Option<String> {
@@ -381,39 +400,37 @@ impl AppConfig {
         match mode {
             StorageMode::Portable => {
                 let path = resolve_portable_config_path(exe_dir);
-                if path.exists() {
-                    if let Ok(data) = std::fs::read_to_string(&path) {
-                        if let Ok(cfg) = serde_json::from_str::<AppConfig>(&data) {
-                            return cfg;
-                        }
-                    }
+                if let Ok(cfg) = Self::load_from_path(&path) {
+                    return cfg;
                 }
                 Self::default()
             }
             StorageMode::System | StorageMode::Auto => {
-                // On Windows, try reading from Registry first
-                #[cfg(target_os = "windows")]
-                {
-                    if let Ok(Some(reg_cfg)) = crate::platform::registry::load_settings_from_registry() {
-                        return reg_cfg;
-                    }
+                // The complete JSON document is authoritative and watchable on
+                // every OS. Windows Registry values remain a native mirror and
+                // a migration fallback, never a reason to discard newer fields.
+                let path = resolve_system_config_path();
+                if let Ok(cfg) = Self::load_from_path(&path) {
+                    return cfg;
                 }
 
-                // Fall back to system configuration file
-                let path = resolve_system_config_path();
-                if path.exists() {
-                    if let Ok(data) = std::fs::read_to_string(&path) {
-                        if let Ok(cfg) = serde_json::from_str::<AppConfig>(&data) {
-                            return cfg;
+                #[cfg(target_os = "windows")]
+                {
+                    if let Ok(Some(reg_cfg)) =
+                        crate::platform::registry::load_settings_from_registry()
+                    {
+                        if reg_cfg.validate().is_ok() {
+                            return reg_cfg;
                         }
                     }
                 }
 
                 // Transparent Migration from legacy recent.json if present
-                let legacy_path = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
-                    .join(".config")
-                    .join("pealayer")
-                    .join("recent.json");
+                let legacy_path =
+                    PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
+                        .join(".config")
+                        .join("pealayer")
+                        .join("recent.json");
 
                 let mut config = Self::default();
                 if legacy_path.exists() {
@@ -429,45 +446,38 @@ impl AppConfig {
         }
     }
 
-    pub fn save_with_mode(&self, mode: StorageMode, exe_dir: &std::path::Path) {
+    pub fn save_with_mode(
+        &self,
+        mode: StorageMode,
+        exe_dir: &std::path::Path,
+    ) -> Result<(), String> {
+        self.validate()?;
         match mode {
             StorageMode::Portable => {
                 let path = resolve_portable_config_path(exe_dir);
-                if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                if let Ok(json) = serde_json::to_string_pretty(self) {
-                    let _ = std::fs::write(path, json);
-                }
+                self.save_to_path(&path)?;
             }
             StorageMode::System | StorageMode::Auto => {
-                // On Windows, save to Registry
+                // Keep the full JSON file as the cross-platform, externally
+                // watchable source. The Windows Registry mirrors the same
+                // complete document for native tooling and migration.
+                let path = resolve_system_config_path();
+                self.save_to_path(&path)?;
+
                 #[cfg(target_os = "windows")]
                 {
-                    let _ = crate::platform::registry::save_settings_to_registry(self);
-                }
-
-                // Save to system config file (as shadow backup / cross-platform standard)
-                let path = resolve_system_config_path();
-                if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                if let Ok(json) = serde_json::to_string_pretty(self) {
-                    let _ = std::fs::write(path, json);
+                    crate::platform::registry::save_settings_to_registry(self)?;
                 }
             }
         }
+        Ok(())
     }
 
     pub fn load() -> Self {
         if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {
             let path = PathBuf::from(path);
-            if path.exists() {
-                if let Ok(data) = std::fs::read_to_string(&path) {
-                    if let Ok(cfg) = serde_json::from_str::<AppConfig>(&data) {
-                        return cfg;
-                    }
-                }
+            if let Ok(cfg) = Self::load_from_path(&path) {
+                return cfg;
             }
             return Self::default();
         }
@@ -476,21 +486,184 @@ impl AppConfig {
         Self::load_with_mode(mode, &exe_dir)
     }
 
-    pub fn save(&self) {
+    pub fn save(&self) -> Result<(), String> {
+        self.validate()?;
         if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {
             let path = PathBuf::from(path);
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if let Ok(json) = serde_json::to_string_pretty(self) {
-                let _ = std::fs::write(path, json);
-            }
-            return;
+            return self.save_to_path(&path);
         }
         let exe_dir = detect_executable_dir();
         let mode = detect_storage_mode(&exe_dir);
-        self.save_with_mode(mode, &exe_dir);
+        self.save_with_mode(mode, &exe_dir)
     }
+
+    pub fn load_from_path(path: &std::path::Path) -> Result<Self, String> {
+        let data = std::fs::read_to_string(path)
+            .map_err(|error| format!("read configuration {}: {error}", path.display()))?;
+        let config = serde_json::from_str::<Self>(&data)
+            .map_err(|error| format!("parse configuration {}: {error}", path.display()))?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn save_to_path(&self, path: &std::path::Path) -> Result<(), String> {
+        self.validate()?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("configuration path has no parent: {}", path.display()))?;
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "create configuration directory {}: {error}",
+                parent.display()
+            )
+        })?;
+        let json = serde_json::to_vec_pretty(self)
+            .map_err(|error| format!("serialize configuration: {error}"))?;
+        let sequence = CONFIG_TEMP_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let file_name = path
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .unwrap_or("config.json");
+        let temporary = parent.join(format!(
+            ".{file_name}.{}.{}.tmp",
+            std::process::id(),
+            sequence
+        ));
+        let write_result = (|| {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temporary)
+                .map_err(|error| {
+                    format!(
+                        "create temporary configuration {}: {error}",
+                        temporary.display()
+                    )
+                })?;
+            file.write_all(&json)
+                .and_then(|_| file.write_all(b"\n"))
+                .and_then(|_| file.sync_all())
+                .map_err(|error| {
+                    format!(
+                        "write temporary configuration {}: {error}",
+                        temporary.display()
+                    )
+                })?;
+            replace_file(&temporary, path)
+        })();
+        if write_result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        write_result
+    }
+
+    pub fn fingerprint(path: &std::path::Path) -> Result<u64, String> {
+        use std::hash::{Hash, Hasher};
+        let bytes = std::fs::read(path)
+            .map_err(|error| format!("read configuration {}: {error}", path.display()))?;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        Ok(hasher.finish())
+    }
+
+    pub fn apply_patch(&self, patch: &serde_json::Value) -> Result<Self, String> {
+        let patch = patch
+            .as_object()
+            .ok_or_else(|| "configuration update must be a JSON object".to_string())?;
+        let mut value = serde_json::to_value(self)
+            .map_err(|error| format!("serialize current configuration: {error}"))?;
+        let target = value
+            .as_object_mut()
+            .ok_or_else(|| "current configuration is not an object".to_string())?;
+        for (key, replacement) in patch {
+            if !target.contains_key(key) {
+                return Err(format!("unknown configuration setting: {key}"));
+            }
+            target.insert(key.clone(), replacement.clone());
+        }
+        let updated = serde_json::from_value::<Self>(value)
+            .map_err(|error| format!("invalid configuration update: {error}"))?;
+        updated.validate()?;
+        Ok(updated)
+    }
+
+    pub fn validate_patch_shape(patch: &serde_json::Value) -> Result<(), String> {
+        let patch = patch
+            .as_object()
+            .ok_or_else(|| "configuration update must be a JSON object".to_string())?;
+        let known =
+            serde_json::to_value(Self::default()).expect("default configuration serializes");
+        let known = known
+            .as_object()
+            .expect("default configuration is an object");
+        if let Some(key) = patch.keys().find(|key| !known.contains_key(*key)) {
+            return Err(format!("unknown configuration setting: {key}"));
+        }
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.volume.is_finite() || !(0.0..=130.0).contains(&self.volume) {
+            return Err("volume must be between 0 and 130".to_string());
+        }
+        if !self.wheel_seek_seconds.is_finite() || !(0.1..=60.0).contains(&self.wheel_seek_seconds)
+        {
+            return Err("wheel_seek_seconds must be between 0.1 and 60".to_string());
+        }
+        if !self.osd_timeout_seconds.is_finite()
+            || !(1.0..=60.0).contains(&self.osd_timeout_seconds)
+        {
+            return Err("osd_timeout_seconds must be between 1 and 60".to_string());
+        }
+        if self
+            .hardware_endpoint
+            .as_deref()
+            .is_some_and(|value| value.len() > 1024)
+        {
+            return Err("hardware_endpoint is too long".to_string());
+        }
+        if self.recent_media.len() > 100 {
+            return Err("recent_media contains too many entries".to_string());
+        }
+        Ok(())
+    }
+}
+
+static CONFIG_TEMP_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+#[cfg(target_os = "windows")]
+fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+    use windows::core::PCWSTR;
+    let destination_display = destination.display().to_string();
+    let source = source
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let destination = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    unsafe {
+        MoveFileExW(
+            PCWSTR(source.as_ptr()),
+            PCWSTR(destination.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    .map_err(|error| format!("replace configuration {destination_display}: {error}"))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
+    std::fs::rename(source, destination)
+        .map_err(|error| format!("replace configuration {}: {error}", destination.display()))
 }
 
 #[cfg(test)]
@@ -547,7 +720,8 @@ mod tests {
 
     #[test]
     fn test_detect_storage_mode_system_default() {
-        let temp_dir = std::env::temp_dir().join(format!("pealayer_test_sys_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("pealayer_test_sys_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         let mode = detect_storage_mode(&temp_dir);
@@ -561,7 +735,8 @@ mod tests {
 
     #[test]
     fn test_detect_storage_mode_pealayer_json() {
-        let temp_dir = std::env::temp_dir().join(format!("pealayer_test_json_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("pealayer_test_json_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp_dir).unwrap();
         std::fs::write(temp_dir.join("pealayer.json"), "{}").unwrap();
 
@@ -573,7 +748,8 @@ mod tests {
 
     #[test]
     fn test_detect_storage_mode_portable_dat() {
-        let temp_dir = std::env::temp_dir().join(format!("pealayer_test_dat_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("pealayer_test_dat_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp_dir).unwrap();
         std::fs::write(temp_dir.join("portable.dat"), "").unwrap();
 
@@ -585,7 +761,8 @@ mod tests {
 
     #[test]
     fn test_detect_storage_mode_env_var() {
-        let temp_dir = std::env::temp_dir().join(format!("pealayer_test_env_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("pealayer_test_env_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         unsafe {
@@ -609,7 +786,8 @@ mod tests {
 
     #[test]
     fn test_portable_save_and_load_roundtrip() {
-        let temp_dir = std::env::temp_dir().join(format!("pealayer_port_test_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("pealayer_port_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         let mut cfg = AppConfig::default();
@@ -619,7 +797,8 @@ mod tests {
         cfg.show_remaining_time = true;
         cfg.recent_media.push(PathBuf::from("/media/video.mp4"));
 
-        cfg.save_with_mode(StorageMode::Portable, &temp_dir);
+        cfg.save_with_mode(StorageMode::Portable, &temp_dir)
+            .unwrap();
 
         let portable_file = temp_dir.join("pealayer.json");
         assert!(portable_file.exists());
@@ -631,6 +810,56 @@ mod tests {
         assert!(loaded.show_remaining_time);
         assert_eq!(loaded.recent_media, vec![PathBuf::from("/media/video.mp4")]);
 
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn config_patch_rejects_unknown_keys_and_persists_complete_settings() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("pealayer_config_patch_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let original = AppConfig::default();
+        let updated = original
+            .apply_patch(&serde_json::json!({
+                "theme": "dark",
+                "hardware_endpoint": "pccontroller://cafe-pc:8787",
+                "pause_on_hardware_disconnect": false,
+                "status_bar": {
+                    "media_rate": false,
+                    "hardware": true,
+                    "telemetry": false,
+                    "status_rgb": true,
+                    "warnings": true,
+                    "workspace": false
+                }
+            }))
+            .unwrap();
+        assert_eq!(updated.theme, AppTheme::Dark);
+        assert_eq!(
+            updated.hardware_endpoint.as_deref(),
+            Some("pccontroller://cafe-pc:8787")
+        );
+        assert!(!updated.pause_on_hardware_disconnect);
+        assert!(!updated.status_bar.media_rate);
+        assert!(!updated.status_bar.workspace);
+        assert!(
+            updated
+                .apply_patch(&serde_json::json!({"hardawre_endpoint": "typo"}))
+                .unwrap_err()
+                .contains("unknown configuration setting")
+        );
+
+        updated
+            .save_with_mode(StorageMode::Portable, &temp_dir)
+            .unwrap();
+        let restored = AppConfig::load_with_mode(StorageMode::Portable, &temp_dir);
+        assert_eq!(restored, updated);
+        let leftovers = std::fs::read_dir(&temp_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(leftovers, 0);
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
@@ -651,7 +880,10 @@ mod tests {
         if std::env::var_os("APP_PUBLISHER").is_none()
             && std::env::var_os("APP_COPYRIGHT").is_none()
         {
-            assert_eq!(resolved_app_publisher(&cfg).as_deref(), Some("Example Studio"));
+            assert_eq!(
+                resolved_app_publisher(&cfg).as_deref(),
+                Some("Example Studio")
+            );
             assert_eq!(resolved_app_copyright(&cfg), None);
         }
     }
@@ -666,7 +898,10 @@ mod tests {
 
         let json = serde_json::to_string(&AppLanguage::Persian).unwrap();
         assert_eq!(json, "\"fa\"");
-        assert_eq!(serde_json::from_str::<AppLanguage>("\"en\"").unwrap(), AppLanguage::English);
+        assert_eq!(
+            serde_json::from_str::<AppLanguage>("\"en\"").unwrap(),
+            AppLanguage::English
+        );
         assert!(resolve_rtl(AppDirection::Auto, AppLanguage::Persian));
         assert!(!resolve_rtl(AppDirection::Auto, AppLanguage::English));
         assert!(resolve_rtl(AppDirection::Rtl, AppLanguage::English));

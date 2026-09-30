@@ -118,9 +118,9 @@ impl HardwareTransport {
     ) -> Result<serde_json::Value, String> {
         match self {
             Self::Controller(client) => client.call(method, params),
-            Self::DirectSerial { .. } => Err(
-                "this hardware action requires the PCController coordinator".to_string(),
-            ),
+            Self::DirectSerial { .. } => {
+                Err("this hardware action requires the PCController coordinator".to_string())
+            }
         }
     }
 }
@@ -157,9 +157,16 @@ pub enum EngineMessage {
     UpdateControllerMacros(Vec<CompiledControllerMacro>),
     UpdateControllerStripEffects(Vec<CompiledControllerStripEffect>),
     UpdateAnalogTracks(Vec<crate::four_d::curve::AnalogTrack>),
-    LiveActuatorOverride { channel: u8, value: u8 },
+    LiveActuatorOverride {
+        channel: u8,
+        value: u8,
+    },
     Seek(u64), // Emitted when user seeks, to clear current active queue and reset hardware
     SendCommand(Command), // Manual override or direct hardware command
+    ReconfigureEndpoint {
+        endpoint: String,
+        connect: bool,
+    },
     ControllerCall {
         method: String,
         params: serde_json::Value,
@@ -238,7 +245,8 @@ impl EngineHandle {
     }
 
     pub fn request_catalog_refresh(&self) {
-        self.catalog_refresh_requested.store(true, Ordering::Relaxed);
+        self.catalog_refresh_requested
+            .store(true, Ordering::Relaxed);
     }
 }
 
@@ -267,8 +275,7 @@ impl ControllerPushTarget {
 
     pub(crate) fn apply_notification(&self, method: &str, params: &serde_json::Value) -> bool {
         if matches!(method, "controller.state" | "controller.event")
-            && params.get("kind").and_then(serde_json::Value::as_str)
-                == Some("peripherals.changed")
+            && params.get("kind").and_then(serde_json::Value::as_str) == Some("peripherals.changed")
         {
             if let Some(refresh) = self.catalog_refresh_requested.upgrade() {
                 refresh.store(true, Ordering::Relaxed);
@@ -334,7 +341,9 @@ fn should_yield_direct_transport(
 
 fn controller_method_is_unavailable(error: &str) -> bool {
     let error = error.to_ascii_lowercase();
-    error.contains("-32601") || error.contains("method not found") || error.contains("unknown method")
+    error.contains("-32601")
+        || error.contains("method not found")
+        || error.contains("unknown method")
 }
 
 pub fn spawn_engine() -> EngineHandle {
@@ -430,10 +439,7 @@ pub fn spawn_engine() -> EngineHandle {
                 match transport {
                     Ok(transport) => {
                         let description = transport.description();
-                        println!(
-                            "[Engine] Connected hardware transport: {}",
-                            description
-                        );
+                        println!("[Engine] Connected hardware transport: {}", description);
                         if let Ok(mut guard) = engine_transport_description.lock() {
                             *guard = Some(description);
                         }
@@ -546,8 +552,8 @@ pub fn spawn_engine() -> EngineHandle {
                     EngineMessage::UpdateControllerMacros(new_queue) => {
                         controller_macros = new_queue;
                         let current_time = engine_time.load(Ordering::Relaxed);
-                        current_controller_macro_index = controller_macros
-                            .partition_point(|cue| cue.time_ms < current_time);
+                        current_controller_macro_index =
+                            controller_macros.partition_point(|cue| cue.time_ms < current_time);
                     }
                     EngineMessage::UpdateControllerStripEffects(new_queue) => {
                         let current_time = engine_time.load(Ordering::Relaxed);
@@ -678,6 +684,34 @@ pub fn spawn_engine() -> EngineHandle {
                             }
                         }
                     }
+                    EngineMessage::ReconfigureEndpoint { endpoint, connect } => {
+                        if let Some(ref mut transport) = active_transport {
+                            let _ = transport.call_controller(
+                                "controller.command.execute",
+                                serde_json::json!({"command": "macro cancel"}),
+                            );
+                            let _ = transport.call_controller(
+                                "controller.command.execute",
+                                serde_json::json!({"command": "strip stop"}),
+                            );
+                            let _ = transport.send(Command::AllOff);
+                        }
+                        active_transport = None;
+                        active_strip_effect = None;
+                        connected = false;
+                        engine_connected.store(false, Ordering::Relaxed);
+                        if let Ok(mut guard) = engine_transport_description.lock() {
+                            *guard = None;
+                        }
+                        if let Ok(mut guard) = engine_capabilities.lock() {
+                            *guard = None;
+                        }
+                        if let Ok(mut guard) = engine_port.lock() {
+                            *guard = endpoint;
+                        }
+                        engine_connection_requested.store(connect, Ordering::Relaxed);
+                        last_connect_attempt = None;
+                    }
                     EngineMessage::ControllerCall { method, params } => {
                         if connected {
                             if let Some(ref mut transport) = active_transport {
@@ -729,7 +763,8 @@ pub fn spawn_engine() -> EngineHandle {
                                     }
                                     Err(error) => {
                                         if let Ok(mut guard) = engine_conn_error.lock() {
-                                            *guard = Some(format!("invoke controller action: {error}"));
+                                            *guard =
+                                                Some(format!("invoke controller action: {error}"));
                                         }
                                     }
                                 }
@@ -749,13 +784,22 @@ pub fn spawn_engine() -> EngineHandle {
                                 let mut params = serde_json::Map::new();
                                 params.insert("key".to_string(), serde_json::Value::String(key));
                                 if let Some(name) = name {
-                                    params.insert("name".to_string(), serde_json::Value::String(name));
+                                    params.insert(
+                                        "name".to_string(),
+                                        serde_json::Value::String(name),
+                                    );
                                 }
                                 if let Some(icon) = icon {
-                                    params.insert("icon".to_string(), serde_json::Value::String(icon));
+                                    params.insert(
+                                        "icon".to_string(),
+                                        serde_json::Value::String(icon),
+                                    );
                                 }
                                 if let Some(group) = group {
-                                    params.insert("group".to_string(), serde_json::Value::String(group));
+                                    params.insert(
+                                        "group".to_string(),
+                                        serde_json::Value::String(group),
+                                    );
                                 }
                                 if let Some(revision) = expected_revision {
                                     params.insert(
@@ -924,11 +968,9 @@ pub fn spawn_engine() -> EngineHandle {
             }
             if !was_playing && is_playing_now {
                 let current_time = engine_time.load(Ordering::Relaxed);
-                let desired = active_controller_strip_effect_at(
-                    &controller_strip_effects,
-                    current_time,
-                )
-                .map(str::to_owned);
+                let desired =
+                    active_controller_strip_effect_at(&controller_strip_effects, current_time)
+                        .map(str::to_owned);
                 if active_strip_effect != desired {
                     if let Some(ref mut transport) = active_transport {
                         if active_strip_effect.is_some() {
@@ -951,8 +993,8 @@ pub fn spawn_engine() -> EngineHandle {
                         }
                     }
                 }
-                current_controller_strip_effect_index = controller_strip_effects
-                    .partition_point(|cue| cue.time_ms <= current_time);
+                current_controller_strip_effect_index =
+                    controller_strip_effects.partition_point(|cue| cue.time_ms <= current_time);
             }
             was_playing = is_playing_now;
 
@@ -972,7 +1014,8 @@ pub fn spawn_engine() -> EngineHandle {
                                 serde_json::json!({"command": command}),
                             ) {
                                 if let Ok(mut guard) = engine_conn_error.lock() {
-                                    *guard = Some(format!("start controller macro {}: {error}", cue.id));
+                                    *guard =
+                                        Some(format!("start controller macro {}: {error}", cue.id));
                                 }
                                 engine_connected.store(false, Ordering::Relaxed);
                             }
@@ -988,8 +1031,7 @@ pub fn spawn_engine() -> EngineHandle {
                     }
                     if connected {
                         if let Some(ref mut transport) = active_transport {
-                            if !cue.start
-                                && active_strip_effect.as_deref() != Some(cue.id.as_str())
+                            if !cue.start && active_strip_effect.as_deref() != Some(cue.id.as_str())
                             {
                                 current_controller_strip_effect_index += 1;
                                 continue;
@@ -1232,9 +1274,7 @@ pub fn compile_controller_macros(timeline: &Timeline) -> Vec<CompiledControllerM
     compiled
 }
 
-pub fn compile_controller_strip_effects(
-    timeline: &Timeline,
-) -> Vec<CompiledControllerStripEffect> {
+pub fn compile_controller_strip_effects(timeline: &Timeline) -> Vec<CompiledControllerStripEffect> {
     let mut compiled = Vec::new();
     for instance in &timeline.instances {
         let Some(effect) = timeline
@@ -1256,7 +1296,9 @@ pub fn compile_controller_strip_effects(
             start: true,
         });
         compiled.push(CompiledControllerStripEffect {
-            time_ms: instance.start_time_ms.saturating_add(effect.duration_ms.max(1)),
+            time_ms: instance
+                .start_time_ms
+                .saturating_add(effect.duration_ms.max(1)),
             id: strip.id.clone(),
             start: false,
         });
@@ -1351,7 +1393,9 @@ mod tests {
         );
         let effect_id = effect.id;
         timeline.templates.push(effect);
-        timeline.instances.push(EffectInstance::new(effect_id, 2_250));
+        timeline
+            .instances
+            .push(EffectInstance::new(effect_id, 2_250));
 
         assert_eq!(
             compile_controller_macros(&timeline),
@@ -1367,14 +1411,13 @@ mod tests {
     #[test]
     fn compiles_advertised_strip_effect_into_bounded_start_and_stop_cues() {
         let mut timeline = Timeline::new();
-        let effect = Effect::controller_strip_effect(
-            "Police".to_string(),
-            5_000,
-            "police".to_string(),
-        );
+        let effect =
+            Effect::controller_strip_effect("Police".to_string(), 5_000, "police".to_string());
         let effect_id = effect.id;
         timeline.templates.push(effect);
-        timeline.instances.push(EffectInstance::new(effect_id, 2_250));
+        timeline
+            .instances
+            .push(EffectInstance::new(effect_id, 2_250));
 
         assert_eq!(
             compile_controller_strip_effects(&timeline),
@@ -1393,14 +1436,33 @@ mod tests {
         );
         let compiled = compile_controller_strip_effects(&timeline);
         assert_eq!(active_controller_strip_effect_at(&compiled, 2_249), None);
-        assert_eq!(active_controller_strip_effect_at(&compiled, 2_250), Some("police"));
+        assert_eq!(
+            active_controller_strip_effect_at(&compiled, 2_250),
+            Some("police")
+        );
         assert_eq!(active_controller_strip_effect_at(&compiled, 7_250), None);
 
         let overlap = vec![
-            CompiledControllerStripEffect { time_ms: 0, id: "police".to_string(), start: true },
-            CompiledControllerStripEffect { time_ms: 50, id: "white-thunder".to_string(), start: true },
-            CompiledControllerStripEffect { time_ms: 100, id: "police".to_string(), start: false },
-            CompiledControllerStripEffect { time_ms: 150, id: "white-thunder".to_string(), start: false },
+            CompiledControllerStripEffect {
+                time_ms: 0,
+                id: "police".to_string(),
+                start: true,
+            },
+            CompiledControllerStripEffect {
+                time_ms: 50,
+                id: "white-thunder".to_string(),
+                start: true,
+            },
+            CompiledControllerStripEffect {
+                time_ms: 100,
+                id: "police".to_string(),
+                start: false,
+            },
+            CompiledControllerStripEffect {
+                time_ms: 150,
+                id: "white-thunder".to_string(),
+                start: false,
+            },
         ];
         assert_eq!(
             active_controller_strip_effect_at(&overlap, 100),

@@ -258,6 +258,68 @@ pub fn spawn_web_server_configured(
                             .unwrap(),
                         );
                     let _ = request.respond(response);
+                } else if url == "/api/config" && request.method() == &tiny_http::Method::Get {
+                    let body =
+                        serde_json::to_string_pretty(&crate::platform::interop::get_live_config())
+                            .unwrap_or_else(|_| "{}".to_string());
+                    let response = tiny_http::Response::from_string(body).with_header(
+                        tiny_http::Header::from_bytes(
+                            &b"Content-Type"[..],
+                            &b"application/json"[..],
+                        )
+                        .unwrap(),
+                    );
+                    let _ = request.respond(response);
+                } else if url == "/api/config" && request.method() == &tiny_http::Method::Post {
+                    let mut body = String::new();
+                    let parsed = request
+                        .as_reader()
+                        .take(1024 * 1024)
+                        .read_to_string(&mut body)
+                        .map_err(|error| format!("read configuration update: {error}"))
+                        .and_then(|_| {
+                            serde_json::from_str::<serde_json::Value>(&body)
+                                .map_err(|error| format!("invalid configuration JSON: {error}"))
+                        })
+                        .and_then(|values| {
+                            crate::config::AppConfig::validate_patch_shape(&values)?;
+                            crate::platform::interop::get_live_config().apply_patch(&values)?;
+                            Ok(values)
+                        });
+                    match parsed {
+                        Ok(values) => {
+                            let _ = cmd_tx_http.send(
+                                crate::platform::interop::InteropCommand::UpdateConfig { values },
+                            );
+                            egui_ctx_http.request_repaint();
+                            let _ = request.respond(
+                                tiny_http::Response::from_string("{\"accepted\":true}")
+                                    .with_status_code(202)
+                                    .with_header(
+                                        tiny_http::Header::from_bytes(
+                                            &b"Content-Type"[..],
+                                            &b"application/json"[..],
+                                        )
+                                        .unwrap(),
+                                    ),
+                            );
+                        }
+                        Err(error) => {
+                            let _ = request.respond(
+                                tiny_http::Response::from_string(
+                                    serde_json::json!({"error": error}).to_string(),
+                                )
+                                .with_status_code(400)
+                                .with_header(
+                                    tiny_http::Header::from_bytes(
+                                        &b"Content-Type"[..],
+                                        &b"application/json"[..],
+                                    )
+                                    .unwrap(),
+                                ),
+                            );
+                        }
+                    }
                 } else if url == "/healthz" {
                     let response = tiny_http::Response::from_string(
                         "{\"status\":\"ok\",\"service\":\"pealayer\",\"rpc\":\"2.0\"}",
@@ -297,6 +359,18 @@ pub fn spawn_web_server_configured(
                         crate::platform::interop::JsonRpcRequest,
                     >(&body)
                     {
+                        Ok(rpc)
+                            if matches!(
+                                rpc.method.as_str(),
+                                "config.get" | "pealayer.config.get"
+                            ) =>
+                        {
+                            crate::platform::interop::json_rpc_result(
+                                &rpc.id,
+                                serde_json::to_value(crate::platform::interop::get_live_config())
+                                    .unwrap_or_else(|_| serde_json::json!({})),
+                            )
+                        }
                         Ok(rpc) => match crate::platform::interop::command_from_json_rpc(&rpc) {
                             Ok(Some(command)) => {
                                 let _ = cmd_tx_http.send(command);

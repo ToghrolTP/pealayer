@@ -160,6 +160,7 @@ fn main() -> eframe::Result {
     let _gui_ownership = gui_ownership;
 
     let launch_config = crate::config::AppConfig::load();
+    crate::platform::interop::set_live_config(launch_config.clone());
     let app_name = crate::config::resolved_app_name(&launch_config);
     let language_preference = crate::config::resolved_language_preference(&launch_config);
     let language = crate::config::resolve_language(language_preference);
@@ -462,6 +463,12 @@ fn main() -> eframe::Result {
                 playing_drag_action: loaded_config.playing_drag_action,
                 fullscreen_video_background: loaded_config.fullscreen_video_background,
                 status_bar: loaded_config.status_bar,
+                config_fingerprint: crate::config::AppConfig::fingerprint(
+                    &crate::config::AppConfig::get_config_path(),
+                )
+                .ok(),
+                last_config_poll: std::time::Instant::now(),
+                config_status: String::new(),
                 was_hardware_connected: false,
                 was_board_connected: false,
                 connection_notice: None,

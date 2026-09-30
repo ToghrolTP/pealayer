@@ -230,6 +230,9 @@ pub struct PealayerApp {
     pub(crate) playing_drag_action: crate::config::PlayerDragAction,
     pub(crate) fullscreen_video_background: crate::config::VideoBackground,
     pub(crate) status_bar: crate::config::StatusBarConfig,
+    pub(crate) config_fingerprint: Option<u64>,
+    pub(crate) last_config_poll: std::time::Instant,
+    pub(crate) config_status: String,
     pub(crate) was_hardware_connected: bool,
     pub(crate) was_board_connected: bool,
     pub(crate) connection_notice: Option<String>,
@@ -283,6 +286,7 @@ impl eframe::App for PealayerApp {
         self.ensure_shell_initialized();
         self.process_shell_commands(ui.ctx());
         self.process_controller_call_results();
+        self.poll_external_config(ui.ctx());
 
         if self.media_controls.is_none() {
             let hwnd = self
@@ -1353,6 +1357,27 @@ impl PealayerApp {
                 let observed = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
                 self.apply_workspace_request(nle, observed);
             }
+            InteropCommand::UpdateConfig { values } => {
+                match self.apply_config_patch(ctx, &values) {
+                    Ok(()) => self.set_osd(self.tr("Preferences updated")),
+                    Err(error) => {
+                        self.config_status = error.clone();
+                        self.set_osd(format!("{}: {error}", self.tr("Preferences update failed")));
+                    }
+                }
+                return;
+            }
+            InteropCommand::ReloadConfig => match self.reload_config_from_disk(ctx) {
+                Ok(()) => {
+                    self.set_osd(self.tr("Preferences reloaded from disk"));
+                    return;
+                }
+                Err(error) => {
+                    self.config_status = error.clone();
+                    self.set_osd(format!("{}: {error}", self.tr("Preferences reload failed")));
+                    return;
+                }
+            },
             InteropCommand::GetStatus => {}
         }
         self.set_osd(format!("{source}: command applied"));
@@ -1847,7 +1872,7 @@ impl PealayerApp {
         self.set_osd("Video Closed".to_string());
     }
 
-    pub fn save_config(&self) {
+    fn runtime_config_snapshot(&self) -> crate::config::AppConfig {
         // Preserve deployment-owned branding while saving mutable player
         // preferences through one typed configuration contract.
         let mut cfg = crate::config::AppConfig::load();
@@ -1872,7 +1897,137 @@ impl PealayerApp {
         cfg.playing_drag_action = self.playing_drag_action;
         cfg.fullscreen_video_background = self.fullscreen_video_background;
         cfg.status_bar = self.status_bar;
-        cfg.save();
+        cfg
+    }
+
+    pub fn save_config(&mut self) {
+        let cfg = self.runtime_config_snapshot();
+        match cfg.save() {
+            Ok(()) => {
+                self.config_fingerprint = crate::config::AppConfig::fingerprint(
+                    &crate::config::AppConfig::get_config_path(),
+                )
+                .ok();
+                self.config_status = format!(
+                    "Saved {}",
+                    crate::config::AppConfig::get_config_path().display()
+                );
+                crate::platform::interop::set_live_config(cfg);
+            }
+            Err(error) => {
+                self.config_status = error.clone();
+                log::error!("Could not save Pealayer configuration: {error}");
+            }
+        }
+    }
+
+    fn apply_runtime_config(
+        &mut self,
+        ctx: &egui::Context,
+        config: crate::config::AppConfig,
+    ) -> Result<(), String> {
+        config.validate()?;
+        let endpoint = config
+            .hardware_endpoint
+            .clone()
+            .unwrap_or_else(|| crate::four_d::controller::DEFAULT_ENDPOINT.to_string());
+        let endpoint_changed = endpoint != self.serial_port;
+
+        self.app_name = crate::config::resolved_app_name(&config);
+        self.app_publisher = crate::config::resolved_app_publisher(&config);
+        self.app_copyright = crate::config::resolved_app_copyright(&config);
+        self.volume = config.volume;
+        self.is_muted = config.is_muted;
+        self.pin_controls = config.pin_controls;
+        self.show_remaining_time = config.show_remaining_time;
+        self.recent_media = config.recent_media.clone();
+        self.language_preference = crate::config::resolved_language_preference(&config);
+        self.language = crate::config::resolve_language(self.language_preference);
+        self.direction_preference = crate::config::resolved_direction_preference(&config);
+        self.rtl = crate::config::resolve_rtl(self.direction_preference, self.language);
+        self.theme_preference = crate::config::resolved_theme(&config);
+        self.serial_port = endpoint.clone();
+        self.auto_connect_hardware = config.auto_connect_hardware;
+        self.pause_on_hardware_disconnect = config.pause_on_hardware_disconnect;
+        self.click_player_to_toggle = config.click_player_to_toggle;
+        self.show_subseconds = config.show_subseconds;
+        self.wheel_seek_seconds = config.wheel_seek_seconds;
+        self.osd_position = config.osd_position;
+        self.osd_timeout_seconds = config.osd_timeout_seconds;
+        self.paused_drag_action = config.paused_drag_action;
+        self.playing_drag_action = config.playing_drag_action;
+        self.fullscreen_video_background = config.fullscreen_video_background;
+        self.status_bar = config.status_bar;
+
+        let _ = self.mpv.set_property("volume", self.volume);
+        let _ = self.mpv.set_property("mute", self.is_muted);
+        crate::platform::windows::sync_windows_jump_list(&self.recent_media);
+        crate::ui::i18n::configure_ui_fonts(
+            ctx,
+            self.language == crate::config::AppLanguage::Persian,
+        );
+        ctx.set_theme(match self.theme_preference {
+            crate::config::AppTheme::System => egui::ThemePreference::System,
+            crate::config::AppTheme::Light => egui::ThemePreference::Light,
+            crate::config::AppTheme::Dark => egui::ThemePreference::Dark,
+        });
+        crate::platform::windows::set_window_theme(ctx.global_style().visuals.dark_mode);
+
+        if endpoint_changed {
+            let _ = self.engine_handle.sender.send(
+                crate::four_d::engine::EngineMessage::ReconfigureEndpoint {
+                    endpoint,
+                    connect: self.auto_connect_hardware,
+                },
+            );
+        }
+        crate::platform::interop::set_live_config(config);
+        Ok(())
+    }
+
+    pub(crate) fn reload_config_from_disk(&mut self, ctx: &egui::Context) -> Result<(), String> {
+        let path = crate::config::AppConfig::get_config_path();
+        let config = crate::config::AppConfig::load_from_path(&path)?;
+        self.apply_runtime_config(ctx, config)?;
+        self.config_fingerprint = crate::config::AppConfig::fingerprint(&path).ok();
+        self.config_status = format!("Reloaded {}", path.display());
+        Ok(())
+    }
+
+    fn poll_external_config(&mut self, ctx: &egui::Context) {
+        if self.last_config_poll.elapsed() < std::time::Duration::from_millis(750) {
+            return;
+        }
+        self.last_config_poll = std::time::Instant::now();
+        let path = crate::config::AppConfig::get_config_path();
+        let Ok(fingerprint) = crate::config::AppConfig::fingerprint(&path) else {
+            return;
+        };
+        if self.config_fingerprint == Some(fingerprint) {
+            return;
+        }
+        match self.reload_config_from_disk(ctx) {
+            Ok(()) => self.set_osd(self.tr("Preferences reloaded from disk")),
+            Err(error) => {
+                self.config_status = error.clone();
+                log::warn!("Could not reload changed Pealayer configuration: {error}");
+            }
+        }
+    }
+
+    fn apply_config_patch(
+        &mut self,
+        ctx: &egui::Context,
+        values: &serde_json::Value,
+    ) -> Result<(), String> {
+        let updated = self.runtime_config_snapshot().apply_patch(values)?;
+        updated.save()?;
+        self.apply_runtime_config(ctx, updated)?;
+        self.config_fingerprint =
+            crate::config::AppConfig::fingerprint(&crate::config::AppConfig::get_config_path())
+                .ok();
+        self.config_status = "Updated through API".to_string();
+        Ok(())
     }
 
     pub(crate) fn tr(&self, english: &'static str) -> String {
@@ -2245,6 +2400,12 @@ impl Default for PealayerApp {
             playing_drag_action: crate::config::PlayerDragAction::TemporaryFastForward,
             fullscreen_video_background: crate::config::VideoBackground::Black,
             status_bar: crate::config::StatusBarConfig::default(),
+            config_fingerprint: crate::config::AppConfig::fingerprint(
+                &crate::config::AppConfig::get_config_path(),
+            )
+            .ok(),
+            last_config_poll: std::time::Instant::now(),
+            config_status: String::new(),
             was_hardware_connected: false,
             was_board_connected: false,
             connection_notice: None,

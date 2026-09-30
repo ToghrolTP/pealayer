@@ -5,8 +5,8 @@ use std::net::TcpListener;
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{channel, Receiver};
 use std::thread;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -33,7 +33,10 @@ impl LaunchRequest {
             .sender_working_directory
             .as_ref()
             .is_some_and(|value| value.len() > 32_768)
-            || self.target.as_ref().is_some_and(|value| value.len() > 32_768)
+            || self
+                .target
+                .as_ref()
+                .is_some_and(|value| value.len() > 32_768)
         {
             return Err("launch path fields must not exceed 32768 bytes".to_string());
         }
@@ -97,12 +100,18 @@ impl LaunchReceiptCache {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum InteropCommand {
-    Launch { request: LaunchRequest },
+    Launch {
+        request: LaunchRequest,
+    },
     Play,
     Pause,
     TogglePause,
-    Seek { seconds: f64 },
-    SeekAbs { percentage: f64 },
+    Seek {
+        seconds: f64,
+    },
+    SeekAbs {
+        percentage: f64,
+    },
     #[serde(alias = "volume")]
     SetVolume {
         #[serde(alias = "level")]
@@ -113,9 +122,17 @@ pub enum InteropCommand {
         #[serde(alias = "path")]
         target: String,
     },
-    SetFullscreen { enabled: bool },
+    SetFullscreen {
+        enabled: bool,
+    },
     ToggleFullscreen,
-    SetWorkspace { nle: bool },
+    SetWorkspace {
+        nle: bool,
+    },
+    UpdateConfig {
+        values: Value,
+    },
+    ReloadConfig,
     GetStatus,
 }
 
@@ -162,7 +179,11 @@ pub struct JsonRpcRequest {
 }
 
 pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropCommand>, String> {
-    if request.jsonrpc.as_deref().is_some_and(|version| version != "2.0") {
+    if request
+        .jsonrpc
+        .as_deref()
+        .is_some_and(|version| version != "2.0")
+    {
         return Err("unsupported JSON-RPC version".to_string());
     }
     let number = |names: &[&str]| {
@@ -180,30 +201,26 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
     };
     match request.method.as_str() {
         "play" | "pealayer.play" | "pealayer.player.play" => Ok(Some(InteropCommand::Play)),
-        "pause" | "pealayer.pause" | "pealayer.player.pause" => {
-            Ok(Some(InteropCommand::Pause))
-        }
+        "pause" | "pealayer.pause" | "pealayer.player.pause" => Ok(Some(InteropCommand::Pause)),
         "toggle" | "toggle_pause" | "pealayer.toggle" | "pealayer.player.toggle" => {
             Ok(Some(InteropCommand::TogglePause))
         }
-        "seek" | "pealayer.seek" | "pealayer.player.seek" => {
-            Ok(Some(InteropCommand::Seek {
-                seconds: number(&["seconds"] )?,
-            }))
-        }
+        "seek" | "pealayer.seek" | "pealayer.player.seek" => Ok(Some(InteropCommand::Seek {
+            seconds: number(&["seconds"])?,
+        })),
         "seek_abs" | "pealayer.seek_absolute" | "pealayer.player.seek_absolute" => {
             Ok(Some(InteropCommand::SeekAbs {
-                percentage: number(&["percentage"] )?,
+                percentage: number(&["percentage"])?,
             }))
         }
         "volume" | "set_volume" | "pealayer.volume.set" | "pealayer.player.volume.set" => {
             Ok(Some(InteropCommand::SetVolume {
-                value: number(&["value", "level"] )?,
+                value: number(&["value", "level"])?,
             }))
         }
         "open" | "open_video" | "pealayer.open" | "pealayer.player.open" => {
             Ok(Some(InteropCommand::Open {
-                target: string(&["target", "path"] )?,
+                target: string(&["target", "path"])?,
             }))
         }
         "fullscreen" | "pealayer.fullscreen.set" | "pealayer.player.fullscreen.set" => {
@@ -225,9 +242,14 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 _ => Err("workspace must be nle or simple".to_string()),
             }
         }
-        "get_status" | "player.status" | "pealayer.status" | "pealayer.player.status" => {
-            Ok(None)
+        "config.update" | "pealayer.config.update" => {
+            crate::config::AppConfig::validate_patch_shape(&request.params)?;
+            Ok(Some(InteropCommand::UpdateConfig {
+                values: request.params.clone(),
+            }))
         }
+        "config.reload" | "pealayer.config.reload" => Ok(Some(InteropCommand::ReloadConfig)),
+        "get_status" | "player.status" | "pealayer.status" | "pealayer.player.status" => Ok(None),
         method => Err(format!("unknown Pealayer JSON-RPC method: {method}")),
     }
 }
@@ -237,11 +259,12 @@ pub fn json_rpc_result(id: &Value, result: Value) -> String {
 }
 
 pub fn json_rpc_error(id: &Value, code: i32, message: &str) -> String {
-    serde_json::json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
-        .to_string()
+    serde_json::json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}}).to_string()
 }
 
 static LIVE_STATUS: std::sync::RwLock<Option<PlayerStatusResponse>> = std::sync::RwLock::new(None);
+static LIVE_CONFIG: std::sync::RwLock<Option<crate::config::AppConfig>> =
+    std::sync::RwLock::new(None);
 
 pub fn set_live_status(status: PlayerStatusResponse) {
     if let Ok(mut lock) = LIVE_STATUS.write() {
@@ -261,6 +284,20 @@ pub fn get_live_status() -> PlayerStatusResponse {
     }
 }
 
+pub fn set_live_config(config: crate::config::AppConfig) {
+    if let Ok(mut lock) = LIVE_CONFIG.write() {
+        *lock = Some(config);
+    }
+}
+
+pub fn get_live_config() -> crate::config::AppConfig {
+    LIVE_CONFIG
+        .read()
+        .ok()
+        .and_then(|config| config.clone())
+        .unwrap_or_else(crate::config::AppConfig::load)
+}
+
 pub fn get_socket_path() -> PathBuf {
     if let Ok(path) = std::env::var("PEALAYER_SOCKET_PATH") {
         return PathBuf::from(path);
@@ -272,13 +309,18 @@ pub fn get_socket_path() -> PathBuf {
     }
 }
 
-pub fn parse_interop_request(line: &str) -> Result<(Option<serde_json::Value>, InteropCommand), String> {
+pub fn parse_interop_request(
+    line: &str,
+) -> Result<(Option<serde_json::Value>, InteropCommand), String> {
     let val: serde_json::Value = serde_json::from_str(line).map_err(|e| e.to_string())?;
 
     // Check if JSON-RPC 2.0 format
     if val.get("jsonrpc").and_then(|v| v.as_str()) == Some("2.0") || val.get("method").is_some() {
         let id = val.get("id").cloned();
-        let method = val.get("method").and_then(|m| m.as_str()).ok_or("Missing method field")?;
+        let method = val
+            .get("method")
+            .and_then(|m| m.as_str())
+            .ok_or("Missing method field")?;
         let params = val.get("params");
 
         let cmd = match method {
@@ -286,19 +328,32 @@ pub fn parse_interop_request(line: &str) -> Result<(Option<serde_json::Value>, I
             "pause" => InteropCommand::Pause,
             "toggle_pause" | "toggle" => InteropCommand::TogglePause,
             "seek" => {
-                let seconds = params.and_then(|p| p.get("seconds")).and_then(|s| s.as_f64()).unwrap_or(0.0);
+                let seconds = params
+                    .and_then(|p| p.get("seconds"))
+                    .and_then(|s| s.as_f64())
+                    .unwrap_or(0.0);
                 InteropCommand::Seek { seconds }
             }
             "seek_abs" => {
-                let percentage = params.and_then(|p| p.get("percentage")).and_then(|p| p.as_f64()).unwrap_or(0.0);
+                let percentage = params
+                    .and_then(|p| p.get("percentage"))
+                    .and_then(|p| p.as_f64())
+                    .unwrap_or(0.0);
                 InteropCommand::SeekAbs { percentage }
             }
             "set_volume" | "volume" => {
-                let value = params.and_then(|p| p.get("value").or_else(|| p.get("level"))).and_then(|v| v.as_f64()).unwrap_or(100.0);
+                let value = params
+                    .and_then(|p| p.get("value").or_else(|| p.get("level")))
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(100.0);
                 InteropCommand::SetVolume { value }
             }
             "open" | "open_video" => {
-                let target = params.and_then(|p| p.get("target").or_else(|| p.get("path"))).and_then(|t| t.as_str()).unwrap_or("").to_string();
+                let target = params
+                    .and_then(|p| p.get("target").or_else(|| p.get("path")))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 InteropCommand::Open { target }
             }
             "fullscreen" | "set_fullscreen" => {
@@ -320,6 +375,12 @@ pub fn parse_interop_request(line: &str) -> Result<(Option<serde_json::Value>, I
                     _ => return Err("workspace must be nle or simple".to_string()),
                 }
             }
+            "config.update" | "pealayer.config.update" => {
+                let values = params.cloned().unwrap_or_else(|| serde_json::json!({}));
+                crate::config::AppConfig::validate_patch_shape(&values)?;
+                InteropCommand::UpdateConfig { values }
+            }
+            "config.reload" | "pealayer.config.reload" => InteropCommand::ReloadConfig,
             "get_status" | "player.status" => InteropCommand::GetStatus,
             other => return Err(format!("Unknown RPC method: {}", other)),
         };
@@ -335,13 +396,18 @@ pub fn parse_interop_request(line: &str) -> Result<(Option<serde_json::Value>, I
     Ok((None, cmd))
 }
 
-pub fn format_interop_response(id: Option<serde_json::Value>, result: &serde_json::Value) -> String {
+pub fn format_interop_response(
+    id: Option<serde_json::Value>,
+    result: &serde_json::Value,
+) -> String {
     if let Some(id_val) = id {
         serde_json::json!({
             "jsonrpc": "2.0",
             "id": id_val,
             "result": result
-        }).to_string() + "\n"
+        })
+        .to_string()
+            + "\n"
     } else {
         result.to_string() + "\n"
     }
@@ -356,12 +422,16 @@ pub fn format_interop_error(id: Option<serde_json::Value>, code: i32, message: &
                 "code": code,
                 "message": message
             }
-        }).to_string() + "\n"
+        })
+        .to_string()
+            + "\n"
     } else {
         serde_json::json!({
             "status": "error",
             "message": message
-        }).to_string() + "\n"
+        })
+        .to_string()
+            + "\n"
     }
 }
 
@@ -384,7 +454,8 @@ fn handle_client_connection<R: std::io::Read, W: Write>(
             match parse_interop_request(trimmed) {
                 Ok((id, InteropCommand::GetStatus)) => {
                     let status = get_live_status();
-                    let resp_val = serde_json::to_value(&status).unwrap_or(serde_json::json!({"status": "ok"}));
+                    let resp_val = serde_json::to_value(&status)
+                        .unwrap_or(serde_json::json!({"status": "ok"}));
                     let resp = format_interop_response(id, &resp_val);
                     let _ = writer.write_all(resp.as_bytes());
                     let _ = writer.flush();
@@ -547,8 +618,7 @@ pub fn spawn_interop_listener(
 
 pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<InteropCommand> {
     let (tx, rx) = channel::<InteropCommand>();
-    let application_identity =
-        crate::config::resolved_app_name(&crate::config::AppConfig::load());
+    let application_identity = crate::config::resolved_app_name(&crate::config::AppConfig::load());
     spawn_interop_listener(tx, egui_ctx, application_identity);
     rx
 }
@@ -679,9 +749,7 @@ fn controller_rpc(id: u64, method: &str, params: Value) -> tungstenite::Message 
 }
 
 fn report_controller_instance(
-    socket: &mut tungstenite::WebSocket<
-        tungstenite::stream::MaybeTlsStream<std::net::TcpStream>,
-    >,
+    socket: &mut tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
     id: u64,
     instance_id: &str,
 ) -> Result<(), String> {
@@ -715,9 +783,7 @@ fn report_controller_instance(
 }
 
 fn send_action_ack(
-    socket: &mut tungstenite::WebSocket<
-        tungstenite::stream::MaybeTlsStream<std::net::TcpStream>,
-    >,
+    socket: &mut tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
     next_id: &mut u64,
     acknowledgement: Value,
 ) -> Result<(), String> {
@@ -815,7 +881,8 @@ fn run_pccontroller_action_bridge(
     let mut subscription_ready = false;
     let mut pending_pre_ack = VecDeque::new();
     loop {
-        if !push_target.is_alive() || push_target.websocket_endpoint().as_deref() != Some(endpoint) {
+        if !push_target.is_alive() || push_target.websocket_endpoint().as_deref() != Some(endpoint)
+        {
             let _ = socket.close(None);
             return Ok(());
         }
@@ -877,11 +944,7 @@ fn run_pccontroller_action_bridge(
                             })?;
                             egui_ctx.request_repaint();
                         } else {
-                            send_action_ack(
-                                &mut socket,
-                                &mut next_id,
-                                action.acknowledgement,
-                            )?;
+                            send_action_ack(&mut socket, &mut next_id, action.acknowledgement)?;
                         }
                     }
                 }
@@ -891,9 +954,7 @@ fn run_pccontroller_action_bridge(
                     .send(Message::Pong(payload))
                     .map_err(|error| format!("answer PCController ping: {error}"))?;
             }
-            Ok(Message::Close(_)) => {
-                return Err("PCController action WebSocket closed".to_string())
-            }
+            Ok(Message::Close(_)) => return Err("PCController action WebSocket closed".to_string()),
             Ok(_) => {}
             Err(tungstenite::Error::Io(error))
                 if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
@@ -1041,21 +1102,16 @@ mod tests {
         };
         let request = crate::cli::launch_request(&options);
         let identity = request.application_identity.clone();
-        assert!(validate_launch_destination(
-            &request,
-            &identity,
-            request.sender_session_id,
-        )
-        .is_ok());
+        assert!(
+            validate_launch_destination(&request, &identity, request.sender_session_id,).is_ok()
+        );
 
         let mut other_identity = request.clone();
         other_identity.application_identity = "Different Player".to_string();
-        assert!(validate_launch_destination(
-            &other_identity,
-            &identity,
-            request.sender_session_id,
-        )
-        .is_err());
+        assert!(
+            validate_launch_destination(&other_identity, &identity, request.sender_session_id,)
+                .is_err()
+        );
 
         #[cfg(target_os = "windows")]
         {
@@ -1065,12 +1121,10 @@ mod tests {
                     .expect("current Windows session")
                     .wrapping_add(1),
             );
-            assert!(validate_launch_destination(
-                &other_session,
-                &identity,
-                request.sender_session_id,
-            )
-            .is_err());
+            assert!(
+                validate_launch_destination(&other_session, &identity, request.sender_session_id,)
+                    .is_err()
+            );
         }
     }
 
@@ -1122,7 +1176,8 @@ mod tests {
         }
 
         // JSON-RPC 2.0 set_volume
-        let vol_rpc = r#"{"jsonrpc":"2.0","id":"vol-1","method":"set_volume","params":{"value":75.0}}"#;
+        let vol_rpc =
+            r#"{"jsonrpc":"2.0","id":"vol-1","method":"set_volume","params":{"value":75.0}}"#;
         let (id, cmd) = parse_interop_request(vol_rpc).unwrap();
         assert_eq!(id, Some(serde_json::json!("vol-1")));
         if let InteropCommand::SetVolume { value } = cmd {
@@ -1142,8 +1197,39 @@ mod tests {
             command_from_json_rpc(&request).unwrap(),
             Some(InteropCommand::Seek { seconds: 12.5 })
         ));
-        assert!(json_rpc_result(&request.id, serde_json::json!({"ok":true}))
-            .contains("\"id\":7"));
+        assert!(json_rpc_result(&request.id, serde_json::json!({"ok":true})).contains("\"id\":7"));
+    }
+
+    #[test]
+    fn parses_validated_config_json_rpc_commands() {
+        let update: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"preferences","method":"pealayer.config.update","params":{"theme":"dark","show_subseconds":false}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&update).unwrap(),
+            Some(InteropCommand::UpdateConfig { values })
+                if values["theme"] == "dark" && values["show_subseconds"] == false
+        ));
+
+        let reload: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"preferences","method":"pealayer.config.reload"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&reload).unwrap(),
+            Some(InteropCommand::ReloadConfig)
+        ));
+
+        let unknown: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"preferences","method":"pealayer.config.update","params":{"typo_setting":true}}"#,
+        )
+        .unwrap();
+        assert!(
+            command_from_json_rpc(&unknown)
+                .unwrap_err()
+                .contains("unknown configuration setting")
+        );
     }
 
     #[test]
@@ -1162,7 +1248,10 @@ mod tests {
         assert_eq!(retrieved.playing, true);
         assert_eq!(retrieved.volume, 92.0);
         assert_eq!(retrieved.playback_time, 45.5);
-        assert_eq!(retrieved.current_video, Some("/path/sample.mkv".to_string()));
+        assert_eq!(
+            retrieved.current_video,
+            Some("/path/sample.mkv".to_string())
+        );
     }
 
     #[test]
@@ -1234,9 +1323,11 @@ mod tests {
             action("pealayer.fullscreen.toggle", "").command,
             Some(InteropCommand::ToggleFullscreen)
         ));
-        assert!(action("pealayer.fullscreen.toggle", "unexpected")
-            .command
-            .is_none());
+        assert!(
+            action("pealayer.fullscreen.toggle", "unexpected")
+                .command
+                .is_none()
+        );
         assert!(matches!(
             action("pealayer.workspace.set", "nle").command,
             Some(InteropCommand::SetWorkspace { nle: true })
@@ -1325,14 +1416,11 @@ mod tests {
             }
         });
 
-        assert!(gate_controller_subscription_message(
-            state,
-            &mut ready,
-            &mut pending,
-            &target,
-        )
-        .unwrap()
-        .is_empty());
+        assert!(
+            gate_controller_subscription_message(state, &mut ready, &mut pending, &target,)
+                .unwrap()
+                .is_empty()
+        );
         assert!(!ready);
         assert_eq!(pending.len(), 1);
         assert_eq!(
