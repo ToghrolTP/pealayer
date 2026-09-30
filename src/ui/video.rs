@@ -179,7 +179,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
         ui.separator();
 
-        ui.menu_button(format!("{} {}", crate::ui::icons::CLOCK_COUNTER_CLOCKWISE, app.tr("Open Recent")), |ui| {
+        crate::ui::icons::submenu(ui, format!("{} {}", crate::ui::icons::CLOCK_COUNTER_CLOCKWISE, app.tr("Open Recent")), |ui| {
             if app.recent_media.is_empty() {
                 ui.label(app.tr("No recent media"));
             } else {

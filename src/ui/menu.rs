@@ -79,7 +79,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         app.show_open_url_dialog = true;
                     }
 
-                    ui.menu_button(app.tr("Open Recent"), |ui| {
+                    crate::ui::icons::submenu(ui, app.tr("Open Recent"), |ui| {
                         if app.recent_media.is_empty() {
                             ui.label(app.tr("No recent media"));
                         } else {
@@ -211,7 +211,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 });
 
                 ui.menu_button(app.tr("Audio"), |ui| {
-                    ui.menu_button(app.tr("Audio Track"), |ui| {
+                    crate::ui::icons::submenu(ui, app.tr("Audio Track"), |ui| {
                         if ui
                             .selectable_label(app.current_aid == "no", app.tr("None"))
                             .clicked()
@@ -247,7 +247,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                 // Subtitles menu
                 ui.menu_button(app.tr("Subtitles"), |ui| {
-                    ui.menu_button(app.tr("Subtitle Track"), |ui| {
+                    crate::ui::icons::submenu(ui, app.tr("Subtitle Track"), |ui| {
                         if ui
                             .selectable_label(app.current_sid == "no", app.tr("None"))
                             .clicked()
@@ -306,7 +306,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         ui.close();
                     }
                     ui.separator();
-                    ui.menu_button(
+                    crate::ui::icons::submenu(
+                        ui,
                         format!("{} {}", crate::ui::icons::TABS, app.tr("Panels")),
                         |ui| crate::ui::layout::draw_workspace_tab_menu(app, ui),
                     );
@@ -346,7 +347,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                 // Add right-aligned E-STOP and Serial controls
                 ui.menu_button(app.tr("Help"), |ui| {
-                    ui.menu_button(app.tr("Language"), |ui| {
+                    crate::ui::icons::submenu(ui, app.tr("Language"), |ui| {
                         for (preference, label) in [
                             (
                                 crate::config::AppLanguage::System,
@@ -364,7 +365,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             }
                         }
                     });
-                    ui.menu_button(app.tr("Direction"), |ui| {
+                    crate::ui::icons::submenu(ui, app.tr("Direction"), |ui| {
                         for (preference, label) in [
                             (crate::config::AppDirection::Auto, app.tr("Automatic")),
                             (crate::config::AppDirection::Ltr, app.tr("Left to right")),

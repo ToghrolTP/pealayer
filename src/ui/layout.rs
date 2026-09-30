@@ -2,6 +2,41 @@ use crate::app::{EffectDragPayload, PealayerApp};
 use eframe::egui;
 use egui_dock::TabViewer;
 
+pub fn paint_dock_disclosure_icons(
+    ui: &mut egui::Ui,
+    dock_state: &egui_dock::DockState<PealayerTab>,
+    tab_bar_height: f32,
+) {
+    let pointer = ui.ctx().pointer_hover_pos();
+    for (_, leaf) in dock_state.iter_leaves() {
+        if !leaf.rect.is_positive() || leaf.tabs.is_empty() {
+            continue;
+        }
+        let button_rect = egui::Rect::from_min_size(
+            leaf.rect.min,
+            egui::vec2(24.0_f32.min(leaf.rect.width()), tab_bar_height),
+        );
+        let hovered = pointer.is_some_and(|position| button_rect.contains(position));
+        let color = if hovered {
+            ui.visuals().strong_text_color()
+        } else {
+            ui.visuals().text_color()
+        };
+        let icon = if leaf.collapsed {
+            crate::ui::icons::CARET_RIGHT
+        } else {
+            crate::ui::icons::CARET_DOWN
+        };
+        ui.painter().text(
+            button_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            icon,
+            egui::FontId::proportional(13.0),
+            color,
+        );
+    }
+}
+
 fn drag_translation(
     pointer: egui::Pos2,
     source_min: egui::Pos2,
@@ -2311,10 +2346,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let record_open = self.app.hardware_effect_authoring.active
                                     || self.app.hardware_effect_authoring.pending_operation.is_some();
                                 ui.add_space(8.0);
-                                egui::CollapsingHeader::new(egui::RichText::new(record_title).strong())
-                                    .id_salt("hardware_effect_recording_panel")
-                                    .default_open(record_open)
-                                    .show(ui, |ui| {
+                                if crate::ui::icons::disclosure_header(
+                                    ui,
+                                    "hardware_effect_recording_panel_disclosure",
+                                    &record_title,
+                                    record_open,
+                                ) {
+                                    ui.indent("hardware_effect_recording_panel_content", |ui| {
                                         egui::Grid::new("hardware_effect_recording_name")
                                             .num_columns(2)
                                             .spacing([12.0, 8.0])
@@ -2382,6 +2420,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             ).weak().monospace());
                                         }
                                     });
+                                }
                             }
 
                             if !capabilities.strip_effects.is_empty() {
@@ -3703,7 +3742,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                                 // Right-Click Context Menu
                                                 kf_response.context_menu(|ui| {
-                                                    ui.menu_button(&interpolation_label, |ui| {
+                                                    crate::ui::icons::submenu(ui, interpolation_label.clone(), |ui| {
                                                         if ui.button(&linear_label).clicked() {
                                                             kf_interp_change = Some((track.id, k_idx, crate::four_d::curve::Interpolation::Linear));
                                                             ui.close();

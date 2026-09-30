@@ -127,7 +127,14 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
             ui.add_space(10.0);
 
             // --- Collapsible Custom Template Creator ---
-            ui.collapsing(app.tr("Create custom template"), |ui| {
+            let custom_template_label = app.tr("Create custom template");
+            if crate::ui::icons::disclosure_header(
+                ui,
+                "custom_template_creator_disclosure",
+                &custom_template_label,
+                false,
+            ) {
+                ui.indent("custom_template_creator_content", |ui| {
                 let name_id = ui.make_persistent_id("new_tmpl_name");
                 let icon_id = ui.make_persistent_id("new_tmpl_icon");
                 let duration_id = ui.make_persistent_id("new_tmpl_duration");
@@ -212,7 +219,8 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     d.insert_temp(duration_id, duration_ms);
                     d.insert_temp(relay_id_id, target_relay);
                 });
-            });
+                });
+            }
 
             ui.add_space(20.0);
 

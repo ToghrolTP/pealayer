@@ -17,23 +17,29 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     ensure_icon(app, ui.ctx());
 
     let mut open = true;
-    let bounds = ui.ctx().content_rect().shrink(18.0);
-    let default_size = egui::vec2(bounds.width().min(640.0), bounds.height().min(500.0));
-    let min_size = egui::vec2(bounds.width().min(400.0), bounds.height().min(330.0));
+    let bounds = ui.ctx().content_rect().shrink(20.0);
+    let max_size = egui::vec2(bounds.width().min(680.0), bounds.height().min(560.0));
+    let default_size = egui::vec2(max_size.x.min(600.0), max_size.y.min(480.0));
+    let min_size = egui::vec2(max_size.x.min(360.0), max_size.y.min(300.0));
+    let default_rect = egui::Rect::from_center_size(bounds.center(), default_size);
     egui::Window::new(format!(
         "{} {} {}",
         crate::ui::icons::INFO,
         app.tr("About"),
         app.app_name
     ))
+    // Keep the resize memory independent of localized/branded titles and reset
+    // the formerly unbounded persisted geometry once for this corrected layout.
+    .id(egui::Id::new("pealayer_about_dialog_bounded_v2"))
     .open(&mut open)
-    .default_size(default_size)
+    .default_rect(default_rect)
     .min_size(min_size)
-    .max_size(bounds.size())
+    .max_size(max_size)
     .constrain_to(bounds)
     .resizable(true)
     .collapsible(false)
     .show(ui.ctx(), |ui| {
+        ui.set_max_width(max_size.x);
         header(app, ui);
         ui.add_space(8.0);
         ui.separator();
@@ -108,43 +114,62 @@ fn draw_content(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .id_salt("about_content")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.set_max_width(ui.available_width());
-            match app.about_tab {
-                0 => overview(app, ui),
-                1 => build_and_system(app, ui),
-                2 => connected_board(app, ui),
-                _ => libraries_and_licenses(app, ui),
-            }
+            // A ScrollArea inherits the surrounding horizontal layout. Without
+            // an explicit vertical child, entire sections and even their text
+            // rows are placed side-by-side, forcing a huge content width and
+            // producing one-character wrapping. Keep a fixed viewport-width
+            // column so every tab remains bounded and scrolls only vertically.
+            let content_width = ui.available_width();
+            ui.allocate_ui_with_layout(
+                egui::vec2(content_width, 0.0),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_width(content_width);
+                    match app.about_tab {
+                        0 => overview(app, ui),
+                        1 => build_and_system(app, ui),
+                        2 => connected_board(app, ui),
+                        _ => libraries_and_licenses(app, ui),
+                    }
+                },
+            );
         });
 }
 
 fn header(app: &PealayerApp, ui: &mut egui::Ui) {
-    ui.horizontal(|ui| {
+    ui.horizontal_top(|ui| {
         if let Some(icon) = &app.about_icon {
             ui.add(egui::Image::new(icon).fit_to_exact_size(egui::vec2(64.0, 64.0)));
         } else {
             ui.label(egui::RichText::new(crate::ui::icons::MONITOR_PLAY).size(52.0));
         }
         ui.add_space(8.0);
-        ui.vertical(|ui| {
-            ui.label(egui::RichText::new(&app.app_name).size(25.0).strong());
-            ui.label(
-                egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
-                    .size(17.0)
-                    .strong(),
-            );
-            ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new("Commit").strong());
-                ui.hyperlink_to(short_commit(), commit_url());
-                if env!("PEALAYER_GIT_DIRTY") == "true" {
-                    ui.label(
-                        egui::RichText::new("locally modified build")
-                            .color(ui.visuals().warn_fg_color),
-                    );
-                }
-            });
-            ui.hyperlink_to("GitHub repository", REPOSITORY);
-        });
+        let text_width = ui.available_width().max(120.0);
+        ui.allocate_ui_with_layout(
+            egui::vec2(text_width, 0.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.add(
+                    egui::Label::new(egui::RichText::new(&app.app_name).size(25.0).strong()).wrap(),
+                );
+                ui.label(
+                    egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
+                        .size(17.0)
+                        .strong(),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new("Commit").strong());
+                    ui.hyperlink_to(short_commit(), commit_url());
+                    if env!("PEALAYER_GIT_DIRTY") == "true" {
+                        ui.label(
+                            egui::RichText::new("locally modified build")
+                                .color(ui.visuals().warn_fg_color),
+                        );
+                    }
+                });
+                ui.hyperlink_to("GitHub repository", REPOSITORY);
+            },
+        );
     });
 }
 
@@ -162,7 +187,7 @@ fn overview(app: &PealayerApp, ui: &mut egui::Ui) {
             .show(ui, |ui| {
                 strong_row(ui, "Version", env!("CARGO_PKG_VERSION"));
                 ui.label(egui::RichText::new("Commit").strong());
-                ui.hyperlink_to(COMMIT, commit_url());
+                ui.hyperlink_to(short_commit(), commit_url());
                 ui.end_row();
                 strong_row(ui, "Branch / ref", env!("PEALAYER_GIT_BRANCH"));
                 ui.label(egui::RichText::new("Repository").strong());
@@ -300,60 +325,74 @@ fn libraries_and_licenses(_app: &PealayerApp, ui: &mut egui::Ui) {
         );
     });
     section(ui, "Core libraries", |ui| {
-        egui::Grid::new("about_libraries")
-            .num_columns(3)
-            .max_col_width((ui.available_width() * 0.46).max(120.0))
-            .spacing([18.0, 8.0])
-            .striped(true)
-            .show(ui, |ui| {
-                for (name, version, license, purpose) in [
-                    (
-                        "egui / eframe",
-                        "0.34.3",
-                        "MIT OR Apache-2.0",
-                        "Native interface and rendering",
-                    ),
-                    ("egui_dock", "0.19.1", "MIT", "Dockable workspace"),
-                    ("egui-phosphor", "0.12.0", "MIT", "Vector icon vocabulary"),
-                    (
-                        "libmpv2 / mpv",
-                        "6.0.0",
-                        "MIT / upstream mpv terms",
-                        "Media playback and video rendering",
-                    ),
-                    (
-                        "serde / serde_json",
-                        "1.0",
-                        "MIT OR Apache-2.0",
-                        "Configuration and protocol data",
-                    ),
-                    (
-                        "tungstenite",
-                        "0.30.0",
-                        "MIT OR Apache-2.0",
-                        "WebSocket transport",
-                    ),
-                    (
-                        "serialport",
-                        "4.10.1",
-                        "MPL-2.0",
-                        "Serial device discovery and diagnostics",
-                    ),
-                    ("souvlaki", "0.8.3", "MIT", "Desktop media controls"),
-                    ("rfd", "0.17.2", "MIT", "Native file dialogs"),
-                    (
-                        "uuid",
-                        "1.26.1",
-                        "MIT OR Apache-2.0",
-                        "Stable project object identifiers",
-                    ),
-                ] {
-                    ui.label(egui::RichText::new(name).strong());
-                    ui.label(format!("{version} · {license}"));
-                    ui.label(purpose);
-                    ui.end_row();
-                }
+        for (index, (name, version, license, purpose)) in [
+            (
+                "egui / eframe",
+                "0.34.3",
+                "MIT OR Apache-2.0",
+                "Native interface and rendering",
+            ),
+            ("egui_dock", "0.19.1", "MIT", "Dockable workspace"),
+            ("egui-phosphor", "0.12.0", "MIT", "Vector icon vocabulary"),
+            (
+                "libmpv2 / mpv",
+                "6.0.0",
+                "MIT / upstream mpv terms",
+                "Media playback and video rendering",
+            ),
+            (
+                "serde / serde_json",
+                "1.0",
+                "MIT OR Apache-2.0",
+                "Configuration and protocol data",
+            ),
+            (
+                "tungstenite",
+                "0.30.0",
+                "MIT OR Apache-2.0",
+                "WebSocket transport",
+            ),
+            (
+                "serialport",
+                "4.10.1",
+                "MPL-2.0",
+                "Serial device discovery and diagnostics",
+            ),
+            ("souvlaki", "0.8.3", "MIT", "Desktop media controls"),
+            ("rfd", "0.17.2", "MIT", "Native file dialogs"),
+            (
+                "uuid",
+                "1.26.1",
+                "MIT OR Apache-2.0",
+                "Stable project object identifiers",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if index > 0 {
+                ui.separator();
+            }
+            ui.horizontal_top(|ui| {
+                let heading_width = (ui.available_width() * 0.34).clamp(112.0, 170.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(heading_width, 0.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.add(egui::Label::new(egui::RichText::new(name).strong()).wrap());
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("{version} · {license}"))
+                                    .small()
+                                    .weak(),
+                            )
+                            .wrap(),
+                        );
+                    },
+                );
+                ui.add(egui::Label::new(purpose).wrap());
             });
+        }
         ui.add_space(6.0);
         ui.add(egui::Label::new(egui::RichText::new("This is a concise runtime inventory. Packaged notices and each dependency's source license remain authoritative.").small().weak()).wrap());
         ui.hyperlink_to(
@@ -370,9 +409,12 @@ fn section(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
         .corner_radius(8.0)
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
-            ui.label(egui::RichText::new(title).heading().strong());
-            ui.add_space(6.0);
-            body(ui);
+            ui.set_min_width(ui.available_width());
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(title).heading().strong());
+                ui.add_space(6.0);
+                body(ui);
+            });
         });
     ui.add_space(10.0);
 }

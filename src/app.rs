@@ -724,13 +724,26 @@ impl eframe::App for PealayerApp {
                         });
                         let mut dock_state =
                             std::mem::replace(&mut self.dock_state, egui_dock::DockState::new(vec![]));
+                        let mut dock_style = egui_dock::Style::from_egui(ui.style().as_ref());
+                        let dock_tab_bar_height = dock_style.tab_bar.height;
+                        // egui_dock paints legacy solid triangles for leaf disclosure.
+                        // Keep its hit target and behavior, but let Pealayer paint the
+                        // matching Phosphor caret from the application's icon vocabulary.
+                        dock_style.buttons.collapse_tabs_color = egui::Color32::TRANSPARENT;
+                        dock_style.buttons.collapse_tabs_active_color = egui::Color32::TRANSPARENT;
                         let dock_response = ui.scope(|ui| {
                             let mut tab_viewer = crate::ui::layout::PealayerTabViewer { app: self };
                             egui_dock::DockArea::new(&mut dock_state)
+                                .style(dock_style)
                                 .show_leaf_collapse_buttons(true)
                                 .show_inside(ui, &mut tab_viewer);
                         });
                         self.dock_state = dock_state;
+                        crate::ui::layout::paint_dock_disclosure_icons(
+                            ui,
+                            &self.dock_state,
+                            dock_tab_bar_height,
+                        );
 
                         let tab_rects = ui.ctx().data_mut(|data| {
                             data.get_temp::<Vec<egui::Rect>>(workspace_tab_rects_id)
