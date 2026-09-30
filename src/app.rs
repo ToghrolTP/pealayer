@@ -261,6 +261,8 @@ pub struct PealayerApp {
     pub(crate) media_cmd_tx: std::sync::mpsc::Sender<crate::platform::interop::InteropCommand>,
     pub window_handle: Option<isize>,
     pub shell_initialized: bool,
+    pub(crate) last_taskbar_state: Option<crate::platform::windows::TaskbarState>,
+    pub(crate) last_thumbnail_button_state: Option<(bool, bool)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1016,6 +1018,12 @@ impl PealayerApp {
                         crate::platform::windows::register_system_tray_icon(hwnd, &self.app_name)
                     });
                 self.shell_initialized = result.is_ok();
+                if self.shell_initialized {
+                    // Initialization creates a fresh Windows Shell surface. Force
+                    // one state publication, then only publish subsequent deltas.
+                    self.last_taskbar_state = None;
+                    self.last_thumbnail_button_state = None;
+                }
                 if let Err(error) = result {
                     log::warn!("Windows shell integration is not ready; retrying: {error}");
                 }
@@ -1061,22 +1069,38 @@ impl PealayerApp {
 
     /// Synchronizes playback time, duration, pause state, and error condition
     /// with the Windows taskbar progress state and thumbnail toolbar buttons.
-    pub fn update_shell_state(&self) {
-        crate::platform::windows::update_windows_taskbar_state_ext(
+    pub fn update_shell_state(&mut self) {
+        let taskbar_state = crate::platform::windows::compute_taskbar_state_with_error(
             self.playback_time,
             self.duration,
             self.is_paused,
             self.show_error.is_some(),
         );
+        if self.last_taskbar_state != Some(taskbar_state) {
+            crate::platform::windows::update_windows_taskbar_state_ext(
+                self.playback_time,
+                self.duration,
+                self.is_paused,
+                self.show_error.is_some(),
+            );
+            self.last_taskbar_state = Some(taskbar_state);
+        }
+
         let hwnd = self
             .window_handle
             .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
-        if hwnd != 0 {
-            let _ = crate::platform::windows::update_taskbar_thumbnail_buttons(
+        let thumbnail_state = (self.is_paused, self.current_video_path.is_some());
+        if self.shell_initialized
+            && hwnd != 0
+            && self.last_thumbnail_button_state != Some(thumbnail_state)
+            && crate::platform::windows::update_taskbar_thumbnail_buttons(
                 hwnd,
-                self.is_paused,
-                self.current_video_path.is_some(),
-            );
+                thumbnail_state.0,
+                thumbnail_state.1,
+            )
+            .is_ok()
+        {
+            self.last_thumbnail_button_state = Some(thumbnail_state);
         }
     }
 
@@ -2608,6 +2632,8 @@ impl Default for PealayerApp {
             media_cmd_tx: interop_tx,
             window_handle: None,
             shell_initialized: false,
+            last_taskbar_state: None,
+            last_thumbnail_button_state: None,
         }
     }
 }

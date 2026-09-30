@@ -514,6 +514,8 @@ fn main() -> eframe::Result {
                 media_cmd_tx: interop_tx,
                 window_handle: None,
                 shell_initialized: false,
+                last_taskbar_state: None,
+                last_thumbnail_button_state: None,
             };
 
             if app.auto_connect_hardware {
