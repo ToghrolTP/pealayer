@@ -1,0 +1,71 @@
+name: "🛡️ Security · CodeQL"
+run-name: "🛡️ CodeQL · ${{ github.ref_name }} · ${{ github.event_name }}"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+  schedule:
+    - cron: "37 2 * * 4"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+  security-events: write
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: "🔎 ${{ matrix.label }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { language: actions, label: Actions workflows, category: "/language:actions/scope:workflows" }
+          - { language: javascript-typescript, label: TypeScript web application, category: "/language:javascript-typescript/scope:web-ui" }
+    steps:
+      - name: "📥 Check out source without persisted credentials"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: "🛡️ Initialize CodeQL"
+        uses: github/codeql-action/init@88585263c0627ee42c0e1c5143a112c8d6f4aa18 # v4.38.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
+      - name: "🔬 Analyze and upload CodeQL results"
+        uses: github/codeql-action/analyze@88585263c0627ee42c0e1c5143a112c8d6f4aa18 # v4.38.2
+        with:
+          category: ${{ matrix.category }}
+
+  complete:
+    name: "🛡️ CodeQL · Complete"
+    if: always()
+    needs: analyze
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: "📋 Publish consolidated security summary"
+        env:
+          ANALYSIS_RESULT: ${{ needs.analyze.result }}
+        run: |
+          [[ "$ANALYSIS_RESULT" == success ]] && icon=✅ || icon=❌
+          {
+            echo "# $icon Pealayer CodeQL"; echo
+            echo '| Codebase | Analyzer | Coverage |'; echo '|---|---|---|'
+            echo '| CI/CD | Actions | Every tracked Actions workflow |'
+            echo '| Web UI | JavaScript/TypeScript | React application and Vite configuration |'; echo
+            echo '> Rust is covered by the native compile/test matrix; this CodeQL configuration has no Rust extractor.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          [[ "$ANALYSIS_RESULT" == success ]]
