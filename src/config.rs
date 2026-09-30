@@ -110,6 +110,8 @@ pub struct AppConfig {
     pub playing_drag_action: PlayerDragAction,
     pub fullscreen_video_background: VideoBackground,
     pub status_bar: StatusBarConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_dock_layout: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -139,6 +141,7 @@ impl Default for AppConfig {
             playing_drag_action: PlayerDragAction::TemporaryFastForward,
             fullscreen_video_background: VideoBackground::Black,
             status_bar: StatusBarConfig::default(),
+            workspace_dock_layout: None,
         }
     }
 }
