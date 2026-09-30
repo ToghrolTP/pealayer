@@ -309,6 +309,36 @@ pub enum PealayerTab {
     Timeline,
 }
 
+impl PealayerTab {
+    pub const ALL: [PealayerTab; 5] = [
+        PealayerTab::ProgramMonitor,
+        PealayerTab::Timeline,
+        PealayerTab::EffectControls,
+        PealayerTab::EffectsLibrary,
+        PealayerTab::HardwareMonitor,
+    ];
+
+    pub fn title(self, app: &crate::app::PealayerApp) -> String {
+        match self {
+            PealayerTab::ProgramMonitor => app.tr("Program Monitor"),
+            PealayerTab::Timeline => app.tr("Timeline"),
+            PealayerTab::EffectControls => app.tr("Effect Controls"),
+            PealayerTab::EffectsLibrary => app.tr("Effects Library"),
+            PealayerTab::HardwareMonitor => app.tr("Hardware Monitor"),
+        }
+    }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            PealayerTab::ProgramMonitor => crate::ui::icons::MONITOR_PLAY,
+            PealayerTab::Timeline => crate::ui::icons::WAVEFORM,
+            PealayerTab::EffectControls => crate::ui::icons::SLIDERS_HORIZONTAL,
+            PealayerTab::EffectsLibrary => crate::ui::icons::SPARKLE,
+            PealayerTab::HardwareMonitor => crate::ui::icons::GAUGE,
+        }
+    }
+}
+
 pub struct PealayerTabViewer<'a> {
     pub app: &'a mut PealayerApp,
 }
@@ -317,13 +347,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
     type Tab = PealayerTab;
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        match tab {
-            PealayerTab::ProgramMonitor => format!("{} {}", crate::ui::icons::MONITOR_PLAY, self.app.tr("Program Monitor")).into(),
-            PealayerTab::EffectControls => format!("{} {}", crate::ui::icons::SLIDERS_HORIZONTAL, self.app.tr("Effect Controls")).into(),
-            PealayerTab::EffectsLibrary => format!("{} {}", crate::ui::icons::SPARKLE, self.app.tr("Effects Library")).into(),
-            PealayerTab::HardwareMonitor => format!("{} {}", crate::ui::icons::GAUGE, self.app.tr("Hardware Monitor")).into(),
-            PealayerTab::Timeline => format!("{} {}", crate::ui::icons::WAVEFORM, self.app.tr("Timeline")).into(),
-        }
+        format!("{} {}", tab.icon(), tab.title(self.app)).into()
     }
 
     fn context_menu(
@@ -332,13 +356,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
         tab: &mut Self::Tab,
         _path: egui_dock::NodePath,
     ) {
-        let title = match tab {
-            PealayerTab::ProgramMonitor => self.app.tr("Program Monitor"),
-            PealayerTab::EffectControls => self.app.tr("Effect Controls"),
-            PealayerTab::EffectsLibrary => self.app.tr("Effects Library"),
-            PealayerTab::HardwareMonitor => self.app.tr("Hardware Monitor"),
-            PealayerTab::Timeline => self.app.tr("Timeline"),
-        };
+        let title = tab.title(self.app);
         ui.label(egui::RichText::new(title).strong());
         ui.separator();
         match tab {
@@ -3267,7 +3285,27 @@ pub fn create_initial_layout() -> egui_dock::DockState<PealayerTab> {
         vec![PealayerTab::EffectsLibrary],
     );
 
+    sanitize_dock_rects(&mut dock_state);
+
     dock_state
+}
+
+/// Sanitizes all node rectangles and viewports in a `DockState` to finite values (`Rect::ZERO`),
+/// preventing non-finite floats (e.g. `Rect::NOTHING` where Pos2 is +/-INFINITY) from serializing
+/// as `null` in JSON formats such as `serde_json`.
+pub fn sanitize_dock_rects<Tab>(dock_state: &mut egui_dock::DockState<Tab>) {
+    for (_path, node) in dock_state.iter_all_nodes_mut() {
+        if let Some(rect) = node.rect()
+            && !rect.is_finite()
+        {
+            node.set_rect(egui::Rect::ZERO);
+        }
+        if let Some(leaf) = node.get_leaf_mut()
+            && !leaf.viewport.is_finite()
+        {
+            leaf.viewport = egui::Rect::ZERO;
+        }
+    }
 }
 
 fn format_timecode(t: f64) -> String {
