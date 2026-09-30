@@ -894,13 +894,21 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 profile.attached && profile.configured
                             }) && !capabilities.controls.is_empty();
                             if can_record {
-                                ui.add_space(8.0);
-                                ui.label(
-                                    egui::RichText::new(self.app.tr("Record hardware effect"))
-                                        .strong(),
+                                let record_title = self.app.tr("Record hardware effect");
+                                let name_label = self.app.tr("Name");
+                                let name_hint = self.app.tr("Seat motion take");
+                                let start_label = self.app.tr("Start board recording");
+                                let start_help = self.app.tr(
+                                    "Anchor at the current video time and capture board-applied actions from every PCController surface.",
                                 );
+                                let refresh_label = self.app.tr("Refresh status");
+                                let save_label = self.app.tr("Save and place");
+                                let discard_label = self.app.tr("Discard");
+                                let anchor_label = self.app.tr("Timeline anchor:");
+                                ui.add_space(8.0);
+                                ui.label(egui::RichText::new(record_title).strong());
                                 ui.horizontal_wrapped(|ui| {
-                                    ui.label(self.app.tr("Name"));
+                                    ui.label(&name_label);
                                     ui.add_enabled(
                                         !self.app.hardware_effect_authoring.active
                                             && self.app.hardware_effect_authoring.pending_operation.is_none(),
@@ -908,7 +916,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             &mut self.app.hardware_effect_authoring.name,
                                         )
                                         .desired_width(180.0)
-                                        .hint_text(self.app.tr("Seat motion take")),
+                                        .hint_text(&name_hint),
                                     );
                                     let pending = self
                                         .app
@@ -925,11 +933,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     .name
                                                     .trim()
                                                     .is_empty(),
-                                            egui::Button::new(self.app.tr("Start board recording")),
+                                            egui::Button::new(&start_label),
                                         )
-                                        .on_hover_text(self.app.tr(
-                                            "Anchor at the current video time and capture board-applied actions from every PCController surface.",
-                                        ))
+                                        .on_hover_text(&start_help)
                                         .clicked()
                                     {
                                         if let Err(error) = self.app.start_hardware_effect_recording() {
@@ -939,7 +945,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     if ui
                                         .add_enabled(
                                             !pending && self.app.hardware_effect_authoring.active,
-                                            egui::Button::new(self.app.tr("Refresh status")),
+                                            egui::Button::new(&refresh_label),
                                         )
                                         .clicked()
                                     {
@@ -950,11 +956,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     if ui
                                         .add_enabled(
                                             !pending && self.app.hardware_effect_authoring.active,
-                                            egui::Button::new(self.app.tr("Save and place")),
+                                            egui::Button::new(&save_label),
                                         )
                                         .on_hover_text(format!(
                                             "{} {:.3}s",
-                                            self.app.tr("Timeline anchor:"),
+                                            anchor_label,
                                             self.app.hardware_effect_authoring.anchor_ms as f64 / 1_000.0
                                         ))
                                         .clicked()
@@ -966,7 +972,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     if ui
                                         .add_enabled(
                                             !pending && self.app.hardware_effect_authoring.active,
-                                            egui::Button::new(self.app.tr("Discard")),
+                                            egui::Button::new(&discard_label),
                                         )
                                         .clicked()
                                     {
@@ -987,16 +993,18 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                             if !capabilities.strip_effects.is_empty() {
+                                let strip_title = self.app.tr("Addressable strip effects");
+                                let stop_label = self.app.tr("Stop preview");
+                                let preview_label = self.app.tr("Preview");
                                 ui.add_space(8.0);
                                 ui.horizontal(|ui| {
                                     ui.label(
-                                        egui::RichText::new(self.app.tr("Addressable strip effects"))
-                                            .strong(),
+                                        egui::RichText::new(&strip_title).strong(),
                                     );
                                     if ui
                                         .add_enabled(
                                             self.app.hardware_effect_authoring.pending_operation.is_none(),
-                                            egui::Button::new(self.app.tr("Stop preview")),
+                                            egui::Button::new(&stop_label),
                                         )
                                         .clicked()
                                     {
@@ -1020,7 +1028,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         if ui
                                             .add_enabled(
                                                 self.app.hardware_effect_authoring.pending_operation.is_none(),
-                                                egui::Button::new(self.app.tr("Preview")),
+                                                egui::Button::new(&preview_label),
                                             )
                                             .on_hover_text(if strip_effect.description.is_empty() {
                                                 strip_effect.id.clone()

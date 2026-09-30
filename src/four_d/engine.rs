@@ -880,6 +880,38 @@ pub fn spawn_engine() -> EngineHandle {
                     println!("[{}] ALL_OFF (Pause)", port_name);
                 }
             }
+            if !was_playing && is_playing_now {
+                let current_time = engine_time.load(Ordering::Relaxed);
+                let desired = active_controller_strip_effect_at(
+                    &controller_strip_effects,
+                    current_time,
+                )
+                .map(str::to_owned);
+                if active_strip_effect != desired {
+                    if let Some(ref mut transport) = active_transport {
+                        if active_strip_effect.is_some() {
+                            let _ = transport.call_controller(
+                                "controller.command.execute",
+                                serde_json::json!({"command": "strip stop"}),
+                            );
+                        }
+                        active_strip_effect = None;
+                        if let Some(id) = desired.as_deref() {
+                            if transport
+                                .call_controller(
+                                    "controller.command.execute",
+                                    serde_json::json!({"command": format!("strip effect play {id}")}),
+                                )
+                                .is_ok()
+                            {
+                                active_strip_effect = Some(id.to_string());
+                            }
+                        }
+                    }
+                }
+                current_controller_strip_effect_index = controller_strip_effects
+                    .partition_point(|cue| cue.time_ms <= current_time);
+            }
             was_playing = is_playing_now;
 
             if is_playing_now {
@@ -1318,6 +1350,18 @@ mod tests {
         assert_eq!(active_controller_strip_effect_at(&compiled, 2_249), None);
         assert_eq!(active_controller_strip_effect_at(&compiled, 2_250), Some("police"));
         assert_eq!(active_controller_strip_effect_at(&compiled, 7_250), None);
+
+        let overlap = vec![
+            CompiledControllerStripEffect { time_ms: 0, id: "police".to_string(), start: true },
+            CompiledControllerStripEffect { time_ms: 50, id: "white-thunder".to_string(), start: true },
+            CompiledControllerStripEffect { time_ms: 100, id: "police".to_string(), start: false },
+            CompiledControllerStripEffect { time_ms: 150, id: "white-thunder".to_string(), start: false },
+        ];
+        assert_eq!(
+            active_controller_strip_effect_at(&overlap, 100),
+            Some("white-thunder")
+        );
+        assert_eq!(active_controller_strip_effect_at(&overlap, 150), None);
     }
 
     #[test]
