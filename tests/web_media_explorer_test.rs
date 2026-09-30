@@ -42,6 +42,25 @@ fn test_web_command_aliases_and_browsing() {
         panic!("Expected Open command, got {:?}", received);
     }
 
+    // Remote URLs, including live protocols, travel through the same API
+    // command without being coerced into filesystem paths.
+    let live_payload = r#"{"command":"open","target":"rtsp://camera.invalid/live"}"#;
+    let mut live_stream = std::net::TcpStream::connect("127.0.0.1:18080")
+        .expect("Failed to connect to web server");
+    let live_request = format!(
+        "POST /api/player/command HTTP/1.1\r\nHost: 127.0.0.1:18080\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        live_payload.len(),
+        live_payload
+    );
+    live_stream.write_all(live_request.as_bytes()).unwrap();
+    let mut live_response = String::new();
+    live_stream.read_to_string(&mut live_response).unwrap();
+    assert!(live_response.contains("200 OK"));
+    assert!(matches!(
+        cmd_rx.recv_timeout(Duration::from_secs(1)),
+        Ok(InteropCommand::Open { target }) if target == "rtsp://camera.invalid/live"
+    ));
+
     // 2. Test set_volume with level
     let mut stream2 = std::net::TcpStream::connect("127.0.0.1:18080").expect("Failed to connect to web server");
     let payload2 = r#"{"command":"set_volume","level":75.0}"#;

@@ -84,17 +84,15 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             ui.label(app.tr("No recent media"));
                         } else {
                             for path in app.recent_media.clone() {
-                                let file_name = path
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or("Unknown");
+                                let target = path.to_string_lossy();
+                                let label = crate::media::media_target_label(&target);
                                 if ui
-                                    .button(app.display_text(file_name))
-                                    .on_hover_text(path.display().to_string())
+                                    .button(app.display_text(&label))
+                                    .on_hover_text(crate::media::redact_media_target(&target))
                                     .clicked()
                                 {
                                     ui.close();
-                                    app.load_video_file(path);
+                                    app.load_media_target(&target);
                                 }
                             }
                             ui.separator();
@@ -142,7 +140,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                     ui.separator();
 
-                    let save_enabled = app.current_video_path.is_some();
+                    let save_enabled = app.current_video_path.as_ref().is_some_and(|path| {
+                        !crate::media::is_remote_media_target(&path.to_string_lossy())
+                    });
                     let save_btn = egui::Button::new(app.tr("Save Timeline (Sidecar)"));
                     if ui.add_enabled(save_enabled, save_btn).clicked() {
                         ui.close();

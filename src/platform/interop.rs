@@ -128,6 +128,14 @@ pub struct PlayerStatusResponse {
     pub duration: f64,
     pub current_video: Option<String>,
     #[serde(default)]
+    pub seekable: bool,
+    #[serde(default)]
+    pub live: bool,
+    #[serde(default)]
+    pub buffered_until: Option<f64>,
+    #[serde(default)]
+    pub buffering_percent: Option<f64>,
+    #[serde(default)]
     pub fullscreen: bool,
     #[serde(default)]
     pub workspace: String,
@@ -982,6 +990,13 @@ mod tests {
             panic!("Expected Open command with aliases");
         }
 
+        let live_json = r#"{"command":"open","target":"rtsp://camera.invalid/live"}"#;
+        let cmd: InteropCommand = serde_json::from_str(live_json).unwrap();
+        assert!(matches!(
+            cmd,
+            InteropCommand::Open { target } if target == "rtsp://camera.invalid/live"
+        ));
+
         let vol_alias_json = r#"{"command":"volume","level":45.0}"#;
         let cmd: InteropCommand = serde_json::from_str(vol_alias_json).unwrap();
         if let InteropCommand::SetVolume { value } = cmd {
@@ -1144,6 +1159,15 @@ mod tests {
         ));
         assert!(json_rpc_result(&request.id, serde_json::json!({"ok":true}))
             .contains("\"id\":7"));
+
+        let live_request: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":8,"method":"pealayer.open","params":{"target":"rtsp://camera.invalid/live"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&live_request).unwrap(),
+            Some(InteropCommand::Open { target }) if target == "rtsp://camera.invalid/live"
+        ));
     }
 
     #[test]

@@ -224,8 +224,8 @@ Pealayer embeds a high-performance web service to control playback and view medi
 
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `GET` | `/api/player/status` | Returns JSON status: `{"status":"ok","playing":bool,"volume":f64,"playback_time":f64,"duration":f64}` |
-| `POST` | `/api/player/command` | Dispatches player commands (JSON payload) |
+| `GET` | `/api/player/status` | Returns playback state, including `duration`, `seekable`, `live`, `buffered_until`, and `buffering_percent` |
+| `POST` | `/api/player/command` | Dispatches player commands (JSON payload), including local files and remote media URLs |
 | `POST` | `/api/rpc` | JSON-RPC 2.0 methods such as `pealayer.play`, `pealayer.seek`, `pealayer.open`, and `pealayer.status` |
 | `GET` | `/healthz` | Service/API liveness for coordinators and supervisors |
 | `GET` | `/api/fs/browse?dir=<path>` | Lists directory entries, folders, video files, and metadata |
@@ -249,7 +249,18 @@ Send and receive JSON command packets in real time:
 
 // Open media file
 { "command": "open", "target": "/path/to/movie.mp4" }
+
+// Open an HTTP file, HLS manifest, or live feed (RTSP/RTMP/SRT/UDP/TCP)
+{ "command": "open", "target": "rtsp://camera.example.invalid/live" }
 ```
+
+Remote targets also appear in **Open Recent** and reopen through their original
+network protocol. Seek controls are enabled only when mpv reports the source as
+seekable; buffered remote files show their cached range on the seek bar, while
+non-seekable streams are labelled **LIVE**. URL credentials are redacted from
+visible metadata and API status, and network URLs are excluded from Windows'
+shell recent-document history. Treat saved application configuration as private
+because replayable recent targets remain local to Pealayer.
 
 ---
 
