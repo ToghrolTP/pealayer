@@ -140,8 +140,11 @@ fn draw_control_card(
     let source_id = ui.make_persistent_id(("control-name-source", control.key.as_str()));
     let relay_active = relay_id_from_control_key(&control.key)
         .is_some_and(|id| capabilities.active_relays.contains(&id));
+    let relay_id = relay_id_from_control_key(&control.key);
     let indicator_color = if relay_active {
         egui::Color32::from_rgb(52, 211, 153)
+    } else if relay_id.is_none() {
+        egui::Color32::from_rgb(56, 189, 248)
     } else {
         ui.visuals().widgets.noninteractive.fg_stroke.color.gamma_multiply(0.45)
     };
@@ -161,7 +164,7 @@ fn draw_control_card(
                     .circle_filled(indicator_rect.center(), 4.0, indicator_color);
                 indicator_response.on_hover_text(if relay_active {
                     app.tr("Board reports ON")
-                } else if relay_id_from_control_key(&control.key).is_some() {
+                } else if relay_id.is_some() {
                     app.tr("Board reports OFF")
                 } else {
                     app.tr("Live board control")
