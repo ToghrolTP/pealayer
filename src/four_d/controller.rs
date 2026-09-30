@@ -25,12 +25,48 @@ pub struct HardwareOutput {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HardwareAction {
+    pub id: String,
+    pub verb: String,
+    pub name: String,
+    pub icon: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HardwareControl {
+    pub key: String,
+    pub kind: String,
+    pub order: u16,
+    pub name: String,
+    pub default_name: String,
+    pub control: String,
+    pub icon: String,
+    pub group: String,
+    pub actions: Vec<HardwareAction>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HardwareBoardProfile {
+    pub key: String,
+    pub board_identity: String,
+    pub identity_source: String,
+    pub identity_stable: bool,
+    pub mode: String,
+    pub configured: bool,
+    pub attached: bool,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HardwareCapabilities {
     pub board_connected: bool,
     pub board_name: String,
     pub host_instance_id: String,
     pub capability_bits: u32,
     pub active_relays: std::collections::BTreeSet<u8>,
+    pub board_profile: Option<HardwareBoardProfile>,
+    pub controls: Vec<HardwareControl>,
+    pub peripheral_names: std::collections::BTreeMap<String, String>,
     pub relays: Vec<HardwareOutput>,
     pub pwm_channels: Vec<HardwareOutput>,
     pub peripherals: Vec<HardwareOutput>,
@@ -43,6 +79,12 @@ pub struct HardwareCapabilities {
     pub telemetry: HardwareTelemetry,
     pub warnings: Vec<HardwareWarning>,
     pub macros: Vec<HardwareMacro>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ControllerEndpointHealth {
+    pub reachable: bool,
+    pub board_connected: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -399,6 +441,32 @@ impl ControllerClient {
         Self::connect_with_timeouts(endpoint, timeout, timeout).is_ok()
     }
 
+    pub fn endpoint_health(endpoint: &str, timeout: Duration) -> ControllerEndpointHealth {
+        let Ok(mut client) = Self::connect_with_timeouts(endpoint, timeout, timeout) else {
+            return ControllerEndpointHealth::default();
+        };
+        let snapshot = client.call("controller.snapshot", json!({})).ok();
+        let catalog = client.call("controller.peripherals.get", json!({})).ok();
+        let transport_has_board = snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.get("connected").and_then(Value::as_bool))
+            .unwrap_or(false);
+        let profile = catalog.as_ref().and_then(|catalog| catalog.get("board_profile"));
+        let board_connected = transport_has_board
+            && profile
+                .and_then(|profile| profile.get("attached"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            && profile
+                .and_then(|profile| profile.get("configured"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+        ControllerEndpointHealth {
+            reachable: true,
+            board_connected,
+        }
+    }
+
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let (writer, reader, next_id) = match &mut self.backend {
             ControllerBackend::Embedded(host) => return host.call(method, params),
@@ -487,6 +555,71 @@ impl ControllerClient {
     }
 }
 
+/// Selects the startup endpoint without inventing hardware. A configured
+/// coordinator with a live board wins, followed by the canonical local
+/// coordinator when it owns a live board. A healthy coordinator without a
+/// board remains useful for discovery and reconnect. If none is running yet,
+/// the canonical local endpoint is returned so the engine can start the
+/// bundled host or keep retrying the external service.
+pub fn select_autoconnect_endpoint(
+    configured_endpoint: &str,
+    timeout: Duration,
+) -> Option<String> {
+    select_autoconnect_endpoint_with(
+        configured_endpoint,
+        &available_endpoints(),
+        |endpoint| ControllerClient::endpoint_health(endpoint, timeout),
+    )
+}
+
+fn select_autoconnect_endpoint_with<F>(
+    configured_endpoint: &str,
+    available: &[String],
+    mut health: F,
+) -> Option<String>
+where
+    F: FnMut(&str) -> ControllerEndpointHealth,
+{
+    let configured_endpoint = configured_endpoint.trim();
+    let configured_is_controller = is_controller_endpoint(configured_endpoint);
+    let configured = configured_is_controller.then(|| configured_endpoint.to_string());
+    let default = DEFAULT_ENDPOINT.to_string();
+
+    let configured_health = configured
+        .as_deref()
+        .map(&mut health)
+        .unwrap_or_default();
+    let default_health = if configured.as_deref() == Some(DEFAULT_ENDPOINT) {
+        configured_health
+    } else {
+        health(DEFAULT_ENDPOINT)
+    };
+
+    if configured_health.board_connected {
+        return configured;
+    }
+    if default_health.board_connected {
+        return Some(default);
+    }
+    if configured_health.reachable {
+        return configured;
+    }
+    if default_health.reachable {
+        return Some(default);
+    }
+
+    if !configured_is_controller
+        && !configured_endpoint.is_empty()
+        && available.iter().any(|candidate| candidate == configured_endpoint)
+    {
+        return Some(configured_endpoint.to_string());
+    }
+
+    // This is intentionally selected even before it is reachable: the engine
+    // owns bundled-host startup and retry behavior for the canonical endpoint.
+    Some(DEFAULT_ENDPOINT.to_string())
+}
+
 fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCapabilities {
     let board_connected = snapshot
         .get("connected")
@@ -511,6 +644,15 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
         .and_then(Value::as_u64)
         .unwrap_or(0);
     let custom_names = catalog.get("peripheral_names").and_then(Value::as_object);
+    let peripheral_names = custom_names
+        .into_iter()
+        .flat_map(|names| names.iter())
+        .filter_map(|(key, name)| {
+            name.as_str()
+                .filter(|name| !name.trim().is_empty())
+                .map(|name| (key.clone(), name.to_string()))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
 
     let mut outputs = catalog
         .get("peripherals")
@@ -551,10 +693,184 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
         .collect::<Vec<_>>();
     outputs.sort_by_key(|(_, output)| output.id);
 
+    let board_profile = catalog
+        .get("board_profile")
+        .filter(|profile| profile.is_object())
+        .map(|profile| HardwareBoardProfile {
+            key: profile
+                .get("key")
+                .or_else(|| profile.get("profile_key"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            board_identity: profile
+                .get("board_identity")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            identity_source: profile
+                .get("identity_source")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            identity_stable: profile
+                .get("identity_stable")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            mode: profile
+                .get("mode")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            configured: profile
+                .get("configured")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            attached: profile
+                .get("attached")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            revision: profile
+                .get("revision")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        });
+    let default_names = catalog
+        .get("peripherals")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            Some((
+                entry.get("key")?.as_str()?.to_string(),
+                entry
+                    .get("default_name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            ))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let has_control_catalog = catalog.get("controls").and_then(Value::as_array).is_some();
+    let mut controls = catalog
+        .get("controls")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let key = entry.get("key")?.as_str()?.to_string();
+            let actions = entry
+                .get("actions")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|action| {
+                    if let Some(id) = action.as_str() {
+                        return Some(HardwareAction {
+                            id: id.to_string(),
+                            verb: id.rsplit('.').next().unwrap_or(id).to_string(),
+                            name: id.rsplit('.').next().unwrap_or(id).to_string(),
+                            icon: String::new(),
+                        });
+                    }
+                    let id = action
+                        .get("id")
+                        .or_else(|| action.get("action_id"))
+                        .and_then(Value::as_str)?
+                        .to_string();
+                    Some(HardwareAction {
+                        verb: action
+                            .get("verb")
+                            .and_then(Value::as_str)
+                            .unwrap_or_else(|| id.rsplit('.').next().unwrap_or(&id))
+                            .to_string(),
+                        name: action
+                            .get("name")
+                            .or_else(|| action.get("label"))
+                            .or_else(|| action.get("verb"))
+                            .and_then(Value::as_str)
+                            .unwrap_or_else(|| id.rsplit('.').next().unwrap_or(&id))
+                            .to_string(),
+                        icon: action
+                            .get("icon")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        id,
+                    })
+                })
+                .collect();
+            Some(HardwareControl {
+                kind: entry
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                order: entry
+                    .get("order")
+                    .and_then(Value::as_u64)
+                    .and_then(|order| u16::try_from(order).ok())
+                    .unwrap_or(0),
+                name: entry
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .or_else(|| peripheral_names.get(&key).map(String::as_str))
+                    .or_else(|| default_names.get(&key).map(String::as_str))
+                    .unwrap_or(&key)
+                    .to_string(),
+                default_name: entry
+                    .get("default_name")
+                    .and_then(Value::as_str)
+                    .or_else(|| default_names.get(&key).map(String::as_str))
+                    .unwrap_or_default()
+                    .to_string(),
+                control: entry
+                    .get("control")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                icon: entry
+                    .get("icon")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                group: entry
+                    .get("group")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                actions,
+                key,
+            })
+        })
+        .collect::<Vec<_>>();
+    controls.sort_by(|left, right| {
+        left.order
+            .cmp(&right.order)
+            .then_with(|| left.key.cmp(&right.key))
+    });
+
+    let relay_control_keys = controls
+        .iter()
+        .filter(|control| control.kind == "relay")
+        .map(|control| control.key.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let pwm_control_keys = controls
+        .iter()
+        .filter(|control| control.kind == "mosfet")
+        .map(|control| control.key.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+
     let relays = if board_connected && capability_bits & CAPABILITY_RELAY_MOTION != 0 {
         outputs
             .iter()
-            .filter(|(kind, output)| kind == "relay" && output.control == "relay" && output.id != 0)
+            .filter(|(kind, output)| {
+                kind == "relay"
+                    && output.control == "relay"
+                    && output.id != 0
+                    && (!has_control_catalog || relay_control_keys.contains(output.key.as_str()))
+            })
             .map(|(_, output)| output.clone())
             .collect()
     } else {
@@ -563,7 +879,11 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
     let pwm_channels = if board_connected && capability_bits & CAPABILITY_PWM != 0 {
         outputs
             .iter()
-            .filter(|(kind, output)| kind == "pwm" && output.control == "pwm-user")
+            .filter(|(kind, output)| {
+                kind == "pwm"
+                    && output.control == "pwm-user"
+                    && (!has_control_catalog || pwm_control_keys.contains(output.key.as_str()))
+            })
             .map(|(_, output)| output.clone())
             .collect()
     } else {
@@ -679,6 +999,9 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
         host_instance_id,
         capability_bits,
         active_relays,
+        board_profile,
+        controls,
+        peripheral_names,
         relays,
         pwm_channels,
         peripherals,
@@ -765,6 +1088,85 @@ mod tests {
                 .iter()
                 .skip(1)
                 .all(|endpoint| endpoint.starts_with("direct:") && endpoint.len() > 7)
+        );
+    }
+
+    #[test]
+    fn autoconnect_prefers_an_attached_board_then_the_canonical_fallback() {
+        let selected = select_autoconnect_endpoint_with(
+            "pccontroller://cafe-pc.local:8787",
+            &[DEFAULT_ENDPOINT.to_string()],
+            |endpoint| match endpoint {
+                "pccontroller://cafe-pc.local:8787" => ControllerEndpointHealth {
+                    reachable: true,
+                    board_connected: false,
+                },
+                DEFAULT_ENDPOINT => ControllerEndpointHealth {
+                    reachable: true,
+                    board_connected: true,
+                },
+                _ => ControllerEndpointHealth::default(),
+            },
+        );
+        assert_eq!(selected.as_deref(), Some(DEFAULT_ENDPOINT));
+
+        let selected = select_autoconnect_endpoint_with(
+            "pccontroller://cafe-pc.local:8787",
+            &[],
+            |_| ControllerEndpointHealth::default(),
+        );
+        assert_eq!(selected.as_deref(), Some(DEFAULT_ENDPOINT));
+    }
+
+    #[test]
+    fn parses_stable_profile_controls_actions_and_mutable_presentation() {
+        let snapshot = json!({
+            "connected": true,
+            "hello": {"name": "Cinema controller", "capabilities": CAPABILITY_RELAY_MOTION}
+        });
+        let catalog = json!({
+            "board_profile": {
+                "key": "cinema-seat-v1",
+                "board_identity": "board-42",
+                "identity_source": "hardware",
+                "identity_stable": true,
+                "mode": "cinema-seat-motion",
+                "configured": true,
+                "attached": true,
+                "revision": "profile-7"
+            },
+            "peripheral_names": {"seat.a": "Left pair"},
+            "peripherals": [{
+                "key": "seat.a", "kind": "motion", "role": "motion-side",
+                "index": 1, "default_name": "Side A motion", "control": "motion"
+            }],
+            "controls": [{
+                "key": "seat.a", "kind": "side", "order": 1,
+                "name": "Left pair", "control": "motion", "icon": "seat",
+                "group": "auditorium-a",
+                "actions": [
+                    {"id": "seat.a.up", "verb": "up", "name": "Up", "icon": "arrow-up"},
+                    "seat.a.stop"
+                ]
+            }]
+        });
+
+        let capabilities = parse_hardware_capabilities(&snapshot, &catalog);
+        assert_eq!(
+            capabilities.board_profile.as_ref().map(|profile| profile.key.as_str()),
+            Some("cinema-seat-v1")
+        );
+        assert_eq!(capabilities.peripheral_names["seat.a"], "Left pair");
+        assert_eq!(capabilities.controls.len(), 1);
+        let control = &capabilities.controls[0];
+        assert_eq!(control.key, "seat.a");
+        assert_eq!(control.default_name, "Side A motion");
+        assert_eq!(control.icon, "seat");
+        assert_eq!(control.group, "auditorium-a");
+        assert_eq!(control.actions[0].verb, "up");
+        assert_eq!(
+            control.actions.iter().map(|action| action.id.as_str()).collect::<Vec<_>>(),
+            vec!["seat.a.up", "seat.a.stop"]
         );
     }
 

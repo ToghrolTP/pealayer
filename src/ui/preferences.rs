@@ -131,7 +131,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 2 => {
                     ui.heading(app.tr("PCController and hardware"));
                     let reconnect_label =
-                        app.tr("Reconnect the last healthy hardware endpoint on startup");
+                        app.tr("Discover and connect to PCController on startup");
                     changed |= ui
                         .checkbox(
                             &mut app.auto_connect_hardware,

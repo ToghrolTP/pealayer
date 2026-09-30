@@ -457,27 +457,11 @@ fn main() -> eframe::Result {
 
             if app.auto_connect_hardware {
                 let configured_endpoint = app.serial_port.clone();
-                let selected_endpoint = if crate::four_d::controller::is_controller_endpoint(
-                    &configured_endpoint,
-                ) && crate::four_d::controller::ControllerClient::is_reachable(
-                    &configured_endpoint,
-                    std::time::Duration::from_millis(250),
-                ) {
-                    Some(configured_endpoint)
-                } else if !crate::four_d::controller::is_controller_endpoint(&configured_endpoint)
-                    && crate::four_d::controller::available_endpoints()
-                        .iter()
-                        .any(|candidate| candidate == &configured_endpoint)
-                {
-                    Some(configured_endpoint)
-                } else if crate::four_d::controller::ControllerClient::is_reachable(
-                    crate::four_d::controller::DEFAULT_ENDPOINT,
-                    std::time::Duration::from_millis(250),
-                ) {
-                    Some(crate::four_d::controller::DEFAULT_ENDPOINT.to_string())
-                } else {
-                    None
-                };
+                let selected_endpoint =
+                    crate::four_d::controller::select_autoconnect_endpoint(
+                        &configured_endpoint,
+                        std::time::Duration::from_millis(250),
+                    );
                 if let Some(endpoint) = selected_endpoint {
                     app.serial_port = endpoint.clone();
                     if let Ok(mut selected) = app.engine_handle.serial_port.lock() {
