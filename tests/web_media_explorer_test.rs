@@ -17,7 +17,7 @@ fn get(port: u16, path: &str) -> String {
 #[test]
 fn test_web_command_aliases_and_browsing() {
     let ctx = eframe::egui::Context::default();
-    let (_state_tx, cmd_rx) = spawn_web_server(18080, 18081, ctx);
+    let (_state_tx, cmd_rx) = spawn_web_server(18080, ctx);
 
     std::thread::sleep(Duration::from_millis(100));
 
@@ -85,7 +85,7 @@ fn test_web_command_aliases_and_browsing() {
 #[test]
 fn test_web_fs_browse_endpoint() {
     let ctx = eframe::egui::Context::default();
-    let (_state_tx, _cmd_rx) = spawn_web_server(18082, 18083, ctx);
+    let (_state_tx, _cmd_rx) = spawn_web_server(18082, ctx);
 
     std::thread::sleep(Duration::from_millis(100));
 
@@ -104,11 +104,9 @@ fn status_is_unknown_until_first_authoritative_snapshot() {
     let ctx = eframe::egui::Context::default();
     let (_state_tx, _cmd_rx) = pealayer::server::spawn_web_server_configured(
         18084,
-        18085,
         ctx,
         pealayer::server::WebRuntimeConfig::production(
             "Workshop Player".to_string(),
-            18085,
             "fa".to_string(),
             "rtl".to_string(),
             "dark".to_string(),
@@ -124,6 +122,43 @@ fn status_is_unknown_until_first_authoritative_snapshot() {
     let runtime = get(18084, "/api/runtime/config");
     assert!(runtime.contains("200 OK"));
     assert!(runtime.contains("Workshop Player"));
-    assert!(runtime.contains("\"wsPort\":18085"));
+    assert!(runtime.contains("\"websocketPath\":\"/ws\""));
     assert!(runtime.contains("\"direction\":\"rtl\""));
+}
+
+#[test]
+fn http_websocket_and_ipc_share_one_port() {
+    let ctx = eframe::egui::Context::default();
+    let (_state_tx, cmd_rx) = spawn_web_server(18086, ctx);
+    std::thread::sleep(Duration::from_millis(100));
+
+    let health = get(18086, "/healthz");
+    assert!(health.contains("200 OK"));
+    assert!(health.contains("\"transport\":\"unified\""));
+
+    let (mut websocket, _) = tungstenite::connect("ws://127.0.0.1:18086/ws")
+        .expect("WebSocket must upgrade on the unified port");
+    websocket
+        .send(tungstenite::Message::Text(r#"{"command":"play"}"#.into()))
+        .unwrap();
+    assert!(matches!(
+        cmd_rx.recv_timeout(Duration::from_secs(1)),
+        Ok(InteropCommand::Play)
+    ));
+
+    let payload = r#"{"command":"pause"}"#;
+    let mut ipc = std::net::TcpStream::connect("127.0.0.1:18086").unwrap();
+    let request = format!(
+        "POST /api/ipc HTTP/1.1\r\nHost: 127.0.0.1:18086\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        payload.len(), payload
+    );
+    ipc.write_all(request.as_bytes()).unwrap();
+    let mut response = String::new();
+    ipc.read_to_string(&mut response).unwrap();
+    assert!(response.contains("200 OK"));
+    assert!(response.contains("\"status\":\"accepted\""));
+    assert!(matches!(
+        cmd_rx.recv_timeout(Duration::from_secs(1)),
+        Ok(InteropCommand::Pause)
+    ));
 }

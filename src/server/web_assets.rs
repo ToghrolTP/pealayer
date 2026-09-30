@@ -244,7 +244,7 @@ pub const INDEX_HTML: &str = r#"<!DOCTYPE html>
         setTimeout(initWS, 3000);
         return;
       }
-      const wsUrl = `${proto}//${location.hostname}:${runtime.wsPort}`;
+      const wsUrl = `${proto}//${location.host}${runtime.websocketPath}`;
       
       try {
         ws = new WebSocket(wsUrl);

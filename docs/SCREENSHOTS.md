@@ -22,8 +22,8 @@ reads `ProductName` from the executable's Win32 version resource.
 
 The script launches isolated English and Persian processes, captures each
 app-owned native window at its initialized dimensions, and terminates only the
-process it created. Each launch uses an isolated settings file and dedicated HTTP,
-WebSocket, and loopback IPC ports, so it never stops, forwards into, or replaces
+process it created. Each launch uses an isolated settings file and dedicated
+unified control port, so it never stops, forwards into, or replaces
 an installed Pealayer instance. The updater tries
 `PrintWindow(PW_RENDERFULLCONTENT)` first, detects the blank frame produced by
 some OpenGL drivers, and then tries the target window's composed device context

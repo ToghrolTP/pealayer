@@ -364,6 +364,11 @@ pub fn runtime_port(env_name: &str, default: u16) -> u16 {
         .unwrap_or(default)
 }
 
+/// The single TCP port used by Pealayer's HTTP, WebSocket, and local IPC APIs.
+pub fn control_port() -> u16 {
+    runtime_port("PEALAYER_PORT", 8080)
+}
+
 impl AppConfig {
     pub fn get_config_path() -> PathBuf {
         if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {

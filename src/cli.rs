@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
@@ -92,20 +92,9 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
 }
 
 pub fn send_remote_command(cmd_str: &str) -> Result<String, String> {
-    let address = format!(
-        "127.0.0.1:{}",
-        crate::config::runtime_port("PEALAYER_IPC_PORT", 8082)
-    );
-    let mut stream = TcpStream::connect_timeout(
-        &address.parse().unwrap(),
-        Duration::from_millis(500),
-    ).map_err(|e| format!("Could not connect to the player instance at {address}: {e}"))?;
-
-    stream.set_read_timeout(Some(Duration::from_secs(2))).map_err(|e| e.to_string())?;
-
     let trimmed = cmd_str.trim();
     let payload = if trimmed.starts_with('{') {
-        trimmed.to_string() + "\n"
+        trimmed.to_string()
     } else {
         let lower = trimmed.to_lowercase();
         match lower.as_str() {
@@ -136,17 +125,10 @@ pub fn send_remote_command(cmd_str: &str) -> Result<String, String> {
             }
             _ => serde_json::json!({
                 "command": trimmed
-            }).to_string() + "\n",
+            }).to_string(),
         }
     };
-
-    stream.write_all(payload.as_bytes()).map_err(|e| e.to_string())?;
-    stream.flush().map_err(|e| e.to_string())?;
-
-    let mut reader = BufReader::new(stream);
-    let mut response = String::new();
-    reader.read_line(&mut response).map_err(|e| e.to_string())?;
-    Ok(response.trim().to_string())
+    send_control_request(&payload, Duration::from_secs(2))
 }
 
 pub fn launch_request(options: &CliOptions) -> LaunchRequest {
@@ -184,29 +166,44 @@ pub fn try_forward_launch_request(request: &LaunchRequest) -> bool {
         request: request.clone(),
     };
     let payload = match serde_json::to_string(&command) {
-        Ok(payload) => payload + "\n",
+        Ok(payload) => payload,
         Err(_) => return false,
     };
-    let address = format!(
-        "127.0.0.1:{}",
-        crate::config::runtime_port("PEALAYER_IPC_PORT", 8082)
+    send_control_request(&payload, Duration::from_millis(500))
+        .is_ok_and(|response| response.contains("\"status\":\"accepted\""))
+}
+
+fn send_control_request(payload: &str, timeout: Duration) -> Result<String, String> {
+    let address = format!("127.0.0.1:{}", crate::config::control_port());
+    let socket_address = address
+        .parse()
+        .map_err(|error| format!("invalid control address: {error}"))?;
+    let mut stream = TcpStream::connect_timeout(&socket_address, Duration::from_millis(500))
+        .map_err(|error| format!("Could not connect to the player instance at {address}: {error}"))?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|error| error.to_string())?;
+
+    let request = format!(
+        "POST /api/ipc HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+        payload.len()
     );
-    if let Ok(mut stream) = TcpStream::connect_timeout(
-        &address.parse().unwrap(),
-        Duration::from_millis(200),
-    ) {
-        let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-        if stream.write_all(payload.as_bytes()).is_ok() && stream.flush().is_ok() {
-            let mut reader = BufReader::new(stream);
-            let mut line = String::new();
-            if reader.read_line(&mut line).is_ok()
-                && line.contains("\"status\":\"accepted\"")
-            {
-                return true;
-            }
-        }
+    stream
+        .write_all(request.as_bytes())
+        .and_then(|_| stream.flush())
+        .map_err(|error| error.to_string())?;
+
+    let mut response = String::new();
+    BufReader::new(stream)
+        .read_to_string(&mut response)
+        .map_err(|error| error.to_string())?;
+    let (headers, body) = response
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| "invalid HTTP response from Pealayer control endpoint".to_string())?;
+    if !headers.starts_with("HTTP/1.1 200") {
+        return Err(format!("Pealayer control endpoint rejected request: {headers}"));
     }
-    false
+    Ok(body.trim().to_string())
 }
 
 #[cfg(test)]
