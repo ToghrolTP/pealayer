@@ -130,6 +130,7 @@ pub struct PealayerApp {
     pub(crate) app_publisher: Option<String>,
     pub(crate) app_copyright: Option<String>,
     pub(crate) last_window_title: String,
+    pub(crate) window_geometry: Option<crate::config::WindowGeometry>,
     pub(crate) language_preference: crate::config::AppLanguage,
     pub(crate) language: crate::config::AppLanguage,
     pub(crate) direction_preference: crate::config::AppDirection,
@@ -241,6 +242,9 @@ pub struct PealayerApp {
     pub(crate) fullscreen_video_background: crate::config::VideoBackground,
     pub(crate) motion_control_mode: crate::config::MotionControlMode,
     pub(crate) compact_hardware_controls: bool,
+    pub(crate) windows_mica_backdrop: bool,
+    pub(crate) windows_dwm_theming: bool,
+    pub(crate) opengl_vsync: bool,
     pub(crate) status_bar: crate::config::StatusBarConfig,
     pub(crate) config_fingerprint: Option<u64>,
     pub(crate) last_config_poll: std::time::Instant,
@@ -352,7 +356,22 @@ impl eframe::App for PealayerApp {
         // A fullscreen request can be observed in this same frame; preserving
         // the already-staged workspace prevents that observation from replacing
         // an NLE restore target with the forced Simple workspace.
-        let is_fullscreen = ui.input(|input| input.viewport().fullscreen.unwrap_or(false));
+        let viewport = ui.input(|input| input.viewport().clone());
+        let is_fullscreen = viewport.fullscreen.unwrap_or(false);
+        if !is_fullscreen && !viewport.minimized.unwrap_or(false) {
+            if let (Some(inner), Some(outer)) = (viewport.inner_rect, viewport.outer_rect) {
+                let geometry = crate::config::WindowGeometry {
+                    x: outer.min.x,
+                    y: outer.min.y,
+                    width: inner.width(),
+                    height: inner.height(),
+                    maximized: viewport.maximized.unwrap_or(false),
+                };
+                if geometry.is_valid() {
+                    self.window_geometry = Some(geometry);
+                }
+            }
+        }
         self.observe_fullscreen_state(is_fullscreen);
 
         // Broadcast state JSON to Web-UI clients (throttled to 10Hz to save CPU / network spam)
@@ -540,9 +559,9 @@ impl eframe::App for PealayerApp {
         self.is_connected = connected_now;
         self.was_hardware_connected = connected_now;
         self.was_board_connected = board_connected_now;
-        if connected_now {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
-        }
+        // Controller/WebSocket callbacks already request repaint on real state
+        // changes. Do not keep the opaque OpenGL window on a synthetic timer:
+        // that needlessly recomposes the entire UI and can present as flicker.
         let connection_requested = self
             .engine_handle
             .connection_requested
@@ -834,30 +853,34 @@ impl eframe::App for PealayerApp {
                 if self.show_open_url_dialog {
                     let mut open_url = false;
                     let mut close_dialog = false;
+                    let bounds = ui.ctx().content_rect().shrink(20.0);
+                    let max_size = egui::vec2(bounds.width().min(520.0), bounds.height().min(260.0));
 
                     egui::Window::new(format!(
                         "{} {}",
                         crate::ui::icons::ARROW_SQUARE_OUT,
                         self.tr("Open Location / URL")
                     ))
+                    .id(egui::Id::new("open_location_dialog_bounded_v2"))
                     .collapsible(false)
-                    .resizable(false)
+                    .resizable(true)
+                    .default_size([max_size.x.min(480.0), max_size.y.min(210.0)])
+                    .min_size([max_size.x.min(340.0), max_size.y.min(170.0)])
+                    .max_size(max_size)
+                    .constrain_to(bounds)
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .show(ui.ctx(), |ui| {
                         ui.with_layout(crate::ui::i18n::vertical_layout(self.rtl), |ui| {
-                            ui.label(
+                            ui.add(egui::Label::new(
                                 self.tr(
                                     "Enter a media URL (HTTP/HTTPS, HLS, RTSP, RTMP, SRT, UDP, or TCP):",
-                                ),
-                            );
+                                )).wrap());
                             ui.add_space(6.0);
 
-                            ui.with_layout(
-                                crate::ui::i18n::layout(self.rtl, egui::Align::Center),
-                                |ui| {
+                            crate::ui::dialog::compact_row(ui, self.rtl, |ui| {
                                     let text_edit = ui.add(
                                         egui::TextEdit::singleline(&mut self.url_input_buffer)
-                                            .desired_width(340.0)
+                                            .desired_width((ui.available_width() - 90.0).max(180.0))
                                             .hint_text("https://..."),
                                     );
                                     if text_edit.lost_focus()
@@ -883,21 +906,17 @@ impl eframe::App for PealayerApp {
                                             self.url_input_buffer = text;
                                         }
                                     }
-                                },
-                            );
+                                });
 
                             ui.add_space(10.0);
-                            ui.with_layout(
-                                crate::ui::i18n::layout(self.rtl, egui::Align::Center),
-                                |ui| {
-                                    if ui.button(self.tr("Open")).clicked() {
+                            crate::ui::dialog::compact_row(ui, self.rtl, |ui| {
+                                    if ui.button(format!("{} {}", crate::ui::icons::ARROW_SQUARE_OUT, self.tr("Open"))).clicked() {
                                         open_url = true;
                                     }
-                                    if ui.button(self.tr("Cancel")).clicked() {
+                                    if ui.button(format!("{} {}", crate::ui::icons::X, self.tr("Cancel"))).clicked() {
                                         close_dialog = true;
                                     }
-                                },
-                            );
+                                });
                         });
                     });
 
@@ -913,21 +932,29 @@ impl eframe::App for PealayerApp {
 
                 if self.show_shortcuts_dialog {
                     let language = self.language;
+                    let bounds = ui.ctx().content_rect().shrink(20.0);
+                    let max_size = egui::vec2(bounds.width().min(600.0), bounds.height().min(520.0));
                     egui::Window::new(format!(
                         "{} {}",
                         crate::ui::icons::KEYBOARD,
                         self.tr("Keyboard Shortcuts & Controls")
                     ))
+                    .id(egui::Id::new("keyboard_shortcuts_dialog_bounded_v2"))
                     .collapsible(false)
                     .resizable(true)
-                    .default_size([460.0, 360.0])
+                    .default_size([max_size.x.min(520.0), max_size.y.min(420.0)])
+                    .min_size([max_size.x.min(360.0), max_size.y.min(280.0)])
+                    .max_size(max_size)
+                    .constrain_to(bounds)
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                     .open(&mut self.show_shortcuts_dialog)
                     .show(ui.ctx(), |ui| {
+                      crate::ui::dialog::scroll_column(ui, "shortcuts_content_v2", None, |ui| {
                         egui::Grid::new("shortcuts_grid")
                             .striped(true)
                             .spacing([20.0, 8.0])
                             .show(ui, |ui| {
+                                ui.label("");
                                 ui.label(
                                     egui::RichText::new(crate::ui::i18n::tr(language, "Shortcut"))
                                         .strong(),
@@ -937,59 +964,27 @@ impl eframe::App for PealayerApp {
                                         .strong(),
                                 );
                                 ui.end_row();
-
-                                ui.label("Space");
-                                ui.label(crate::ui::i18n::tr(language, "Play / Pause video"));
-                                ui.end_row();
-                                ui.label("F");
-                                ui.label(crate::ui::i18n::tr(language, "Toggle Fullscreen mode"));
-                                ui.end_row();
-                                ui.label("M");
-                                ui.label(crate::ui::i18n::tr(language, "Toggle Audio Mute"));
-                                ui.end_row();
-                                ui.label("← / →");
-                                ui.label(crate::ui::i18n::tr(language, "Seek -5s / +5s"));
-                                ui.end_row();
-                                ui.label("↑ / ↓");
-                                ui.label(crate::ui::i18n::tr(language, "Volume -5% / +5%"));
-                                ui.end_row();
-                                ui.label(".  or  ]");
-                                ui.label(crate::ui::i18n::tr(
-                                    language,
-                                    "Frame Step Forward (+1 frame)",
-                                ));
-                                ui.end_row();
-                                ui.label(",  or  [");
-                                ui.label(crate::ui::i18n::tr(
-                                    language,
-                                    "Frame Step Backward (-1 frame)",
-                                ));
-                                ui.end_row();
-                                ui.label("Mouse Wheel");
-                                ui.label(crate::ui::i18n::tr(
-                                    language,
-                                    "Adjust Volume on player/bar",
-                                ));
-                                ui.end_row();
-                                ui.label("Shift + Mouse Wheel");
-                                ui.label(crate::ui::i18n::tr(language, "Seek forward / backward"));
-                                ui.end_row();
-                                ui.label("Double Click");
-                                ui.label(crate::ui::i18n::tr(
-                                    language,
-                                    "Toggle Fullscreen / Open Video",
-                                ));
-                                ui.end_row();
-                                ui.label("Right Click");
-                                ui.label(crate::ui::i18n::tr(language, "Open Player Context Menu"));
-                                ui.end_row();
-                                ui.label("Drag & Drop");
-                                ui.label(crate::ui::i18n::tr(
-                                    language,
-                                    "Drop media file onto window to play",
-                                ));
-                                ui.end_row();
+                                for (icon, shortcut, action) in [
+                                    (crate::ui::icons::PLAY, "Space", "Play / Pause video"),
+                                    (crate::ui::icons::ARROWS_OUT, "F", "Toggle Fullscreen mode"),
+                                    (crate::ui::icons::SPEAKER_HIGH, "M", "Toggle Audio Mute"),
+                                    (crate::ui::icons::ARROW_COUNTER_CLOCKWISE, "← / →", "Seek -5s / +5s"),
+                                    (crate::ui::icons::SPEAKER_HIGH, "↑ / ↓", "Volume -5% / +5%"),
+                                    (crate::ui::icons::ARROW_DOWN, ".  or  ]", "Frame Step Forward (+1 frame)"),
+                                    (crate::ui::icons::ARROW_UP, ",  or  [", "Frame Step Backward (-1 frame)"),
+                                    (crate::ui::icons::SLIDERS_HORIZONTAL, "Mouse Wheel", "Adjust Volume on player/bar"),
+                                    (crate::ui::icons::CLOCK_COUNTER_CLOCKWISE, "Shift + Mouse Wheel", "Seek forward / backward"),
+                                    (crate::ui::icons::ARROWS_OUT, "Double Click", "Toggle Fullscreen / Open Video"),
+                                    (crate::ui::icons::LIST_CHECKS, "Right Click", "Open Player Context Menu"),
+                                    (crate::ui::icons::FILE_VIDEO, "Drag & Drop", "Drop media file onto window to play"),
+                                ] {
+                                    ui.label(icon);
+                                    ui.label(shortcut);
+                                    ui.add(egui::Label::new(crate::ui::i18n::tr(language, action)).wrap());
+                                    ui.end_row();
+                                }
                             });
+                      });
                     });
                 }
 
@@ -2095,7 +2090,11 @@ impl PealayerApp {
         cfg.fullscreen_video_background = self.fullscreen_video_background;
         cfg.motion_control_mode = self.motion_control_mode;
         cfg.compact_hardware_controls = self.compact_hardware_controls;
+        cfg.windows_mica_backdrop = self.windows_mica_backdrop;
+        cfg.windows_dwm_theming = self.windows_dwm_theming;
+        cfg.opengl_vsync = self.opengl_vsync;
         cfg.status_bar = self.status_bar;
+        cfg.window_geometry = self.window_geometry;
         let mut dock_state = self.dock_state.clone();
         crate::ui::layout::sanitize_dock_rects(&mut dock_state);
         if let Ok(json) = serde_json::to_string(&dock_state) {
@@ -2163,7 +2162,14 @@ impl PealayerApp {
         self.fullscreen_video_background = config.fullscreen_video_background;
         self.motion_control_mode = config.motion_control_mode;
         self.compact_hardware_controls = config.compact_hardware_controls;
+        self.windows_mica_backdrop = config.windows_mica_backdrop;
+        self.windows_dwm_theming = config.windows_dwm_theming;
+        self.opengl_vsync = config.opengl_vsync;
         self.status_bar = config.status_bar;
+        crate::platform::windows::configure_window_composition(
+            self.windows_dwm_theming,
+            self.windows_mica_backdrop,
+        );
         if let Some(layout_json) = config.workspace_dock_layout.as_deref()
             && let Ok(mut dock_state) = serde_json::from_str::<
                 egui_dock::DockState<crate::ui::layout::PealayerTab>,
@@ -2516,6 +2522,7 @@ impl Default for PealayerApp {
                 &crate::config::AppConfig::default(),
             ),
             last_window_title: String::new(),
+            window_geometry: None,
             language_preference: crate::config::AppLanguage::System,
             language: crate::config::resolve_language(crate::config::AppLanguage::System),
             direction_preference: crate::config::AppDirection::Auto,
@@ -2623,6 +2630,9 @@ impl Default for PealayerApp {
             fullscreen_video_background: crate::config::VideoBackground::Black,
             motion_control_mode: crate::config::MotionControlMode::Toggle,
             compact_hardware_controls: false,
+            windows_mica_backdrop: false,
+            windows_dwm_theming: true,
+            opengl_vsync: true,
             status_bar: crate::config::StatusBarConfig::default(),
             config_fingerprint: crate::config::AppConfig::fingerprint(
                 &crate::config::AppConfig::get_config_path(),

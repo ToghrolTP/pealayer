@@ -7,20 +7,25 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 
     let mut open = app.show_audio_settings;
+    let bounds = ui.ctx().content_rect().shrink(20.0);
+    let max_size = egui::vec2(bounds.width().min(460.0), bounds.height().min(430.0));
+    let default_size = egui::vec2(max_size.x.min(420.0), max_size.y.min(380.0));
 
     egui::Window::new(format!("{} {}", crate::ui::icons::MUSIC_NOTE, app.tr("Audio Settings")))
+        .id(egui::Id::new("audio_settings_dialog_bounded_v2"))
         .open(&mut open)
-        .collapsible(true)
+        .collapsible(false)
         .resizable(true)
-        .default_size([420.0, 320.0])
+        .default_size(default_size)
+        .min_size([340.0_f32.min(max_size.x), 260.0_f32.min(max_size.y)])
+        .max_size(max_size)
+        .constrain_to(bounds)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ui.ctx(), |ui| {
-          ui.with_layout(crate::ui::i18n::vertical_layout(app.rtl), |ui| {
+          crate::ui::dialog::scroll_column(ui, "audio_settings_body_v2", None, |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
 
-            // Track Selection
-            ui.with_layout(crate::ui::i18n::layout(app.rtl, egui::Align::Center), |ui| {
-                ui.label(app.tr("Track:"));
+            crate::ui::dialog::section(ui, crate::ui::icons::MUSIC_NOTE, &app.tr("Track"), |ui| {
                 let current_label = if app.current_aid == "no" {
                     app.tr("None").to_string()
                 } else {
@@ -46,6 +51,8 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 let none_label = app.tr("None");
                 egui::ComboBox::from_id_salt("audio_track_combo")
                     .selected_text(current_label)
+                    .width((ui.available_width() - 4.0).clamp(140.0, 240.0))
+                    .height(200.0)
                     .show_ui(ui, |ui| {
                         if ui
                             .selectable_value(&mut app.current_aid, "no".to_string(), none_label)
@@ -78,12 +85,10 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         }
                     });
             });
+            ui.add_space(8.0);
 
-            ui.separator();
-
-            // Synchronization
-            ui.label(app.tr("Synchronization"));
-            ui.with_layout(crate::ui::i18n::layout(app.rtl, egui::Align::Center), |ui| {
+            crate::ui::dialog::section(ui, crate::ui::icons::CLOCK_COUNTER_CLOCKWISE, &app.tr("Synchronization"), |ui| {
+              crate::ui::dialog::compact_row(ui, app.rtl, |ui| {
                 ui.label(app.tr("Delay (s):"));
                 let mut delay = app.audio_delay;
                 if ui
@@ -97,16 +102,16 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     app.audio_delay = delay;
                     let _ = app.mpv.set_property("audio-delay", delay);
                 }
-                if ui.button(app.tr("Reset")).clicked() {
+                if ui.button(format!("{} {}", crate::ui::icons::ARROW_COUNTER_CLOCKWISE, app.tr("Reset"))).clicked() {
                     app.audio_delay = 0.0;
                     let _ = app.mpv.set_property("audio-delay", 0.0);
                 }
+              });
             });
-
-            ui.separator();
+            ui.add_space(8.0);
 
             // Load External
-            if ui.button(app.tr("Load External Audio...")).clicked() {
+            if ui.button(format!("{} {}", crate::ui::icons::FOLDER_OPEN, app.tr("Load External Audio..."))).clicked() {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("Audio Files", &["mp3", "flac", "wav", "m4a", "aac", "ogg"])
                     .pick_file()

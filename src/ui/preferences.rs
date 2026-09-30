@@ -18,17 +18,19 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
     let mut open = app.show_preferences_dialog;
     let bounds = ui.ctx().content_rect().shrink(18.0);
-    let default_size = egui::vec2(bounds.width().min(540.0), bounds.height().min(470.0));
-    let min_size = egui::vec2(bounds.width().min(390.0), bounds.height().min(330.0));
+    let max_size = egui::vec2(bounds.width().min(700.0), bounds.height().min(620.0));
+    let default_size = egui::vec2(max_size.x.min(620.0), max_size.y.min(520.0));
+    let min_size = egui::vec2(max_size.x.min(390.0), max_size.y.min(330.0));
     egui::Window::new(format!(
         "{} {}",
         crate::ui::icons::GEAR,
         app.tr("Preferences")
     ))
+    .id(egui::Id::new("preferences_dialog_bounded_v2"))
     .open(&mut open)
     .default_size(default_size)
     .min_size(min_size)
-    .max_size(bounds.size())
+    .max_size(max_size)
     .constrain_to(bounds)
     .resizable(true)
     .collapsible(false)
@@ -81,10 +83,7 @@ fn draw_tabs(app: &mut PealayerApp, ui: &mut egui::Ui, compact: bool) {
 
 fn draw_preferences_content(app: &mut PealayerApp, ui: &mut egui::Ui, changed: &mut bool) {
     let detail_width = ui.available_width();
-    egui::ScrollArea::vertical()
-        .id_salt("preferences_content")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
+    crate::ui::dialog::scroll_column(ui, "preferences_content_v2", None, |ui| {
             ui.set_max_width((detail_width - 8.0).max(180.0));
             ui.spacing_mut().item_spacing.y = 8.0;
             match app.preferences_tab {
@@ -350,6 +349,38 @@ fn input_preferences(app: &mut PealayerApp, ui: &mut egui::Ui, changed: &mut boo
 
 fn advanced_preferences(app: &mut PealayerApp, ui: &mut egui::Ui) {
     ui.heading(app.tr("Configuration"));
+    preference_section(
+        ui,
+        crate::ui::icons::APP_WINDOW,
+        &app.tr("Windows graphics and composition"),
+        |ui| {
+            let mut changed = false;
+            let dwm_label = app.tr("Use DWM title-bar theming");
+            let mica_label = app.tr("Use Mica backdrop (may flicker with some OpenGL drivers)");
+            let vsync_label = app.tr("Use OpenGL vertical sync");
+            changed |= ui
+                .checkbox(&mut app.windows_dwm_theming, dwm_label)
+                .changed();
+            changed |= ui
+                .checkbox(&mut app.windows_mica_backdrop, mica_label)
+                .changed();
+            changed |= ui.checkbox(&mut app.opengl_vsync, vsync_label).changed();
+            ui.label(
+                egui::RichText::new(app.tr(
+                    "Mica and DWM changes apply immediately. OpenGL vertical sync applies after restart.",
+                ))
+                .small()
+                .weak(),
+            );
+            if changed {
+                crate::platform::windows::configure_window_composition(
+                    app.windows_dwm_theming,
+                    app.windows_mica_backdrop,
+                );
+                app.save_config();
+            }
+        },
+    );
     preference_section(ui, crate::ui::icons::GAUGE, &app.tr("Status bar"), |ui| {
         let hardware_label = app.tr("Hardware connection");
         let rgb_label = app.tr("Physical status RGB");
@@ -472,10 +503,12 @@ fn preference_section(
         .inner_margin(egui::Margin::same(12))
         .corner_radius(9.0)
         .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new(format!("{icon}  {title}")).strong());
-            ui.add_space(6.0);
-            body(ui);
+            ui.set_min_width(ui.available_width());
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(format!("{icon}  {title}")).strong());
+                ui.add_space(6.0);
+                body(ui);
+            });
         });
     ui.add_space(8.0);
 }

@@ -232,8 +232,6 @@ fn draw_hardware_status(app: &mut PealayerApp, ui: &mut egui::Ui) {
             app.status_bar.status_rgb = false;
             app.save_config();
         }
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(33));
     }
 
     if app.status_bar.telemetry {

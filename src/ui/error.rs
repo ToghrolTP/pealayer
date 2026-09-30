@@ -8,11 +8,17 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
             clear_error = true;
         }
-        egui::Window::new(&heading)
+        let bounds = ui.ctx().content_rect().shrink(20.0);
+        let max_width = bounds.width().min(520.0);
+        egui::Window::new(format!("{} {heading}", crate::ui::icons::WARNING))
+            .id(egui::Id::new("error_dialog_bounded_v2"))
             .collapsible(false)
-            .resizable(false)
+            .resizable(true)
             .movable(true)
-            .default_width(480.0)
+            .default_size([max_width.min(480.0), bounds.height().min(300.0)])
+            .min_size([max_width.min(340.0), bounds.height().min(220.0)])
+            .max_size([max_width, bounds.height().min(420.0)])
+            .constrain_to(bounds)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ui.ctx(), |ui| {
                 ui.with_layout(crate::ui::i18n::vertical_layout(app.rtl), |ui| {
@@ -28,8 +34,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         ui.painter().text(
                             center,
                             egui::Align2::CENTER_CENTER,
-                            "!",
-                            egui::FontId::proportional(24.0),
+                            crate::ui::icons::WARNING,
+                            egui::FontId::proportional(20.0),
                             egui::Color32::WHITE,
                         );
                         ui.vertical(|ui| {
@@ -50,10 +56,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     );
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        if ui.button(app.tr("Copy details")).clicked() {
+                        if ui.button(format!("{} {}", crate::ui::icons::COPY, app.tr("Copy details"))).clicked() {
                             ui.ctx().copy_text(err.clone());
                         }
-                        if ui.button(app.tr("Close")).clicked()
+                        if ui.button(format!("{} {}", crate::ui::icons::X, app.tr("Close"))).clicked()
                             || ui.input(|input| input.key_pressed(egui::Key::Enter))
                         {
                             clear_error = true;

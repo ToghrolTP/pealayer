@@ -10,20 +10,25 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .advertised_hardware()
         .map(|capabilities| capabilities.strip_effects)
         .unwrap_or_default();
+    let bounds = ui.ctx().content_rect().shrink(20.0);
+    let max_size = egui::vec2(bounds.width().min(820.0), bounds.height().min(680.0));
+    let default_size = egui::vec2(max_size.x.min(620.0), max_size.y.min(470.0));
 
     egui::Window::new(format!(
         "{} {}",
         crate::ui::icons::SPARKLE,
         app.tr("Effect library")
     ))
+    .id(egui::Id::new("effect_library_dialog_bounded_v2"))
     .open(&mut open)
-    .default_size([620.0, 470.0])
-    .min_size([500.0, 360.0])
-    .max_size([920.0, 760.0])
+    .default_size(default_size)
+    .min_size([max_size.x.min(500.0), max_size.y.min(360.0)])
+    .max_size(max_size)
+    .constrain_to(bounds)
     .resizable(true)
     .collapsible(false)
     .show(ui.ctx(), |ui| {
-        let height = ui.available_height().max(330.0);
+        let height = ui.available_height();
         ui.horizontal_top(|ui| {
             ui.allocate_ui_with_layout(
                 egui::vec2(190.0, height),
@@ -112,7 +117,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         egui::TextEdit::singleline(
                                             &mut app.effect_library_draft.name,
                                         )
-                                        .desired_width(ui.available_width().max(180.0)),
+                                        .desired_width(ui.available_width().clamp(160.0, 420.0)),
                                     );
                                     ui.end_row();
 
@@ -121,7 +126,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         egui::TextEdit::singleline(
                                             &mut app.effect_library_draft.category,
                                         )
-                                        .desired_width(ui.available_width().max(180.0)),
+                                        .desired_width(ui.available_width().clamp(160.0, 420.0)),
                                     );
                                     ui.end_row();
 
@@ -141,7 +146,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         .collect::<Vec<_>>();
                                     egui::ComboBox::from_id_salt("effect_renderer")
                                         .selected_text(renderer_name)
-                                        .width(ui.available_width().max(180.0))
+                                        .width(ui.available_width().clamp(160.0, 420.0))
                                         .show_ui(ui, |ui| {
                                             for (renderer_id, renderer_name) in renderer_options {
                                                 ui.selectable_value(

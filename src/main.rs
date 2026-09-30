@@ -167,6 +167,10 @@ fn main() -> eframe::Result {
     let language = crate::config::resolve_language(language_preference);
     let direction_preference = crate::config::resolved_direction_preference(&launch_config);
     let rtl = crate::config::resolve_rtl(direction_preference, language);
+    crate::platform::windows::configure_window_composition(
+        launch_config.windows_dwm_theming,
+        launch_config.windows_mica_backdrop,
+    );
     let initial_window_title = app_name.clone();
     let icon_data = crate::config::resolved_app_icon(&launch_config)
         .and_then(|path| std::fs::read(path).ok())
@@ -175,7 +179,15 @@ fn main() -> eframe::Result {
             eframe::icon_data::from_png_bytes(include_bytes!("../assets/pealayer-icon.png")).ok()
         });
 
-    let mut viewport = egui::ViewportBuilder::default().with_inner_size([800.0, 600.0]);
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([800.0, 600.0])
+        .with_clamp_size_to_monitor_size(true);
+    if let Some(geometry) = launch_config.window_geometry.filter(|geometry| geometry.is_valid()) {
+        viewport = viewport
+            .with_inner_size([geometry.width, geometry.height])
+            .with_position([geometry.x, geometry.y])
+            .with_maximized(geometry.maximized);
+    }
     if cli_options.fullscreen {
         viewport = viewport.with_fullscreen(true);
     }
@@ -186,6 +198,7 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Glow,
+        vsync: launch_config.opengl_vsync,
         ..Default::default()
     };
 
@@ -382,6 +395,7 @@ fn main() -> eframe::Result {
                 app_publisher: crate::config::resolved_app_publisher(&loaded_config),
                 app_copyright: crate::config::resolved_app_copyright(&loaded_config),
                 last_window_title: String::new(),
+                window_geometry: loaded_config.window_geometry,
                 language_preference,
                 language,
                 direction_preference,
@@ -490,6 +504,9 @@ fn main() -> eframe::Result {
                 fullscreen_video_background: loaded_config.fullscreen_video_background,
                 motion_control_mode: loaded_config.motion_control_mode,
                 compact_hardware_controls: loaded_config.compact_hardware_controls,
+                windows_mica_backdrop: loaded_config.windows_mica_backdrop,
+                windows_dwm_theming: loaded_config.windows_dwm_theming,
+                opengl_vsync: loaded_config.opengl_vsync,
                 status_bar: loaded_config.status_bar,
                 config_fingerprint: crate::config::AppConfig::fingerprint(
                     &crate::config::AppConfig::get_config_path(),

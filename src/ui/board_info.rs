@@ -21,15 +21,20 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 
     let mut open = true;
+    let bounds = ui.ctx().content_rect().shrink(20.0);
+    let max_size = egui::vec2(bounds.width().min(760.0), bounds.height().min(650.0));
+    let default_size = egui::vec2(max_size.x.min(640.0), max_size.y.min(470.0));
     egui::Window::new(format!(
         "{} {}",
         crate::ui::icons::INFO,
         app.tr("Board information")
     ))
+    .id(egui::Id::new("board_information_dialog_bounded_v2"))
     .open(&mut open)
-    .default_size([640.0, 470.0])
-    .min_size([500.0, 360.0])
-    .max_size([980.0, 800.0])
+    .default_size(default_size)
+    .min_size([max_size.x.min(480.0), max_size.y.min(340.0)])
+    .max_size(max_size)
+    .constrain_to(bounds)
     .resizable(true)
     .collapsible(false)
     .show(ui.ctx(), |ui| {
@@ -67,7 +72,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         });
         ui.separator();
 
-        let available_height = ui.available_height().max(280.0);
+        let available_height = ui.available_height();
         ui.horizontal_top(|ui| {
             ui.allocate_ui_with_layout(
                 egui::vec2(148.0, available_height),
@@ -88,10 +93,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 },
             );
             ui.separator();
-            egui::ScrollArea::vertical()
-                .id_salt("board_info_content")
-                .auto_shrink([false, false])
-                .show(ui, |ui| match app.board_info_tab {
+            crate::ui::dialog::scroll_column(ui, "board_info_content_v2", None, |ui| match app.board_info_tab {
                     0 => overview(app, ui, &capabilities),
                     1 => capability_list(app, ui, &capabilities),
                     2 => front_panel(app, ui, &capabilities),

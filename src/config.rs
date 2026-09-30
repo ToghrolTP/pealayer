@@ -95,6 +95,26 @@ impl Default for StatusBarConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct WindowGeometry {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub maximized: bool,
+}
+
+impl WindowGeometry {
+    pub fn is_valid(self) -> bool {
+        self.x.is_finite()
+            && self.y.is_finite()
+            && self.width.is_finite()
+            && self.height.is_finite()
+            && (420.0..=16_384.0).contains(&self.width)
+            && (300.0..=16_384.0).contains(&self.height)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AppConfig {
@@ -123,7 +143,12 @@ pub struct AppConfig {
     pub fullscreen_video_background: VideoBackground,
     pub motion_control_mode: MotionControlMode,
     pub compact_hardware_controls: bool,
+    pub windows_mica_backdrop: bool,
+    pub windows_dwm_theming: bool,
+    pub opengl_vsync: bool,
     pub status_bar: StatusBarConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_geometry: Option<WindowGeometry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_dock_layout: Option<String>,
 }
@@ -156,7 +181,11 @@ impl Default for AppConfig {
             fullscreen_video_background: VideoBackground::Black,
             motion_control_mode: MotionControlMode::Toggle,
             compact_hardware_controls: false,
+            windows_mica_backdrop: false,
+            windows_dwm_theming: true,
+            opengl_vsync: true,
             status_bar: StatusBarConfig::default(),
+            window_geometry: None,
             workspace_dock_layout: None,
         }
     }
@@ -640,6 +669,9 @@ impl AppConfig {
         }
         if self.recent_media.len() > 100 {
             return Err("recent_media contains too many entries".to_string());
+        }
+        if self.window_geometry.is_some_and(|geometry| !geometry.is_valid()) {
+            return Err("window_geometry contains invalid coordinates or dimensions".to_string());
         }
         Ok(())
     }

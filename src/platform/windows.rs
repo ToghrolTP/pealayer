@@ -2,6 +2,8 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 
 static WINDOW_HWND: AtomicIsize = AtomicIsize::new(0);
 static WINDOW_DARK_THEME: AtomicBool = AtomicBool::new(true);
+static WINDOW_DWM_THEMING: AtomicBool = AtomicBool::new(true);
+static WINDOW_MICA_BACKDROP: AtomicBool = AtomicBool::new(false);
 static ORIGINAL_WINDOW_PROC: AtomicIsize = AtomicIsize::new(0);
 static SHELL_COMMAND: AtomicU32 = AtomicU32::new(0);
 static SHELL_PAUSED: AtomicBool = AtomicBool::new(true);
@@ -180,6 +182,15 @@ pub fn set_window_theme(dark: bool) {
     }
 }
 
+pub fn configure_window_composition(dwm_theming: bool, mica_backdrop: bool) {
+    let dwm_changed = WINDOW_DWM_THEMING.swap(dwm_theming, Ordering::SeqCst) != dwm_theming;
+    let mica_changed = WINDOW_MICA_BACKDROP.swap(mica_backdrop, Ordering::SeqCst) != mica_backdrop;
+    let hwnd = get_registered_hwnd();
+    if hwnd != 0 && (dwm_changed || mica_changed) {
+        apply_windows_window_decorations(hwnd);
+    }
+}
+
 #[cfg(any(target_os = "windows", test))]
 fn decoration_colors(dark: bool) -> (u32, u32) {
     if dark {
@@ -194,7 +205,7 @@ pub fn apply_windows_window_decorations(hwnd_raw: isize) {
     use windows::Win32::Foundation::{BOOL, HWND};
     use windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE;
     use windows::Win32::Graphics::Dwm::{
-        DWMSBT_MAINWINDOW, DWMWA_CAPTION_COLOR, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_TEXT_COLOR,
+        DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMWA_CAPTION_COLOR, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_TEXT_COLOR,
         DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
     };
 
@@ -203,11 +214,13 @@ pub fn apply_windows_window_decorations(hwnd_raw: isize) {
     }
     let hwnd = HWND(hwnd_raw as *mut _);
     let dark = WINDOW_DARK_THEME.load(Ordering::SeqCst);
+    let dwm_theming = WINDOW_DWM_THEMING.load(Ordering::SeqCst);
+    let mica_backdrop = WINDOW_MICA_BACKDROP.load(Ordering::SeqCst);
     let (caption_color, text_color) = decoration_colors(dark);
 
     unsafe {
         // 1. Enable immersive dark mode (attribute 20, fallback 19 for older Win10 builds)
-        let dark_mode = BOOL::from(dark);
+        let dark_mode = BOOL::from(dwm_theming && dark);
         if DwmSetWindowAttribute(
             hwnd,
             DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -224,27 +237,24 @@ pub fn apply_windows_window_decorations(hwnd_raw: isize) {
             );
         }
 
-        // 2. Set Mica backdrop on Windows 11 (build 22621+ attribute 38 = DWMSBT_MAINWINDOW)
-        let backdrop = DWMSBT_MAINWINDOW.0 as u32;
-        if DwmSetWindowAttribute(
+        // Pealayer presents an opaque OpenGL swapchain. Mica is optional because
+        // some drivers briefly expose the backdrop while swapping buffers.
+        let backdrop = if mica_backdrop {
+            DWMSBT_MAINWINDOW.0
+        } else {
+            DWMSBT_NONE.0
+        } as u32;
+        let _ = DwmSetWindowAttribute(
             hwnd,
             DWMWA_SYSTEMBACKDROP_TYPE,
             &backdrop as *const _ as *const _,
             std::mem::size_of::<u32>() as u32,
-        )
-        .is_err()
-        {
-            // Fallback for Windows 11 22000: DWMWA_MICA_EFFECT = 1029
-            let mica_compat = BOOL::from(true);
-            let _ = DwmSetWindowAttribute(
-                hwnd,
-                DWMWINDOWATTRIBUTE(1029),
-                &mica_compat as *const _ as *const _,
-                std::mem::size_of::<BOOL>() as u32,
-            );
-        }
+        );
 
-        // 3. Keep native caption and text colors aligned with the app theme.
+        // Keep native caption and text colors aligned with the app theme, or
+        // return them to the system-selected default when DWM theming is off.
+        let caption_color = if dwm_theming { caption_color } else { 0xFFFF_FFFF };
+        let text_color = if dwm_theming { text_color } else { 0xFFFF_FFFF };
         let _ = DwmSetWindowAttribute(
             hwnd,
             DWMWA_CAPTION_COLOR,
