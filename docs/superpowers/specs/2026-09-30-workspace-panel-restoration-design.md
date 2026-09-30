@@ -2,7 +2,7 @@
 
 ## 1. Overview & Motivation
 
-In Pealayer's Non-Linear Editor (NLE) mode, the workspace is partitioned into docking panes managed by `egui_dock::DockState<PealayerTab>`. 
+In Pealayer's Non-Linear Editor (NLE) mode, the workspace is partitioned into docking panes managed by `egui_dock::DockState<PealayerTab>`.
 
 Previously, when a user closed a pane (such as the Timeline, Effect Controls, or Hardware Monitor) via its tab `(×)` button, the application provided no mechanism to reopen that specific panel. The only recovery option was a blanket "Restore all workspace tabs" / "Reset workspace layout" action, which destroyed all user customizations, split ratios, and panel arrangements. Furthermore, the dock state was not serialized, causing layout customizations and closed panels to reset across application restarts.
 

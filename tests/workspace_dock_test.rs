@@ -198,4 +198,3 @@ fn test_workspace_window_menu_translations() {
         pealayer::ui::i18n::visual_text(fa, "همه پنل‌های فضای کاری بسته شده‌اند")
     );
 }
-
