@@ -1781,9 +1781,10 @@ impl PealayerApp {
 
     pub fn is_live_media(&self) -> bool {
         self.current_video_path.as_ref().is_some_and(|path| {
-            crate::media::is_remote_media_target(&path.to_string_lossy())
-                && !self.is_seekable
-                && self.duration <= 0.0
+            let target = path.to_string_lossy();
+            !self.is_seekable
+                && (crate::media::is_live_media_target(&target)
+                    || (crate::media::is_remote_media_target(&target) && self.duration <= 0.0))
         })
     }
 

@@ -9,6 +9,10 @@ const REMOTE_SCHEMES: &[&str] = &[
     "tcp", "tls",
 ];
 
+const LIVE_SCHEMES: &[&str] = &[
+    "rtsp", "rtsps", "rtmp", "rtmps", "rtp", "srt", "rist", "udp",
+];
+
 pub fn media_scheme(target: &str) -> Option<&str> {
     let (scheme, _) = target.trim().split_once("://")?;
     if scheme.is_empty()
@@ -25,6 +29,14 @@ pub fn media_scheme(target: &str) -> Option<&str> {
 pub fn is_remote_media_target(target: &str) -> bool {
     media_scheme(target).is_some_and(|scheme| {
         REMOTE_SCHEMES
+            .iter()
+            .any(|candidate| scheme.eq_ignore_ascii_case(candidate))
+    })
+}
+
+pub fn is_live_media_target(target: &str) -> bool {
+    media_scheme(target).is_some_and(|scheme| {
+        LIVE_SCHEMES
             .iter()
             .any(|candidate| scheme.eq_ignore_ascii_case(candidate))
     })
@@ -77,6 +89,8 @@ mod tests {
         assert!(is_remote_media_target("rtsp://camera.invalid/live"));
         assert!(is_remote_media_target("HTTPS://cdn.invalid/video.mp4"));
         assert!(is_remote_media_target("srt://media.invalid:9000"));
+        assert!(is_live_media_target("rtsp://camera.invalid/live"));
+        assert!(!is_live_media_target("https://cdn.invalid/video.mp4"));
         assert!(!is_remote_media_target(r"C:\media\clip.mp4"));
         assert!(!is_remote_media_target("notes:clip.mp4"));
     }
