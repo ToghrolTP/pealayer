@@ -114,3 +114,26 @@ fn test_pealayer_app_tab_toggle_and_focus() {
     app.open_or_focus_tab(PealayerTab::Timeline);
     assert!(app.is_tab_open(PealayerTab::Timeline));
 }
+
+#[test]
+fn test_corrupt_dock_json_fallback() {
+    let invalid_json = "{ corrupted invalid json ...";
+    let fallback = serde_json::from_str::<DockState<PealayerTab>>(invalid_json)
+        .unwrap_or_else(|_| create_initial_layout());
+
+    for tab in PealayerTab::ALL {
+        assert!(fallback.find_tab(&tab).is_some());
+    }
+}
+
+#[test]
+fn test_app_save_dock_layout_persists_to_config() {
+    let mut app = pealayer::app::PealayerApp::default();
+    app.save_dock_layout();
+
+    let cfg = pealayer::config::AppConfig::load();
+    assert!(cfg.workspace_dock_layout.is_some());
+    let layout_json = cfg.workspace_dock_layout.unwrap();
+    let deserialized: DockState<PealayerTab> = serde_json::from_str(&layout_json).expect("valid dock state JSON");
+    assert!(deserialized.find_tab(&PealayerTab::ProgramMonitor).is_some());
+}

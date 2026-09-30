@@ -671,15 +671,37 @@ impl eframe::App for PealayerApp {
             .frame(frame)
             .show_inside(ui, |ui| {
                 if self.show_four_d_editor {
-                    let mut dock_state =
-                        std::mem::replace(&mut self.dock_state, egui_dock::DockState::new(vec![]));
-                    let dock_response = ui.scope(|ui| {
-                        let mut tab_viewer = crate::ui::layout::PealayerTabViewer { app: self };
-                        egui_dock::DockArea::new(&mut dock_state)
-                            .show_inside(ui, &mut tab_viewer);
-                    });
-                    self.dock_state = dock_state;
-                    dock_response.response.context_menu(|ui| {
+                    if self.dock_state.iter_all_tabs().count() == 0 {
+                        ui.centered_and_justified(|ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.label(egui::RichText::new(crate::ui::icons::TABS).size(36.0));
+                                ui.add_space(8.0);
+                                ui.heading(self.tr("All workspace panels are closed"));
+                                ui.label(self.tr("Open panels from the Window menu above, or reset the workspace."));
+                                ui.add_space(12.0);
+                                if ui
+                                    .button(format!(
+                                        "{} {}",
+                                        crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                                        self.tr("Reset Workspace to Default")
+                                    ))
+                                    .clicked()
+                                {
+                                    self.dock_state = crate::ui::layout::create_initial_layout();
+                                    self.save_dock_layout();
+                                }
+                            });
+                        });
+                    } else {
+                        let mut dock_state =
+                            std::mem::replace(&mut self.dock_state, egui_dock::DockState::new(vec![]));
+                        let dock_response = ui.scope(|ui| {
+                            let mut tab_viewer = crate::ui::layout::PealayerTabViewer { app: self };
+                            egui_dock::DockArea::new(&mut dock_state)
+                                .show_inside(ui, &mut tab_viewer);
+                        });
+                        self.dock_state = dock_state;
+                        dock_response.response.context_menu(|ui| {
                             ui.label(egui::RichText::new(self.tr("Workspace")).strong());
                             ui.separator();
                             if ui
@@ -691,6 +713,7 @@ impl eframe::App for PealayerApp {
                                 .clicked()
                             {
                                 self.dock_state = crate::ui::layout::create_initial_layout();
+                                self.save_dock_layout();
                                 ui.close();
                             }
                             if ui
@@ -713,6 +736,7 @@ impl eframe::App for PealayerApp {
                                 ui.close();
                             }
                         });
+                    }
                 } else {
                     crate::ui::video::draw(self, ui);
                     crate::ui::controls::draw(self, ui);
@@ -1537,7 +1561,10 @@ impl PealayerApp {
         }
     }
 
-    pub fn save_dock_layout(&mut self) {}
+    pub fn save_dock_layout(&mut self) {
+        crate::ui::layout::sanitize_dock_rects(&mut self.dock_state);
+        self.save_config();
+    }
 
     /// Performs an exact relative seek by the given number of seconds.
     pub fn seek_relative(&mut self, seconds: f64) {
@@ -1813,6 +1840,11 @@ impl PealayerApp {
         cfg.playing_drag_action = self.playing_drag_action;
         cfg.fullscreen_video_background = self.fullscreen_video_background;
         cfg.status_bar = self.status_bar;
+        let mut dock_state = self.dock_state.clone();
+        crate::ui::layout::sanitize_dock_rects(&mut dock_state);
+        if let Ok(json) = serde_json::to_string(&dock_state) {
+            cfg.workspace_dock_layout = Some(json);
+        }
         cfg.save();
     }
 
