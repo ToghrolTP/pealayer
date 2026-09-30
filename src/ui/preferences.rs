@@ -73,18 +73,23 @@ fn appearance_preferences(app: &mut PealayerApp, ui: &mut egui::Ui, changed: &mu
         ui.end_row();
         ui.label(app.tr("Fullscreen background"));
         let background_label = match app.fullscreen_video_background { VideoBackground::Black => app.tr("Black"), VideoBackground::DarkGray => app.tr("Dark gray"), VideoBackground::Theme => app.tr("Use app theme") };
+        let black_label = app.tr("Black");
+        let dark_gray_label = app.tr("Dark gray");
+        let theme_label = app.tr("Use app theme");
         egui::ComboBox::from_id_salt("fullscreen_video_background").selected_text(background_label).show_ui(ui, |ui| {
-            *changed |= ui.selectable_value(&mut app.fullscreen_video_background, VideoBackground::Black, app.tr("Black")).changed();
-            *changed |= ui.selectable_value(&mut app.fullscreen_video_background, VideoBackground::DarkGray, app.tr("Dark gray")).changed();
-            *changed |= ui.selectable_value(&mut app.fullscreen_video_background, VideoBackground::Theme, app.tr("Use app theme")).changed();
+            *changed |= ui.selectable_value(&mut app.fullscreen_video_background, VideoBackground::Black, black_label).changed();
+            *changed |= ui.selectable_value(&mut app.fullscreen_video_background, VideoBackground::DarkGray, dark_gray_label).changed();
+            *changed |= ui.selectable_value(&mut app.fullscreen_video_background, VideoBackground::Theme, theme_label).changed();
         });
         ui.end_row();
     });
     ui.separator();
     ui.strong(app.tr("On-screen display"));
-    egui::ComboBox::from_id_salt("preferences_osd_position").selected_text(match app.osd_position { OsdPosition::TopLeft => app.tr("Top left"), OsdPosition::Center => app.tr("Center") }).show_ui(ui, |ui| {
-        *changed |= ui.selectable_value(&mut app.osd_position, OsdPosition::TopLeft, app.tr("Top left")).changed();
-        *changed |= ui.selectable_value(&mut app.osd_position, OsdPosition::Center, app.tr("Center")).changed();
+    let top_left_label = app.tr("Top left");
+    let center_label = app.tr("Center");
+    egui::ComboBox::from_id_salt("preferences_osd_position").selected_text(match app.osd_position { OsdPosition::TopLeft => top_left_label.clone(), OsdPosition::Center => center_label.clone() }).show_ui(ui, |ui| {
+        *changed |= ui.selectable_value(&mut app.osd_position, OsdPosition::TopLeft, top_left_label).changed();
+        *changed |= ui.selectable_value(&mut app.osd_position, OsdPosition::Center, center_label).changed();
     });
     let timeout_label = app.tr("OSD timeout (seconds)");
     *changed |= ui.add(egui::Slider::new(&mut app.osd_timeout_seconds, 1.0..=12.0).text(timeout_label)).changed();

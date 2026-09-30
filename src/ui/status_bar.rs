@@ -55,13 +55,18 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     });
 
     panel.response.context_menu(|ui| {
-        ui.strong(app.tr("Status bar"));
+        let title = app.tr("Status bar");
+        let media_rate = app.tr("Media frame rate");
+        let hardware = app.tr("Hardware connection");
+        let telemetry = app.tr("Hardware telemetry");
+        let workspace = app.tr("Workspace mode");
+        ui.strong(title);
         ui.separator();
         let mut changed = false;
-        changed |= ui.checkbox(&mut app.status_bar.media_rate, app.tr("Media frame rate")).changed();
-        changed |= ui.checkbox(&mut app.status_bar.hardware, app.tr("Hardware connection")).changed();
-        changed |= ui.checkbox(&mut app.status_bar.telemetry, app.tr("Hardware telemetry")).changed();
-        changed |= ui.checkbox(&mut app.status_bar.workspace, app.tr("Workspace mode")).changed();
+        changed |= ui.checkbox(&mut app.status_bar.media_rate, media_rate).changed();
+        changed |= ui.checkbox(&mut app.status_bar.hardware, hardware).changed();
+        changed |= ui.checkbox(&mut app.status_bar.telemetry, telemetry).changed();
+        changed |= ui.checkbox(&mut app.status_bar.workspace, workspace).changed();
         if changed { app.save_config(); }
     });
 }
