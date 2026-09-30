@@ -678,17 +678,66 @@ impl eframe::App for PealayerApp {
             .frame(frame)
             .show_inside(ui, |ui| {
                 if self.show_four_d_editor {
-                    let mut dock_state =
-                        std::mem::replace(&mut self.dock_state, egui_dock::DockState::new(vec![]));
-                    let dock_response = ui.scope(|ui| {
-                        let mut tab_viewer = crate::ui::layout::PealayerTabViewer { app: self };
-                        egui_dock::DockArea::new(&mut dock_state)
-                            .show_inside(ui, &mut tab_viewer);
-                    });
-                    self.dock_state = dock_state;
-                    dock_response.response.context_menu(|ui| {
+                    if self.dock_state.iter_all_tabs().count() == 0 {
+                        ui.centered_and_justified(|ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.label(egui::RichText::new(crate::ui::icons::TABS).size(36.0));
+                                ui.add_space(8.0);
+                                ui.heading(self.tr("All workspace panels are closed"));
+                                ui.label(self.tr("Open panels from the Window menu above, or reset the workspace."));
+                                ui.add_space(12.0);
+                                if ui
+                                    .button(format!(
+                                        "{} {}",
+                                        crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                                        self.tr("Reset Workspace to Default")
+                                    ))
+                                    .clicked()
+                                {
+                                    self.dock_state = crate::ui::layout::create_initial_layout();
+                                    self.save_dock_layout();
+                                }
+                            });
+                        });
+                    } else {
+                        let mut dock_state =
+                            std::mem::replace(&mut self.dock_state, egui_dock::DockState::new(vec![]));
+                        let dock_response = ui.scope(|ui| {
+                            let mut tab_viewer = crate::ui::layout::PealayerTabViewer { app: self };
+                            egui_dock::DockArea::new(&mut dock_state)
+                                .show_inside(ui, &mut tab_viewer);
+                        });
+                        self.dock_state = dock_state;
+                        dock_response.response.context_menu(|ui| {
                             ui.label(egui::RichText::new(self.tr("Workspace")).strong());
                             ui.separator();
+                            ui.menu_button(self.tr("Panels"), |ui| {
+                                for tab in crate::ui::layout::PealayerTab::ALL {
+                                    let is_open = self.is_tab_open(tab);
+                                    let icon = tab.icon();
+                                    let name = tab.title(self);
+                                    let label = format!("{icon}  {name}");
+
+                                    let mut checked = is_open;
+                                    if ui.checkbox(&mut checked, label).clicked() {
+                                        self.toggle_tab(tab);
+                                        ui.close();
+                                    }
+                                }
+                                ui.separator();
+                                if ui
+                                    .button(format!(
+                                        "{}  {}",
+                                        crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                                        self.tr("Reset Workspace to Default")
+                                    ))
+                                    .clicked()
+                                {
+                                    self.dock_state = crate::ui::layout::create_initial_layout();
+                                    self.save_dock_layout();
+                                    ui.close();
+                                }
+                            });
                             if ui
                                 .button(format!(
                                     "{} {}",
@@ -698,6 +747,7 @@ impl eframe::App for PealayerApp {
                                 .clicked()
                             {
                                 self.dock_state = crate::ui::layout::create_initial_layout();
+                                self.save_dock_layout();
                                 ui.close();
                             }
                             if ui
@@ -720,6 +770,7 @@ impl eframe::App for PealayerApp {
                                 ui.close();
                             }
                         });
+                    }
                 } else {
                     crate::ui::video::draw(self, ui);
                     crate::ui::controls::draw(self, ui);
@@ -1522,6 +1573,37 @@ impl PealayerApp {
         }
     }
 
+    pub fn is_tab_open(&self, tab: crate::ui::layout::PealayerTab) -> bool {
+        self.dock_state.find_tab(&tab).is_some()
+    }
+
+    pub fn open_or_focus_tab(&mut self, tab: crate::ui::layout::PealayerTab) {
+        self.show_four_d_editor = true;
+        if let Some(path) = self.dock_state.find_tab(&tab) {
+            let _ = self.dock_state.set_active_tab(path);
+        } else {
+            crate::ui::layout::restore_tab_to_canonical_slot(&mut self.dock_state, tab);
+            if let Some(path) = self.dock_state.find_tab(&tab) {
+                let _ = self.dock_state.set_active_tab(path);
+            }
+            self.save_dock_layout();
+        }
+    }
+
+    pub fn toggle_tab(&mut self, tab: crate::ui::layout::PealayerTab) {
+        if let Some(path) = self.dock_state.find_tab(&tab) {
+            self.dock_state.remove_tab(path);
+            self.save_dock_layout();
+        } else {
+            self.open_or_focus_tab(tab);
+        }
+    }
+
+    pub fn save_dock_layout(&mut self) {
+        crate::ui::layout::sanitize_dock_rects(&mut self.dock_state);
+        self.save_config();
+    }
+
     /// Performs an exact relative seek by the given number of seconds.
     pub fn seek_relative(&mut self, seconds: f64) {
         if self.current_video_path.is_none() || !self.is_seekable {
@@ -1850,10 +1932,15 @@ impl PealayerApp {
         cfg.playing_drag_action = self.playing_drag_action;
         cfg.fullscreen_video_background = self.fullscreen_video_background;
         cfg.status_bar = self.status_bar;
+        let mut dock_state = self.dock_state.clone();
+        crate::ui::layout::sanitize_dock_rects(&mut dock_state);
+        if let Ok(json) = serde_json::to_string(&dock_state) {
+            cfg.workspace_dock_layout = Some(json);
+        }
         cfg.save();
     }
 
-    pub(crate) fn tr(&self, english: &'static str) -> String {
+    pub fn tr(&self, english: &'static str) -> String {
         crate::ui::i18n::tr(self.language, english)
     }
 

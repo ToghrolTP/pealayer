@@ -309,6 +309,36 @@ pub enum PealayerTab {
     Timeline,
 }
 
+impl PealayerTab {
+    pub const ALL: [PealayerTab; 5] = [
+        PealayerTab::ProgramMonitor,
+        PealayerTab::Timeline,
+        PealayerTab::EffectControls,
+        PealayerTab::EffectsLibrary,
+        PealayerTab::HardwareMonitor,
+    ];
+
+    pub fn title(self, app: &crate::app::PealayerApp) -> String {
+        match self {
+            PealayerTab::ProgramMonitor => app.tr("Program Monitor"),
+            PealayerTab::Timeline => app.tr("Timeline"),
+            PealayerTab::EffectControls => app.tr("Effect Controls"),
+            PealayerTab::EffectsLibrary => app.tr("Effects Library"),
+            PealayerTab::HardwareMonitor => app.tr("Hardware Monitor"),
+        }
+    }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            PealayerTab::ProgramMonitor => crate::ui::icons::MONITOR_PLAY,
+            PealayerTab::Timeline => crate::ui::icons::WAVEFORM,
+            PealayerTab::EffectControls => crate::ui::icons::SLIDERS_HORIZONTAL,
+            PealayerTab::EffectsLibrary => crate::ui::icons::SPARKLE,
+            PealayerTab::HardwareMonitor => crate::ui::icons::GAUGE,
+        }
+    }
+}
+
 pub struct PealayerTabViewer<'a> {
     pub app: &'a mut PealayerApp,
 }
@@ -317,13 +347,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
     type Tab = PealayerTab;
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        match tab {
-            PealayerTab::ProgramMonitor => format!("{} {}", crate::ui::icons::MONITOR_PLAY, self.app.tr("Program Monitor")).into(),
-            PealayerTab::EffectControls => format!("{} {}", crate::ui::icons::SLIDERS_HORIZONTAL, self.app.tr("Effect Controls")).into(),
-            PealayerTab::EffectsLibrary => format!("{} {}", crate::ui::icons::SPARKLE, self.app.tr("Effects Library")).into(),
-            PealayerTab::HardwareMonitor => format!("{} {}", crate::ui::icons::GAUGE, self.app.tr("Hardware Monitor")).into(),
-            PealayerTab::Timeline => format!("{} {}", crate::ui::icons::WAVEFORM, self.app.tr("Timeline")).into(),
-        }
+        format!("{} {}", tab.icon(), tab.title(self.app)).into()
     }
 
     fn context_menu(
@@ -332,13 +356,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
         tab: &mut Self::Tab,
         _path: egui_dock::NodePath,
     ) {
-        let title = match tab {
-            PealayerTab::ProgramMonitor => self.app.tr("Program Monitor"),
-            PealayerTab::EffectControls => self.app.tr("Effect Controls"),
-            PealayerTab::EffectsLibrary => self.app.tr("Effects Library"),
-            PealayerTab::HardwareMonitor => self.app.tr("Hardware Monitor"),
-            PealayerTab::Timeline => self.app.tr("Timeline"),
-        };
+        let title = tab.title(self.app);
         ui.label(egui::RichText::new(title).strong());
         ui.separator();
         match tab {
@@ -379,6 +397,33 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
             }
             _ => {}
         }
+        ui.separator();
+        ui.menu_button(self.app.tr("Panels"), |ui| {
+            for t in PealayerTab::ALL {
+                let is_open = self.app.is_tab_open(t);
+                let icon = t.icon();
+                let name = t.title(self.app);
+                let label = format!("{icon}  {name}");
+                let mut checked = is_open;
+                if ui.checkbox(&mut checked, label).clicked() {
+                    self.app.toggle_tab(t);
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if ui
+                .button(format!(
+                    "{}  {}",
+                    crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                    self.app.tr("Reset Workspace to Default")
+                ))
+                .clicked()
+            {
+                self.app.dock_state = create_initial_layout();
+                self.app.save_dock_layout();
+                ui.close();
+            }
+        });
         ui.separator();
         if ui.button(format!("{} {}", crate::ui::icons::GEAR, self.app.tr("Preferences..."))).clicked() {
             self.app.show_preferences_dialog = true;
@@ -3301,7 +3346,125 @@ pub fn create_initial_layout() -> egui_dock::DockState<PealayerTab> {
         vec![PealayerTab::EffectsLibrary],
     );
 
+    sanitize_dock_rects(&mut dock_state);
+
     dock_state
+}
+
+/// Sanitizes all node rectangles and viewports in a `DockState` to finite values (`Rect::ZERO`),
+/// preventing non-finite floats (e.g. `Rect::NOTHING` where Pos2 is +/-INFINITY) from serializing
+/// as `null` in JSON formats such as `serde_json`.
+pub fn sanitize_dock_rects<Tab>(dock_state: &mut egui_dock::DockState<Tab>) {
+    for (_path, node) in dock_state.iter_all_nodes_mut() {
+        if let Some(rect) = node.rect()
+            && !rect.is_finite()
+        {
+            node.set_rect(egui::Rect::ZERO);
+        }
+        if let Some(leaf) = node.get_leaf_mut()
+            && !leaf.viewport.is_finite()
+        {
+            leaf.viewport = egui::Rect::ZERO;
+        }
+    }
+}
+
+/// Restores a tab to its canonical dock location if it is closed, respecting sibling groupings and anchors.
+pub fn restore_tab_to_canonical_slot(dock_state: &mut egui_dock::DockState<PealayerTab>, tab: PealayerTab) {
+    if dock_state.find_tab(&tab).is_some() {
+        return;
+    }
+
+    if dock_state.iter_all_tabs().count() == 0 {
+        *dock_state = egui_dock::DockState::new(vec![tab]);
+        sanitize_dock_rects(dock_state);
+        return;
+    }
+
+    match tab {
+        PealayerTab::EffectControls => {
+            if let Some(sibling_path) = dock_state.find_tab(&PealayerTab::HardwareMonitor) {
+                let node_path = sibling_path.node_path();
+                if let Ok(leaf) = dock_state.leaf_mut(node_path) {
+                    leaf.tabs.push(tab);
+                    sanitize_dock_rects(dock_state);
+                    return;
+                }
+            }
+            if let Some(anchor_path) = dock_state
+                .find_tab(&PealayerTab::ProgramMonitor)
+                .or_else(|| dock_state.find_tab(&PealayerTab::Timeline))
+            {
+                let node_index = anchor_path.node;
+                dock_state.main_surface_mut().split_left(node_index, 0.25, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+        }
+        PealayerTab::HardwareMonitor => {
+            if let Some(sibling_path) = dock_state.find_tab(&PealayerTab::EffectControls) {
+                let node_path = sibling_path.node_path();
+                if let Ok(leaf) = dock_state.leaf_mut(node_path) {
+                    leaf.tabs.push(tab);
+                    sanitize_dock_rects(dock_state);
+                    return;
+                }
+            }
+            if let Some(anchor_path) = dock_state
+                .find_tab(&PealayerTab::ProgramMonitor)
+                .or_else(|| dock_state.find_tab(&PealayerTab::Timeline))
+            {
+                let node_index = anchor_path.node;
+                dock_state.main_surface_mut().split_left(node_index, 0.25, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+        }
+        PealayerTab::Timeline => {
+            if let Some(anchor_path) = dock_state
+                .find_tab(&PealayerTab::ProgramMonitor)
+                .or_else(|| dock_state.find_tab(&PealayerTab::EffectControls))
+                .or_else(|| dock_state.find_tab(&PealayerTab::EffectsLibrary))
+                .or_else(|| dock_state.find_tab(&PealayerTab::HardwareMonitor))
+            {
+                let node_index = anchor_path.node;
+                dock_state.main_surface_mut().split_below(node_index, 0.7, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+        }
+        PealayerTab::EffectsLibrary => {
+            if let Some(anchor_path) = dock_state
+                .find_tab(&PealayerTab::ProgramMonitor)
+                .or_else(|| dock_state.find_tab(&PealayerTab::Timeline))
+            {
+                let node_index = anchor_path.node;
+                dock_state.main_surface_mut().split_right(node_index, 0.75, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+        }
+        PealayerTab::ProgramMonitor => {
+            if let Some(anchor_path) = dock_state.find_tab(&PealayerTab::Timeline) {
+                let node_index = anchor_path.node;
+                dock_state.main_surface_mut().split_above(node_index, 0.7, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+            if let Some(anchor_path) = dock_state
+                .find_tab(&PealayerTab::EffectControls)
+                .or_else(|| dock_state.find_tab(&PealayerTab::HardwareMonitor))
+            {
+                let node_index = anchor_path.node;
+                dock_state.main_surface_mut().split_right(node_index, 0.5, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+        }
+    }
+
+    dock_state.push_to_first_leaf(tab);
+    sanitize_dock_rects(dock_state);
 }
 
 fn format_timecode(t: f64) -> String {
