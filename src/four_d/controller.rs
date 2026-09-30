@@ -566,18 +566,14 @@ impl ControllerClient {
         let peripherals = self.call("controller.peripherals.get", json!({}))?;
         let mut capabilities = parse_hardware_capabilities(&snapshot, &peripherals);
         if capabilities.supports_addressable_led && capabilities.strip_effects.is_empty() {
-            let catalog = match self.call("controller.strip.effects.list", json!({})) {
-                Ok(catalog) => Some(catalog),
-                Err(error) if controller_method_is_unavailable(&error) => self
-                    .call(
-                        "controller.command.execute",
-                        json!({"command": "strip effect list"}),
-                    )
-                    .ok()
-                    .and_then(|result| result.get("output").and_then(Value::as_str).map(str::to_owned))
-                    .and_then(|output| serde_json::from_str::<Value>(&output).ok()),
-                Err(_) => None,
-            };
+            let catalog = self
+                .call(
+                    "controller.command.execute",
+                    json!({"command": "strip effect list"}),
+                )
+                .ok()
+                .and_then(|result| result.get("output").and_then(Value::as_str).map(str::to_owned))
+                .and_then(|output| serde_json::from_str::<Value>(&output).ok());
             if let Some(catalog) = catalog {
                 capabilities.strip_effects = parse_strip_effects(&catalog);
             }
@@ -703,10 +699,6 @@ fn parse_strip_effects(value: &Value) -> Vec<HardwareStripEffect> {
             })
         })
         .collect()
-}
-
-fn controller_method_is_unavailable(error: &str) -> bool {
-    error.contains("-32601") || error.to_ascii_lowercase().contains("method not found")
 }
 
 fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCapabilities {
@@ -1328,7 +1320,7 @@ mod tests {
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
-            for call in 0..5 {
+            for call in 0..4 {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
                 let request: Value = serde_json::from_str(line.trim()).unwrap();
@@ -1339,9 +1331,6 @@ mod tests {
                         "hello": {"capabilities": CAPABILITY_ADDRESSABLE_LED}
                     }}),
                     2 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"peripherals":[]}}),
-                    3 => json!({"jsonrpc":"2.0","id":request["id"],"error":{
-                        "code": -32601, "message": "method not found"
-                    }}),
                     _ => json!({"jsonrpc":"2.0","id":request["id"],"result":{"output":
                         "[{\"id\":\"white-thunder\",\"name\":\"White thunder\",\"default_fps\":30}]"
                     }}),

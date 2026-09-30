@@ -167,7 +167,6 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Board reports OFF" => "برد حالت خاموش را گزارش می‌کند",
         "PCController macro catalog" => "فهرست ماکروهای PCController",
         "Record hardware effect" => "ضبط جلوهٔ سخت‌افزاری",
-        "Name" => "نام",
         "Seat motion take" => "برداشت حرکت صندلی",
         "Start board recording" => "آغاز ضبط از برد",
         "Anchor at the current video time and capture board-applied actions from every PCController surface." => {
