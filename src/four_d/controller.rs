@@ -647,6 +647,16 @@ where
     Some(DEFAULT_ENDPOINT.to_string())
 }
 
+pub(crate) fn valid_strip_effect_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'_' | b'-')
+        })
+}
+
 fn parse_strip_effects(value: &Value) -> Vec<HardwareStripEffect> {
     let entries = value
         .as_array()
@@ -671,7 +681,7 @@ fn parse_strip_effects(value: &Value) -> Vec<HardwareStripEffect> {
         .iter()
         .filter_map(|entry| {
             let id = entry.get("id")?.as_str()?.trim();
-            if id.is_empty() {
+            if !valid_strip_effect_id(id) {
                 return None;
             }
             Some(HardwareStripEffect {
@@ -1268,16 +1278,22 @@ mod tests {
             "connected": true,
             "hello": {"capabilities": CAPABILITY_ADDRESSABLE_LED}
         });
-        let catalog = json!({"strip_effects": [{
-            "id": "police",
-            "name": "Police",
-            "description": "Red and blue sweep",
-            "default_fps": 20,
-            "min_fps": 1,
-            "max_fps": 30,
-            "min_pixels": 1,
-            "max_pixels": 100
-        }]});
+        let catalog = json!({"strip_effects": [
+            {
+                "id": "police",
+                "name": "Police",
+                "description": "Red and blue sweep",
+                "default_fps": 20,
+                "min_fps": 1,
+                "max_fps": 30,
+                "min_pixels": 1,
+                "max_pixels": 100
+            },
+            {
+                "id": "police 100 30",
+                "name": "Injected arguments"
+            }
+        ]});
 
         let parsed = parse_hardware_capabilities(&snapshot, &catalog);
         assert_eq!(parsed.strip_effects.len(), 1);

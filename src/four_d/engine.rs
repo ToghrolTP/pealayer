@@ -1225,6 +1225,9 @@ pub fn compile_controller_strip_effects(
         let Some(strip) = effect.controller_strip_effect.as_ref() else {
             continue;
         };
+        if !crate::four_d::controller::valid_strip_effect_id(&strip.id) {
+            continue;
+        }
         compiled.push(CompiledControllerStripEffect {
             time_ms: instance.start_time_ms,
             id: strip.id.clone(),
@@ -1382,6 +1385,20 @@ mod tests {
             Some("white-thunder")
         );
         assert_eq!(active_controller_strip_effect_at(&overlap, 150), None);
+
+        let unsafe_effect = Effect::controller_strip_effect(
+            "Malformed".to_string(),
+            5_000,
+            "police 100 30".to_string(),
+        );
+        let unsafe_effect_id = unsafe_effect.id;
+        timeline.templates.push(unsafe_effect);
+        timeline
+            .instances
+            .push(EffectInstance::new(unsafe_effect_id, 10_000));
+        let compiled = compile_controller_strip_effects(&timeline);
+        assert_eq!(compiled.len(), 2);
+        assert!(compiled.iter().all(|cue| cue.id == "police"));
     }
 
     #[test]
