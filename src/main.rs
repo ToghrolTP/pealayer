@@ -3,6 +3,7 @@
 pub mod app;
 pub mod cli;
 pub mod config;
+pub mod effects_library;
 pub mod four_d;
 pub mod mpv;
 pub mod platform;
@@ -112,7 +113,14 @@ fn main() -> eframe::Result {
             #[cfg(target_os = "windows")]
             {
                 let config = crate::config::AppConfig::load();
-                let app_identity = crate::config::resolved_app_name(&config);
+                let mut app_identity = crate::config::resolved_app_name(&config);
+                if let Ok(instance_id) = std::env::var("PEALAYER_INSTANCE_ID") {
+                    let instance_id = instance_id.trim();
+                    if !instance_id.is_empty() {
+                        app_identity.push(':');
+                        app_identity.push_str(instance_id);
+                    }
+                }
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
                 loop {
                     match crate::platform::windows::acquire_gui_ownership(&app_identity) {
@@ -292,7 +300,10 @@ fn main() -> eframe::Result {
                 .observe_property("eof-reached", libmpv2::Format::Flag, 12)
                 .unwrap();
             mpv_client
-                .observe_property("estimated-vf-fps", libmpv2::Format::Double, 13)
+                // `estimated-vf-fps` is a live decoder estimate and visibly jitters
+                // whenever the UI repaints.  The status bar promises the media rate,
+                // so observe the stable container metadata instead.
+                .observe_property("container-fps", libmpv2::Format::Double, 13)
                 .unwrap();
 
             let egui_ctx2 = cc.egui_ctx.clone();
@@ -405,6 +416,10 @@ fn main() -> eframe::Result {
                 undo_stack: crate::four_d::history::UndoStack::default(),
                 relay_overrides: std::collections::BTreeSet::new(),
                 effects_search_query: String::new(),
+                user_strip_effects: crate::effects_library::load_or_seed(),
+                show_effect_library_editor: false,
+                effect_library_selection: None,
+                effect_library_draft: crate::effects_library::UserStripEffectPreset::default(),
                 track_muted: std::collections::BTreeSet::new(),
                 track_soloed: std::collections::BTreeSet::new(),
                 track_locked: std::collections::BTreeSet::new(),
@@ -437,6 +452,8 @@ fn main() -> eframe::Result {
                 osd_timeout_seconds: loaded_config.osd_timeout_seconds,
                 paused_drag_action: loaded_config.paused_drag_action,
                 playing_drag_action: loaded_config.playing_drag_action,
+                fullscreen_video_background: loaded_config.fullscreen_video_background,
+                status_bar: loaded_config.status_bar,
                 was_hardware_connected: false,
                 was_board_connected: false,
                 connection_notice: None,

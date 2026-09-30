@@ -715,12 +715,22 @@ pub fn spawn_engine() -> EngineHandle {
                     EngineMessage::InvokeControllerAction { action_id } => {
                         if connected {
                             if let Some(ref mut transport) = active_transport {
-                                if let Err(error) = transport.call_controller(
+                                match transport.call_controller(
                                     "controller.action.invoke",
                                     serde_json::json!({"action_id": action_id}),
                                 ) {
-                                    if let Ok(mut guard) = engine_conn_error.lock() {
-                                        *guard = Some(format!("invoke controller action: {error}"));
+                                    Ok(_) => {
+                                        // Pull an authoritative snapshot immediately. Push
+                                        // events remain the lowest-latency path, while this
+                                        // closes the race for coordinators that do not emit
+                                        // state changes for semantic actions yet.
+                                        engine_catalog_refresh_requested
+                                            .store(true, Ordering::Relaxed);
+                                    }
+                                    Err(error) => {
+                                        if let Ok(mut guard) = engine_conn_error.lock() {
+                                            *guard = Some(format!("invoke controller action: {error}"));
+                                        }
                                     }
                                 }
                             }
@@ -1418,7 +1428,7 @@ mod tests {
         let mut timeline = Timeline::new();
         let effect = Effect::new(
             "Test Constant".to_string(),
-            "🧪".to_string(),
+            "Test".to_string(),
             1000,
             vec![
                 AtomicAction {
@@ -1531,7 +1541,7 @@ mod tests {
         let mut timeline = Timeline::new();
         let effect = Effect::new(
             "Test Constant".to_string(),
-            "🧪".to_string(),
+            "Test".to_string(),
             1000,
             vec![
                 AtomicAction {

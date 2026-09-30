@@ -186,6 +186,10 @@ pub struct PealayerApp {
 
     // Phase 6 Preset Library state
     pub(crate) effects_search_query: String,
+    pub(crate) user_strip_effects: Vec<crate::effects_library::UserStripEffectPreset>,
+    pub(crate) show_effect_library_editor: bool,
+    pub(crate) effect_library_selection: Option<uuid::Uuid>,
+    pub(crate) effect_library_draft: crate::effects_library::UserStripEffectPreset,
     pub(crate) track_muted: std::collections::BTreeSet<u8>,
     pub(crate) track_soloed: std::collections::BTreeSet<u8>,
     pub(crate) track_locked: std::collections::BTreeSet<u8>,
@@ -216,6 +220,8 @@ pub struct PealayerApp {
     pub(crate) osd_timeout_seconds: f32,
     pub(crate) paused_drag_action: crate::config::PlayerDragAction,
     pub(crate) playing_drag_action: crate::config::PlayerDragAction,
+    pub(crate) fullscreen_video_background: crate::config::VideoBackground,
+    pub(crate) status_bar: crate::config::StatusBarConfig,
     pub(crate) was_hardware_connected: bool,
     pub(crate) was_board_connected: bool,
     pub(crate) connection_notice: Option<String>,
@@ -267,6 +273,7 @@ impl eframe::App for PealayerApp {
         }
 
         self.ensure_shell_initialized();
+        self.process_shell_commands(ui.ctx());
         self.process_controller_call_results();
 
         if self.media_controls.is_none() {
@@ -469,15 +476,27 @@ impl eframe::App for PealayerApp {
             && self
                 .advertised_hardware()
                 .is_some_and(|capabilities| capabilities.board_connected);
-        if hardware_connection_was_lost(
+        let hardware_lost = hardware_connection_was_lost(
             self.was_hardware_connected,
             connected_now,
             self.was_board_connected,
             board_connected_now,
-        ) && self.pause_on_hardware_disconnect
-        {
-            self.pause();
-            self.set_osd(self.tr("Hardware disconnected — playback paused"));
+        );
+        if hardware_lost {
+            let message = if self.pause_on_hardware_disconnect {
+                self.pause();
+                self.tr("Hardware disconnected — playback paused")
+            } else {
+                self.tr("Hardware disconnected")
+            };
+            self.set_osd(message.clone());
+            if let Some(hwnd) = self.window_handle {
+                let _ = crate::platform::windows::show_system_notification(
+                    hwnd,
+                    &self.app_name,
+                    &message,
+                );
+            }
         }
         if connected_now && !self.was_hardware_connected {
             self.connection_notice = None;
@@ -660,20 +679,13 @@ impl eframe::App for PealayerApp {
                             .show_inside(ui, &mut tab_viewer);
                     });
                     self.dock_state = dock_state;
-                    let pointer_is_in_primary_tab_header = ui
-                        .ctx()
-                        .pointer_latest_pos()
-                        .is_some_and(|pointer| {
-                            pointer.y >= dock_response.response.rect.top()
-                                && pointer.y <= dock_response.response.rect.top() + 32.0
-                        });
-                    if pointer_is_in_primary_tab_header {
-                        dock_response.response.context_menu(|ui| {
+                    dock_response.response.context_menu(|ui| {
                             ui.label(egui::RichText::new(self.tr("Workspace")).strong());
                             ui.separator();
                             if ui
                                 .button(format!(
-                                    "▦ {}",
+                                    "{} {}",
+                                    crate::ui::icons::TABS,
                                     self.tr("Reset workspace layout")
                                 ))
                                 .clicked()
@@ -683,7 +695,8 @@ impl eframe::App for PealayerApp {
                             }
                             if ui
                                 .button(format!(
-                                    "▶ {}",
+                                    "{} {}",
+                                    crate::ui::icons::PLAY,
                                     self.tr("Switch to Simple Player")
                                 ))
                                 .clicked()
@@ -693,14 +706,13 @@ impl eframe::App for PealayerApp {
                             }
                             ui.separator();
                             if ui
-                                .button(format!("⚙ {}", self.tr("Preferences...")))
+                                .button(format!("{} {}", crate::ui::icons::GEAR, self.tr("Preferences...")))
                                 .clicked()
                             {
                                 self.show_preferences_dialog = true;
                                 ui.close();
                             }
                         });
-                    }
                 } else {
                     crate::ui::video::draw(self, ui);
                     crate::ui::controls::draw(self, ui);
@@ -710,12 +722,13 @@ impl eframe::App for PealayerApp {
                 crate::ui::subtitles::draw_settings_dialog(self, ui);
                 crate::ui::audio::draw_settings_dialog(self, ui);
                 crate::ui::preferences::draw(self, ui);
+                crate::ui::effects_library::draw_editor(self, ui);
 
                 if self.show_open_url_dialog {
                     let mut open_url = false;
                     let mut close_dialog = false;
 
-                    egui::Window::new(format!("↗ {}", self.tr("Open Location / URL")))
+                    egui::Window::new(format!("{} {}", crate::ui::icons::ARROW_SQUARE_OUT, self.tr("Open Location / URL")))
                         .collapsible(false)
                         .resizable(false)
                         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
@@ -742,7 +755,7 @@ impl eframe::App for PealayerApp {
                                             open_url = true;
                                         }
 
-                                        if ui.button(format!("📋 {}", self.tr("Paste"))).clicked()
+                                        if ui.button(format!("{} {}", crate::ui::icons::CLIPBOARD, self.tr("Paste"))).clicked()
                                         {
                                             if let Some(text) = ui.input(|i| {
                                                 i.raw.events.iter().find_map(|e| match e {
@@ -783,7 +796,7 @@ impl eframe::App for PealayerApp {
 
                 if self.show_shortcuts_dialog {
                     let language = self.language;
-                    egui::Window::new(format!("⌨ {}", self.tr("Keyboard Shortcuts & Controls")))
+                    egui::Window::new(format!("{} {}", crate::ui::icons::KEYBOARD, self.tr("Keyboard Shortcuts & Controls")))
                         .collapsible(false)
                         .resizable(true)
                         .default_size([460.0, 360.0])
@@ -876,7 +889,7 @@ impl eframe::App for PealayerApp {
                     let app_name = self.app_name.clone();
                     let app_publisher = self.app_publisher.clone();
                     let app_copyright = self.app_copyright.clone();
-                    egui::Window::new(format!("ℹ {} {}", self.tr("About"), self.app_name))
+                    egui::Window::new(format!("{} {} {}", crate::ui::icons::INFO, self.tr("About"), self.app_name))
                         .collapsible(false)
                         .resizable(false)
                         .default_size([380.0, 240.0])
@@ -885,7 +898,7 @@ impl eframe::App for PealayerApp {
                         .show(ui.ctx(), |ui| {
                             ui.vertical_centered(|ui| {
                                 ui.add_space(8.0);
-                                ui.heading(format!("▣ {app_name} v{}", env!("CARGO_PKG_VERSION")));
+                                ui.heading(format!("{} {app_name} v{}", crate::ui::icons::MONITOR_PLAY, env!("CARGO_PKG_VERSION")));
                                 if let Some(publisher) = &app_publisher {
                                     ui.label(publisher);
                                 }
@@ -924,9 +937,43 @@ impl PealayerApp {
                 .window_handle
                 .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
             if hwnd != 0 {
-                let _ = crate::platform::windows::init_taskbar_thumbnail_toolbar(hwnd);
-                let _ = crate::platform::windows::register_system_tray_icon(hwnd, "Pealayer");
-                self.shell_initialized = true;
+                let result = crate::platform::windows::install_shell_message_hook(hwnd)
+                    .and_then(|_| crate::platform::windows::init_taskbar_thumbnail_toolbar(hwnd))
+                    .and_then(|_| crate::platform::windows::register_system_tray_icon(hwnd, &self.app_name));
+                self.shell_initialized = result.is_ok();
+                if let Err(error) = result {
+                    log::warn!("Windows shell integration is not ready; retrying: {error}");
+                }
+            }
+        }
+    }
+
+    fn process_shell_commands(&mut self, ctx: &egui::Context) {
+        crate::platform::windows::update_shell_command_state(self.is_paused, self.is_muted);
+        while let Some(command) = crate::platform::windows::take_shell_command() {
+            match command {
+                crate::platform::windows::THUMB_BUTTON_PREV => self.seek_relative(-10.0),
+                crate::platform::windows::THUMB_BUTTON_PLAYPAUSE
+                | crate::platform::windows::TRAY_CMD_PLAYPAUSE => self.toggle_playback(),
+                crate::platform::windows::THUMB_BUTTON_NEXT => self.seek_relative(10.0),
+                crate::platform::windows::TRAY_CMD_MUTE => {
+                    let _ = self.mpv.command("cycle", &["mute"]);
+                    self.is_muted = !self.is_muted;
+                }
+                crate::platform::windows::TRAY_CMD_OPEN => {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Video Files", &["mp4", "mkv", "avi", "webm", "mov", "flv"])
+                        .pick_file()
+                    { self.load_video_file(path); }
+                }
+                crate::platform::windows::TRAY_CMD_EXIT => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                crate::platform::windows::TRAY_CMD_SHOW => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+                _ => {}
             }
         }
     }
@@ -985,9 +1032,9 @@ impl PealayerApp {
             .iter()
             .map(controller_macro_effect_preset)
             .chain(
-                capabilities
-                    .strip_effects
+                self.user_strip_effects
                     .iter()
+                    .filter(|preset| capabilities.strip_effects.iter().any(|effect| effect.id == preset.hardware_effect_id))
                     .map(controller_strip_effect_preset),
             )
             .collect()
@@ -1736,6 +1783,8 @@ impl PealayerApp {
         cfg.osd_timeout_seconds = self.osd_timeout_seconds;
         cfg.paused_drag_action = self.paused_drag_action;
         cfg.playing_drag_action = self.playing_drag_action;
+        cfg.fullscreen_video_background = self.fullscreen_video_background;
+        cfg.status_bar = self.status_bar;
         cfg.save();
     }
 
@@ -1937,14 +1986,14 @@ fn controller_macro_effect_preset(
 }
 
 fn controller_strip_effect_preset(
-    strip_effect: &crate::four_d::controller::HardwareStripEffect,
+    strip_effect: &crate::effects_library::UserStripEffectPreset,
 ) -> EffectPreset {
     EffectPreset {
-        category: "Addressable strip".to_string(),
+        category: strip_effect.category.clone(),
         effect: crate::four_d::models::Effect::controller_strip_effect(
             strip_effect.name.clone(),
-            5_000,
-            strip_effect.id.clone(),
+            strip_effect.duration_ms,
+            strip_effect.hardware_effect_id.clone(),
         ),
     }
 }
@@ -1990,7 +2039,7 @@ impl Default for PealayerApp {
         let _ = mpv_client.observe_property("audio-delay", libmpv2::Format::Double, 10);
         let _ = mpv_client.observe_property("aid", libmpv2::Format::String, 11);
         let _ = mpv_client.observe_property("eof-reached", libmpv2::Format::Flag, 12);
-        let _ = mpv_client.observe_property("estimated-vf-fps", libmpv2::Format::Double, 13);
+        let _ = mpv_client.observe_property("container-fps", libmpv2::Format::Double, 13);
         let (interop_tx, interop_rx) = std::sync::mpsc::channel();
         let (_controller_cmd_tx, controller_cmd_rx) =
             std::sync::mpsc::channel::<crate::platform::interop::ControllerDelivery>();
@@ -2059,6 +2108,10 @@ impl Default for PealayerApp {
             recording_keys: std::collections::HashMap::new(),
             relay_overrides: std::collections::BTreeSet::new(),
             effects_search_query: String::new(),
+            user_strip_effects: crate::effects_library::load_or_seed(),
+            show_effect_library_editor: false,
+            effect_library_selection: None,
+            effect_library_draft: crate::effects_library::UserStripEffectPreset::default(),
             track_muted: std::collections::BTreeSet::new(),
             track_soloed: std::collections::BTreeSet::new(),
             track_locked: std::collections::BTreeSet::new(),
@@ -2095,6 +2148,8 @@ impl Default for PealayerApp {
             osd_timeout_seconds: 3.5,
             paused_drag_action: crate::config::PlayerDragAction::MoveWindow,
             playing_drag_action: crate::config::PlayerDragAction::TemporaryFastForward,
+            fullscreen_video_background: crate::config::VideoBackground::Black,
+            status_bar: crate::config::StatusBarConfig::default(),
             was_hardware_connected: false,
             was_board_connected: false,
             connection_notice: None,

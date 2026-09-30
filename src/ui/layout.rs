@@ -74,6 +74,209 @@ fn timeline_row_for_relay(rows: &[TimelineTrackRow], relay_id: u8) -> Option<usi
         .position(|track| track.kind == TimelineTrackKind::Relay(relay_id))
 }
 
+fn relay_id_from_control_key(key: &str) -> Option<u8> {
+    key.strip_prefix("relay.")?.parse().ok()
+}
+
+fn humanize_machine_label(value: &str) -> String {
+    value
+        .split(['-', '_', '.'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            chars
+                .next()
+                .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn update_control_name(
+    app: &PealayerApp,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+    requested_name: String,
+) {
+    let requested_name = requested_name.trim().to_string();
+    let restore_default = requested_name.is_empty()
+        || (!control.default_name.is_empty() && requested_name == control.default_name);
+    let mut fallback_names = capabilities.peripheral_names.clone();
+    if restore_default {
+        fallback_names.remove(&control.key);
+    } else {
+        fallback_names.insert(control.key.clone(), requested_name.clone());
+    }
+    let expected_revision = capabilities
+        .board_profile
+        .as_ref()
+        .map(|profile| profile.revision.clone())
+        .filter(|revision| !revision.is_empty());
+    let _ = app.engine_handle.sender.send(
+        crate::four_d::engine::EngineMessage::UpdatePeripheralPresentation {
+            key: control.key.clone(),
+            name: Some(if restore_default {
+                String::new()
+            } else {
+                requested_name
+            }),
+            icon: None,
+            group: None,
+            expected_revision,
+            fallback_names,
+        },
+    );
+}
+
+fn draw_control_card(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+) {
+    let edit_id = ui.make_persistent_id(("control-name-editing", control.key.as_str()));
+    let draft_id = ui.make_persistent_id(("control-name-draft", control.key.as_str()));
+    let source_id = ui.make_persistent_id(("control-name-source", control.key.as_str()));
+    let relay_active = relay_id_from_control_key(&control.key)
+        .is_some_and(|id| capabilities.active_relays.contains(&id));
+    let relay_id = relay_id_from_control_key(&control.key);
+    let indicator_color = if relay_active {
+        egui::Color32::from_rgb(52, 211, 153)
+    } else if relay_id.is_none() {
+        egui::Color32::from_rgb(56, 189, 248)
+    } else {
+        ui.visuals().widgets.noninteractive.fg_stroke.color.gamma_multiply(0.45)
+    };
+
+    let card = egui::Frame::group(ui.style())
+        .inner_margin(egui::Margin::symmetric(12, 10))
+        .corner_radius(8.0)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(crate::ui::icons::control(&control.kind, &control.icon))
+                        .size(18.0),
+                );
+                let (indicator_rect, indicator_response) =
+                    ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                ui.painter()
+                    .circle_filled(indicator_rect.center(), 4.0, indicator_color);
+                indicator_response.on_hover_text(if relay_active {
+                    app.tr("Board reports ON")
+                } else if relay_id.is_some() {
+                    app.tr("Board reports OFF")
+                } else {
+                    app.tr("Live board control")
+                });
+
+                let mut editing = ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
+                if editing {
+                    let mut draft = ui.data_mut(|data| {
+                        let source = data.get_temp::<String>(source_id);
+                        if source.as_deref() != Some(control.name.as_str()) {
+                            data.insert_temp(source_id, control.name.clone());
+                            data.insert_temp(draft_id, control.name.clone());
+                        }
+                        data.get_temp::<String>(draft_id)
+                            .unwrap_or_else(|| control.name.clone())
+                    });
+                    let edit = ui.add(
+                        egui::TextEdit::singleline(&mut draft)
+                            .desired_width(180.0)
+                            .hint_text(&control.default_name),
+                    );
+                    if edit.changed() {
+                        ui.data_mut(|data| data.insert_temp(draft_id, draft.clone()));
+                    }
+                    let save = ui
+                        .button(crate::ui::icons::FLOPPY_DISK)
+                        .on_hover_text(app.tr("Save name"));
+                    let cancel = ui
+                        .button(crate::ui::icons::X)
+                        .on_hover_text(app.tr("Cancel"));
+                    if save.clicked()
+                        || (edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)))
+                    {
+                        update_control_name(app, capabilities, control, draft);
+                        editing = false;
+                    } else if cancel.clicked()
+                        || ui.input(|input| input.key_pressed(egui::Key::Escape))
+                    {
+                        editing = false;
+                    }
+                    ui.data_mut(|data| data.insert_temp(edit_id, editing));
+                } else {
+                    let title = ui.label(
+                        egui::RichText::new(crate::ui::i18n::visual_text(
+                            app.language,
+                            &control.name,
+                        ))
+                        .strong()
+                        .size(13.0),
+                    );
+                    if title.double_clicked() {
+                        ui.data_mut(|data| data.insert_temp(edit_id, true));
+                    }
+                    if !control.group.trim().is_empty() {
+                        ui.label(egui::RichText::new(&control.group).weak().small());
+                    }
+                    if ui
+                        .button(crate::ui::icons::PENCIL_SIMPLE)
+                        .on_hover_text(app.tr("Rename"))
+                        .clicked()
+                    {
+                        ui.data_mut(|data| data.insert_temp(edit_id, true));
+                    }
+                }
+            });
+
+            if !control.actions.is_empty() {
+                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    for action in &control.actions {
+                        let label = format!(
+                            "{} {}",
+                            crate::ui::icons::action(&action.verb),
+                            crate::ui::i18n::visual_text(app.language, &action.name),
+                        );
+                        if ui
+                            .add_enabled(!app.estop_active, egui::Button::new(label))
+                            .clicked()
+                        {
+                            let _ = app.engine_handle.sender.send(
+                                crate::four_d::engine::EngineMessage::InvokeControllerAction {
+                                    action_id: action.id.clone(),
+                                },
+                            );
+                        }
+                    }
+                });
+            }
+        });
+
+    card.response.context_menu(|ui| {
+        if ui
+            .button(format!(
+                "{} {}",
+                crate::ui::icons::PENCIL_SIMPLE,
+                app.tr("Rename")
+            ))
+            .clicked()
+        {
+            ui.data_mut(|data| data.insert_temp(edit_id, true));
+            ui.close();
+        }
+        if !control.default_name.is_empty()
+            && control.name != control.default_name
+            && ui.button(app.tr("Restore default name")).clicked()
+        {
+            update_control_name(app, capabilities, control, String::new());
+            ui.close();
+        }
+    });
+}
+
 #[cfg(test)]
 mod timeline_row_tests {
     use super::*;
@@ -115,11 +318,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
         match tab {
-            PealayerTab::ProgramMonitor => format!("{} ▶", self.app.tr("Program Monitor")).into(),
-            PealayerTab::EffectControls => format!("{} ⚙", self.app.tr("Effect Controls")).into(),
-            PealayerTab::EffectsLibrary => format!("{} ◫", self.app.tr("Effects Library")).into(),
-            PealayerTab::HardwareMonitor => format!("{} ⌁", self.app.tr("Hardware Monitor")).into(),
-            PealayerTab::Timeline => format!("{} ━", self.app.tr("Timeline")).into(),
+            PealayerTab::ProgramMonitor => format!("{} {}", crate::ui::icons::MONITOR_PLAY, self.app.tr("Program Monitor")).into(),
+            PealayerTab::EffectControls => format!("{} {}", crate::ui::icons::SLIDERS_HORIZONTAL, self.app.tr("Effect Controls")).into(),
+            PealayerTab::EffectsLibrary => format!("{} {}", crate::ui::icons::SPARKLE, self.app.tr("Effects Library")).into(),
+            PealayerTab::HardwareMonitor => format!("{} {}", crate::ui::icons::GAUGE, self.app.tr("Hardware Monitor")).into(),
+            PealayerTab::Timeline => format!("{} {}", crate::ui::icons::WAVEFORM, self.app.tr("Timeline")).into(),
         }
     }
 
@@ -146,13 +349,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                 } else {
                     self.app.tr("Fullscreen")
                 };
-                if ui.button(format!("⛶ {label}")).clicked() {
+                if ui.button(format!("{} {label}", crate::ui::icons::ARROWS_OUT)).clicked() {
                     self.app.toggle_fullscreen(ui.ctx());
                     ui.close();
                 }
             }
             PealayerTab::Timeline => {
-                if ui.button(format!("▣ {}", self.app.tr("Select all cues"))).clicked() {
+                if ui.button(format!("{} {}", crate::ui::icons::CHECK_SQUARE, self.app.tr("Select all cues"))).clicked() {
                     self.app.selected_instance_ids = self
                         .app
                         .timeline
@@ -162,13 +365,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         .collect();
                     ui.close();
                 }
-                if ui.button(format!("↺ {}", self.app.tr("Reset zoom"))).clicked() {
+                if ui.button(format!("{} {}", crate::ui::icons::ARROW_COUNTER_CLOCKWISE, self.app.tr("Reset zoom"))).clicked() {
                     self.app.timeline_zoom = 100.0;
                     ui.close();
                 }
             }
             PealayerTab::HardwareMonitor => {
-                if ui.button(format!("⌁ {}", self.app.tr("Hardware preferences"))).clicked() {
+                if ui.button(format!("{} {}", crate::ui::icons::PLUG, self.app.tr("Hardware preferences"))).clicked() {
                     self.app.preferences_tab = 2;
                     self.app.show_preferences_dialog = true;
                     ui.close();
@@ -177,7 +380,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
             _ => {}
         }
         ui.separator();
-        if ui.button(format!("⚙ {}", self.app.tr("Preferences..."))).clicked() {
+        if ui.button(format!("{} {}", crate::ui::icons::GEAR, self.app.tr("Preferences..."))).clicked() {
             self.app.show_preferences_dialog = true;
             ui.close();
         }
@@ -250,11 +453,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             ui.add_enabled_ui(has_video, |ui| {
                                 ui.horizontal(|ui| {
                                     let play_icon = if self.app.is_playback_finished() {
-                                        "↺"
+                                        crate::ui::icons::ARROW_COUNTER_CLOCKWISE
                                     } else if self.app.is_paused {
-                                        "▶"
+                                        crate::ui::icons::PLAY
                                     } else {
-                                        "⏸"
+                                        crate::ui::icons::PAUSE
                                     };
                                     let play_tooltip = if self.app.is_playback_finished() {
                                         &replay_label
@@ -270,7 +473,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     {
                                         self.app.toggle_playback();
                                     }
-                                    if ui.add_sized([30.0, 22.0], egui::Button::new("⏹")).on_hover_text(&stop_label).clicked() {
+                                    if ui.add_sized([30.0, 22.0], egui::Button::new(crate::ui::icons::STOP_CIRCLE)).on_hover_text(&stop_label).clicked() {
                                         // Punch out on stop
                                         self.app.commit_recorded_samples();
 
@@ -342,7 +545,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         self.app.save_config();
                                     }
                                     if ui
-                                        .button("⛶")
+                                        .button(crate::ui::icons::ARROWS_OUT)
                                         .on_hover_text(format!("{} (F)", self.app.tr("Fullscreen")))
                                         .clicked()
                                     {
@@ -386,7 +589,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             if let Some(idx) = instance_idx {
                                 let identity_label = self.app.tr("Identity");
                                 let name_label = self.app.tr("Name:");
-                                let icon_label = self.app.tr("Icon:");
                                 let timing_label = self.app.tr("Timing constraints");
                                 let start_time_label = self.app.tr("Start time:");
                                 let duration_label = self.app.tr("Duration:");
@@ -424,13 +626,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         ui.horizontal(|ui| {
                                             ui.label(&name_label);
                                             if ui.text_edit_singleline(&mut template.name).changed() {
-                                                timeline_dirty = true;
-                                            }
-                                        });
-
-                                        ui.horizontal(|ui| {
-                                            ui.label(&icon_label);
-                                            if ui.text_edit_singleline(&mut template.icon).changed() {
                                                 timeline_dirty = true;
                                             }
                                         });
@@ -495,7 +690,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         ui.group(|ui| {
                                             ui.colored_label(
                                                 egui::Color32::from_rgb(245, 158, 11),
-                                                format!("△ Track mismatch: configured for {configured_name}"),
+                                                format!("{} Track mismatch: configured for {configured_name}", crate::ui::icons::WARNING),
                                             );
                                             if let Some(primary) = template.target.primary_relay_id() {
                                                 if advertised_relays.iter().any(|relay| relay.id == primary)
@@ -545,7 +740,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     }
 
                                     ui.add_space(12.0);
-                                    if ui.button(egui::RichText::new(format!("× {delete_cue_label}")).color(egui::Color32::from_rgb(231, 76, 60))).clicked() {
+                                    if ui.button(egui::RichText::new(format!("{} {delete_cue_label}", crate::ui::icons::X)).color(egui::Color32::from_rgb(231, 76, 60))).clicked() {
                                         delete_cue = true;
                                     }
                                 }
@@ -672,7 +867,19 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         }
                     }
                     PealayerTab::EffectsLibrary => {
-                        ui.heading(self.app.tr("Effects Library"));
+                        ui.horizontal(|ui| {
+                            ui.heading(self.app.tr("Effects Library"));
+                            if ui
+                                .button(format!(
+                                    "{} {}",
+                                    crate::ui::icons::PENCIL_SIMPLE,
+                                    self.app.tr("Manage effects")
+                                ))
+                                .clicked()
+                            {
+                                self.app.show_effect_library_editor = true;
+                            }
+                        });
                         ui.add_space(4.0);
 
                         // 1. Instant search edit field
@@ -765,17 +972,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 display_language,
                                                                 &preset.effect.name,
                                                             );
-                                                        let effect_label = if preset.effect.icon.trim().is_empty() {
-                                                            displayed_effect_name
-                                                        } else {
-                                                            format!("{} {}", preset.effect.icon, displayed_effect_name)
-                                                        };
+                                                        let effect_label = format!(
+                                                            "{} {}",
+                                                            crate::ui::icons::SPARKLE,
+                                                            displayed_effect_name,
+                                                        );
                                                         ui.painter().text(
                                                             rect.left_center() + egui::vec2(8.0, 0.0),
                                                             egui::Align2::LEFT_CENTER,
                                                             effect_label.clone(),
                                                             egui::FontId::proportional(11.0),
-                                                            egui::Color32::WHITE,
+                                                            ui.visuals().text_color(),
                                                         );
 
                                                         // Change cursor to Grab on hover, Grabbing on active drag
@@ -822,7 +1029,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 };
                                 ui.colored_label(
                                     color,
-                                    egui::RichText::new(format!("△ {estop_banner_label} △"))
+                                    egui::RichText::new(format!("{} {estop_banner_label}", crate::ui::icons::WARNING))
                                         .strong()
                                         .size(13.0)
                                 );
@@ -853,42 +1060,58 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         if let Some(capabilities) = capabilities
                             .filter(|capabilities| capabilities.board_connected)
                         {
-                            let board_label = if capabilities.board_name.is_empty() {
-                                self.app.tr("Connected board").to_string()
-                            } else {
-                                format!(
-                                    "{} {}",
-                                    self.app.tr("Connected board:"),
-                                    crate::ui::i18n::visual_text(
-                                        display_language,
-                                        &capabilities.board_name,
-                                    )
-                                )
-                            };
-                            ui.label(board_label);
-
-                            if let Some(profile) = capabilities.board_profile.as_ref() {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "{} · {}",
-                                            profile.key, profile.mode
-                                        ))
-                                        .weak()
-                                        .monospace(),
-                                    )
-                                    .on_hover_text(format!(
-                                        "{} · {}",
-                                        profile.board_identity, profile.identity_source
-                                    ));
-                                    if !profile.identity_stable {
+                            egui::Frame::group(ui.style())
+                                .inner_margin(egui::Margin::symmetric(14, 12))
+                                .corner_radius(10.0)
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
                                         ui.label(
-                                            egui::RichText::new(self.app.tr("Temporary board identity"))
-                                                .weak(),
+                                            egui::RichText::new(crate::ui::icons::PLUG)
+                                                .size(22.0),
                                         );
-                                    }
+                                        ui.vertical(|ui| {
+                                            let profile_name = capabilities
+                                                .board_profile
+                                                .as_ref()
+                                                .map(|profile| humanize_machine_label(&profile.key))
+                                                .filter(|name| !name.is_empty());
+                                            let board_name = crate::ui::i18n::visual_text(
+                                                display_language,
+                                                &capabilities.board_name,
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(if board_name.trim().is_empty() {
+                                                    profile_name.clone().unwrap_or_else(|| self.app.tr("Connected board"))
+                                                } else {
+                                                    board_name
+                                                })
+                                                    .heading()
+                                                    .strong(),
+                                            );
+                                            if let Some(profile_name) = profile_name {
+                                                ui.label(
+                                                    egui::RichText::new(profile_name)
+                                                    .weak(),
+                                                );
+                                            }
+                                        });
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                let (rect, _) = ui.allocate_exact_size(
+                                                    egui::vec2(14.0, 14.0),
+                                                    egui::Sense::hover(),
+                                                );
+                                                ui.painter().circle_filled(
+                                                    rect.center(),
+                                                    5.0,
+                                                    egui::Color32::from_rgb(52, 211, 153),
+                                                );
+                                                ui.label(self.app.tr("Connected"));
+                                            },
+                                        );
+                                    });
                                 });
-                            }
 
                             let can_record = capabilities.board_profile.as_ref().is_some_and(|profile| {
                                 profile.attached && profile.configured
@@ -996,11 +1219,28 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let strip_title = self.app.tr("Addressable strip effects");
                                 let stop_label = self.app.tr("Stop preview");
                                 let preview_label = self.app.tr("Preview");
+                                let user_effects = self
+                                    .app
+                                    .user_strip_effects
+                                    .iter()
+                                    .filter(|preset| capabilities.strip_effects.iter().any(|effect| effect.id == preset.hardware_effect_id))
+                                    .cloned()
+                                    .collect::<Vec<_>>();
                                 ui.add_space(8.0);
                                 ui.horizontal(|ui| {
                                     ui.label(
                                         egui::RichText::new(&strip_title).strong(),
                                     );
+                                    if ui
+                                        .button(format!(
+                                            "{} {}",
+                                            crate::ui::icons::PENCIL_SIMPLE,
+                                            self.app.tr("Manage effects")
+                                        ))
+                                        .clicked()
+                                    {
+                                        self.app.show_effect_library_editor = true;
+                                    }
                                     if ui
                                         .add_enabled(
                                             self.app.hardware_effect_authoring.pending_operation.is_none(),
@@ -1013,7 +1253,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
                                     }
                                 });
-                                for strip_effect in &capabilities.strip_effects {
+                                for strip_effect in &user_effects {
                                     ui.horizontal_wrapped(|ui| {
                                         ui.label(
                                             egui::RichText::new(crate::ui::i18n::visual_text(
@@ -1022,23 +1262,23 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             ))
                                             .strong(),
                                         );
-                                        if let Some(fps) = strip_effect.default_fps {
-                                            ui.label(egui::RichText::new(format!("{fps} FPS")).weak());
-                                        }
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{:.1} s",
+                                                strip_effect.duration_ms as f64 / 1_000.0
+                                            ))
+                                            .weak(),
+                                        );
                                         if ui
                                             .add_enabled(
                                                 self.app.hardware_effect_authoring.pending_operation.is_none(),
                                                 egui::Button::new(&preview_label),
                                             )
-                                            .on_hover_text(if strip_effect.description.is_empty() {
-                                                strip_effect.id.clone()
-                                            } else {
-                                                format!("{}\n{}", strip_effect.id, strip_effect.description)
-                                            })
+                                            .on_hover_text(format!("{} ms", strip_effect.duration_ms))
                                             .clicked()
                                         {
                                             if let Err(error) =
-                                                self.app.preview_strip_effect(&strip_effect.id)
+                                                self.app.preview_strip_effect(&strip_effect.hardware_effect_id)
                                             {
                                                 self.app.set_osd(error);
                                             }
@@ -1055,7 +1295,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     capabilities
                                         .controls
                                         .iter()
-                                        .filter(|control| !control.actions.is_empty())
+                                        .filter(|control| relay_id_from_control_key(&control.key).is_none())
                                         .collect::<Vec<_>>()
                                 })
                                 .unwrap_or_default();
@@ -1065,187 +1305,36 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     egui::RichText::new(self.app.tr("Semantic board controls"))
                                         .strong(),
                                 );
-                                for control in semantic_controls {
-                                    ui.horizontal_wrapped(|ui| {
-                                        if !control.icon.is_empty() {
-                                            ui.label(&control.icon);
-                                        }
-                                        ui.label(
-                                            egui::RichText::new(crate::ui::i18n::visual_text(
-                                                display_language,
-                                                &control.name,
-                                            ))
-                                            .strong(),
-                                        )
-                                        .on_hover_text(format!(
-                                            "{} · {} · {}",
-                                            control.key, control.kind, control.group
-                                        ));
-                                        for action in &control.actions {
-                                            let label = if action.icon.is_empty() {
-                                                action.name.clone()
-                                            } else {
-                                                format!("{} {}", action.icon, action.name)
-                                            };
-                                            if ui
-                                                .add_enabled(
-                                                    !self.app.estop_active,
-                                                    egui::Button::new(label),
-                                                )
-                                                .on_hover_text(&action.id)
-                                                .clicked()
-                                            {
-                                                let _ = self.app.engine_handle.sender.send(
-                                                    crate::four_d::engine::EngineMessage::InvokeControllerAction {
-                                                        action_id: action.id.clone(),
-                                                    },
-                                                );
-                                            }
-                                        }
-                                    });
-                                }
-                            }
-
-                            if !capabilities.controls.is_empty() {
-                                egui::CollapsingHeader::new(self.app.tr("Channel names"))
-                                    .id_salt("hardware_channel_names")
+                                egui::Grid::new("semantic_control_cards")
+                                    .num_columns(2)
+                                    .spacing([10.0, 10.0])
                                     .show(ui, |ui| {
-                                        for control in &capabilities.controls {
-                                            let draft_id = ui.make_persistent_id((
-                                                "channel_name_draft",
-                                                control.key.as_str(),
-                                            ));
-                                            let source_id = ui.make_persistent_id((
-                                                "channel_name_source",
-                                                control.key.as_str(),
-                                            ));
-                                            let mut draft = ui.data_mut(|data| {
-                                                let source = data.get_temp::<String>(source_id);
-                                                if source.as_deref() != Some(control.name.as_str()) {
-                                                    data.insert_temp(source_id, control.name.clone());
-                                                    data.insert_temp(draft_id, control.name.clone());
-                                                }
-                                                data.get_temp::<String>(draft_id)
-                                                    .unwrap_or_else(|| control.name.clone())
-                                            });
-                                            ui.horizontal(|ui| {
-                                                ui.label(egui::RichText::new(&control.key).monospace());
-                                                let edit = ui.add(
-                                                    egui::TextEdit::singleline(&mut draft)
-                                                        .desired_width(190.0),
-                                                );
-                                                if edit.changed() {
-                                                    ui.data_mut(|data| {
-                                                        data.insert_temp(draft_id, draft.clone())
-                                                    });
-                                                }
-                                                let trimmed = draft.trim();
-                                                let changed = trimmed != control.name;
-                                                if ui
-                                                    .add_enabled(
-                                                        changed
-                                                            && (!trimmed.is_empty()
-                                                                || !control.default_name.is_empty()),
-                                                        egui::Button::new(self.app.tr("Save name")),
-                                                    )
-                                                    .clicked()
-                                                {
-                                                    let name = trimmed.to_string();
-                                                    let restore_default = name.is_empty()
-                                                        || (!control.default_name.is_empty()
-                                                            && name == control.default_name);
-                                                    let mut fallback_names =
-                                                        capabilities.peripheral_names.clone();
-                                                    if restore_default {
-                                                        fallback_names.remove(&control.key);
-                                                    } else {
-                                                        fallback_names
-                                                            .insert(control.key.clone(), name.clone());
-                                                    }
-                                                    let expected_revision = capabilities
-                                                        .board_profile
-                                                        .as_ref()
-                                                        .map(|profile| profile.revision.clone())
-                                                        .filter(|revision| !revision.is_empty());
-                                                    let _ = self.app.engine_handle.sender.send(
-                                                        crate::four_d::engine::EngineMessage::UpdatePeripheralPresentation {
-                                                            key: control.key.clone(),
-                                                            name: Some(if restore_default {
-                                                                String::new()
-                                                            } else {
-                                                                name
-                                                            }),
-                                                            icon: None,
-                                                            group: None,
-                                                            expected_revision,
-                                                            fallback_names,
-                                                        },
-                                                    );
-                                                }
-                                                if !control.group.is_empty() {
-                                                    ui.label(
-                                                        egui::RichText::new(&control.group).weak(),
-                                                    );
-                                                }
-                                            });
+                                        for (index, control) in semantic_controls.into_iter().enumerate() {
+                                            draw_control_card(self.app, ui, &capabilities, control);
+                                            if index % 2 == 1 {
+                                                ui.end_row();
+                                            }
                                         }
                                     });
                             }
 
                             if !capabilities.relays.is_empty() {
+                                let relay_controls = capabilities
+                                    .controls
+                                    .iter()
+                                    .filter(|control| relay_id_from_control_key(&control.key).is_some())
+                                    .collect::<Vec<_>>();
                                 ui.label(egui::RichText::new(self.app.tr("Relay outputs")).strong());
-                                egui::Grid::new("hardware_monitor_grid")
-                                    .num_columns(3)
-                                    .spacing([16.0, 12.0])
-                                    .striped(true)
+                                egui::Grid::new("hardware_monitor_relay_cards")
+                                    .num_columns(2)
+                                    .spacing([10.0, 10.0])
                                     .show(ui, |ui| {
-                                    for relay in &capabilities.relays {
-                                        let id = relay.id;
-                                        let board_active = capabilities.active_relays.contains(&id);
-                                        let is_overridden = self.app.relay_overrides.contains(&id);
-
-                                        ui.horizontal(|ui| {
-                                            draw_led(ui, board_active);
-                                            ui.add_space(4.0);
-                                            ui.label(egui::RichText::new(crate::ui::i18n::visual_text(display_language, &relay.name)).monospace())
-                                                .on_hover_text(format!("{} · {}", crate::ui::i18n::visual_text(display_language, &relay.key), crate::ui::i18n::visual_text(display_language, &relay.role)));
-                                        });
-
-                                        let btn_text = if is_overridden {
-                                            self.app.tr("Release")
-                                        } else {
-                                            self.app.tr("Force ON")
-                                        };
-                                        let btn = ui.add_enabled(
-                                            !self.app.estop_active,
-                                            egui::Button::new(btn_text).selected(is_overridden),
-                                        );
-                                        if btn.clicked() {
-                                            let state = !is_overridden;
-                                            if state {
-                                                self.app.relay_overrides.insert(id);
-                                            } else {
-                                                self.app.relay_overrides.remove(&id);
+                                        for (index, control) in relay_controls.into_iter().enumerate() {
+                                            draw_control_card(self.app, ui, &capabilities, control);
+                                            if index % 2 == 1 {
+                                                ui.end_row();
                                             }
-                                            let _ = self.app.engine_handle.sender.send(
-                                                crate::four_d::engine::EngineMessage::SendCommand(
-                                                    crate::four_d::protocol::Command::RelaySet {
-                                                        id,
-                                                        state,
-                                                    },
-                                                ),
-                                            );
                                         }
-
-                                        ui.label(if is_overridden {
-                                            self.app.tr("Override requested")
-                                        } else if board_active {
-                                            self.app.tr("Board reports ON")
-                                        } else {
-                                            self.app.tr("Board reports OFF")
-                                        });
-                                        ui.end_row();
-                                    }
                                     });
                             }
 
@@ -1289,16 +1378,16 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             ui.label(egui::RichText::new(self.app.tr("Advertised capabilities")).strong());
                             ui.horizontal_wrapped(|ui| {
                                 if capabilities.supports_addressable_led {
-                                    ui.label("◉ Addressable RGB strip");
+                                    ui.label(format!("{} Addressable RGB strip", crate::ui::icons::LIGHTBULB));
                                 }
                                 if capabilities.supports_rf_transmit {
-                                    ui.label("⌁ RF transmitter");
+                                    ui.label(format!("{} RF transmitter", crate::ui::icons::RADIO));
                                 }
                                 if capabilities.supports_segment_display {
-                                    ui.label("▦ Segment display");
+                                    ui.label(format!("{} Segment display", crate::ui::icons::GAUGE));
                                 }
                                 if capabilities.supports_lcd_display {
-                                    ui.label("▤ LCD text display");
+                                    ui.label(format!("{} LCD text display", crate::ui::icons::MONITOR_PLAY));
                                 }
                             });
 
@@ -1310,7 +1399,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     if ui.text_edit_singleline(&mut text).changed() {
                                         ui.data_mut(|data| data.insert_temp(text_id, text.clone()));
                                     }
-                                    if ui.add_enabled(!text.trim().is_empty(), egui::Button::new("▸ Send")).clicked() {
+                                    if ui.add_enabled(!text.trim().is_empty(), egui::Button::new(format!("{} Send", crate::ui::icons::PAPER_PLANE_TILT))).clicked() {
                                         let target = if capabilities.supports_segment_display && capabilities.supports_lcd_display {
                                             "both"
                                         } else if capabilities.supports_lcd_display {
@@ -1324,26 +1413,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 params: serde_json::json!({"target": target, "text": text, "duration_ms": 5000}),
                                             },
                                         );
-                                    }
-                                });
-                            }
-
-                            if capabilities.supports_addressable_led {
-                                ui.horizontal(|ui| {
-                                    ui.label(self.app.tr("RGB strip"));
-                                    for (label, command) in [
-                                        ("Red", "strip fill 255 0 0 255"),
-                                        ("White", "strip fill 255 255 255 255"),
-                                        ("Off", "strip clear"),
-                                    ] {
-                                        if ui.button(self.app.tr(label)).clicked() {
-                                            let _ = self.app.engine_handle.sender.send(
-                                                crate::four_d::engine::EngineMessage::ControllerCall {
-                                                    method: "controller.command.execute".to_string(),
-                                                    params: serde_json::json!({"command": command}),
-                                                },
-                                            );
-                                        }
                                     }
                                 });
                             }
@@ -1362,7 +1431,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         .or_else(|| trimmed.strip_prefix("0X"))
                                         .map(|hex| u32::from_str_radix(hex, 16).ok())
                                         .unwrap_or_else(|| trimmed.parse::<u32>().ok());
-                                    if ui.add_enabled(parsed.is_some(), egui::Button::new("⌁ Send 24-bit")).clicked() {
+                                    if ui.add_enabled(parsed.is_some(), egui::Button::new(format!("{} Send 24-bit", crate::ui::icons::RADIO))).clicked() {
                                         let _ = self.app.engine_handle.sender.send(
                                             crate::four_d::engine::EngineMessage::ControllerCall {
                                                 method: "controller.rf.transmit".to_string(),
@@ -1378,7 +1447,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 for warning in &capabilities.warnings {
                                     ui.colored_label(
                                         ui.visuals().warn_fg_color,
-                                        format!("⚠ {} — {}", warning.code, warning.message),
+                                        format!("{} {} — {}", crate::ui::icons::WARNING, warning.code, warning.message),
                                     );
                                 }
                             }
@@ -1984,9 +2053,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 // Clip name label
                                                 let displayed_effect_name = crate::ui::i18n::visual_text(display_language, &effect.name);
                                                 let title = if is_mismatched {
-                                                    format!("△ {} {}", effect.icon, displayed_effect_name)
+                                                    format!("{} {} {}", crate::ui::icons::WARNING, crate::ui::icons::SPARKLE, displayed_effect_name)
                                                 } else {
-                                                    format!("{} {}", effect.icon, displayed_effect_name)
+                                                    format!("{} {}", crate::ui::icons::SPARKLE, displayed_effect_name)
                                                 };
                                                 painter.text(
                                                     clip_rect.left_center() + egui::vec2(12.0, 0.0),
@@ -2027,9 +2096,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             // Clip name label
                                             let displayed_effect_name = crate::ui::i18n::visual_text(display_language, &effect.name);
                                             let title = if is_mismatched {
-                                                format!("△ {} {}", effect.icon, displayed_effect_name)
+                                                format!("{} {} {}", crate::ui::icons::WARNING, crate::ui::icons::SPARKLE, displayed_effect_name)
                                             } else {
-                                                format!("{} {}", effect.icon, displayed_effect_name)
+                                                format!("{} {}", crate::ui::icons::SPARKLE, displayed_effect_name)
                                             };
                                             painter.text(
                                                 clip_rect.left_center() + egui::vec2(12.0, 0.0),
@@ -3038,7 +3107,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             response.context_menu(|ui| {
                                 ui.label(egui::RichText::new(self.app.tr("Timeline")).strong());
                                 ui.separator();
-                                if ui.button(format!("▣ {}", self.app.tr("Select all cues"))).clicked() {
+                                if ui.button(format!("{} {}", crate::ui::icons::SELECTION_ALL, self.app.tr("Select all cues"))).clicked() {
                                     self.app.selected_instance_ids = self.app.timeline.instances.iter().map(|instance| instance.id).collect();
                                     self.app.selected_keyframes.clear();
                                     for track in &self.app.timeline.analog_tracks {
@@ -3048,22 +3117,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     }
                                     ui.close();
                                 }
-                                if ui.button(format!("◇ {}", self.app.tr("Clear selection"))).clicked() {
+                                if ui.button(format!("{} {}", crate::ui::icons::ERASER, self.app.tr("Clear selection"))).clicked() {
                                     self.app.selected_instance_ids.clear();
                                     self.app.selected_keyframes.clear();
                                     ui.close();
                                 }
                                 ui.separator();
                                 ui.horizontal(|ui| {
-                                    ui.label(format!("⌕ {}", self.app.tr("Zoom")));
+                                    ui.label(format!("{} {}", crate::ui::icons::MAGNIFYING_GLASS, self.app.tr("Zoom")));
                                     ui.add(egui::Slider::new(&mut self.app.timeline_zoom, 20.0..=500.0).suffix(" px/s"));
                                 });
-                                if ui.button(format!("↺ {}", self.app.tr("Reset zoom"))).clicked() {
+                                if ui.button(format!("{} {}", crate::ui::icons::ARROW_COUNTER_CLOCKWISE, self.app.tr("Reset zoom"))).clicked() {
                                     self.app.timeline_zoom = 100.0;
                                     ui.close();
                                 }
                                 ui.separator();
-                                if ui.button(format!("⚙ {}", self.app.tr("Preferences..."))).clicked() {
+                                if ui.button(format!("{} {}", crate::ui::icons::GEAR, self.app.tr("Preferences..."))).clicked() {
                                     self.app.show_preferences_dialog = true;
                                     ui.close();
                                 }
@@ -3208,33 +3277,6 @@ fn format_timecode(t: f64) -> String {
     let s = secs % 60;
     let f = ((t - t.floor()) * 24.0).round() as i64;
     format!("{:02}:{:02}:{:02}:{:02}", h, m, s, f)
-}
-
-fn draw_led(ui: &mut egui::Ui, active: bool) {
-    let size = egui::vec2(14.0, 14.0);
-    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-
-    let center = rect.center();
-    let outer_radius = 7.0;
-    let inner_radius = 4.5;
-
-    let painter = ui.painter();
-
-    // Outer housing
-    painter.circle(
-        center,
-        outer_radius,
-        egui::Color32::TRANSPARENT,
-        egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(100, 100, 100)),
-    );
-
-    // Emissive filled circle
-    let fill_color = if active {
-        egui::Color32::from_rgb(0, 255, 136) // Neon Green
-    } else {
-        egui::Color32::from_rgb(50, 50, 50) // Dark Grey
-    };
-    painter.circle_filled(center, inner_radius, fill_color);
 }
 
 impl PealayerApp {

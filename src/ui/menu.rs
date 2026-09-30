@@ -170,7 +170,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     ui.separator();
                     if ui
                         .button(format!(
-                            "⚙ {}",
+                            "{} {}", crate::ui::icons::GEAR,
                             app.tr("Register as Default Media Player...")
                         ))
                         .clicked()
@@ -190,7 +190,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                 ui.menu_button(app.tr("Edit"), |ui| {
                     if ui
-                        .button(format!("⚙ {}", app.tr("Preferences...")))
+                        .button(format!("{} {}", crate::ui::icons::GEAR, app.tr("Preferences...")))
                         .clicked()
                     {
                         app.show_preferences_dialog = true;
@@ -305,6 +305,19 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         app.show_four_d_editor = false;
                         ui.close();
                     }
+                    ui.separator();
+                    if ui
+                        .button(format!(
+                            "{} {}",
+                            crate::ui::icons::TABS,
+                            app.tr("Restore all workspace tabs")
+                        ))
+                        .clicked()
+                    {
+                        app.dock_state = crate::ui::layout::create_initial_layout();
+                        app.show_four_d_editor = true;
+                        ui.close();
+                    }
                 });
 
                 // Add right-aligned E-STOP and Serial controls
@@ -344,14 +357,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     });
                     ui.separator();
                     if ui
-                        .button(format!("⌨ {}", app.tr("Keyboard Shortcuts...")))
+                        .button(format!("{} {}", crate::ui::icons::KEYBOARD, app.tr("Keyboard Shortcuts...")))
                         .clicked()
                     {
                         ui.close();
                         app.show_shortcuts_dialog = true;
                     }
                     if ui
-                        .button(format!("ℹ {} {}", app.tr("About"), app.app_name))
+                        .button(format!("{} {} {}", crate::ui::icons::INFO, app.tr("About"), app.app_name))
                         .clicked()
                     {
                         ui.close();
@@ -399,7 +412,15 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     } else {
                         app.tr("Connect")
                     };
-                    let conn_btn = ui.add(egui::Button::new(conn_text).selected(app.is_connected));
+                    let connection_icon = if app.is_connected {
+                        crate::ui::icons::X
+                    } else {
+                        crate::ui::icons::PLUG
+                    };
+                    let conn_btn = ui.add(
+                        egui::Button::new(format!("{connection_icon} {conn_text}"))
+                            .selected(app.is_connected),
+                    );
                     if conn_btn.clicked() {
                         let should_connect = !(app.is_connected || connection_requested);
                         if should_connect {
@@ -434,10 +455,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     // paths are valid even when they are not visible to the local enumerator.
                     let mut endpoint_changed = false;
                     ui.add_enabled_ui(!app.is_connected && !connection_requested, |ui| {
-                        ui.allocate_ui(egui::vec2(250.0, 20.0), |ui| {
+                        ui.allocate_ui(egui::vec2(188.0, 20.0), |ui| {
                             egui::ComboBox::from_id_salt("hardware_endpoint_select")
                                 .selected_text(&app.serial_port)
-                                .width(330.0)
+                                .width(240.0)
                                 .height(240.0)
                                 .show_ui(ui, |ui| {
                                     for endpoint in crate::four_d::controller::available_endpoints()
@@ -458,7 +479,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     );
                                     endpoint_changed |= ui
                                         .add_sized(
-                                            [330.0, 22.0],
+                                            [240.0, 22.0],
                                             egui::TextEdit::singleline(&mut app.serial_port)
                                                 .hint_text(endpoint_hint),
                                         )

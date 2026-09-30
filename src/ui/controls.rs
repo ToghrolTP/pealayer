@@ -40,11 +40,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                     ui.add_enabled_ui(has_video, |ui| {
                         let play_icon = if app.is_playback_finished() {
-                            "↺"
+                            crate::ui::icons::ARROW_COUNTER_CLOCKWISE
                         } else if app.is_paused {
-                            "▶"
+                            crate::ui::icons::PLAY
                         } else {
-                            "⏸"
+                            crate::ui::icons::PAUSE
                         };
                         let play_tooltip = if app.is_playback_finished() {
                             app.tr("Replay")
@@ -112,14 +112,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.set_clip_rect(ui.max_rect());
                         if ui
-                            .button("⛶")
+                            .button(crate::ui::icons::ARROWS_OUT)
                             .on_hover_text(format!("{} (F)", app.tr("Fullscreen")))
                             .clicked()
                         {
                             app.toggle_fullscreen(&ctx);
                         }
 
-                        let pin_icon = if app.pin_controls { "◆" } else { "◇" };
+                        let pin_icon = if app.pin_controls { crate::ui::icons::PUSH_PIN_SLASH } else { crate::ui::icons::PUSH_PIN };
                         if ui
                             .button(pin_icon)
                             .on_hover_text(if app.pin_controls {
@@ -134,12 +134,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             app.save_config();
                         }
 
-                        if ui.button("♫").on_hover_text(app.tr("Audio Settings...")).clicked() {
+                        if ui.button(crate::ui::icons::MUSIC_NOTE).on_hover_text(app.tr("Audio Settings...")).clicked() {
                             app.show_audio_settings = !app.show_audio_settings;
                         }
 
                         if ui
-                            .button("▤")
+                            .button(crate::ui::icons::TABS)
                             .on_hover_text(app.tr("Switch NLE / Simple Player"))
                             .clicked()
                         {
@@ -147,7 +147,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         }
 
                         if ui
-                            .button("CC")
+                            .button(crate::ui::icons::SUBTITLES)
                             .on_hover_text(app.tr("Subtitle Settings..."))
                             .clicked()
                         {
@@ -185,7 +185,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     app.save_config();
                                 }
                             }
-                            let mute_icon = if app.is_muted { "×♪" } else { "♪" };
+                            let mute_icon = if app.is_muted { crate::ui::icons::SPEAKER_SLASH } else { crate::ui::icons::SPEAKER_HIGH };
                             if ui
                                 .add(egui::Button::new(mute_icon).frame(false))
                                 .on_hover_text(format!("{} (M)", if app.is_muted { app.tr("Unmute") } else { app.tr("Mute") }))

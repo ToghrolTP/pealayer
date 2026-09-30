@@ -12,7 +12,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
     let (rect, response) = ui.allocate_exact_size(video_size, egui::Sense::click_and_drag());
 
-    if response.clicked_by(egui::PointerButton::Primary) {
+    if response.double_clicked_by(egui::PointerButton::Primary)
+        && app.current_video_path.is_some()
+    {
+        app.toggle_fullscreen(ui.ctx());
+    } else if response.clicked_by(egui::PointerButton::Primary) {
         if app.current_video_path.is_some() && app.click_player_to_toggle {
             app.toggle_playback();
         } else if app.current_video_path.is_none() {
@@ -91,7 +95,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
     response.context_menu(|ui| {
         if ui
-            .button(format!("▣ {}", app.tr("Open Video File...")))
+            .button(format!("{} {}", crate::ui::icons::PLAY, app.tr("Open Video File...")))
             .clicked()
         {
             ui.close();
@@ -107,7 +111,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         }
 
         if ui
-            .button(format!("↗ {}", app.tr("Open Location / URL...")))
+            .button(format!("{} {}", crate::ui::icons::ARROW_SQUARE_OUT, app.tr("Open Location / URL...")))
             .clicked()
         {
             ui.close();
@@ -118,7 +122,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         if ui
             .add_enabled(
                 has_video,
-                egui::Button::new(format!("× {}", app.tr("Close Video"))),
+                egui::Button::new(format!("{} {}", crate::ui::icons::X, app.tr("Close Video"))),
             )
             .clicked()
         {
@@ -129,11 +133,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         ui.separator();
 
         let play_title = if app.is_playback_finished() {
-            format!("↺ {}", app.tr("Replay"))
+            format!("{} {}", crate::ui::icons::ARROW_COUNTER_CLOCKWISE, app.tr("Replay"))
         } else if app.is_paused {
-            format!("▶ {}", app.tr("Play"))
+            format!("{} {}", crate::ui::icons::PLAY, app.tr("Play"))
         } else {
-            format!("⏸ {}", app.tr("Pause"))
+            format!("{} {}", crate::ui::icons::STOP_CIRCLE, app.tr("Pause"))
         };
         if ui
             .add_enabled(has_video, egui::Button::new(play_title))
@@ -145,9 +149,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
         let is_fullscreen = app.fullscreen_intent(ui.ctx());
         let fs_title = if is_fullscreen {
-            format!("⤡ {}", app.tr("Exit Fullscreen"))
+            format!("{} {}", crate::ui::icons::ARROWS_OUT, app.tr("Exit Fullscreen"))
         } else {
-            format!("⛶ {}", app.tr("Fullscreen"))
+            format!("{} {}", crate::ui::icons::ARROWS_OUT, app.tr("Fullscreen"))
         };
         if ui.button(fs_title).clicked() {
             ui.close();
@@ -155,9 +159,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         }
 
         let mute_title = if app.is_muted {
-            format!("🔊 {}", app.tr("Unmute"))
+            format!("{} {}", crate::ui::icons::SPEAKER_HIGH, app.tr("Unmute"))
         } else {
-            format!("🔇 {}", app.tr("Mute"))
+            format!("{} {}", crate::ui::icons::SPEAKER_SLASH, app.tr("Mute"))
         };
         if ui
             .add_enabled(has_video, egui::Button::new(mute_title))
@@ -175,7 +179,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
         ui.separator();
 
-        ui.menu_button(format!("◷ {}", app.tr("Open Recent")), |ui| {
+        ui.menu_button(format!("{} {}", crate::ui::icons::CLOCK_COUNTER_CLOCKWISE, app.tr("Open Recent")), |ui| {
             if app.recent_media.is_empty() {
                 ui.label(app.tr("No recent media"));
             } else {
@@ -203,9 +207,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         });
 
         let pin_title = if app.pin_controls {
-            format!("◆ {}", app.tr("Unpin Controls"))
+            format!("{} {}", crate::ui::icons::PUSH_PIN_SLASH, app.tr("Unpin Controls"))
         } else {
-            format!("◇ {}", app.tr("Pin Controls"))
+            format!("{} {}", crate::ui::icons::PUSH_PIN, app.tr("Pin Controls"))
         };
         if ui.button(pin_title).clicked() {
             ui.close();
@@ -213,6 +217,18 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             app.save_config();
         }
     });
+
+    let is_fullscreen = app.fullscreen_intent(ui.ctx());
+    let surface_background = if is_fullscreen {
+        match app.fullscreen_video_background {
+            crate::config::VideoBackground::Black => egui::Color32::BLACK,
+            crate::config::VideoBackground::DarkGray => egui::Color32::from_rgb(18, 18, 20),
+            crate::config::VideoBackground::Theme => ui.visuals().panel_fill,
+        }
+    } else {
+        ui.visuals().panel_fill
+    };
+    ui.painter().rect_filled(rect, 0.0, surface_background);
 
     // 1. Calculate destination rect maintaining 16:9 aspect ratio
     let aspect_ratio = 16.0 / 9.0;
@@ -396,7 +412,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .rect_filled(rect, 0.0, egui::Color32::from_black_alpha(180));
         let font_id = egui::FontId::proportional(26.0);
         let galley = ui.painter().layout_no_wrap(
-            format!("▣ {}", app.tr("Drop video file here to play")),
+            format!("{} {}", crate::ui::icons::FILE_VIDEO, app.tr("Drop video file here to play")),
             font_id,
             egui::Color32::WHITE,
         );

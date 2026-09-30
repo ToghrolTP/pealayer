@@ -1,6 +1,8 @@
 pub mod controls;
 pub mod error;
+pub mod effects_library;
 pub mod i18n;
+pub mod icons;
 pub mod menu;
 pub mod subtitles;
 pub mod audio;

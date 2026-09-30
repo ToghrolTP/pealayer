@@ -269,6 +269,7 @@ for ($localeIndex = 0; $localeIndex -lt $Locale.Count; $localeIndex++) {
     $start.EnvironmentVariables['APP_DIRECTION'] = 'auto'
     $start.EnvironmentVariables['APP_THEME'] = $Theme
     $start.EnvironmentVariables['APP_NAME'] = $effectiveAppName
+    $start.EnvironmentVariables['PEALAYER_INSTANCE_ID'] = "screenshot-$captureSession-$language"
     $start.EnvironmentVariables['PEALAYER_CONFIG_FILE'] = Join-Path $captureProfile "$language-settings.json"
     $start.EnvironmentVariables['PEALAYER_HTTP_PORT'] = (28080 + ($localeIndex * 10)).ToString()
     $start.EnvironmentVariables['PEALAYER_WS_PORT'] = (28081 + ($localeIndex * 10)).ToString()

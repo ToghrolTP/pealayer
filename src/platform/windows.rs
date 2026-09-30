@@ -1,7 +1,11 @@
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 
 static WINDOW_HWND: AtomicIsize = AtomicIsize::new(0);
 static WINDOW_DARK_THEME: AtomicBool = AtomicBool::new(true);
+static ORIGINAL_WINDOW_PROC: AtomicIsize = AtomicIsize::new(0);
+static SHELL_COMMAND: AtomicU32 = AtomicU32::new(0);
+static SHELL_PAUSED: AtomicBool = AtomicBool::new(true);
+static SHELL_MUTED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(target_os = "windows")]
 pub struct GuiOwnershipGuard(windows::Win32::Foundation::HANDLE);
@@ -567,6 +571,7 @@ pub const TRAY_CMD_PLAYPAUSE: u32 = 2001;
 pub const TRAY_CMD_MUTE: u32 = 2002;
 pub const TRAY_CMD_OPEN: u32 = 2003;
 pub const TRAY_CMD_EXIT: u32 = 2004;
+pub const TRAY_CMD_SHOW: u32 = 2005;
 
 pub fn tray_menu_label(cmd: u32, active: bool) -> &'static str {
     match cmd {
@@ -586,8 +591,98 @@ pub fn tray_menu_label(cmd: u32, active: bool) -> &'static str {
         }
         TRAY_CMD_OPEN => "Open Media...",
         TRAY_CMD_EXIT => "Exit",
+        TRAY_CMD_SHOW => "Show Pealayer",
         _ => "",
     }
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn shell_window_proc(
+    hwnd: windows::Win32::Foundation::HWND,
+    message: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::Foundation::LRESULT;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CallWindowProcW, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_RBUTTONUP,
+        WNDPROC,
+    };
+
+    if message == WM_TRAYICON {
+        let mouse_message = lparam.0 as u32;
+        if mouse_message == WM_RBUTTONUP || mouse_message == WM_CONTEXTMENU {
+            if let Some(command) = show_tray_popup_menu(
+                hwnd.0 as isize,
+                SHELL_PAUSED.load(Ordering::Relaxed),
+                SHELL_MUTED.load(Ordering::Relaxed),
+            ) {
+                SHELL_COMMAND.store(command, Ordering::Release);
+            }
+            return LRESULT(0);
+        }
+        if mouse_message == WM_LBUTTONDBLCLK {
+            SHELL_COMMAND.store(TRAY_CMD_SHOW, Ordering::Release);
+            return LRESULT(0);
+        }
+    } else if message == WM_COMMAND {
+        let packed = wparam.0 as u32;
+        let notification = (packed >> 16) & 0xffff;
+        let command = packed & 0xffff;
+        const THBN_CLICKED: u32 = 0x1800;
+        if notification == THBN_CLICKED
+            && matches!(command, THUMB_BUTTON_PREV | THUMB_BUTTON_PLAYPAUSE | THUMB_BUTTON_NEXT)
+        {
+            SHELL_COMMAND.store(command, Ordering::Release);
+            return LRESULT(0);
+        }
+    }
+
+    let original = ORIGINAL_WINDOW_PROC.load(Ordering::Acquire);
+    if original == 0 {
+        unsafe { windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, message, wparam, lparam) }
+    } else {
+        let original: WNDPROC = unsafe { std::mem::transmute(original) };
+        unsafe { CallWindowProcW(original, hwnd, message, wparam, lparam) }
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn install_shell_message_hook(hwnd_raw: isize) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowLongPtrW, GWLP_WNDPROC};
+
+    if hwnd_raw == 0 {
+        return Err("invalid window handle (HWND is 0)".to_string());
+    }
+    if ORIGINAL_WINDOW_PROC.load(Ordering::Acquire) != 0 {
+        return Ok(());
+    }
+    let previous = unsafe {
+        SetWindowLongPtrW(
+            HWND(hwnd_raw as *mut _),
+            GWLP_WNDPROC,
+            shell_window_proc as *const () as isize,
+        )
+    };
+    if previous == 0 {
+        return Err("SetWindowLongPtrW GWLP_WNDPROC failed".to_string());
+    }
+    ORIGINAL_WINDOW_PROC.store(previous, Ordering::Release);
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn install_shell_message_hook(_hwnd_raw: isize) -> Result<(), String> { Ok(()) }
+
+pub fn update_shell_command_state(is_paused: bool, is_muted: bool) {
+    SHELL_PAUSED.store(is_paused, Ordering::Relaxed);
+    SHELL_MUTED.store(is_muted, Ordering::Relaxed);
+}
+
+pub fn take_shell_command() -> Option<u32> {
+    let command = SHELL_COMMAND.swap(0, Ordering::AcqRel);
+    (command != 0).then_some(command)
 }
 
 #[cfg(target_os = "windows")]
@@ -605,9 +700,9 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
     use windows::Win32::UI::Shell::{
         Shell_NotifyIconW, NOTIFYICONDATAW, NIM_ADD, NIF_ICON, NIF_MESSAGE, NIF_TIP,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetClassLongPtrW, GCLP_HICON, LoadIconW, IDI_APPLICATION, HICON,
-    };
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{GetClassLongPtrW, GCLP_HICON, LoadIconW, HICON};
+    use windows::core::PCWSTR;
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
@@ -615,11 +710,13 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
     let hwnd = HWND(hwnd_raw as *mut _);
 
     unsafe {
-        let mut hicon = HICON(GetClassLongPtrW(hwnd, GCLP_HICON) as *mut _);
+        let module = GetModuleHandleW(None)
+            .map_err(|error| format!("GetModuleHandleW failed: {error}"))?;
+        let instance: windows::Win32::Foundation::HINSTANCE = module.into();
+        let hicon = LoadIconW(Some(&instance), PCWSTR(1usize as *const u16))
+            .unwrap_or_else(|_| HICON(GetClassLongPtrW(hwnd, GCLP_HICON) as *mut _));
         if hicon.0.is_null() {
-            if let Ok(default_icon) = LoadIconW(None, IDI_APPLICATION) {
-                hicon = default_icon;
-            }
+            return Err("packaged application icon is unavailable".to_string());
         }
 
         let mut nid = NOTIFYICONDATAW {
@@ -641,6 +738,34 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
         }
     }
 }
+
+#[cfg(target_os = "windows")]
+pub fn show_system_notification(hwnd_raw: isize, title: &str, message: &str) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::Shell::{
+        Shell_NotifyIconW, NIIF_INFO, NIF_INFO, NIM_MODIFY, NOTIFYICONDATAW,
+    };
+    if hwnd_raw == 0 { return Err("invalid window handle (HWND is 0)".to_string()); }
+    let mut info = [0u16; 256];
+    for (index, unit) in message.encode_utf16().take(255).enumerate() { info[index] = unit; }
+    let mut info_title = [0u16; 64];
+    for (index, unit) in title.encode_utf16().take(63).enumerate() { info_title[index] = unit; }
+    let mut nid = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: HWND(hwnd_raw as *mut _),
+        uID: 1,
+        uFlags: NIF_INFO,
+        szInfo: info,
+        szInfoTitle: info_title,
+        dwInfoFlags: NIIF_INFO,
+        ..Default::default()
+    };
+    let result = unsafe { Shell_NotifyIconW(NIM_MODIFY, &mut nid) };
+    result.as_bool().then_some(()).ok_or_else(|| "Shell_NotifyIconW notification failed".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn show_system_notification(_hwnd_raw: isize, _title: &str, _message: &str) -> Result<(), String> { Ok(()) }
 
 #[cfg(target_os = "windows")]
 pub fn update_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), String> {
@@ -973,4 +1098,3 @@ mod tests {
         }
     }
 }
-
