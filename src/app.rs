@@ -2039,7 +2039,7 @@ impl Default for PealayerApp {
         let _ = mpv_client.observe_property("audio-delay", libmpv2::Format::Double, 10);
         let _ = mpv_client.observe_property("aid", libmpv2::Format::String, 11);
         let _ = mpv_client.observe_property("eof-reached", libmpv2::Format::Flag, 12);
-        let _ = mpv_client.observe_property("estimated-vf-fps", libmpv2::Format::Double, 13);
+        let _ = mpv_client.observe_property("container-fps", libmpv2::Format::Double, 13);
         let (interop_tx, interop_rx) = std::sync::mpsc::channel();
         let (_controller_cmd_tx, controller_cmd_rx) =
             std::sync::mpsc::channel::<crate::platform::interop::ControllerDelivery>();

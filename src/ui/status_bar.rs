@@ -26,7 +26,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 && app.media_fps.is_finite()
                 && app.media_fps > 0.0
             {
-                ui.label(format!("{:.3} fps", app.media_fps));
+                ui.label(format!("{:.2} fps", app.media_fps));
                 ui.separator();
             }
 

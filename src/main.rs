@@ -300,7 +300,10 @@ fn main() -> eframe::Result {
                 .observe_property("eof-reached", libmpv2::Format::Flag, 12)
                 .unwrap();
             mpv_client
-                .observe_property("estimated-vf-fps", libmpv2::Format::Double, 13)
+                // `estimated-vf-fps` is a live decoder estimate and visibly jitters
+                // whenever the UI repaints.  The status bar promises the media rate,
+                // so observe the stable container metadata instead.
+                .observe_property("container-fps", libmpv2::Format::Double, 13)
                 .unwrap();
 
             let egui_ctx2 = cc.egui_ctx.clone();
