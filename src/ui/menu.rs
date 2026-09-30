@@ -305,6 +305,19 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         app.show_four_d_editor = false;
                         ui.close();
                     }
+                    ui.separator();
+                    if ui
+                        .button(format!(
+                            "{} {}",
+                            crate::ui::icons::TABS,
+                            app.tr("Restore all workspace tabs")
+                        ))
+                        .clicked()
+                    {
+                        app.dock_state = crate::ui::layout::create_initial_layout();
+                        app.show_four_d_editor = true;
+                        ui.close();
+                    }
                 });
 
                 // Add right-aligned E-STOP and Serial controls

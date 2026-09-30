@@ -1072,25 +1072,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 .as_ref()
                                                 .map(|profile| humanize_machine_label(&profile.key))
                                                 .filter(|name| !name.is_empty());
-                                            let board_name = profile_name.unwrap_or_else(|| {
-                                                crate::ui::i18n::visual_text(
-                                                    display_language,
-                                                    &capabilities.board_name,
-                                                )
-                                            });
+                                            let board_name = crate::ui::i18n::visual_text(
+                                                display_language,
+                                                &capabilities.board_name,
+                                            );
                                             ui.label(
-                                                egui::RichText::new(board_name)
+                                                egui::RichText::new(if board_name.trim().is_empty() {
+                                                    profile_name.clone().unwrap_or_else(|| self.app.tr("Connected board"))
+                                                } else {
+                                                    board_name
+                                                })
                                                     .heading()
                                                     .strong(),
                                             );
-                                            if !capabilities.board_name.is_empty() {
+                                            if let Some(profile_name) = profile_name {
                                                 ui.label(
-                                                    egui::RichText::new(
-                                                        crate::ui::i18n::visual_text(
-                                                            display_language,
-                                                            &capabilities.board_name,
-                                                        ),
-                                                    )
+                                                    egui::RichText::new(profile_name)
                                                     .weak(),
                                                 );
                                             }
@@ -1333,7 +1330,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             draw_led(ui, board_active);
                                             ui.add_space(4.0);
                                             ui.label(egui::RichText::new(crate::ui::i18n::visual_text(display_language, &relay.name)).monospace())
-                                                .on_hover_text(format!("{} · {}", crate::ui::i18n::visual_text(display_language, &relay.key), crate::ui::i18n::visual_text(display_language, &relay.role)));
+                                                .on_hover_text(humanize_machine_label(&relay.role));
                                         });
 
                                         let btn_text = if is_overridden {
@@ -1449,26 +1446,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 params: serde_json::json!({"target": target, "text": text, "duration_ms": 5000}),
                                             },
                                         );
-                                    }
-                                });
-                            }
-
-                            if capabilities.supports_addressable_led {
-                                ui.horizontal(|ui| {
-                                    ui.label(self.app.tr("RGB strip"));
-                                    for (label, command) in [
-                                        ("Red", "strip fill 255 0 0 255"),
-                                        ("White", "strip fill 255 255 255 255"),
-                                        ("Off", "strip clear"),
-                                    ] {
-                                        if ui.button(self.app.tr(label)).clicked() {
-                                            let _ = self.app.engine_handle.sender.send(
-                                                crate::four_d::engine::EngineMessage::ControllerCall {
-                                                    method: "controller.command.execute".to_string(),
-                                                    params: serde_json::json!({"command": command}),
-                                                },
-                                            );
-                                        }
                                     }
                                 });
                             }

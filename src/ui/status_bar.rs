@@ -93,10 +93,12 @@ fn draw_hardware_status(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let label_text = if app.is_connected && coordinator_endpoint && board_ready {
         let board_name = capabilities
             .as_ref()
-            .and_then(|value| value.board_profile.as_ref())
-            .map(|profile| friendly_name(&profile.key))
+            .map(|value| app.display_text(&value.board_name))
             .filter(|name| !name.is_empty())
-            .or_else(|| capabilities.as_ref().map(|value| app.display_text(&value.board_name)))
+            .or_else(|| capabilities
+                .as_ref()
+                .and_then(|value| value.board_profile.as_ref())
+                .map(|profile| friendly_name(&profile.key)))
             .unwrap_or_else(|| app.tr("Connected board"));
         selected_transport
             .as_deref()
