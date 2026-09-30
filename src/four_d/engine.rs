@@ -527,7 +527,16 @@ pub fn spawn_engine() -> EngineHandle {
             }
 
             // Check for new messages (non-blocking)
-            while let Ok(msg) = rx.try_recv() {
+            let mut channel_disconnected = false;
+            loop {
+                let msg = match rx.try_recv() {
+                    Ok(msg) => msg,
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        channel_disconnected = true;
+                        break;
+                    }
+                };
                 match msg {
                     EngineMessage::UpdateQueue(new_queue) => {
                         queue = new_queue;
@@ -774,6 +783,9 @@ pub fn spawn_engine() -> EngineHandle {
                         }
                     }
                 }
+            }
+            if channel_disconnected {
+                break;
             }
 
             if !engine_connected.load(Ordering::Relaxed) && active_transport.is_some() {
