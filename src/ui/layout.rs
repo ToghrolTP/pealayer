@@ -1295,6 +1295,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     capabilities
                                         .controls
                                         .iter()
+                                        .filter(|control| relay_id_from_control_key(&control.key).is_none())
                                         .collect::<Vec<_>>()
                                 })
                                 .unwrap_or_default();
@@ -1318,59 +1319,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                             if !capabilities.relays.is_empty() {
+                                let relay_controls = capabilities
+                                    .controls
+                                    .iter()
+                                    .filter(|control| relay_id_from_control_key(&control.key).is_some())
+                                    .collect::<Vec<_>>();
                                 ui.label(egui::RichText::new(self.app.tr("Relay outputs")).strong());
-                                egui::Grid::new("hardware_monitor_grid")
-                                    .num_columns(3)
-                                    .spacing([16.0, 12.0])
-                                    .striped(true)
+                                egui::Grid::new("hardware_monitor_relay_cards")
+                                    .num_columns(2)
+                                    .spacing([10.0, 10.0])
                                     .show(ui, |ui| {
-                                    for relay in &capabilities.relays {
-                                        let id = relay.id;
-                                        let board_active = capabilities.active_relays.contains(&id);
-                                        let is_overridden = self.app.relay_overrides.contains(&id);
-
-                                        ui.horizontal(|ui| {
-                                            draw_led(ui, board_active);
-                                            ui.add_space(4.0);
-                                            ui.label(egui::RichText::new(crate::ui::i18n::visual_text(display_language, &relay.name)).monospace())
-                                                .on_hover_text(humanize_machine_label(&relay.role));
-                                        });
-
-                                        let btn_text = if is_overridden {
-                                            self.app.tr("Release")
-                                        } else {
-                                            self.app.tr("Force ON")
-                                        };
-                                        let btn = ui.add_enabled(
-                                            !self.app.estop_active,
-                                            egui::Button::new(btn_text).selected(is_overridden),
-                                        );
-                                        if btn.clicked() {
-                                            let state = !is_overridden;
-                                            if state {
-                                                self.app.relay_overrides.insert(id);
-                                            } else {
-                                                self.app.relay_overrides.remove(&id);
+                                        for (index, control) in relay_controls.into_iter().enumerate() {
+                                            draw_control_card(self.app, ui, &capabilities, control);
+                                            if index % 2 == 1 {
+                                                ui.end_row();
                                             }
-                                            let _ = self.app.engine_handle.sender.send(
-                                                crate::four_d::engine::EngineMessage::SendCommand(
-                                                    crate::four_d::protocol::Command::RelaySet {
-                                                        id,
-                                                        state,
-                                                    },
-                                                ),
-                                            );
                                         }
-
-                                        ui.label(if is_overridden {
-                                            self.app.tr("Override requested")
-                                        } else if board_active {
-                                            self.app.tr("Board reports ON")
-                                        } else {
-                                            self.app.tr("Board reports OFF")
-                                        });
-                                        ui.end_row();
-                                    }
                                     });
                             }
 
@@ -3313,33 +3277,6 @@ fn format_timecode(t: f64) -> String {
     let s = secs % 60;
     let f = ((t - t.floor()) * 24.0).round() as i64;
     format!("{:02}:{:02}:{:02}:{:02}", h, m, s, f)
-}
-
-fn draw_led(ui: &mut egui::Ui, active: bool) {
-    let size = egui::vec2(14.0, 14.0);
-    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-
-    let center = rect.center();
-    let outer_radius = 7.0;
-    let inner_radius = 4.5;
-
-    let painter = ui.painter();
-
-    // Outer housing
-    painter.circle(
-        center,
-        outer_radius,
-        egui::Color32::TRANSPARENT,
-        egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(100, 100, 100)),
-    );
-
-    // Emissive filled circle
-    let fill_color = if active {
-        egui::Color32::from_rgb(0, 255, 136) // Neon Green
-    } else {
-        egui::Color32::from_rgb(50, 50, 50) // Dark Grey
-    };
-    painter.circle_filled(center, inner_radius, fill_color);
 }
 
 impl PealayerApp {
