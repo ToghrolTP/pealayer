@@ -273,6 +273,7 @@ impl eframe::App for PealayerApp {
         }
 
         self.ensure_shell_initialized();
+        self.process_shell_commands(ui.ctx());
         self.process_controller_call_results();
 
         if self.media_controls.is_none() {
@@ -475,15 +476,27 @@ impl eframe::App for PealayerApp {
             && self
                 .advertised_hardware()
                 .is_some_and(|capabilities| capabilities.board_connected);
-        if hardware_connection_was_lost(
+        let hardware_lost = hardware_connection_was_lost(
             self.was_hardware_connected,
             connected_now,
             self.was_board_connected,
             board_connected_now,
-        ) && self.pause_on_hardware_disconnect
-        {
-            self.pause();
-            self.set_osd(self.tr("Hardware disconnected — playback paused"));
+        );
+        if hardware_lost {
+            let message = if self.pause_on_hardware_disconnect {
+                self.pause();
+                self.tr("Hardware disconnected — playback paused")
+            } else {
+                self.tr("Hardware disconnected")
+            };
+            self.set_osd(message.clone());
+            if let Some(hwnd) = self.window_handle {
+                let _ = crate::platform::windows::show_system_notification(
+                    hwnd,
+                    &self.app_name,
+                    &message,
+                );
+            }
         }
         if connected_now && !self.was_hardware_connected {
             self.connection_notice = None;
@@ -924,9 +937,43 @@ impl PealayerApp {
                 .window_handle
                 .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
             if hwnd != 0 {
-                let _ = crate::platform::windows::init_taskbar_thumbnail_toolbar(hwnd);
-                let _ = crate::platform::windows::register_system_tray_icon(hwnd, "Pealayer");
-                self.shell_initialized = true;
+                let result = crate::platform::windows::install_shell_message_hook(hwnd)
+                    .and_then(|_| crate::platform::windows::init_taskbar_thumbnail_toolbar(hwnd))
+                    .and_then(|_| crate::platform::windows::register_system_tray_icon(hwnd, &self.app_name));
+                self.shell_initialized = result.is_ok();
+                if let Err(error) = result {
+                    log::warn!("Windows shell integration is not ready; retrying: {error}");
+                }
+            }
+        }
+    }
+
+    fn process_shell_commands(&mut self, ctx: &egui::Context) {
+        crate::platform::windows::update_shell_command_state(self.is_paused, self.is_muted);
+        while let Some(command) = crate::platform::windows::take_shell_command() {
+            match command {
+                crate::platform::windows::THUMB_BUTTON_PREV => self.seek_relative(-10.0),
+                crate::platform::windows::THUMB_BUTTON_PLAYPAUSE
+                | crate::platform::windows::TRAY_CMD_PLAYPAUSE => self.toggle_playback(),
+                crate::platform::windows::THUMB_BUTTON_NEXT => self.seek_relative(10.0),
+                crate::platform::windows::TRAY_CMD_MUTE => {
+                    let _ = self.mpv.command("cycle", &["mute"]);
+                    self.is_muted = !self.is_muted;
+                }
+                crate::platform::windows::TRAY_CMD_OPEN => {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Video Files", &["mp4", "mkv", "avi", "webm", "mov", "flv"])
+                        .pick_file()
+                    { self.load_video_file(path); }
+                }
+                crate::platform::windows::TRAY_CMD_EXIT => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                crate::platform::windows::TRAY_CMD_SHOW => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+                _ => {}
             }
         }
     }
