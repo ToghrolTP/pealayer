@@ -859,6 +859,174 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             };
                             ui.label(board_label);
 
+                            if let Some(profile) = capabilities.board_profile.as_ref() {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} · {}",
+                                            profile.key, profile.mode
+                                        ))
+                                        .weak()
+                                        .monospace(),
+                                    )
+                                    .on_hover_text(format!(
+                                        "{} · {}",
+                                        profile.board_identity, profile.identity_source
+                                    ));
+                                    if !profile.identity_stable {
+                                        ui.label(
+                                            egui::RichText::new(self.app.tr("Temporary board identity"))
+                                                .weak(),
+                                        );
+                                    }
+                                });
+                            }
+
+                            let semantic_controls = capabilities
+                                .board_profile
+                                .as_ref()
+                                .filter(|profile| profile.attached && profile.configured)
+                                .map(|_| {
+                                    capabilities
+                                        .controls
+                                        .iter()
+                                        .filter(|control| !control.actions.is_empty())
+                                        .collect::<Vec<_>>()
+                                })
+                                .unwrap_or_default();
+                            if !semantic_controls.is_empty() {
+                                ui.add_space(8.0);
+                                ui.label(
+                                    egui::RichText::new(self.app.tr("Semantic board controls"))
+                                        .strong(),
+                                );
+                                for control in semantic_controls {
+                                    ui.horizontal_wrapped(|ui| {
+                                        if !control.icon.is_empty() {
+                                            ui.label(&control.icon);
+                                        }
+                                        ui.label(
+                                            egui::RichText::new(crate::ui::i18n::visual_text(
+                                                display_language,
+                                                &control.name,
+                                            ))
+                                            .strong(),
+                                        )
+                                        .on_hover_text(format!(
+                                            "{} · {} · {}",
+                                            control.key, control.kind, control.group
+                                        ));
+                                        for action in &control.actions {
+                                            let label = if action.icon.is_empty() {
+                                                action.name.clone()
+                                            } else {
+                                                format!("{} {}", action.icon, action.name)
+                                            };
+                                            if ui
+                                                .add_enabled(
+                                                    !self.app.estop_active,
+                                                    egui::Button::new(label),
+                                                )
+                                                .on_hover_text(&action.id)
+                                                .clicked()
+                                            {
+                                                let _ = self.app.engine_handle.sender.send(
+                                                    crate::four_d::engine::EngineMessage::InvokeControllerAction {
+                                                        action_id: action.id.clone(),
+                                                    },
+                                                );
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+
+                            if !capabilities.controls.is_empty() {
+                                egui::CollapsingHeader::new(self.app.tr("Channel names"))
+                                    .id_salt("hardware_channel_names")
+                                    .show(ui, |ui| {
+                                        for control in &capabilities.controls {
+                                            let draft_id = ui.make_persistent_id((
+                                                "channel_name_draft",
+                                                control.key.as_str(),
+                                            ));
+                                            let source_id = ui.make_persistent_id((
+                                                "channel_name_source",
+                                                control.key.as_str(),
+                                            ));
+                                            let mut draft = ui.data_mut(|data| {
+                                                let source = data.get_temp::<String>(source_id);
+                                                if source.as_deref() != Some(control.name.as_str()) {
+                                                    data.insert_temp(source_id, control.name.clone());
+                                                    data.insert_temp(draft_id, control.name.clone());
+                                                }
+                                                data.get_temp::<String>(draft_id)
+                                                    .unwrap_or_else(|| control.name.clone())
+                                            });
+                                            ui.horizontal(|ui| {
+                                                ui.label(egui::RichText::new(&control.key).monospace());
+                                                let edit = ui.add(
+                                                    egui::TextEdit::singleline(&mut draft)
+                                                        .desired_width(190.0),
+                                                );
+                                                if edit.changed() {
+                                                    ui.data_mut(|data| {
+                                                        data.insert_temp(draft_id, draft.clone())
+                                                    });
+                                                }
+                                                let trimmed = draft.trim();
+                                                let changed = trimmed != control.name;
+                                                if ui
+                                                    .add_enabled(
+                                                        changed
+                                                            && (!trimmed.is_empty()
+                                                                || !control.default_name.is_empty()),
+                                                        egui::Button::new(self.app.tr("Save name")),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    let name = trimmed.to_string();
+                                                    let restore_default = name.is_empty()
+                                                        || (!control.default_name.is_empty()
+                                                            && name == control.default_name);
+                                                    let mut fallback_names =
+                                                        capabilities.peripheral_names.clone();
+                                                    if restore_default {
+                                                        fallback_names.remove(&control.key);
+                                                    } else {
+                                                        fallback_names
+                                                            .insert(control.key.clone(), name.clone());
+                                                    }
+                                                    let expected_revision = capabilities
+                                                        .board_profile
+                                                        .as_ref()
+                                                        .map(|profile| profile.revision.clone())
+                                                        .filter(|revision| !revision.is_empty());
+                                                    let _ = self.app.engine_handle.sender.send(
+                                                        crate::four_d::engine::EngineMessage::UpdatePeripheralPresentation {
+                                                            key: control.key.clone(),
+                                                            name: Some(if restore_default {
+                                                                String::new()
+                                                            } else {
+                                                                name
+                                                            }),
+                                                            icon: None,
+                                                            group: None,
+                                                            expected_revision,
+                                                            fallback_names,
+                                                        },
+                                                    );
+                                                }
+                                                if !control.group.is_empty() {
+                                                    ui.label(
+                                                        egui::RichText::new(&control.group).weak(),
+                                                    );
+                                                }
+                                            });
+                                        }
+                                    });
+                            }
+
                             if !capabilities.relays.is_empty() {
                                 ui.label(egui::RichText::new(self.app.tr("Relay outputs")).strong());
                                 egui::Grid::new("hardware_monitor_grid")

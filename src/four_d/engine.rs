@@ -150,6 +150,17 @@ pub enum EngineMessage {
         method: String,
         params: serde_json::Value,
     },
+    InvokeControllerAction {
+        action_id: String,
+    },
+    UpdatePeripheralPresentation {
+        key: String,
+        name: Option<String>,
+        icon: Option<String>,
+        group: Option<String>,
+        expected_revision: Option<String>,
+        fallback_names: std::collections::BTreeMap<String, String>,
+    },
 }
 
 pub struct EngineHandle {
@@ -163,6 +174,7 @@ pub struct EngineHandle {
     pub active_transport: Arc<Mutex<Option<String>>>,
     pub connection_error: Arc<Mutex<Option<String>>>,
     pub hardware_capabilities: Arc<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
+    catalog_refresh_requested: Arc<AtomicBool>,
     pub sender: mpsc::Sender<EngineMessage>,
 }
 
@@ -176,6 +188,7 @@ pub struct ControllerPushTarget {
     serial_port: std::sync::Weak<Mutex<String>>,
     hardware_capabilities:
         std::sync::Weak<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
+    catalog_refresh_requested: std::sync::Weak<AtomicBool>,
 }
 
 impl EngineHandle {
@@ -185,6 +198,7 @@ impl EngineHandle {
             connection_requested: Arc::downgrade(&self.connection_requested),
             serial_port: Arc::downgrade(&self.serial_port),
             hardware_capabilities: Arc::downgrade(&self.hardware_capabilities),
+            catalog_refresh_requested: Arc::downgrade(&self.catalog_refresh_requested),
         }
     }
 }
@@ -213,6 +227,15 @@ impl ControllerPushTarget {
     }
 
     pub(crate) fn apply_notification(&self, method: &str, params: &serde_json::Value) -> bool {
+        if matches!(method, "controller.state" | "controller.event")
+            && params.get("kind").and_then(serde_json::Value::as_str)
+                == Some("peripherals.changed")
+        {
+            if let Some(refresh) = self.catalog_refresh_requested.upgrade() {
+                refresh.store(true, Ordering::Relaxed);
+                return true;
+            }
+        }
         let Some(capabilities) = self.hardware_capabilities.upgrade() else {
             return false;
         };
@@ -270,6 +293,11 @@ fn should_yield_direct_transport(
     is_direct && !diagnostic_override && coordinator_reachable
 }
 
+fn controller_method_is_unavailable(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("-32601") || error.contains("method not found") || error.contains("unknown method")
+}
+
 pub fn spawn_engine() -> EngineHandle {
     let lifecycle = Arc::new(());
     let playback_time_ms = Arc::new(AtomicU64::new(0));
@@ -283,6 +311,7 @@ pub fn spawn_engine() -> EngineHandle {
     let active_transport_description = Arc::new(Mutex::new(None));
     let connection_error = Arc::new(Mutex::new(None));
     let hardware_capabilities = Arc::new(Mutex::new(None));
+    let catalog_refresh_requested = Arc::new(AtomicBool::new(false));
 
     let (tx, rx) = mpsc::channel();
 
@@ -295,6 +324,7 @@ pub fn spawn_engine() -> EngineHandle {
     let engine_transport_description = Arc::clone(&active_transport_description);
     let engine_conn_error = Arc::clone(&connection_error);
     let engine_capabilities = Arc::clone(&hardware_capabilities);
+    let engine_catalog_refresh_requested = Arc::clone(&catalog_refresh_requested);
 
     thread::spawn(move || {
         let mut queue: Vec<CompiledAction> = Vec::new();
@@ -525,6 +555,76 @@ pub fn spawn_engine() -> EngineHandle {
                             }
                         }
                     }
+                    EngineMessage::InvokeControllerAction { action_id } => {
+                        if connected {
+                            if let Some(ref mut transport) = active_transport {
+                                if let Err(error) = transport.call_controller(
+                                    "controller.action.invoke",
+                                    serde_json::json!({"action_id": action_id}),
+                                ) {
+                                    if let Ok(mut guard) = engine_conn_error.lock() {
+                                        *guard = Some(format!("invoke controller action: {error}"));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    EngineMessage::UpdatePeripheralPresentation {
+                        key,
+                        name,
+                        icon,
+                        group,
+                        expected_revision,
+                        fallback_names,
+                    } => {
+                        if connected {
+                            if let Some(ref mut transport) = active_transport {
+                                let mut params = serde_json::Map::new();
+                                params.insert("key".to_string(), serde_json::Value::String(key));
+                                if let Some(name) = name {
+                                    params.insert("name".to_string(), serde_json::Value::String(name));
+                                }
+                                if let Some(icon) = icon {
+                                    params.insert("icon".to_string(), serde_json::Value::String(icon));
+                                }
+                                if let Some(group) = group {
+                                    params.insert("group".to_string(), serde_json::Value::String(group));
+                                }
+                                if let Some(revision) = expected_revision {
+                                    params.insert(
+                                        "expected_revision".to_string(),
+                                        serde_json::Value::String(revision),
+                                    );
+                                }
+                                let update = transport.call_controller(
+                                    "controller.peripheral.presentation.update",
+                                    serde_json::Value::Object(params),
+                                );
+                                let update = match update {
+                                    Err(error) if controller_method_is_unavailable(&error) => {
+                                        transport.call_controller(
+                                            "controller.peripherals.set",
+                                            serde_json::json!({"peripheral_names": fallback_names}),
+                                        )
+                                    }
+                                    result => result,
+                                };
+                                match update {
+                                    Ok(_) => {
+                                        engine_catalog_refresh_requested
+                                            .store(true, Ordering::Relaxed);
+                                    }
+                                    Err(error) => {
+                                        if let Ok(mut guard) = engine_conn_error.lock() {
+                                            *guard = Some(format!(
+                                                "update peripheral presentation: {error}"
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -575,11 +675,14 @@ pub fn spawn_engine() -> EngineHandle {
                 }
             }
 
+            let catalog_refresh_requested =
+                engine_catalog_refresh_requested.swap(false, Ordering::Relaxed);
             if connected
                 // Live relay, telemetry, and status-LED changes arrive on the
                 // controller WebSocket. This slow refresh is only a recovery
                 // baseline for catalog/config changes or a missed push epoch.
-                && last_capability_refresh.elapsed() >= Duration::from_secs(30)
+                && (catalog_refresh_requested
+                    || last_capability_refresh.elapsed() >= Duration::from_secs(30))
                 && active_transport
                     .as_ref()
                     .is_some_and(|transport| !transport.is_direct_serial())
@@ -756,6 +859,7 @@ pub fn spawn_engine() -> EngineHandle {
         active_transport: active_transport_description,
         connection_error,
         hardware_capabilities,
+        catalog_refresh_requested,
         sender: tx,
     }
 }
@@ -1155,6 +1259,28 @@ mod tests {
         assert!(!should_yield_direct_transport(true, true, true));
         assert!(!should_yield_direct_transport(true, false, false));
         assert!(!should_yield_direct_transport(false, false, true));
+    }
+
+    #[test]
+    fn presentation_change_notification_requests_authoritative_catalog_refresh() {
+        let handle = spawn_engine();
+        let target = handle.controller_push_target();
+        assert!(!handle.catalog_refresh_requested.load(Ordering::Relaxed));
+        assert!(target.apply_notification(
+            "controller.state",
+            &serde_json::json!({"kind": "peripherals.changed", "action": "refresh"}),
+        ));
+        assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn presentation_fallback_only_accepts_unknown_method_errors() {
+        assert!(controller_method_is_unavailable(
+            "PCController JSON-RPC error: {\"code\":-32601,\"message\":\"method not found\"}"
+        ));
+        assert!(!controller_method_is_unavailable(
+            "PCController JSON-RPC error: revision conflict"
+        ));
     }
 
     #[test]
