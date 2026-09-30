@@ -1090,6 +1090,10 @@ impl PealayerApp {
                         .to_string();
                     match result.operation.as_str() {
                         "macro-start" => self.hardware_effect_authoring.active = true,
+                        "macro-status" => {
+                            self.hardware_effect_authoring.active =
+                                output.contains("active=true");
+                        }
                         "macro-save" => {
                             self.hardware_effect_authoring.active = false;
                             self.hardware_effect_authoring.pending_saved_macro_id =

@@ -1322,6 +1322,42 @@ mod tests {
     }
 
     #[test]
+    fn legacy_strip_catalog_fallback_is_gated_by_advertised_capability() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            for call in 0..5 {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let request: Value = serde_json::from_str(line.trim()).unwrap();
+                let response = match call {
+                    0 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"ok":true}}),
+                    1 => json!({"jsonrpc":"2.0","id":request["id"],"result":{
+                        "connected": true,
+                        "hello": {"capabilities": CAPABILITY_ADDRESSABLE_LED}
+                    }}),
+                    2 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"peripherals":[]}}),
+                    3 => json!({"jsonrpc":"2.0","id":request["id"],"error":{
+                        "code": -32601, "message": "method not found"
+                    }}),
+                    _ => json!({"jsonrpc":"2.0","id":request["id"],"result":{"output":
+                        "[{\"id\":\"white-thunder\",\"name\":\"White thunder\",\"default_fps\":30}]"
+                    }}),
+                };
+                writeln!(stream, "{response}").unwrap();
+            }
+        });
+
+        let mut client = ControllerClient::connect(&format!("pccontroller://{address}")).unwrap();
+        let capabilities = client.hardware_capabilities().unwrap();
+        assert_eq!(capabilities.strip_effects.len(), 1);
+        assert_eq!(capabilities.strip_effects[0].id, "white-thunder");
+        server.join().unwrap();
+    }
+
+    #[test]
     fn capability_catalog_uses_advertised_outputs_and_custom_names() {
         let snapshot = json!({
             "connected": true,

@@ -475,7 +475,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                     ui.add_space(8.0);
 
+                                    let is_controller_owned = template.controller_macro.is_some()
+                                        || template.controller_strip_effect.is_some();
                                     let current_relay_id = template.actions.first().map(|a| a.relay_id).unwrap_or(0);
+                                    if !is_controller_owned {
                                     let is_mismatched = !template.target.is_compatible_with_relay(current_relay_id);
                                     if is_mismatched {
                                         let configured_name = template
@@ -539,6 +542,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             timeline_dirty = true;
                                         }
                                     });
+                                    }
 
                                     ui.add_space(12.0);
                                     if ui.button(egui::RichText::new(format!("× {delete_cue_label}")).color(egui::Color32::from_rgb(231, 76, 60))).clicked() {
@@ -599,8 +603,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                             if timeline_dirty {
-                                let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
-                                let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                                self.app.sync_timeline_engine();
                                 ui.ctx().request_repaint();
                             }
                         } else if selected_count > 1 {
@@ -623,9 +626,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             // Apply the advertised target to all selected instances' templates.
                                             let selected_ids = &self.app.selected_instance_ids;
                                             for inst in &mut self.app.timeline.instances {
-                                                if selected_ids.contains(&inst.id) {
-                                                    if let Some(template) = self.app.timeline.templates.iter_mut().find(|t| t.id == inst.effect_id) {
-                                                        template.actions = crate::four_d::patterns::generate_constant(relay.id, true, template.duration_ms);
+                                                    if selected_ids.contains(&inst.id) {
+                                                        if let Some(template) = self.app.timeline.templates.iter_mut().find(|t| t.id == inst.effect_id) {
+                                                            if template.controller_macro.is_some()
+                                                                || template.controller_strip_effect.is_some()
+                                                            {
+                                                                continue;
+                                                            }
+                                                            template.actions = crate::four_d::patterns::generate_constant(relay.id, true, template.duration_ms);
                                                         template.target = crate::four_d::models::HardwareTarget::Relay(relay.id);
                                                     }
                                                 }
@@ -655,8 +663,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                             if timeline_dirty {
-                                let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
-                                let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                                self.app.sync_timeline_engine();
                             }
                         } else {
                             ui.centered_and_justified(|ui| {

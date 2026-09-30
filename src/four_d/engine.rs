@@ -374,6 +374,7 @@ pub fn spawn_engine() -> EngineHandle {
         let mut current_controller_macro_index = 0;
         let mut controller_strip_effects = Vec::<CompiledControllerStripEffect>::new();
         let mut current_controller_strip_effect_index = 0;
+        let mut active_strip_effect: Option<String> = None;
         let mut analog_tracks: Vec<crate::four_d::curve::AnalogTrack> = Vec::new();
         let mut last_pwm_values = [0u8; 16];
         let mut was_playing = false;
@@ -566,6 +567,7 @@ pub fn spawn_engine() -> EngineHandle {
                                     "controller.command.execute",
                                     serde_json::json!({"command": "strip stop"}),
                                 );
+                                active_strip_effect = None;
                                 if let Err(e) = transport.send(Command::AllOff) {
                                     if let Ok(mut guard) = engine_conn_error.lock() {
                                         *guard = Some(e);
@@ -819,6 +821,7 @@ pub fn spawn_engine() -> EngineHandle {
                                 "controller.command.execute",
                                 serde_json::json!({"command": "strip stop"}),
                             );
+                            active_strip_effect = None;
                             let _ = transport.send(Command::AllOff);
                         }
                     let port_name = {
@@ -862,6 +865,12 @@ pub fn spawn_engine() -> EngineHandle {
                     }
                     if connected {
                         if let Some(ref mut transport) = active_transport {
+                            if !cue.start
+                                && active_strip_effect.as_deref() != Some(cue.id.as_str())
+                            {
+                                current_controller_strip_effect_index += 1;
+                                continue;
+                            }
                             let command = if cue.start {
                                 format!("strip effect play {}", cue.id)
                             } else {
@@ -878,6 +887,10 @@ pub fn spawn_engine() -> EngineHandle {
                                         cue.id
                                     ));
                                 }
+                            } else if cue.start {
+                                active_strip_effect = Some(cue.id.clone());
+                            } else {
+                                active_strip_effect = None;
                             }
                         }
                     }
