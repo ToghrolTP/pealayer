@@ -640,10 +640,10 @@ unsafe extern "system" fn shell_window_proc(
 
     let original = ORIGINAL_WINDOW_PROC.load(Ordering::Acquire);
     if original == 0 {
-        windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, message, wparam, lparam)
+        unsafe { windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, message, wparam, lparam) }
     } else {
-        let original: WNDPROC = std::mem::transmute(original);
-        CallWindowProcW(original, hwnd, message, wparam, lparam)
+        let original: WNDPROC = unsafe { std::mem::transmute(original) };
+        unsafe { CallWindowProcW(original, hwnd, message, wparam, lparam) }
     }
 }
 
@@ -710,7 +710,8 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
         if hicon.0.is_null() {
             let module = GetModuleHandleW(None)
                 .map_err(|error| format!("GetModuleHandleW failed: {error}"))?;
-            hicon = LoadIconW(Some(module.into()), PCWSTR(1usize as *const u16))
+            let instance: windows::Win32::Foundation::HINSTANCE = module.into();
+            hicon = LoadIconW(Some(&instance), PCWSTR(1usize as *const u16))
                 .map_err(|error| format!("load packaged application icon: {error}"))?;
         }
 
