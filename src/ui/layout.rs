@@ -450,6 +450,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             ui.add_space(5.0);
 
                             let has_video = self.app.current_video_path.is_some();
+                            let can_seek = has_video
+                                && self.app.is_seekable
+                                && self.app.duration > 0.0;
                             ui.add_enabled_ui(has_video, |ui| {
                                 ui.horizontal(|ui| {
                                     let play_icon = if self.app.is_playback_finished() {
@@ -512,13 +515,38 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     let seekbar_w = (ui.available_width() - 180.0).max(50.0);
                                     let old_w = ui.spacing().slider_width;
                                     ui.spacing_mut().slider_width = seekbar_w;
-                                    let response = ui.add(slider);
+                                    let response = ui.add_enabled(can_seek, slider);
                                     ui.spacing_mut().slider_width = old_w;
 
-                                    if has_video && response.dragged() {
+                                    if let Some(buffered_until) = self.app.buffered_until() {
+                                        let fraction = (buffered_until / self.app.duration)
+                                            .clamp(0.0, 1.0)
+                                            as f32;
+                                        let buffered_rect = egui::Rect::from_min_max(
+                                            egui::pos2(
+                                                response.rect.left(),
+                                                response.rect.bottom() - 2.0,
+                                            ),
+                                            egui::pos2(
+                                                response.rect.left()
+                                                    + response.rect.width() * fraction,
+                                                response.rect.bottom(),
+                                            ),
+                                        );
+                                        ui.painter().rect_filled(
+                                            buffered_rect,
+                                            1.0,
+                                            ui.visuals()
+                                                .selection
+                                                .bg_fill
+                                                .linear_multiply(0.55),
+                                        );
+                                    }
+
+                                    if can_seek && response.dragged() {
                                         self.app.scrub_to(current_pos);
                                     }
-                                    if has_video && response.drag_stopped() {
+                                    if can_seek && response.drag_stopped() {
                                         self.app.finish_scrub(current_pos);
                                     }
 
@@ -527,15 +555,21 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     } else {
                                         self.app.duration
                                     };
+                                    let total_label = if has_video
+                                        && !can_seek
+                                        && self.app.is_live_media()
+                                    {
+                                        "LIVE".to_string()
+                                    } else {
+                                        crate::ui::controls::format_player_time(
+                                            displayed_total,
+                                            include_hours,
+                                            self.app.show_subseconds,
+                                        )
+                                    };
                                     if ui
                                         .add(
-                                            egui::Label::new(
-                                                crate::ui::controls::format_player_time(
-                                                    displayed_total,
-                                                    include_hours,
-                                                    self.app.show_subseconds,
-                                                ),
-                                            )
+                                            egui::Label::new(total_label)
                                             .sense(egui::Sense::click()),
                                         )
                                         .on_hover_text(self.app.tr("Toggle duration / remaining time"))
