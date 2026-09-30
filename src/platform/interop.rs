@@ -890,13 +890,14 @@ fn run_pccontroller_action_bridge(
                 let Ok(message) = serde_json::from_str::<Value>(&text) else {
                     continue;
                 };
+                let was_subscription_ready = subscription_ready;
                 let ready_messages = gate_controller_subscription_message(
                     message,
                     &mut subscription_ready,
                     &mut pending_pre_ack,
                     push_target,
                 )?;
-                if subscription_ready {
+                if subscription_ready && !was_subscription_ready {
                     egui_ctx.request_repaint();
                 }
                 for message in ready_messages {
