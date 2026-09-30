@@ -1,44 +1,43 @@
-use pealayer::platform::interop::{
-    set_live_status, spawn_interop_listener, InteropCommand, PlayerStatusResponse,
-};
-use std::io::{BufRead, BufReader, Write};
-use std::net::TcpStream;
-use std::sync::mpsc::channel;
+use pealayer::cli::send_remote_command;
+use pealayer::platform::interop::{InteropCommand, PlayerStatusResponse, set_live_status};
 use std::time::Duration;
 
 #[test]
 fn test_loopback_tcp_interop_commands_and_status() {
     unsafe {
-        std::env::set_var("PEALAYER_IPC_PORT", "18085");
-        std::env::set_var("PEALAYER_SOCKET_PATH", format!("/tmp/pealayer_tcp_{}.sock", std::process::id()));
+        std::env::set_var("PEALAYER_PORT", "18085");
+        std::env::set_var(
+            "PEALAYER_SOCKET_PATH",
+            format!("/tmp/pealayer_tcp_{}.sock", std::process::id()),
+        );
     }
-    let (tx, rx) = channel::<InteropCommand>();
     let ctx = eframe::egui::Context::default();
     let application_identity =
         pealayer::config::resolved_app_name(&pealayer::config::AppConfig::load());
-    spawn_interop_listener(tx, ctx, application_identity);
+    let (_state_tx, rx) = pealayer::server::spawn_web_server_configured(
+        18085,
+        ctx,
+        pealayer::server::WebRuntimeConfig::production(
+            application_identity,
+            "en".to_string(),
+            "ltr".to_string(),
+            "system".to_string(),
+        ),
+    );
 
     // Give background TCP listener a moment to bind
     std::thread::sleep(Duration::from_millis(150));
 
-    let mut stream = TcpStream::connect("127.0.0.1:18085").expect("Failed to connect to loopback IPC");
-    stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-
     // 1. Send JSON-RPC Play command
-    stream
-        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"play\"}\n")
-        .unwrap();
-    stream.flush().unwrap();
+    let response = send_remote_command(r#"{"jsonrpc":"2.0","id":1,"method":"play"}"#)
+        .expect("Failed to send JSON-RPC over unified HTTP IPC");
 
     let cmd = rx
         .recv_timeout(Duration::from_secs(1))
         .expect("Did not receive Play command on channel");
     assert!(matches!(cmd, InteropCommand::Play));
 
-    let mut reader = BufReader::new(stream.try_clone().unwrap());
-    let mut response_line = String::new();
-    reader.read_line(&mut response_line).unwrap();
-    assert!(response_line.contains("\"result\":{\"status\":\"accepted\"}"));
+    assert!(response.contains("\"result\":{\"status\":\"accepted\"}"));
 
     // 2. Set mock live status and query via get_status
     let mock_status = PlayerStatusResponse {
@@ -52,13 +51,8 @@ fn test_loopback_tcp_interop_commands_and_status() {
     };
     set_live_status(mock_status);
 
-    stream
-        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"get_status\"}\n")
-        .unwrap();
-    stream.flush().unwrap();
-
-    let mut status_line = String::new();
-    reader.read_line(&mut status_line).unwrap();
+    let status_line = send_remote_command(r#"{"jsonrpc":"2.0","id":2,"method":"get_status"}"#)
+        .expect("Failed to query status over unified HTTP IPC");
     assert!(status_line.contains("\"volume\":85.0"));
     assert!(status_line.contains("\"playback_time\":12.34"));
     assert!(status_line.contains("/movies/test.mp4"));

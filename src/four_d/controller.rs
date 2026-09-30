@@ -236,20 +236,25 @@ impl HardwareCapabilities {
                         .and_then(value_as_u64)
                         .and_then(|value| u8::try_from(value).ok())
                 };
-                let (Some(red), Some(green), Some(blue), Some(brightness), Some(effect), Some(condition)) = (
+                let (
+                    Some(red),
+                    Some(green),
+                    Some(blue),
+                    Some(brightness),
+                    Some(effect),
+                    Some(condition),
+                ) = (
                     byte("red"),
                     byte("green"),
                     byte("blue"),
                     byte("brightness"),
                     byte("effect"),
                     byte("condition"),
-                ) else {
+                )
+                else {
                     return false;
                 };
-                let revision = metadata
-                    .get("revision")
-                    .and_then(value_as_u64)
-                    .unwrap_or(0);
+                let revision = metadata.get("revision").and_then(value_as_u64).unwrap_or(0);
                 if revision > 0
                     && self.status_led_revision > 0
                     && revision <= self.status_led_revision
@@ -332,10 +337,7 @@ fn value_as_u64(value: &Value) -> Option<u64> {
         .or_else(|| value.as_str()?.trim().parse::<u64>().ok())
 }
 
-fn active_relays_from_mask(
-    relays: &[HardwareOutput],
-    mask: u64,
-) -> std::collections::BTreeSet<u8> {
+fn active_relays_from_mask(relays: &[HardwareOutput], mask: u64) -> std::collections::BTreeSet<u8> {
     relays
         .iter()
         .filter(|relay| {
@@ -363,7 +365,12 @@ fn telemetry_from_status(status: &Value, board_connected: bool) -> HardwareTelem
             .get("ina219_available")
             .and_then(Value::as_bool)
             .unwrap_or(false)
-            .then(|| status.get("current_ma").and_then(Value::as_i64).unwrap_or(0) as i32),
+            .then(|| {
+                status
+                    .get("current_ma")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0) as i32
+            }),
         power_mw: status
             .get("ina219_available")
             .and_then(Value::as_bool)
@@ -393,14 +400,23 @@ fn telemetry_from_status(status: &Value, board_connected: bool) -> HardwareTelem
             .get("pwm_available")
             .and_then(Value::as_bool)
             .unwrap_or(false)
-            .then(|| status.get("pwm_channel").and_then(Value::as_u64).unwrap_or(0) as u8),
+            .then(|| {
+                status
+                    .get("pwm_channel")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0) as u8
+            }),
         pwm_value: status
             .get("pwm_available")
             .and_then(Value::as_bool)
             .unwrap_or(false)
             .then(|| status.get("pwm_value").and_then(Value::as_u64).unwrap_or(0) as u16),
-        door_open: board_connected
-            .then(|| status.get("door_open").and_then(Value::as_bool).unwrap_or(false)),
+        door_open: board_connected.then(|| {
+            status
+                .get("door_open")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        }),
     }
 }
 
@@ -513,7 +529,9 @@ impl ControllerClient {
             .as_ref()
             .and_then(|snapshot| snapshot.get("connected").and_then(Value::as_bool))
             .unwrap_or(false);
-        let profile = catalog.as_ref().and_then(|catalog| catalog.get("board_profile"));
+        let profile = catalog
+            .as_ref()
+            .and_then(|catalog| catalog.get("board_profile"));
         let board_connected = transport_has_board
             && profile
                 .and_then(|profile| profile.get("attached"))
@@ -621,7 +639,12 @@ impl ControllerClient {
                     json!({"command": "strip effect list"}),
                 )
                 .ok()
-                .and_then(|result| result.get("output").and_then(Value::as_str).map(str::to_owned))
+                .and_then(|result| {
+                    result
+                        .get("output")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
                 .and_then(|output| serde_json::from_str::<Value>(&output).ok());
             if let Some(catalog) = catalog {
                 capabilities.strip_effects = parse_strip_effects(&catalog);
@@ -637,15 +660,10 @@ impl ControllerClient {
 /// board remains useful for discovery and reconnect. If none is running yet,
 /// the canonical local endpoint is returned so the engine can start the
 /// bundled host or keep retrying the external service.
-pub fn select_autoconnect_endpoint(
-    configured_endpoint: &str,
-    timeout: Duration,
-) -> Option<String> {
-    select_autoconnect_endpoint_with(
-        configured_endpoint,
-        &available_endpoints(),
-        |endpoint| ControllerClient::endpoint_health(endpoint, timeout),
-    )
+pub fn select_autoconnect_endpoint(configured_endpoint: &str, timeout: Duration) -> Option<String> {
+    select_autoconnect_endpoint_with(configured_endpoint, &available_endpoints(), |endpoint| {
+        ControllerClient::endpoint_health(endpoint, timeout)
+    })
 }
 
 fn select_autoconnect_endpoint_with<F>(
@@ -661,10 +679,7 @@ where
     let configured = configured_is_controller.then(|| configured_endpoint.to_string());
     let default = DEFAULT_ENDPOINT.to_string();
 
-    let configured_health = configured
-        .as_deref()
-        .map(&mut health)
-        .unwrap_or_default();
+    let configured_health = configured.as_deref().map(&mut health).unwrap_or_default();
     let default_health = if configured.as_deref() == Some(DEFAULT_ENDPOINT) {
         configured_health
     } else {
@@ -686,7 +701,9 @@ where
 
     if !configured_is_controller
         && !configured_endpoint.is_empty()
-        && available.iter().any(|candidate| candidate == configured_endpoint)
+        && available
+            .iter()
+            .any(|candidate| candidate == configured_endpoint)
     {
         return Some(configured_endpoint.to_string());
     }
@@ -700,9 +717,7 @@ pub(crate) fn valid_strip_effect_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
         && id.bytes().all(|byte| {
-            byte.is_ascii_lowercase()
-                || byte.is_ascii_digit()
-                || matches!(byte, b'.' | b'_' | b'-')
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
         })
 }
 
@@ -747,14 +762,10 @@ fn parse_strip_effects(value: &Value) -> Vec<HardwareStripEffect> {
                     .unwrap_or_default()
                     .to_string(),
                 default_fps: byte(entry, "default_fps"),
-                minimum_fps: byte(entry, "minimum_fps")
-                    .or_else(|| byte(entry, "min_fps")),
-                maximum_fps: byte(entry, "maximum_fps")
-                    .or_else(|| byte(entry, "max_fps")),
-                minimum_pixels: word(entry, "minimum_pixels")
-                    .or_else(|| word(entry, "min_pixels")),
-                maximum_pixels: word(entry, "maximum_pixels")
-                    .or_else(|| word(entry, "max_pixels")),
+                minimum_fps: byte(entry, "minimum_fps").or_else(|| byte(entry, "min_fps")),
+                maximum_fps: byte(entry, "maximum_fps").or_else(|| byte(entry, "max_fps")),
+                minimum_pixels: word(entry, "minimum_pixels").or_else(|| word(entry, "min_pixels")),
+                maximum_pixels: word(entry, "maximum_pixels").or_else(|| word(entry, "max_pixels")),
             })
         })
         .collect()
@@ -783,7 +794,9 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
             .pointer("/hello/identity_schema")
             .and_then(Value::as_u64)
             .unwrap_or(0),
-        build_hash: snapshot.pointer("/hello/build_hash").and_then(Value::as_u64),
+        build_hash: snapshot
+            .pointer("/hello/build_hash")
+            .and_then(Value::as_u64),
         build_timestamp: snapshot
             .pointer("/hello/build_timestamp")
             .and_then(Value::as_str)
@@ -1031,11 +1044,7 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
     let relays = if board_connected && capability_bits & CAPABILITY_RELAY_MOTION != 0 {
         outputs
             .iter()
-            .filter(|(kind, output)| {
-                kind == "relay"
-                    && output.control == "relay"
-                    && output.id != 0
-            })
+            .filter(|(kind, output)| kind == "relay" && output.control == "relay" && output.id != 0)
             .map(|(_, output)| output.clone())
             .collect()
     } else {
@@ -1044,9 +1053,7 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
     let pwm_channels = if board_connected && capability_bits & CAPABILITY_PWM != 0 {
         outputs
             .iter()
-            .filter(|(kind, output)| {
-                kind == "pwm" && output.control == "pwm-user"
-            })
+            .filter(|(kind, output)| kind == "pwm" && output.control == "pwm-user")
             .map(|(_, output)| output.clone())
             .collect()
     } else {
@@ -1063,12 +1070,30 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
             .and_then(Value::as_bool)
             .unwrap_or(false))
     .then(|| HardwareStatusLed {
-        red: snapshot.pointer("/status_led/red").and_then(Value::as_u64).unwrap_or(0) as u8,
-        green: snapshot.pointer("/status_led/green").and_then(Value::as_u64).unwrap_or(0) as u8,
-        blue: snapshot.pointer("/status_led/blue").and_then(Value::as_u64).unwrap_or(0) as u8,
-        brightness: snapshot.pointer("/status_led/brightness").and_then(Value::as_u64).unwrap_or(0) as u8,
-        effect: snapshot.pointer("/status_led/effect").and_then(Value::as_u64).unwrap_or(0) as u8,
-        condition: snapshot.pointer("/status_led/condition").and_then(Value::as_u64).unwrap_or(0) as u8,
+        red: snapshot
+            .pointer("/status_led/red")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
+        green: snapshot
+            .pointer("/status_led/green")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
+        blue: snapshot
+            .pointer("/status_led/blue")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
+        brightness: snapshot
+            .pointer("/status_led/brightness")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
+        effect: snapshot
+            .pointer("/status_led/effect")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
+        condition: snapshot
+            .pointer("/status_led/condition")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
     });
     let status_led_revision = snapshot
         .get("status_led_revision")
@@ -1186,8 +1211,16 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
         .into_iter()
         .flatten()
         .map(|problem| HardwareWarning {
-            code: problem.get("code").and_then(Value::as_str).unwrap_or("hardware_problem").to_string(),
-            severity: problem.get("severity").and_then(Value::as_str).unwrap_or("warning").to_string(),
+            code: problem
+                .get("code")
+                .and_then(Value::as_str)
+                .unwrap_or("hardware_problem")
+                .to_string(),
+            severity: problem
+                .get("severity")
+                .and_then(Value::as_str)
+                .unwrap_or("warning")
+                .to_string(),
             message: problem
                 .get("description")
                 .or_else(|| problem.get("impact"))
@@ -1286,7 +1319,8 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
         supports_rf_transmit: board_connected && capability_bits & CAPABILITY_RF != 0,
         supports_segment_display: board_connected && capability_bits & CAPABILITY_SEGMENTS != 0,
         supports_lcd_display: board_connected && capability_bits & CAPABILITY_LCD != 0,
-        supports_addressable_led: board_connected && capability_bits & CAPABILITY_ADDRESSABLE_LED != 0,
+        supports_addressable_led: board_connected
+            && capability_bits & CAPABILITY_ADDRESSABLE_LED != 0,
         status_led,
         status_led_revision,
         settings,
@@ -1391,11 +1425,10 @@ mod tests {
         );
         assert_eq!(selected.as_deref(), Some(DEFAULT_ENDPOINT));
 
-        let selected = select_autoconnect_endpoint_with(
-            "pccontroller://cafe-pc.local:8787",
-            &[],
-            |_| ControllerEndpointHealth::default(),
-        );
+        let selected =
+            select_autoconnect_endpoint_with("pccontroller://cafe-pc.local:8787", &[], |_| {
+                ControllerEndpointHealth::default()
+            });
         assert_eq!(selected.as_deref(), Some(DEFAULT_ENDPOINT));
     }
 
@@ -1434,7 +1467,10 @@ mod tests {
 
         let capabilities = parse_hardware_capabilities(&snapshot, &catalog);
         assert_eq!(
-            capabilities.board_profile.as_ref().map(|profile| profile.key.as_str()),
+            capabilities
+                .board_profile
+                .as_ref()
+                .map(|profile| profile.key.as_str()),
             Some("cinema-seat-v1")
         );
         assert_eq!(capabilities.peripheral_names["seat.a"], "Left pair");
@@ -1446,7 +1482,11 @@ mod tests {
         assert_eq!(control.group, "auditorium-a");
         assert_eq!(control.actions[0].verb, "up");
         assert_eq!(
-            control.actions.iter().map(|action| action.id.as_str()).collect::<Vec<_>>(),
+            control
+                .actions
+                .iter()
+                .map(|action| action.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["seat.a.up", "seat.a.stop"]
         );
     }
@@ -1598,7 +1638,11 @@ mod tests {
         });
         let parsed = parse_hardware_capabilities(&snapshot, &catalog);
         assert_eq!(
-            parsed.relays.iter().map(|relay| relay.id).collect::<Vec<_>>(),
+            parsed
+                .relays
+                .iter()
+                .map(|relay| relay.id)
+                .collect::<Vec<_>>(),
             [1, 2, 3, 4]
         );
     }

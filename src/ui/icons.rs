@@ -2,14 +2,13 @@
 //! not emoji, so glyph availability and color do not vary by host OS.
 
 pub use egui_phosphor::regular::{
-    APP_WINDOW, ARROW_COUNTER_CLOCKWISE, ARROW_DOWN, ARROW_SQUARE_OUT, ARROW_UP,
-    ARROWS_IN, ARROWS_OUT, CARET_DOWN, CARET_RIGHT, CHECK_SQUARE, CIRCUITRY,
-    CLIPBOARD, CLOCK_COUNTER_CLOCKWISE, COPY, CPU, DOT_OUTLINE, ERASER, EYE,
-    EYE_SLASH, FILE_VIDEO, FLOPPY_DISK, FOLDER_OPEN, GAUGE, GEAR, INFO, KEYBOARD,
-    LIGHTBULB, LIGHTNING, LINK, LIST_CHECKS, MAGNIFYING_GLASS, MONITOR_PLAY,
-    MUSIC_NOTE, PAPER_PLANE_TILT, PAUSE, PENCIL_SIMPLE, PLAY, PLUG, POWER, PUSH_PIN,
-    PUSH_PIN_SLASH, RADIO, RECORD, SEAT, SELECTION_ALL, SLIDERS_HORIZONTAL, SPARKLE,
-    SPEAKER_HIGH, SPEAKER_NONE, SPEAKER_SLASH, STOP_CIRCLE, SUBTITLES, TABS, TRASH,
+    APP_WINDOW, ARROW_COUNTER_CLOCKWISE, ARROW_DOWN, ARROW_SQUARE_OUT, ARROW_UP, ARROWS_IN,
+    ARROWS_OUT, CARET_DOWN, CARET_RIGHT, CHECK_SQUARE, CIRCUITRY, CLIPBOARD,
+    CLOCK_COUNTER_CLOCKWISE, COPY, CPU, DOT_OUTLINE, ERASER, EYE, EYE_SLASH, FILE_VIDEO,
+    FLOPPY_DISK, FOLDER_OPEN, GAUGE, GEAR, INFO, KEYBOARD, LIGHTBULB, LIGHTNING, LINK, LIST_CHECKS,
+    MAGNIFYING_GLASS, MONITOR_PLAY, MUSIC_NOTE, PAPER_PLANE_TILT, PAUSE, PENCIL_SIMPLE, PLAY, PLUG,
+    POWER, PUSH_PIN, PUSH_PIN_SLASH, RADIO, RECORD, SEAT, SELECTION_ALL, SLIDERS_HORIZONTAL,
+    SPARKLE, SPEAKER_HIGH, SPEAKER_NONE, SPEAKER_SLASH, STOP_CIRCLE, SUBTITLES, TABS, TRASH,
     WARNING, WAVEFORM, X,
 };
 
@@ -50,10 +49,8 @@ pub fn disclosure_header(
     let mut open = ui.data_mut(|data| data.get_persisted::<bool>(id).unwrap_or(default_open));
     let icon = if open { CARET_DOWN } else { CARET_RIGHT };
     let response = ui.add(
-        eframe::egui::Button::new(
-            eframe::egui::RichText::new(format!("{icon}  {label}")).strong(),
-        )
-        .frame(false),
+        eframe::egui::Button::new(eframe::egui::RichText::new(format!("{icon}  {label}")).strong())
+            .frame(false),
     );
     if response.clicked() {
         open = !open;
@@ -71,6 +68,5 @@ pub fn submenu(
     add_contents: impl FnOnce(&mut eframe::egui::Ui),
 ) {
     let button = eframe::egui::Button::new(label).right_text(CARET_RIGHT);
-    let _ = eframe::egui::containers::menu::SubMenuButton::from_button(button)
-        .ui(ui, add_contents);
+    let _ = eframe::egui::containers::menu::SubMenuButton::from_button(button).ui(ui, add_contents);
 }

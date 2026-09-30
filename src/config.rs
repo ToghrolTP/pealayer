@@ -183,7 +183,10 @@ impl Default for AppConfig {
             compact_hardware_controls: false,
             windows_mica_backdrop: false,
             windows_dwm_theming: true,
-            opengl_vsync: true,
+            // Reactive egui rendering does not require a continuously synced
+            // swap loop. Some Windows OpenGL drivers flicker with V-Sync, so
+            // keep it opt-in while retaining the persisted preference.
+            opengl_vsync: false,
             status_bar: StatusBarConfig::default(),
             window_geometry: None,
             workspace_dock_layout: None,
@@ -428,6 +431,11 @@ pub fn runtime_port(env_name: &str, default: u16) -> u16 {
         .unwrap_or(default)
 }
 
+/// The single TCP port used by Pealayer's HTTP, WebSocket, and local IPC APIs.
+pub fn control_port() -> u16 {
+    runtime_port("PEALAYER_PORT", 8080)
+}
+
 impl AppConfig {
     pub fn get_config_path() -> PathBuf {
         if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {
@@ -670,7 +678,10 @@ impl AppConfig {
         if self.recent_media.len() > 100 {
             return Err("recent_media contains too many entries".to_string());
         }
-        if self.window_geometry.is_some_and(|geometry| !geometry.is_valid()) {
+        if self
+            .window_geometry
+            .is_some_and(|geometry| !geometry.is_valid())
+        {
             return Err("window_geometry contains invalid coordinates or dimensions".to_string());
         }
         Ok(())

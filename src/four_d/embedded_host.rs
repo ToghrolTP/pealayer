@@ -210,7 +210,10 @@ impl EmbeddedHost {
             .handle
             .ok_or_else(|| "PCController embedded host is already destroyed".to_string())?;
         let mut request = fields.as_object().cloned().unwrap_or_default();
-        request.insert("operation".to_string(), Value::String(operation.to_string()));
+        request.insert(
+            "operation".to_string(),
+            Value::String(operation.to_string()),
+        );
         request.insert("handle".to_string(), Value::from(handle));
         invoke_json(self.api, &Value::Object(request))
             .map(|response| response.get("result").cloned().unwrap_or(Value::Null))
@@ -230,9 +233,7 @@ fn invoke_json(api: NativeApi, request: &Value) -> Result<Value, String> {
     if response_ptr.is_null() {
         return Err("PCControllerInvoke returned NULL".to_string());
     }
-    let response = unsafe { CStr::from_ptr(response_ptr) }
-        .to_bytes()
-        .to_vec();
+    let response = unsafe { CStr::from_ptr(response_ptr) }.to_bytes().to_vec();
     unsafe { (api.free)(response_ptr) };
     let value: Value = serde_json::from_slice(&response)
         .map_err(|error| format!("decode PCController response: {error}"))?;

@@ -889,8 +889,12 @@ pub fn spawn_engine() -> EngineHandle {
                 }
             }
 
+            // Keep catalog refreshes queued while the coordinator is offline.
+            // Clearing the flag before a connection exists can lose a
+            // peripherals.changed notification and makes reconnection retain a
+            // stale controller catalog.
             let catalog_refresh_requested =
-                engine_catalog_refresh_requested.swap(false, Ordering::Relaxed);
+                connected && engine_catalog_refresh_requested.swap(false, Ordering::Relaxed);
             if connected
                 // Live relay, telemetry, and status-LED changes arrive on the
                 // controller WebSocket. This slow refresh is only a recovery

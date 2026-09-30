@@ -111,7 +111,7 @@ export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionM
             <Text code>{window.location.origin}</Text>
           </Descriptions.Item>
           <Descriptions.Item label={tr(locale, 'WebSocket Remote Endpoint')}>
-            <Text code>{runtime ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:${runtime.wsPort}` : 'Initializing…'}</Text>
+            <Text code>{runtime ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}${runtime.websocketPath}` : 'Initializing…'}</Text>
           </Descriptions.Item>
           <Descriptions.Item label={`${runtime?.appName || tr(locale, 'Application')} ${tr(locale, 'Version')}`}>
             <Text style={{ color: '#f8fafc' }}>{runtime?.version || 'Initializing…'}</Text>

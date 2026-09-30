@@ -12,8 +12,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
     let (rect, response) = ui.allocate_exact_size(video_size, egui::Sense::click_and_drag());
 
-    if response.double_clicked_by(egui::PointerButton::Primary)
-        && app.current_video_path.is_some()
+    if response.double_clicked_by(egui::PointerButton::Primary) && app.current_video_path.is_some()
     {
         app.toggle_fullscreen(ui.ctx());
     } else if response.clicked_by(egui::PointerButton::Primary) {
@@ -95,7 +94,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
     response.context_menu(|ui| {
         if ui
-            .button(format!("{} {}", crate::ui::icons::PLAY, app.tr("Open Video File...")))
+            .button(format!(
+                "{} {}",
+                crate::ui::icons::PLAY,
+                app.tr("Open Video File...")
+            ))
             .clicked()
         {
             ui.close();
@@ -111,7 +114,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         }
 
         if ui
-            .button(format!("{} {}", crate::ui::icons::ARROW_SQUARE_OUT, app.tr("Open Location / URL...")))
+            .button(format!(
+                "{} {}",
+                crate::ui::icons::ARROW_SQUARE_OUT,
+                app.tr("Open Location / URL...")
+            ))
             .clicked()
         {
             ui.close();
@@ -133,7 +140,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         ui.separator();
 
         let play_title = if app.is_playback_finished() {
-            format!("{} {}", crate::ui::icons::ARROW_COUNTER_CLOCKWISE, app.tr("Replay"))
+            format!(
+                "{} {}",
+                crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                app.tr("Replay")
+            )
         } else if app.is_paused {
             format!("{} {}", crate::ui::icons::PLAY, app.tr("Play"))
         } else {
@@ -149,7 +160,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
         let is_fullscreen = app.fullscreen_intent(ui.ctx());
         let fs_title = if is_fullscreen {
-            format!("{} {}", crate::ui::icons::ARROWS_OUT, app.tr("Exit Fullscreen"))
+            format!(
+                "{} {}",
+                crate::ui::icons::ARROWS_OUT,
+                app.tr("Exit Fullscreen")
+            )
         } else {
             format!("{} {}", crate::ui::icons::ARROWS_OUT, app.tr("Fullscreen"))
         };
@@ -179,32 +194,44 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
         ui.separator();
 
-        crate::ui::icons::submenu(ui, format!("{} {}", crate::ui::icons::CLOCK_COUNTER_CLOCKWISE, app.tr("Open Recent")), |ui| {
-            if app.recent_media.is_empty() {
-                ui.label(app.tr("No recent media"));
-            } else {
-                for path in app.recent_media.clone() {
-                    let target = path.to_string_lossy();
-                    let label = crate::media::media_target_label(&target);
-                    if ui
-                        .button(app.display_text(&label))
-                        .on_hover_text(crate::media::redact_media_target(&target))
-                        .clicked()
-                    {
+        crate::ui::icons::submenu(
+            ui,
+            format!(
+                "{} {}",
+                crate::ui::icons::CLOCK_COUNTER_CLOCKWISE,
+                app.tr("Open Recent")
+            ),
+            |ui| {
+                if app.recent_media.is_empty() {
+                    ui.label(app.tr("No recent media"));
+                } else {
+                    for path in app.recent_media.clone() {
+                        let target = path.to_string_lossy();
+                        let label = crate::media::media_target_label(&target);
+                        if ui
+                            .button(app.display_text(&label))
+                            .on_hover_text(crate::media::redact_media_target(&target))
+                            .clicked()
+                        {
+                            ui.close();
+                            app.load_media_target(&target);
+                        }
+                    }
+                    ui.separator();
+                    if ui.button(app.tr("Clear Recent")).clicked() {
                         ui.close();
-                        app.load_media_target(&target);
+                        app.clear_recent_media();
                     }
                 }
-                ui.separator();
-                if ui.button(app.tr("Clear Recent")).clicked() {
-                    ui.close();
-                    app.clear_recent_media();
-                }
-            }
-        });
+            },
+        );
 
         let pin_title = if app.pin_controls {
-            format!("{} {}", crate::ui::icons::PUSH_PIN_SLASH, app.tr("Unpin Controls"))
+            format!(
+                "{} {}",
+                crate::ui::icons::PUSH_PIN_SLASH,
+                app.tr("Unpin Controls")
+            )
         } else {
             format!("{} {}", crate::ui::icons::PUSH_PIN, app.tr("Pin Controls"))
         };
@@ -295,14 +322,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 .painter()
                 .layout_no_wrap(msg.clone(), font_id, text_color);
             let rect = match app.osd_position {
-                crate::config::OsdPosition::TopLeft => egui::Rect::from_min_size(
-                    center,
-                    galley.size() + egui::vec2(24.0, 16.0),
-                ),
-                crate::config::OsdPosition::Center => egui::Rect::from_center_size(
-                    center,
-                    galley.size() + egui::vec2(24.0, 16.0),
-                ),
+                crate::config::OsdPosition::TopLeft => {
+                    egui::Rect::from_min_size(center, galley.size() + egui::vec2(24.0, 16.0))
+                }
+                crate::config::OsdPosition::Center => {
+                    egui::Rect::from_center_size(center, galley.size() + egui::vec2(24.0, 16.0))
+                }
             };
             ui.painter().rect_filled(rect, 8.0, bg_color);
             ui.painter().galley(
@@ -409,7 +434,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .rect_filled(rect, 0.0, egui::Color32::from_black_alpha(180));
         let font_id = egui::FontId::proportional(26.0);
         let galley = ui.painter().layout_no_wrap(
-            format!("{} {}", crate::ui::icons::FILE_VIDEO, app.tr("Drop video file here to play")),
+            format!(
+                "{} {}",
+                crate::ui::icons::FILE_VIDEO,
+                app.tr("Drop video file here to play")
+            ),
             font_id,
             egui::Color32::WHITE,
         );

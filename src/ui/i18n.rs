@@ -258,12 +258,18 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Connect to PCController to discover live board controls." => {
             "برای دریافت کنترل‌های زندهٔ برد به PCController متصل شوید."
         }
-        "PCController is connected; waiting for its capability catalog…" => {
-            "PCController متصل است؛ در انتظار فهرست قابلیت‌ها…"
+        "PCController is connected; requesting the board capability catalog…" => {
+            "PCController متصل است؛ فهرست قابلیت‌های برد در حال درخواست است…"
         }
-        "PCController is reachable, but no board is currently advertising live controls." => {
-            "PCController در دسترس است، اما هیچ بردی کنترل زنده اعلام نمی‌کند."
+        "Board connection failed" => "اتصال برد ناموفق بود",
+        "PCController detected hardware on" => "PCController سخت‌افزار را در این مسیر شناسایی کرد:",
+        "but the board is not responding. Check its USB cable, power, and operating-system device status." => {
+            "اما برد پاسخ نمی‌دهد. کابل USB، برق و وضعیت دستگاه در سیستم‌عامل را بررسی کنید."
         }
+        "PCController is reachable, but no board is connected. Connect the board and check its USB cable, power, and port." => {
+            "PCController در دسترس است، اما هیچ بردی متصل نیست. برد را متصل کنید و کابل USB، برق و درگاه آن را بررسی کنید."
+        }
+        "PCController connected; board not connected" => "PCController متصل است؛ برد متصل نیست",
         "The connected board advertises no relay controls." => {
             "برد متصل هیچ کنترل رله‌ای اعلام نکرده است."
         }

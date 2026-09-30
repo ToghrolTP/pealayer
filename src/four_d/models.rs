@@ -145,11 +145,7 @@ impl Effect {
         }
     }
 
-    pub fn controller_strip_effect(
-        name: String,
-        duration_ms: u64,
-        effect_id: String,
-    ) -> Self {
+    pub fn controller_strip_effect(name: String, duration_ms: u64, effect_id: String) -> Self {
         Self {
             id: Uuid::new_v4(),
             name,

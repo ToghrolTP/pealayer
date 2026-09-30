@@ -45,8 +45,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             } else {
                 ui.visuals().warn_fg_color
             };
-            let (rect, _) =
-                ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
             ui.painter().circle_filled(rect.center(), 5.5, color);
             ui.vertical(|ui| {
                 ui.label(
@@ -93,12 +92,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 },
             );
             ui.separator();
-            crate::ui::dialog::scroll_column(ui, "board_info_content_v2", None, |ui| match app.board_info_tab {
+            crate::ui::dialog::scroll_column(ui, "board_info_content_v2", None, |ui| {
+                match app.board_info_tab {
                     0 => overview(app, ui, &capabilities),
                     1 => capability_list(app, ui, &capabilities),
                     2 => front_panel(app, ui, &capabilities),
                     _ => settings(app, ui, &capabilities),
-                });
+                }
+            });
         });
     });
     app.show_board_info_dialog = open;
@@ -216,7 +217,10 @@ fn capability_list(
             (!capabilities.pwm_channels.is_empty(), "PWM / MOSFET"),
             (capabilities.supports_rf_transmit, "RF transmit"),
             (capabilities.supports_addressable_led, "Addressable strip"),
-            (capabilities.supports_segment_display, "Seven-segment display"),
+            (
+                capabilities.supports_segment_display,
+                "Seven-segment display",
+            ),
             (capabilities.supports_lcd_display, "LCD display"),
             (!capabilities.macros.is_empty(), "Board macros"),
         ] {
@@ -235,8 +239,16 @@ fn capability_list(
                 &app.tr("Capability bits"),
                 &format!("0x{:08X}", capabilities.capability_bits),
             );
-            row(ui, &app.tr("Controls"), &capabilities.controls.len().to_string());
-            row(ui, &app.tr("Relays"), &capabilities.relays.len().to_string());
+            row(
+                ui,
+                &app.tr("Controls"),
+                &capabilities.controls.len().to_string(),
+            );
+            row(
+                ui,
+                &app.tr("Relays"),
+                &capabilities.relays.len().to_string(),
+            );
             row(
                 ui,
                 &app.tr("PWM channels"),
@@ -247,7 +259,11 @@ fn capability_list(
                 &app.tr("Peripherals"),
                 &capabilities.peripherals.len().to_string(),
             );
-            row(ui, &app.tr("Macros"), &capabilities.macros.len().to_string());
+            row(
+                ui,
+                &app.tr("Macros"),
+                &capabilities.macros.len().to_string(),
+            );
             row(
                 ui,
                 &app.tr("Strip renderers"),
@@ -278,7 +294,11 @@ fn front_panel(
                 &app.tr("Raw segments"),
                 &format!("{:02X?}", front_panel.raw_segments),
             );
-            row(ui, &app.tr("Brightness"), &front_panel.brightness.to_string());
+            row(
+                ui,
+                &app.tr("Brightness"),
+                &front_panel.brightness.to_string(),
+            );
             row(ui, &app.tr("Blink"), &yes_no(app, front_panel.blink));
             row(
                 ui,
@@ -339,8 +359,16 @@ fn settings(
         .spacing([20.0, 8.0])
         .show(ui, |ui| {
             row(ui, &app.tr("Light mode"), &settings.light_mode.to_string());
-            row(ui, &app.tr("On brightness"), &settings.on_brightness.to_string());
-            row(ui, &app.tr("Off brightness"), &settings.off_brightness.to_string());
+            row(
+                ui,
+                &app.tr("On brightness"),
+                &settings.on_brightness.to_string(),
+            );
+            row(
+                ui,
+                &app.tr("Off brightness"),
+                &settings.off_brightness.to_string(),
+            );
             row(
                 ui,
                 &app.tr("Display brightness"),
@@ -361,7 +389,11 @@ fn settings(
                 &app.tr("Stream period"),
                 &format!("{} ms", settings.stream_period_ms),
             );
-            row(ui, &app.tr("Default page"), &settings.default_page.to_string());
+            row(
+                ui,
+                &app.tr("Default page"),
+                &settings.default_page.to_string(),
+            );
             row(
                 ui,
                 &app.tr("Motion break"),

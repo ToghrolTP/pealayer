@@ -6,7 +6,10 @@ pub fn get_thumbnail_cache_dir() -> PathBuf {
         PathBuf::from(cache).join("pealayer").join("thumbnails")
     } else {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home).join(".cache").join("pealayer").join("thumbnails")
+        PathBuf::from(home)
+            .join(".cache")
+            .join("pealayer")
+            .join("thumbnails")
     }
 }
 
@@ -30,11 +33,16 @@ pub fn get_or_generate_thumbnail(video_path: &Path) -> Option<PathBuf> {
     // Try generating thumbnail using ffmpeg first
     let status = Command::new("ffmpeg")
         .args(&[
-            "-ss", "00:00:05",
-            "-i", path_str.as_ref(),
-            "-vframes", "1",
-            "-s", "320x180",
-            "-q:v", "5",
+            "-ss",
+            "00:00:05",
+            "-i",
+            path_str.as_ref(),
+            "-vframes",
+            "1",
+            "-s",
+            "320x180",
+            "-q:v",
+            "5",
             "-y",
             thumb_path.to_str().unwrap_or(""),
         ])

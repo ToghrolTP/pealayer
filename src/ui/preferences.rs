@@ -36,9 +36,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     .collapsible(false)
     .show(ui.ctx(), |ui| {
         let mut changed = false;
-        let narrow = ui.available_width() < 500.0;
+        // A vertical tab rail plus the minimum useful settings column needs
+        // considerably more than 500 points. Switch before either side starts
+        // squeezing controls into overlapping or single-glyph columns.
+        let narrow = ui.available_width() < 580.0;
         if narrow {
-            ui.horizontal_wrapped(|ui| draw_tabs(app, ui, true));
+            draw_compact_tab_selector(app, ui);
             ui.separator();
             draw_preferences_content(app, ui, &mut changed);
         } else {
@@ -81,19 +84,39 @@ fn draw_tabs(app: &mut PealayerApp, ui: &mut egui::Ui, compact: bool) {
     }
 }
 
+fn draw_compact_tab_selector(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    let (active_icon, active_name) = TABS[app.preferences_tab.min(TABS.len() - 1)];
+    egui::ComboBox::from_id_salt("preferences_compact_tab")
+        .width(ui.available_width())
+        .selected_text(format!("{active_icon}  {}", app.tr(active_name)))
+        .show_ui(ui, |ui| {
+            for (index, (icon, name)) in TABS.into_iter().enumerate() {
+                if ui
+                    .selectable_label(
+                        app.preferences_tab == index,
+                        format!("{icon}  {}", app.tr(name)),
+                    )
+                    .clicked()
+                {
+                    app.preferences_tab = index;
+                }
+            }
+        });
+}
+
 fn draw_preferences_content(app: &mut PealayerApp, ui: &mut egui::Ui, changed: &mut bool) {
     let detail_width = ui.available_width();
     crate::ui::dialog::scroll_column(ui, "preferences_content_v2", None, |ui| {
-            ui.set_max_width((detail_width - 8.0).max(180.0));
-            ui.spacing_mut().item_spacing.y = 8.0;
-            match app.preferences_tab {
-                0 => appearance_preferences(app, ui, changed),
-                1 => playback_preferences(app, ui, changed),
-                2 => hardware_preferences(app, ui, changed),
-                3 => input_preferences(app, ui, changed),
-                _ => advanced_preferences(app, ui),
-            }
-        });
+        ui.set_max_width((detail_width - 8.0).max(180.0));
+        ui.spacing_mut().item_spacing.y = 8.0;
+        match app.preferences_tab {
+            0 => appearance_preferences(app, ui, changed),
+            1 => playback_preferences(app, ui, changed),
+            2 => hardware_preferences(app, ui, changed),
+            3 => input_preferences(app, ui, changed),
+            _ => advanced_preferences(app, ui),
+        }
+    });
 }
 
 fn appearance_preferences(app: &mut PealayerApp, ui: &mut egui::Ui, changed: &mut bool) {
@@ -514,10 +537,11 @@ fn preference_section(
 }
 
 fn preference_grid(ui: &mut egui::Ui, id: &'static str, body: impl FnOnce(&mut egui::Ui)) {
+    let narrow = ui.available_width() < 360.0;
     egui::Grid::new(id)
         .num_columns(2)
-        .spacing([18.0, 10.0])
-        .min_col_width(120.0)
+        .spacing([if narrow { 8.0 } else { 18.0 }, 10.0])
+        .min_col_width(if narrow { 72.0 } else { 120.0 })
         .show(ui, body);
 }
 

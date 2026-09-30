@@ -205,8 +205,8 @@ pub fn apply_windows_window_decorations(hwnd_raw: isize) {
     use windows::Win32::Foundation::{BOOL, HWND};
     use windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE;
     use windows::Win32::Graphics::Dwm::{
-        DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMWA_CAPTION_COLOR, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_TEXT_COLOR,
-        DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
+        DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMWA_CAPTION_COLOR, DWMWA_SYSTEMBACKDROP_TYPE,
+        DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
     };
 
     if hwnd_raw == 0 {
@@ -253,7 +253,11 @@ pub fn apply_windows_window_decorations(hwnd_raw: isize) {
 
         // Keep native caption and text colors aligned with the app theme, or
         // return them to the system-selected default when DWM theming is off.
-        let caption_color = if dwm_theming { caption_color } else { 0xFFFF_FFFF };
+        let caption_color = if dwm_theming {
+            caption_color
+        } else {
+            0xFFFF_FFFF
+        };
         let text_color = if dwm_theming { text_color } else { 0xFFFF_FFFF };
         let _ = DwmSetWindowAttribute(
             hwnd,

@@ -168,7 +168,7 @@ fn draw_hardware_status(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .map(|transport| format!("{board_name} via {transport}"))
             .unwrap_or(board_name)
     } else if app.is_connected && coordinator_endpoint {
-        app.tr("PCController connected; board unavailable")
+        app.tr("PCController connected; board not connected")
     } else if app.is_connected {
         format!("{} direct diagnostic", app.serial_port)
     } else if connection_requested {
@@ -177,7 +177,10 @@ fn draw_hardware_status(app: &mut PealayerApp, ui: &mut egui::Ui) {
         app.tr("Hardware: Disconnected")
     };
     let mut connection_label = ui.label(label_text);
-    if let Some(notice) = &app.connection_notice {
+    if app.is_connected && coordinator_endpoint && !board_ready {
+        connection_label =
+            connection_label.on_hover_text(app.hardware_unavailable_detail(capabilities.as_ref()));
+    } else if let Some(notice) = &app.connection_notice {
         connection_label = connection_label.on_hover_text(notice);
     }
     if hide_item_menu(app, connection_label, app.tr("Hardware connection")) {

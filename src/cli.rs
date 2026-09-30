@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
@@ -53,7 +53,10 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
                 return Ok(CliAction::PrintHelp(format_help_message()));
             }
             "-V" | "--version" => {
-                return Ok(CliAction::PrintVersion(format!("pealayer {}", env!("CARGO_PKG_VERSION"))));
+                return Ok(CliAction::PrintVersion(format!(
+                    "pealayer {}",
+                    env!("CARGO_PKG_VERSION")
+                )));
             }
             "--register-associations" => {
                 return Ok(CliAction::RegisterAssociations);
@@ -65,12 +68,18 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
                 fullscreen = true;
             }
             "-v" | "--volume" => {
-                let val_str = args_iter.next().ok_or("Option '--volume' requires a value between 0 and 130")?;
-                let val = val_str.parse::<f64>().map_err(|_| "Invalid volume value: must be a number")?;
+                let val_str = args_iter
+                    .next()
+                    .ok_or("Option '--volume' requires a value between 0 and 130")?;
+                let val = val_str
+                    .parse::<f64>()
+                    .map_err(|_| "Invalid volume value: must be a number")?;
                 volume = Some(val.clamp(0.0, 130.0));
             }
             "--remote" => {
-                let cmd = args_iter.next().ok_or("Option '--remote' requires a command argument (e.g. 'play', 'pause')")?;
+                let cmd = args_iter.next().ok_or(
+                    "Option '--remote' requires a command argument (e.g. 'play', 'pause')",
+                )?;
                 return Ok(CliAction::SendRemote(cmd));
             }
             other if other.starts_with('-') => {
@@ -92,20 +101,9 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
 }
 
 pub fn send_remote_command(cmd_str: &str) -> Result<String, String> {
-    let address = format!(
-        "127.0.0.1:{}",
-        crate::config::runtime_port("PEALAYER_IPC_PORT", 8082)
-    );
-    let mut stream = TcpStream::connect_timeout(
-        &address.parse().unwrap(),
-        Duration::from_millis(500),
-    ).map_err(|e| format!("Could not connect to the player instance at {address}: {e}"))?;
-
-    stream.set_read_timeout(Some(Duration::from_secs(2))).map_err(|e| e.to_string())?;
-
     let trimmed = cmd_str.trim();
     let payload = if trimmed.starts_with('{') {
-        trimmed.to_string() + "\n"
+        trimmed.to_string()
     } else {
         let lower = trimmed.to_lowercase();
         match lower.as_str() {
@@ -118,35 +116,35 @@ pub fn send_remote_command(cmd_str: &str) -> Result<String, String> {
                 serde_json::json!({
                     "command": "seek",
                     "seconds": sec
-                }).to_string() + "\n"
+                })
+                .to_string()
+                    + "\n"
             }
             s if s.starts_with("volume ") => {
                 let v: f64 = trimmed[7..].trim().parse().unwrap_or(100.0);
                 serde_json::json!({
                     "command": "set_volume",
                     "value": v
-                }).to_string() + "\n"
+                })
+                .to_string()
+                    + "\n"
             }
             s if s.starts_with("open ") => {
                 let target = trimmed[5..].trim();
                 serde_json::json!({
                     "command": "open",
                     "target": target
-                }).to_string() + "\n"
+                })
+                .to_string()
+                    + "\n"
             }
             _ => serde_json::json!({
                 "command": trimmed
-            }).to_string() + "\n",
+            })
+            .to_string(),
         }
     };
-
-    stream.write_all(payload.as_bytes()).map_err(|e| e.to_string())?;
-    stream.flush().map_err(|e| e.to_string())?;
-
-    let mut reader = BufReader::new(stream);
-    let mut response = String::new();
-    reader.read_line(&mut response).map_err(|e| e.to_string())?;
-    Ok(response.trim().to_string())
+    send_control_request(&payload, Duration::from_secs(2))
 }
 
 pub fn launch_request(options: &CliOptions) -> LaunchRequest {
@@ -184,29 +182,48 @@ pub fn try_forward_launch_request(request: &LaunchRequest) -> bool {
         request: request.clone(),
     };
     let payload = match serde_json::to_string(&command) {
-        Ok(payload) => payload + "\n",
+        Ok(payload) => payload,
         Err(_) => return false,
     };
-    let address = format!(
-        "127.0.0.1:{}",
-        crate::config::runtime_port("PEALAYER_IPC_PORT", 8082)
+    send_control_request(&payload, Duration::from_millis(500))
+        .is_ok_and(|response| response.contains("\"status\":\"accepted\""))
+}
+
+fn send_control_request(payload: &str, timeout: Duration) -> Result<String, String> {
+    let address = format!("127.0.0.1:{}", crate::config::control_port());
+    let socket_address = address
+        .parse()
+        .map_err(|error| format!("invalid control address: {error}"))?;
+    let mut stream = TcpStream::connect_timeout(&socket_address, Duration::from_millis(500))
+        .map_err(|error| {
+            format!("Could not connect to the player instance at {address}: {error}")
+        })?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|error| error.to_string())?;
+
+    let request = format!(
+        "POST /api/ipc HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+        payload.len()
     );
-    if let Ok(mut stream) = TcpStream::connect_timeout(
-        &address.parse().unwrap(),
-        Duration::from_millis(200),
-    ) {
-        let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-        if stream.write_all(payload.as_bytes()).is_ok() && stream.flush().is_ok() {
-            let mut reader = BufReader::new(stream);
-            let mut line = String::new();
-            if reader.read_line(&mut line).is_ok()
-                && line.contains("\"status\":\"accepted\"")
-            {
-                return true;
-            }
-        }
+    stream
+        .write_all(request.as_bytes())
+        .and_then(|_| stream.flush())
+        .map_err(|error| error.to_string())?;
+
+    let mut response = String::new();
+    BufReader::new(stream)
+        .read_to_string(&mut response)
+        .map_err(|error| error.to_string())?;
+    let (headers, body) = response
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| "invalid HTTP response from Pealayer control endpoint".to_string())?;
+    if !headers.starts_with("HTTP/1.1 200") {
+        return Err(format!(
+            "Pealayer control endpoint rejected request: {headers}"
+        ));
     }
-    false
+    Ok(body.trim().to_string())
 }
 
 #[cfg(test)]
@@ -246,16 +263,26 @@ mod tests {
         );
 
         // 3. Remote IPC command
-        let args = vec!["pealayer".to_string(), "--remote".to_string(), "play".to_string()];
+        let args = vec![
+            "pealayer".to_string(),
+            "--remote".to_string(),
+            "play".to_string(),
+        ];
         let action = parse_cli_args(args).unwrap();
         assert_eq!(action, CliAction::SendRemote("play".to_string()));
 
         // 4. Help and Version flags
         let args_h = vec!["pealayer".to_string(), "--help".to_string()];
-        assert!(matches!(parse_cli_args(args_h).unwrap(), CliAction::PrintHelp(_)));
+        assert!(matches!(
+            parse_cli_args(args_h).unwrap(),
+            CliAction::PrintHelp(_)
+        ));
 
         let args_v = vec!["pealayer".to_string(), "-V".to_string()];
-        assert!(matches!(parse_cli_args(args_v).unwrap(), CliAction::PrintVersion(_)));
+        assert!(matches!(
+            parse_cli_args(args_v).unwrap(),
+            CliAction::PrintVersion(_)
+        ));
     }
 
     #[test]
@@ -289,11 +316,7 @@ mod tests {
         );
 
         // Volume clamping to 0
-        let args = vec![
-            "pealayer".to_string(),
-            "-v".to_string(),
-            "-20".to_string(),
-        ];
+        let args = vec!["pealayer".to_string(), "-v".to_string(), "-20".to_string()];
         let action = parse_cli_args(args).unwrap();
         assert_eq!(
             action,
@@ -308,22 +331,44 @@ mod tests {
         let action_h = parse_cli_args(vec!["pealayer".to_string(), "-h".to_string()]).unwrap();
         assert!(matches!(action_h, CliAction::PrintHelp(_)));
 
-        let action_ver = parse_cli_args(vec!["pealayer".to_string(), "--version".to_string()]).unwrap();
+        let action_ver =
+            parse_cli_args(vec!["pealayer".to_string(), "--version".to_string()]).unwrap();
         assert!(matches!(action_ver, CliAction::PrintVersion(_)));
 
         // Error cases
         assert!(parse_cli_args(vec!["pealayer".to_string(), "-v".to_string()]).is_err());
-        assert!(parse_cli_args(vec!["pealayer".to_string(), "-v".to_string(), "abc".to_string()]).is_err());
+        assert!(
+            parse_cli_args(vec![
+                "pealayer".to_string(),
+                "-v".to_string(),
+                "abc".to_string()
+            ])
+            .is_err()
+        );
         assert!(parse_cli_args(vec!["pealayer".to_string(), "--remote".to_string()]).is_err());
-        assert!(parse_cli_args(vec!["pealayer".to_string(), "--unknown-flag".to_string()]).is_err());
+        assert!(
+            parse_cli_args(vec!["pealayer".to_string(), "--unknown-flag".to_string()]).is_err()
+        );
     }
 
     #[test]
     fn test_cli_association_flags() {
-        let args_reg = vec!["pealayer".to_string(), "--register-associations".to_string()];
-        assert_eq!(parse_cli_args(args_reg).unwrap(), CliAction::RegisterAssociations);
+        let args_reg = vec![
+            "pealayer".to_string(),
+            "--register-associations".to_string(),
+        ];
+        assert_eq!(
+            parse_cli_args(args_reg).unwrap(),
+            CliAction::RegisterAssociations
+        );
 
-        let args_unreg = vec!["pealayer".to_string(), "--unregister-associations".to_string()];
-        assert_eq!(parse_cli_args(args_unreg).unwrap(), CliAction::UnregisterAssociations);
+        let args_unreg = vec![
+            "pealayer".to_string(),
+            "--unregister-associations".to_string(),
+        ];
+        assert_eq!(
+            parse_cli_args(args_unreg).unwrap(),
+            CliAction::UnregisterAssociations
+        );
     }
 }

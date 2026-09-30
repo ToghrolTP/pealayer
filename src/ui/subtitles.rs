@@ -20,167 +20,210 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
         bounds.width().min(460.0),
         bounds.height().min(SUBTITLE_DIALOG_MAX_HEIGHT),
     );
-    let default_size = egui::vec2(
-        max_size.x.min(SUBTITLE_DIALOG_WIDTH),
-        max_size.y.min(420.0),
-    );
+    let default_size = egui::vec2(max_size.x.min(SUBTITLE_DIALOG_WIDTH), max_size.y.min(420.0));
 
     egui::Window::new(format!(
         "{} {}",
         crate::ui::icons::SUBTITLES,
         app.tr("Subtitle Settings")
     ))
-        // Reset geometry remembered by both earlier unbounded implementations.
-        .id(egui::Id::new("subtitle_settings_dialog_bounded_v3"))
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(true)
-        .default_size(default_size)
-        .min_size([340.0_f32.min(max_size.x), 280.0_f32.min(max_size.y)])
-        .max_size(max_size)
-        .constrain_to(bounds)
-        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .show(ui.ctx(), |ui| {
-          ui.set_max_width(max_size.x);
-          crate::ui::dialog::scroll_column(
+    // Reset geometry remembered by both earlier unbounded implementations.
+    .id(egui::Id::new("subtitle_settings_dialog_bounded_v3"))
+    .open(&mut open)
+    .collapsible(false)
+    .resizable(true)
+    .default_size(default_size)
+    .min_size([340.0_f32.min(max_size.x), 280.0_f32.min(max_size.y)])
+    .max_size(max_size)
+    .constrain_to(bounds)
+    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+    .show(ui.ctx(), |ui| {
+        ui.set_max_width(max_size.x);
+        crate::ui::dialog::scroll_column(
             ui,
             "subtitle_settings_body_v3",
             Some(SUBTITLE_DIALOG_BODY_HEIGHT.min(ui.available_height() - 38.0)),
             |ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
+                ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
 
-            crate::ui::dialog::section(
-              ui,
-              crate::ui::icons::SUBTITLES,
-              &app.tr("Subtitles"),
-              |ui| {
-                let mut vis = app.sub_visibility;
-                if ui.checkbox(&mut vis, app.tr("Enable Subtitles")).changed() {
-                    app.sub_visibility = vis;
-                    let _ = app.mpv.set_property("sub-visibility", vis);
-                }
-              },
-            );
-            ui.add_space(8.0);
-
-            crate::ui::dialog::section(
-              ui,
-              crate::ui::icons::LIST_CHECKS,
-              &app.tr("Track"),
-              |ui| {
-                let current_label = if app.current_sid == "no" {
-                    app.tr("None").to_string()
-                } else {
-                    let mut label = format!("Track {}", app.current_sid);
-                    for t in &app.sub_tracks {
-                        if t.id.to_string() == app.current_sid {
-                            let parts: Vec<&str> = vec![
-                                t.lang.as_deref().unwrap_or(""),
-                                t.title.as_deref().unwrap_or(""),
-                            ]
-                            .into_iter()
-                            .filter(|s| !s.is_empty())
-                            .collect();
-                            if !parts.is_empty() {
-                                label = format!("Track {} ({})", t.id, parts.join(" - "));
-                            }
-                            break;
+                crate::ui::dialog::section(
+                    ui,
+                    crate::ui::icons::SUBTITLES,
+                    &app.tr("Subtitles"),
+                    |ui| {
+                        let mut vis = app.sub_visibility;
+                        if ui.checkbox(&mut vis, app.tr("Enable Subtitles")).changed() {
+                            app.sub_visibility = vis;
+                            let _ = app.mpv.set_property("sub-visibility", vis);
                         }
-                    }
-                    label
-                };
+                    },
+                );
+                ui.add_space(8.0);
 
-                let none_label = app.tr("None");
-                let combo_width = (ui.available_width() - 4.0)
-                    .clamp(140.0, SUBTITLE_TRACK_WIDTH);
-                egui::ComboBox::from_id_salt("sub_track_combo")
-                  .selected_text(current_label)
-                  .width(combo_width)
-                  .height(SUBTITLE_TRACK_POPUP_HEIGHT)
-                  .show_ui(ui, |ui| {
-                    if ui
-                        .selectable_value(&mut app.current_sid, "no".to_string(), none_label)
-                        .clicked()
-                    {
-                        let _ = app.mpv.set_property("sid", "no");
-                    }
-                    for track in &app.sub_tracks {
-                        let track_id_str = track.id.to_string();
-                        let parts: Vec<&str> = vec![
-                            track.lang.as_deref().unwrap_or(""),
-                            track.title.as_deref().unwrap_or(""),
-                        ]
-                        .into_iter()
-                        .filter(|s| !s.is_empty())
-                        .collect();
-                        let label = if parts.is_empty() {
-                            format!("Track {}", track.id)
+                crate::ui::dialog::section(
+                    ui,
+                    crate::ui::icons::LIST_CHECKS,
+                    &app.tr("Track"),
+                    |ui| {
+                        let current_label = if app.current_sid == "no" {
+                            app.tr("None").to_string()
                         } else {
-                            format!("Track {} ({})", track.id, parts.join(" - "))
+                            let mut label = format!("Track {}", app.current_sid);
+                            for t in &app.sub_tracks {
+                                if t.id.to_string() == app.current_sid {
+                                    let parts: Vec<&str> = vec![
+                                        t.lang.as_deref().unwrap_or(""),
+                                        t.title.as_deref().unwrap_or(""),
+                                    ]
+                                    .into_iter()
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
+                                    if !parts.is_empty() {
+                                        label = format!("Track {} ({})", t.id, parts.join(" - "));
+                                    }
+                                    break;
+                                }
+                            }
+                            label
                         };
+
+                        let none_label = app.tr("None");
+                        let combo_width =
+                            (ui.available_width() - 4.0).clamp(140.0, SUBTITLE_TRACK_WIDTH);
+                        egui::ComboBox::from_id_salt("sub_track_combo")
+                            .selected_text(current_label)
+                            .width(combo_width)
+                            .height(SUBTITLE_TRACK_POPUP_HEIGHT)
+                            .show_ui(ui, |ui| {
+                                if ui
+                                    .selectable_value(
+                                        &mut app.current_sid,
+                                        "no".to_string(),
+                                        none_label,
+                                    )
+                                    .clicked()
+                                {
+                                    let _ = app.mpv.set_property("sid", "no");
+                                }
+                                for track in &app.sub_tracks {
+                                    let track_id_str = track.id.to_string();
+                                    let parts: Vec<&str> = vec![
+                                        track.lang.as_deref().unwrap_or(""),
+                                        track.title.as_deref().unwrap_or(""),
+                                    ]
+                                    .into_iter()
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
+                                    let label = if parts.is_empty() {
+                                        format!("Track {}", track.id)
+                                    } else {
+                                        format!("Track {} ({})", track.id, parts.join(" - "))
+                                    };
+                                    if ui
+                                        .selectable_value(
+                                            &mut app.current_sid,
+                                            track_id_str.clone(),
+                                            label,
+                                        )
+                                        .clicked()
+                                    {
+                                        let _ = app.mpv.set_property("sid", track_id_str);
+                                    }
+                                }
+                            });
+                    },
+                );
+                ui.add_space(8.0);
+
+                crate::ui::dialog::section(
+                    ui,
+                    crate::ui::icons::SPARKLE,
+                    &app.tr("Appearance"),
+                    |ui| {
+                        crate::ui::dialog::compact_row(ui, app.rtl, |ui| {
+                            ui.label(app.tr("Font Size:"));
+                            let mut font_size = app.sub_font_size;
                             if ui
-                                .selectable_value(&mut app.current_sid, track_id_str.clone(), label)
+                                .add(egui::Slider::new(&mut font_size, 10.0..=100.0))
+                                .changed()
+                            {
+                                app.sub_font_size = font_size;
+                                let _ = app.mpv.set_property("sub-font-size", font_size);
+                            }
+                        });
+                    },
+                );
+                ui.add_space(8.0);
+
+                crate::ui::dialog::section(
+                    ui,
+                    crate::ui::icons::CLOCK_COUNTER_CLOCKWISE,
+                    &app.tr("Synchronization"),
+                    |ui| {
+                        crate::ui::dialog::compact_row(ui, app.rtl, |ui| {
+                            ui.label(app.tr("Delay (s):"));
+                            let mut delay = app.sub_delay;
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut delay)
+                                        .speed(0.1)
+                                        .range(MIN_SUB_DELAY..=MAX_SUB_DELAY),
+                                )
+                                .changed()
+                            {
+                                app.sub_delay = delay;
+                                let _ = app.mpv.set_property("sub-delay", delay);
+                            }
+                            if ui
+                                .button(format!(
+                                    "{} {}",
+                                    crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                                    app.tr("Reset")
+                                ))
                                 .clicked()
                             {
-                                let _ = app.mpv.set_property("sid", track_id_str);
+                                app.sub_delay = 0.0;
+                                let _ = app.mpv.set_property("sub-delay", 0.0);
                             }
-                        }
-                  });
-              },
-            );
-            ui.add_space(8.0);
+                        });
+                    },
+                );
+                ui.add_space(8.0);
 
-            crate::ui::dialog::section(ui, crate::ui::icons::SPARKLE, &app.tr("Appearance"), |ui| {
-              crate::ui::dialog::compact_row(ui, app.rtl, |ui| {
-                ui.label(app.tr("Font Size:"));
-                let mut font_size = app.sub_font_size;
-                if ui.add(egui::Slider::new(&mut font_size, 10.0..=100.0)).changed() {
-                  app.sub_font_size = font_size;
-                  let _ = app.mpv.set_property("sub-font-size", font_size);
-                }
-              });
-            });
-            ui.add_space(8.0);
-
-            crate::ui::dialog::section(ui, crate::ui::icons::CLOCK_COUNTER_CLOCKWISE, &app.tr("Synchronization"), |ui| {
-              crate::ui::dialog::compact_row(ui, app.rtl, |ui| {
-                ui.label(app.tr("Delay (s):"));
-                let mut delay = app.sub_delay;
-                if ui.add(egui::DragValue::new(&mut delay).speed(0.1).range(MIN_SUB_DELAY..=MAX_SUB_DELAY)).changed() {
-                  app.sub_delay = delay;
-                  let _ = app.mpv.set_property("sub-delay", delay);
-                }
-                if ui.button(format!("{} {}", crate::ui::icons::ARROW_COUNTER_CLOCKWISE, app.tr("Reset"))).clicked() {
-                  app.sub_delay = 0.0;
-                  let _ = app.mpv.set_property("sub-delay", 0.0);
-                }
-              });
-            });
-            ui.add_space(8.0);
-
-            if ui.button(format!("{} {}", crate::ui::icons::FOLDER_OPEN, app.tr("Load External Subtitle..."))).clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Subtitles", &["srt", "vtt", "ass", "ssa"])
-                    .pick_file()
+                if ui
+                    .button(format!(
+                        "{} {}",
+                        crate::ui::icons::FOLDER_OPEN,
+                        app.tr("Load External Subtitle...")
+                    ))
+                    .clicked()
                 {
-                    if let Some(path_str) = path.to_str() {
-                        let _ = app.mpv.command("sub-add", &[path_str]);
-                        // It takes a moment for the track to be added and selected.
-                        // Ideally we observe track-list changes, but we can also just
-                        // refresh manually or rely on the user to see the new track.
-                        // Let's manually refresh after a slight delay or just call it directly.
-                        app.refresh_sub_tracks();
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Subtitles", &["srt", "vtt", "ass", "ssa"])
+                        .pick_file()
+                    {
+                        if let Some(path_str) = path.to_str() {
+                            let _ = app.mpv.command("sub-add", &[path_str]);
+                            // It takes a moment for the track to be added and selected.
+                            // Ideally we observe track-list changes, but we can also just
+                            // refresh manually or rely on the user to see the new track.
+                            // Let's manually refresh after a slight delay or just call it directly.
+                            app.refresh_sub_tracks();
+                        }
                     }
                 }
-            }
-          });
-          ui.separator();
-          ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button(format!("{} {}", crate::ui::icons::X, app.tr("Close"))).clicked() {
+            },
+        );
+        ui.separator();
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .button(format!("{} {}", crate::ui::icons::X, app.tr("Close")))
+                .clicked()
+            {
                 close_requested = true;
             }
-          });
         });
+    });
 
     app.show_sub_settings = open && !close_requested;
 }

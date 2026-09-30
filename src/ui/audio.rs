@@ -11,18 +11,22 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let max_size = egui::vec2(bounds.width().min(460.0), bounds.height().min(430.0));
     let default_size = egui::vec2(max_size.x.min(420.0), max_size.y.min(380.0));
 
-    egui::Window::new(format!("{} {}", crate::ui::icons::MUSIC_NOTE, app.tr("Audio Settings")))
-        .id(egui::Id::new("audio_settings_dialog_bounded_v2"))
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(true)
-        .default_size(default_size)
-        .min_size([340.0_f32.min(max_size.x), 260.0_f32.min(max_size.y)])
-        .max_size(max_size)
-        .constrain_to(bounds)
-        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .show(ui.ctx(), |ui| {
-          crate::ui::dialog::scroll_column(ui, "audio_settings_body_v2", None, |ui| {
+    egui::Window::new(format!(
+        "{} {}",
+        crate::ui::icons::MUSIC_NOTE,
+        app.tr("Audio Settings")
+    ))
+    .id(egui::Id::new("audio_settings_dialog_bounded_v2"))
+    .open(&mut open)
+    .collapsible(false)
+    .resizable(true)
+    .default_size(default_size)
+    .min_size([340.0_f32.min(max_size.x), 260.0_f32.min(max_size.y)])
+    .max_size(max_size)
+    .constrain_to(bounds)
+    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+    .show(ui.ctx(), |ui| {
+        crate::ui::dialog::scroll_column(ui, "audio_settings_body_v2", None, |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
 
             crate::ui::dialog::section(ui, crate::ui::icons::MUSIC_NOTE, &app.tr("Track"), |ui| {
@@ -69,7 +73,7 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             .into_iter()
                             .filter(|s| !s.is_empty())
                             .collect();
-                            
+
                             let label = if parts.is_empty() {
                                 format!("Track {}", track.id)
                             } else {
@@ -87,31 +91,50 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
             });
             ui.add_space(8.0);
 
-            crate::ui::dialog::section(ui, crate::ui::icons::CLOCK_COUNTER_CLOCKWISE, &app.tr("Synchronization"), |ui| {
-              crate::ui::dialog::compact_row(ui, app.rtl, |ui| {
-                ui.label(app.tr("Delay (s):"));
-                let mut delay = app.audio_delay;
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut delay)
-                            .speed(0.1)
-                            .range(MIN_AUDIO_DELAY..=MAX_AUDIO_DELAY),
-                    )
-                    .changed()
-                {
-                    app.audio_delay = delay;
-                    let _ = app.mpv.set_property("audio-delay", delay);
-                }
-                if ui.button(format!("{} {}", crate::ui::icons::ARROW_COUNTER_CLOCKWISE, app.tr("Reset"))).clicked() {
-                    app.audio_delay = 0.0;
-                    let _ = app.mpv.set_property("audio-delay", 0.0);
-                }
-              });
-            });
+            crate::ui::dialog::section(
+                ui,
+                crate::ui::icons::CLOCK_COUNTER_CLOCKWISE,
+                &app.tr("Synchronization"),
+                |ui| {
+                    crate::ui::dialog::compact_row(ui, app.rtl, |ui| {
+                        ui.label(app.tr("Delay (s):"));
+                        let mut delay = app.audio_delay;
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut delay)
+                                    .speed(0.1)
+                                    .range(MIN_AUDIO_DELAY..=MAX_AUDIO_DELAY),
+                            )
+                            .changed()
+                        {
+                            app.audio_delay = delay;
+                            let _ = app.mpv.set_property("audio-delay", delay);
+                        }
+                        if ui
+                            .button(format!(
+                                "{} {}",
+                                crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                                app.tr("Reset")
+                            ))
+                            .clicked()
+                        {
+                            app.audio_delay = 0.0;
+                            let _ = app.mpv.set_property("audio-delay", 0.0);
+                        }
+                    });
+                },
+            );
             ui.add_space(8.0);
 
             // Load External
-            if ui.button(format!("{} {}", crate::ui::icons::FOLDER_OPEN, app.tr("Load External Audio..."))).clicked() {
+            if ui
+                .button(format!(
+                    "{} {}",
+                    crate::ui::icons::FOLDER_OPEN,
+                    app.tr("Load External Audio...")
+                ))
+                .clicked()
+            {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("Audio Files", &["mp3", "flac", "wav", "m4a", "aac", "ogg"])
                     .pick_file()
@@ -122,8 +145,8 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
                 }
             }
-          });
         });
+    });
 
     app.show_audio_settings = open;
 }

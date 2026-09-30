@@ -56,10 +56,19 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     );
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        if ui.button(format!("{} {}", crate::ui::icons::COPY, app.tr("Copy details"))).clicked() {
+                        if ui
+                            .button(format!(
+                                "{} {}",
+                                crate::ui::icons::COPY,
+                                app.tr("Copy details")
+                            ))
+                            .clicked()
+                        {
                             ui.ctx().copy_text(err.clone());
                         }
-                        if ui.button(format!("{} {}", crate::ui::icons::X, app.tr("Close"))).clicked()
+                        if ui
+                            .button(format!("{} {}", crate::ui::icons::X, app.tr("Close")))
+                            .clicked()
                             || ui.input(|input| input.key_pressed(egui::Key::Enter))
                         {
                             clear_error = true;

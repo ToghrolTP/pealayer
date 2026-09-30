@@ -1139,6 +1139,44 @@ impl PealayerApp {
             .filter(|name| !name.trim().is_empty())
     }
 
+    pub fn hardware_unavailable_detail(
+        &self,
+        capabilities: Option<&crate::four_d::controller::HardwareCapabilities>,
+    ) -> String {
+        if let Some(notice) = self
+            .connection_notice
+            .as_deref()
+            .map(str::trim)
+            .filter(|notice| !notice.is_empty())
+        {
+            return format!("{}: {notice}", self.tr("Board connection failed"));
+        }
+        if let Some(capabilities) = capabilities {
+            if let Some(warning) = capabilities.warnings.iter().find(|warning| {
+                !warning.message.trim().is_empty()
+                    && matches!(
+                        warning.severity.trim().to_ascii_lowercase().as_str(),
+                        "error" | "critical" | "fatal"
+                    )
+            }) {
+                return format!(
+                    "{}: {}",
+                    self.tr("Board connection failed"),
+                    self.display_text(warning.message.trim())
+                );
+            }
+            let port = capabilities.port.name.trim();
+            if !port.is_empty() {
+                return format!(
+                    "{} {port}, {}",
+                    self.tr("PCController detected hardware on"),
+                    self.tr("but the board is not responding. Check its USB cable, power, and operating-system device status.")
+                );
+            }
+        }
+        self.tr("PCController is reachable, but no board is connected. Connect the board and check its USB cable, power, and port.")
+    }
+
     pub fn advertised_effect_presets(&self) -> Vec<EffectPreset> {
         let Some(capabilities) = self
             .advertised_hardware()
@@ -2632,7 +2670,7 @@ impl Default for PealayerApp {
             compact_hardware_controls: false,
             windows_mica_backdrop: false,
             windows_dwm_theming: true,
-            opengl_vsync: true,
+            opengl_vsync: false,
             status_bar: crate::config::StatusBarConfig::default(),
             config_fingerprint: crate::config::AppConfig::fingerprint(
                 &crate::config::AppConfig::get_config_path(),

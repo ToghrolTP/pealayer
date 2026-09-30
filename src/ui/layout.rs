@@ -2214,16 +2214,40 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         } else if crate::four_d::controller::is_controller_endpoint(&self.app.serial_port)
                             && capabilities.is_none()
                         {
-                            ui.label(egui::RichText::new(
-                                self.app.tr("PCController is connected; waiting for its capability catalog…")
-                            ).weak());
+                            if self.app.connection_notice.is_some() {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.colored_label(
+                                        ui.visuals().warn_fg_color,
+                                        crate::ui::icons::WARNING,
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(
+                                            self.app.hardware_unavailable_detail(None),
+                                        )
+                                        .weak(),
+                                    );
+                                });
+                            } else {
+                                ui.label(egui::RichText::new(
+                                    self.app.tr("PCController is connected; requesting the board capability catalog…")
+                                ).weak());
+                            }
                         } else if capabilities
                             .as_ref()
                             .is_some_and(|capabilities| !capabilities.board_connected)
                         {
-                            ui.label(egui::RichText::new(
-                                self.app.tr("PCController is reachable, but no board is currently advertising live controls.")
-                            ).weak());
+                            ui.horizontal_wrapped(|ui| {
+                                ui.colored_label(
+                                    ui.visuals().warn_fg_color,
+                                    crate::ui::icons::WARNING,
+                                );
+                                ui.label(
+                                    egui::RichText::new(
+                                        self.app.hardware_unavailable_detail(capabilities.as_ref()),
+                                    )
+                                    .weak(),
+                                );
+                            });
                         }
 
                         if let Some(capabilities) = capabilities

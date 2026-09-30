@@ -72,12 +72,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                     let is_long_video = app.duration >= 3600.0;
                     let show_subseconds = app.show_subseconds;
-                    let format_time = |time| {
-                        format_player_time(time, is_long_video, show_subseconds)
-                    };
+                    let format_time =
+                        |time| format_player_time(time, is_long_video, show_subseconds);
 
                     let elapsed_str = format_time(elapsed_time);
-                    let elapsed_resp = ui.add_enabled(has_video, egui::Label::new(elapsed_str).sense(egui::Sense::click()));
+                    let elapsed_resp = ui.add_enabled(
+                        has_video,
+                        egui::Label::new(elapsed_str).sense(egui::Sense::click()),
+                    );
                     if has_video && elapsed_resp.clicked() {
                         app.show_remaining_time = !app.show_remaining_time;
                     }
@@ -136,7 +138,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             app.toggle_fullscreen(&ctx);
                         }
 
-                        let pin_icon = if app.pin_controls { crate::ui::icons::PUSH_PIN_SLASH } else { crate::ui::icons::PUSH_PIN };
+                        let pin_icon = if app.pin_controls {
+                            crate::ui::icons::PUSH_PIN_SLASH
+                        } else {
+                            crate::ui::icons::PUSH_PIN
+                        };
                         if ui
                             .button(pin_icon)
                             .on_hover_text(if app.pin_controls {
@@ -147,11 +153,19 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             .clicked()
                         {
                             app.pin_controls = !app.pin_controls;
-                            app.set_osd(if app.pin_controls { app.tr("Controls Pinned") } else { app.tr("Controls Unpinned") });
+                            app.set_osd(if app.pin_controls {
+                                app.tr("Controls Pinned")
+                            } else {
+                                app.tr("Controls Unpinned")
+                            });
                             app.save_config();
                         }
 
-                        if ui.button(crate::ui::icons::MUSIC_NOTE).on_hover_text(app.tr("Audio Settings...")).clicked() {
+                        if ui
+                            .button(crate::ui::icons::MUSIC_NOTE)
+                            .on_hover_text(app.tr("Audio Settings..."))
+                            .clicked()
+                        {
                             app.show_audio_settings = !app.show_audio_settings;
                         }
 
@@ -174,7 +188,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         let has_video = app.current_video_path.is_some();
                         ui.add_enabled_ui(has_video, |ui| {
                             let mut vol = app.volume;
-                            let vol_slider = egui::Slider::new(&mut vol, 0.0..=130.0).show_value(false);
+                            let vol_slider =
+                                egui::Slider::new(&mut vol, 0.0..=130.0).show_value(false);
                             let vol_resp = ui.add_sized([80.0, 15.0], vol_slider);
                             if vol_resp.changed() {
                                 let _ = app.mpv.set_property("volume", vol);
@@ -202,15 +217,30 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     app.save_config();
                                 }
                             }
-                            let mute_icon = if app.is_muted { crate::ui::icons::SPEAKER_SLASH } else { crate::ui::icons::SPEAKER_HIGH };
+                            let mute_icon = if app.is_muted {
+                                crate::ui::icons::SPEAKER_SLASH
+                            } else {
+                                crate::ui::icons::SPEAKER_HIGH
+                            };
                             if ui
                                 .add(egui::Button::new(mute_icon).frame(false))
-                                .on_hover_text(format!("{} (M)", if app.is_muted { app.tr("Unmute") } else { app.tr("Mute") }))
+                                .on_hover_text(format!(
+                                    "{} (M)",
+                                    if app.is_muted {
+                                        app.tr("Unmute")
+                                    } else {
+                                        app.tr("Mute")
+                                    }
+                                ))
                                 .clicked()
                             {
                                 let _ = app.mpv.command("cycle", &["mute"]);
                                 app.is_muted = !app.is_muted;
-                                app.set_osd(if app.is_muted { app.tr("Mute") } else { app.tr("Unmute") });
+                                app.set_osd(if app.is_muted {
+                                    app.tr("Mute")
+                                } else {
+                                    app.tr("Unmute")
+                                });
                                 app.save_config();
                             }
                         });
@@ -220,7 +250,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         } else {
                             format_time(display_total)
                         };
-                        let total_resp = ui.add_enabled(has_video, egui::Label::new(total_str).sense(egui::Sense::click()));
+                        let total_resp = ui.add_enabled(
+                            has_video,
+                            egui::Label::new(total_str).sense(egui::Sense::click()),
+                        );
                         if has_video && total_resp.clicked() {
                             app.show_remaining_time = !app.show_remaining_time;
                             app.save_config();
@@ -247,7 +280,10 @@ pub fn multiply_style_opacity(style: &mut egui::Style, alpha: f32) {
     // When override_text_color is None, egui uses visuals.text_color().
     // Set override_text_color explicitly to faded text_color so all labels,
     // button text, and icon glyphs fade smoothly.
-    let base_text_color = style.visuals.override_text_color.unwrap_or_else(|| style.visuals.text_color());
+    let base_text_color = style
+        .visuals
+        .override_text_color
+        .unwrap_or_else(|| style.visuals.text_color());
     style.visuals.override_text_color = Some(base_text_color.linear_multiply(alpha));
 
     fade_color(&mut style.visuals.warn_fg_color);
@@ -287,16 +323,31 @@ pub fn format_player_time(time: f64, include_hours: bool, show_subseconds: bool)
     let millis = total_millis % 1000;
     let formatted = if include_hours {
         if show_subseconds {
-            format!("{:02}:{:02}:{:02}.{:03}", whole / 3600, (whole / 60) % 60, whole % 60, millis)
+            format!(
+                "{:02}:{:02}:{:02}.{:03}",
+                whole / 3600,
+                (whole / 60) % 60,
+                whole % 60,
+                millis
+            )
         } else {
-            format!("{:02}:{:02}:{:02}", whole / 3600, (whole / 60) % 60, whole % 60)
+            format!(
+                "{:02}:{:02}:{:02}",
+                whole / 3600,
+                (whole / 60) % 60,
+                whole % 60
+            )
         }
     } else if show_subseconds {
         format!("{:02}:{:02}.{:03}", (whole / 60) % 60, whole % 60, millis)
     } else {
         format!("{:02}:{:02}", (whole / 60) % 60, whole % 60)
     };
-    if negative { format!("-{formatted}") } else { formatted }
+    if negative {
+        format!("-{formatted}")
+    } else {
+        formatted
+    }
 }
 
 pub const LEFT_CONTROLS_WIDTH: f32 = 93.0;
@@ -312,7 +363,8 @@ pub fn compute_controls_layout(
     let fixed_widths = left_width + right_width + (spacing * 2.0);
     if available_width > fixed_widths {
         let seekbar_width = (available_width - fixed_widths).max(min_seekbar_width);
-        let remaining_gap = (available_width - (left_width + spacing + seekbar_width + right_width)).max(spacing);
+        let remaining_gap =
+            (available_width - (left_width + spacing + seekbar_width + right_width)).max(spacing);
         (seekbar_width, remaining_gap)
     } else {
         (min_seekbar_width, spacing)
@@ -348,7 +400,8 @@ mod tests {
     #[test]
     fn test_multiply_style_opacity() {
         let mut style = egui::Style::default();
-        style.visuals.override_text_color = Some(egui::Color32::from_rgba_premultiplied(200, 200, 200, 200));
+        style.visuals.override_text_color =
+            Some(egui::Color32::from_rgba_premultiplied(200, 200, 200, 200));
         let orig_fill = style.visuals.widgets.inactive.bg_fill;
 
         multiply_style_opacity(&mut style, 0.5);
@@ -366,7 +419,8 @@ mod tests {
     #[test]
     fn test_multiply_style_opacity_zero() {
         let mut style = egui::Style::default();
-        style.visuals.override_text_color = Some(egui::Color32::from_rgba_premultiplied(200, 200, 200, 200));
+        style.visuals.override_text_color =
+            Some(egui::Color32::from_rgba_premultiplied(200, 200, 200, 200));
 
         multiply_style_opacity(&mut style, 0.0);
 
@@ -432,7 +486,11 @@ mod tests {
         let duration = 0.0;
 
         let current_pos = if has_video { playback_time } else { 0.0 };
-        let max_dur = if has_video && duration > 0.0 { duration } else { 1.0 };
+        let max_dur = if has_video && duration > 0.0 {
+            duration
+        } else {
+            1.0
+        };
 
         assert_eq!(current_pos, 0.0);
         assert_eq!(max_dur, 1.0);
@@ -453,7 +511,8 @@ mod tests {
 
         // Narrow 500px window
         let available_w_narrow = 520.0;
-        let (seekbar_w_narrow, _gap_narrow) = compute_controls_layout(available_w_narrow, left_w, right_w, spacing);
+        let (seekbar_w_narrow, _gap_narrow) =
+            compute_controls_layout(available_w_narrow, left_w, right_w, spacing);
         assert_eq!(seekbar_w_narrow, 40.0); // clamped to min width
         assert!(left_w + seekbar_w_narrow <= available_w_narrow);
     }

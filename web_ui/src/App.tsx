@@ -16,7 +16,7 @@ const { Sider, Content } = Layout;
 export interface RuntimeConfig {
   appName: string;
   version: string;
-  wsPort: number;
+  websocketPath: string;
   locale: 'en' | 'fa';
   direction: 'ltr' | 'rtl';
   theme: 'system' | 'light' | 'dark';
@@ -72,7 +72,7 @@ const App: React.FC = () => {
     if (!runtime) return;
     const connectWS = () => {
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${proto}//${window.location.hostname}:${runtime.wsPort}`;
+      const wsUrl = `${proto}//${window.location.host}${runtime.websocketPath}`;
 
       try {
         const ws = new WebSocket(wsUrl);

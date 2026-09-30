@@ -1,12 +1,7 @@
 use eframe::egui;
 
 /// A visually consistent, width-bounded section used inside modal dialogs.
-pub fn section(
-    ui: &mut egui::Ui,
-    icon: &str,
-    title: &str,
-    body: impl FnOnce(&mut egui::Ui),
-) {
+pub fn section(ui: &mut egui::Ui, icon: &str, title: &str, body: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::same(12))
         .corner_radius(9.0)
@@ -21,11 +16,7 @@ pub fn section(
 }
 
 /// A compact horizontal row that cannot consume the remaining dialog height.
-pub fn compact_row(
-    ui: &mut egui::Ui,
-    rtl: bool,
-    body: impl FnOnce(&mut egui::Ui),
-) {
+pub fn compact_row(ui: &mut egui::Ui, rtl: bool, body: impl FnOnce(&mut egui::Ui)) {
     let height = ui.spacing().interact_size.y;
     ui.allocate_ui_with_layout(
         egui::vec2(ui.available_width(), height),

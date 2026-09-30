@@ -73,13 +73,13 @@ Whether designing an immersive theme park ride, an experiential 4D theater, or h
 * **Live Actuator Telemetry**: Real-time status LEDs and manual "Force ON" overrides in the Hardware Monitor panel.
 
 ### 🌐 Built-In Web Remote Control & REST/WebSocket APIs
-* **Headless Server Engine**: Built-in loopback-only HTTP server (`tiny_http` on `127.0.0.1:8080`) and WebSocket server (`tungstenite` on `127.0.0.1:8081`). Set `PEALAYER_WEB_BIND` to a specific interface address only when remote access is intended.
+* **Unified Control Server**: HTTP, REST, WebSocket, JSON-RPC, and CLI/single-instance IPC share one loopback-only listener at `127.0.0.1:8080`. Set `PEALAYER_PORT` to override the port, or `PEALAYER_WEB_BIND` to a specific interface address only when remote access is intended.
 * **Mobile-Responsive Remote Web App**: Standalone SPA built with **React 19**, **TypeScript**, **Vite**, and **Ant Design 6** (`web_ui/dist`). Control playback, seek, adjust volume, and trigger E-STOP from any phone, tablet, or secondary monitor.
 * **Remote Media Library & Thumbnail Caching**: Browse server directories, inspect media durations, and view dynamically cached video thumbnails over HTTP.
 
 ### 🖥 Operating System Integration & IPC
 * **Unix Domain Socket IPC**: Direct headless automation on Linux via `/tmp/pealayer.sock` or `$XDG_RUNTIME_DIR/pealayer.sock`.
-* **Pealayer Automation Endpoint**: Pealayer's own newline-delimited command and JSON-RPC endpoint listens on `127.0.0.1:8082`. This is distinct from the PCController coordinator endpoint on `:8787`; native local IPC/embedded transport support is tracked separately and `:8787` remains the controller fallback.
+* **Pealayer Automation Endpoint**: Pealayer's newline-compatible command transport is available at `POST http://127.0.0.1:8080/api/ipc`, while JSON-RPC 2.0 remains at `/api/rpc`. These are distinct from the PCController coordinator endpoint on `:8787`; `:8787` remains the controller fallback.
 * **Desktop File Associations**: 1-click registration as default system player for 9+ media formats (`.mp4`, `.mkv`, `.avi`, `.webm`, `.mov`, `.flv`, `.mp3`, `.flac`, `.wav`) via Windows Registry (`winreg`) and Linux FreeDesktop XDG desktop entries (`xdg-mime`).
 * **Automatic Sidecar Mounting**: Automatically discovers and loads `<video>.4d.json` timeline projects saved alongside movie files.
 * **Native Multi-File Drop**: Dropped media is opened or queued, external subtitles are attached, and timeline JSON is imported according to the actual file type.
@@ -124,8 +124,8 @@ flowchart TD
     end
 
     subgraph Network ["Remote Control & Network Server"]
-        HTTP["HTTP Server (tiny_http 127.0.0.1:8080)\nREST API & Thumbnail Cache"]
-        WS["WebSocket Server (tungstenite 127.0.0.1:8081)\nReal-time State Broadcast"]
+        HTTP["Unified Control Server (127.0.0.1:8080)\nHTTP, REST, WebSocket & IPC"]
+        WS["WebSocket Upgrade (/ws)\nReal-time State Broadcast"]
         WebUI["React 19 Web Remote SPA\n(web_ui / Mobile & Tablet UI)"]
         IPC["Unix Domain Socket IPC\n(pealayer.sock)"]
     end
@@ -215,8 +215,13 @@ When the coordinator is unavailable, selecting a `direct:` endpoint uses:
 
 Pealayer embeds a high-performance web service to control playback and view media libraries over local networks.
 
+All TCP-facing interfaces share one listener. `PEALAYER_PORT` selects that
+listener (default `8080`). There are no protocol-specific port settings. Unix
+builds may additionally expose their native domain socket, which does not
+consume a TCP port.
+
 <div align="center">
-  <b>Local Web Remote:</b> <code>http://127.0.0.1:8080/</code> &nbsp;•&nbsp; <b>WebSocket Endpoint:</b> <code>ws://127.0.0.1:8081</code><br>
+  <b>Local Web Remote:</b> <code>http://127.0.0.1:8080/</code> &nbsp;•&nbsp; <b>WebSocket Endpoint:</b> <code>ws://127.0.0.1:8080/ws</code><br>
   For an intentionally shared LAN remote, set <code>PEALAYER_WEB_BIND</code> to the machine's interface address and use that address from the client.
 </div>
 
@@ -227,11 +232,12 @@ Pealayer embeds a high-performance web service to control playback and view medi
 | `GET` | `/api/player/status` | Returns playback state, including `duration`, `seekable`, `live`, `buffered_until`, and `buffering_percent` |
 | `POST` | `/api/player/command` | Dispatches player commands (JSON payload), including local files and remote media URLs |
 | `POST` | `/api/rpc` | JSON-RPC 2.0 methods such as `pealayer.play`, `pealayer.seek`, `pealayer.open`, and `pealayer.status` |
+| `POST` | `/api/ipc` | CLI and single-instance command transport; accepts legacy command JSON or newline-compatible JSON-RPC payloads |
 | `GET` | `/healthz` | Service/API liveness for coordinators and supervisors |
 | `GET` | `/api/fs/browse?dir=<path>` | Lists directory entries, folders, video files, and metadata |
 | `GET` | `/api/fs/thumbnail?path=<path>` | Returns extracted, cached thumbnail image (JPEG/PNG) for media files |
 
-### WebSocket Protocol (`ws://127.0.0.1:8081`)
+### WebSocket Protocol (`ws://127.0.0.1:8080/ws`)
 Send and receive JSON command packets in real time:
 
 ```json
@@ -448,7 +454,7 @@ pealayer/
 │   │   ├── windows.rs          # Windows Registry (HKCU) ProgID bindings
 │   │   └── interop.rs          # Unix domain socket server (pealayer.sock)
 │   ├── server/                 # Embedded network server
-│   │   ├── mod.rs              # Dual HTTP (tiny_http) & WebSocket (tungstenite) servers
+│   │   ├── mod.rs              # Unified HTTP, WebSocket & IPC control server
 │   │   ├── fs_api.rs           # REST directory navigation & media file explorer
 │   │   ├── thumbnails.rs       # Video thumbnail extractor & filesystem cache
 │   │   └── web_assets.rs       # Embedded / static SPA asset router
