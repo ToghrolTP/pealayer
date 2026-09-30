@@ -5,6 +5,7 @@ pub mod cli;
 pub mod config;
 pub mod effects_library;
 pub mod four_d;
+pub mod media;
 pub mod mpv;
 pub mod platform;
 pub mod server;
@@ -305,6 +306,15 @@ fn main() -> eframe::Result {
                 // so observe the stable container metadata instead.
                 .observe_property("container-fps", libmpv2::Format::Double, 13)
                 .unwrap();
+            mpv_client
+                .observe_property("seekable", libmpv2::Format::Flag, 14)
+                .unwrap();
+            mpv_client
+                .observe_property("demuxer-cache-duration", libmpv2::Format::Double, 15)
+                .unwrap();
+            mpv_client
+                .observe_property("cache-buffering-state", libmpv2::Format::Int64, 16)
+                .unwrap();
 
             let egui_ctx2 = cc.egui_ctx.clone();
             mpv_client.set_wakeup_callback(move || {
@@ -368,6 +378,9 @@ fn main() -> eframe::Result {
                 render_context: Arc::new(Mutex::new(Some(RenderContextWrapper(render_context)))),
                 playback_time: 0.0,
                 duration: 0.0,
+                is_seekable: false,
+                cache_duration: None,
+                cache_buffering_percent: None,
                 media_fps: 0.0,
                 is_paused: false,
                 is_eof: false,
@@ -492,11 +505,7 @@ fn main() -> eframe::Result {
             }
 
             if let Some(target) = cli_options.target {
-                if target.starts_with("http://") || target.starts_with("https://") {
-                    app.load_url(&target);
-                } else {
-                    app.load_video_file(std::path::PathBuf::from(target));
-                }
+                app.load_media_target(&target);
             }
 
             Ok(Box::new(app))

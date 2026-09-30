@@ -134,6 +134,9 @@ pub struct PealayerApp {
 
     pub playback_time: f64,
     pub duration: f64,
+    pub is_seekable: bool,
+    pub(crate) cache_duration: Option<f64>,
+    pub(crate) cache_buffering_percent: Option<f64>,
     pub(crate) media_fps: f64,
     pub is_paused: bool,
     pub is_eof: bool,
@@ -362,7 +365,11 @@ impl eframe::App for PealayerApp {
                 current_video: self
                     .current_video_path
                     .as_ref()
-                    .map(|p| p.to_string_lossy().to_string()),
+                    .map(|p| crate::media::redact_media_target(&p.to_string_lossy())),
+                seekable: self.is_seekable,
+                live: self.is_live_media(),
+                buffered_until: self.buffered_until(),
+                buffering_percent: self.cache_buffering_percent,
                 fullscreen: is_fullscreen,
                 workspace: if self.show_four_d_editor { "nle" } else { "simple" }.to_string(),
                 controller_connected,
@@ -736,7 +743,7 @@ impl eframe::App for PealayerApp {
                             ui.with_layout(crate::ui::i18n::vertical_layout(self.rtl), |ui| {
                                 ui.label(
                                     self.tr(
-                                        "Enter direct video URL, HTTP/HTTPS stream, or HLS link:",
+                                        "Enter a media URL (HTTP/HTTPS, HLS, RTSP, RTMP, SRT, UDP, or TCP):",
                                     ),
                                 );
                                 ui.add_space(6.0);
@@ -1211,8 +1218,8 @@ impl PealayerApp {
                     self.save_config();
                 }
                 if let Some(target) = request.target {
-                    if target.starts_with("http://") || target.starts_with("https://") {
-                        self.load_url(&target);
+                    if crate::media::is_remote_media_target(&target) {
+                        self.load_media_target(&target);
                     } else {
                         let path = std::path::PathBuf::from(target);
                         let resolved = if path.is_relative() {
@@ -1241,10 +1248,12 @@ impl PealayerApp {
             InteropCommand::TogglePause => self.toggle_playback(),
             InteropCommand::Seek { seconds } => self.seek_relative(seconds),
             InteropCommand::SeekAbs { percentage } => {
-                let clamped = percentage.clamp(0.0, 100.0);
-                let target = self.duration * (clamped / 100.0);
-                self.scrub_to(target);
-                self.finish_scrub(target);
+                if self.is_seekable {
+                    let clamped = percentage.clamp(0.0, 100.0);
+                    let target = self.duration * (clamped / 100.0);
+                    self.scrub_to(target);
+                    self.finish_scrub(target);
+                }
             }
             InteropCommand::SetVolume { value } => {
                 let clamped = value.clamp(0.0, 130.0);
@@ -1252,13 +1261,7 @@ impl PealayerApp {
                 self.volume = clamped;
                 self.save_config();
             }
-            InteropCommand::Open { target } => {
-                if target.starts_with("http://") || target.starts_with("https://") {
-                    self.load_url(&target);
-                } else {
-                    self.load_video_file(std::path::PathBuf::from(&target));
-                }
-            }
+            InteropCommand::Open { target } => self.load_media_target(&target),
             InteropCommand::SetFullscreen { enabled } => self.set_fullscreen(ctx, enabled),
             InteropCommand::ToggleFullscreen => self.toggle_fullscreen(ctx),
             InteropCommand::SetWorkspace { nle } => {
@@ -1336,6 +1339,11 @@ impl PealayerApp {
                     (13, PropertyData::Double(v)) => {
                         self.media_fps = v;
                     }
+                    (14, PropertyData::Flag(v)) => self.is_seekable = v,
+                    (15, PropertyData::Double(v)) => self.cache_duration = Some(v.max(0.0)),
+                    (16, PropertyData::Int64(v)) => {
+                        self.cache_buffering_percent = Some((v as f64).clamp(0.0, 100.0));
+                    }
                     _ => {}
                 },
                 Some(Ok(Event::EndFile(reason))) => {
@@ -1359,6 +1367,9 @@ impl PealayerApp {
                 Some(Ok(Event::StartFile)) => {
                     self.show_error = None;
                     self.is_eof = false;
+                    self.is_seekable = false;
+                    self.cache_duration = None;
+                    self.cache_buffering_percent = None;
                     self.refresh_sub_tracks();
                     self.refresh_audio_tracks();
                 }
@@ -1513,7 +1524,7 @@ impl PealayerApp {
 
     /// Performs an exact relative seek by the given number of seconds.
     pub fn seek_relative(&mut self, seconds: f64) {
-        if self.current_video_path.is_none() {
+        if self.current_video_path.is_none() || !self.is_seekable {
             return;
         }
         let sec_str = seconds.to_string();
@@ -1531,6 +1542,9 @@ impl PealayerApp {
     /// Sets seek_pos, pauses playback smoothly during drag, and dispatches a non-blocking
     /// preview seek to the background worker thread with latest-target coalescing.
     pub fn scrub_to(&mut self, target_time: f64) {
+        if !self.is_seekable {
+            return;
+        }
         let clamped = if self.duration > 0.0 {
             target_time.clamp(0.0, self.duration)
         } else {
@@ -1559,6 +1573,9 @@ impl PealayerApp {
     /// Ends an active scrub session. Dispatches a final exact commit seek and
     /// restores playback if the video was playing prior to scrubbing.
     pub fn finish_scrub(&mut self, target_time: f64) {
+        if !self.is_seekable {
+            return;
+        }
         let clamped = if self.duration > 0.0 {
             target_time.clamp(0.0, self.duration)
         } else {
@@ -1635,6 +1652,10 @@ impl PealayerApp {
             self.is_eof = false;
             self.is_paused = false;
             self.playback_time = 0.0;
+            self.duration = 0.0;
+            self.is_seekable = false;
+            self.cache_duration = None;
+            self.cache_buffering_percent = None;
             self.seek_pos = None;
             self.add_recent_media(path.clone());
             let title = path
@@ -1730,19 +1751,60 @@ impl PealayerApp {
         let trimmed = url.trim();
         if !trimmed.is_empty() {
             let _ = self.mpv.set_property("keep-open", "always");
-            let _ = self.mpv.command("loadfile", &[trimmed, "replace"]);
+            let _ = if crate::media::prefers_rtsp_tcp(trimmed) {
+                // TCP interleaving is materially more reliable for surveillance
+                // cameras crossing Windows firewalls/NAT and avoids short UDP
+                // sessions being mistaken for finite clips.
+                self.mpv.command(
+                    "loadfile",
+                    &[
+                        trimmed,
+                        "replace",
+                        "-1",
+                        "demuxer-lavf-o=rtsp_transport=tcp",
+                    ],
+                )
+            } else {
+                self.mpv.command("loadfile", &[trimmed, "replace"])
+            };
             let path = std::path::PathBuf::from(trimmed);
             self.current_video_path = Some(path.clone());
             self.is_eof = false;
             self.is_paused = false;
             self.playback_time = 0.0;
+            self.duration = 0.0;
+            self.is_seekable = false;
+            self.cache_duration = None;
+            self.cache_buffering_percent = None;
             self.seek_pos = None;
             self.add_recent_media(path);
+            let safe_target = crate::media::redact_media_target(trimmed);
             if let Some(ref mut mc) = self.media_controls {
-                mc.update_metadata(Some(trimmed));
+                mc.update_metadata(Some(&safe_target));
             }
-            self.set_osd(format!("Loading URL: {}", trimmed));
+            self.set_osd(format!("Loading URL: {safe_target}"));
         }
+    }
+
+    pub fn load_media_target(&mut self, target: &str) {
+        if crate::media::is_remote_media_target(target) {
+            self.load_url(target);
+        } else {
+            self.load_video_file(std::path::PathBuf::from(target));
+        }
+    }
+
+    pub fn is_live_media(&self) -> bool {
+        self.current_video_path.as_ref().is_some_and(|path| {
+            let target = path.to_string_lossy();
+            !self.is_seekable
+                && (crate::media::is_live_media_target(&target)
+                    || (crate::media::is_remote_media_target(&target) && self.duration <= 0.0))
+        })
+    }
+
+    pub fn buffered_until(&self) -> Option<f64> {
+        crate::media::buffered_until(self.duration, self.playback_time, self.cache_duration)
     }
 
     pub fn close_video(&mut self) {
@@ -1750,6 +1812,9 @@ impl PealayerApp {
         self.current_video_path = None;
         self.playback_time = 0.0;
         self.duration = 0.0;
+        self.is_seekable = false;
+        self.cache_duration = None;
+        self.cache_buffering_percent = None;
         self.is_eof = false;
         self.is_paused = false;
         self.seek_pos = None;
@@ -2040,6 +2105,9 @@ impl Default for PealayerApp {
         let _ = mpv_client.observe_property("aid", libmpv2::Format::String, 11);
         let _ = mpv_client.observe_property("eof-reached", libmpv2::Format::Flag, 12);
         let _ = mpv_client.observe_property("container-fps", libmpv2::Format::Double, 13);
+        let _ = mpv_client.observe_property("seekable", libmpv2::Format::Flag, 14);
+        let _ = mpv_client.observe_property("demuxer-cache-duration", libmpv2::Format::Double, 15);
+        let _ = mpv_client.observe_property("cache-buffering-state", libmpv2::Format::Int64, 16);
         let (interop_tx, interop_rx) = std::sync::mpsc::channel();
         let (_controller_cmd_tx, controller_cmd_rx) =
             std::sync::mpsc::channel::<crate::platform::interop::ControllerDelivery>();
@@ -2068,6 +2136,9 @@ impl Default for PealayerApp {
             render_context: Arc::new(Mutex::new(None)),
             playback_time: 0.0,
             duration: 0.0,
+            is_seekable: false,
+            cache_duration: None,
+            cache_buffering_percent: None,
             media_fps: 0.0,
             is_paused: false,
             is_eof: false,
@@ -2175,8 +2246,10 @@ pub fn contextual_window_title(
     connected: bool,
     connection_requested: bool,
 ) -> String {
-    if let Some(media_name) = media_path.and_then(std::path::Path::file_name) {
-        return format!("{} — {}", media_name.to_string_lossy(), app_name);
+    if let Some(media_path) = media_path {
+        let target = media_path.to_string_lossy();
+        let media_name = crate::media::media_target_label(&target);
+        return format!("{media_name} — {app_name}");
     }
     if connected {
         format!("{app_name} — Hardware connected")
@@ -2297,6 +2370,17 @@ mod tests {
                 true,
             ),
             "demo.mp4 — Studio"
+        );
+        assert_eq!(
+            contextual_window_title(
+                "Studio",
+                Some(std::path::Path::new(
+                    "rtsp://operator:secret@camera.invalid/live",
+                )),
+                false,
+                false,
+            ),
+            "rtsp://***@camera.invalid/live — Studio"
         );
     }
 
