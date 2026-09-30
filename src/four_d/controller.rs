@@ -1273,6 +1273,17 @@ mod tests {
     }
 
     #[test]
+    fn strip_effect_ids_are_bounded_command_tokens() {
+        for id in ["police", "white-thunder", "converging_red.v2", "effect9"] {
+            assert!(valid_strip_effect_id(id), "expected {id:?} to be valid");
+        }
+        for id in ["", "Police", "police 100 30", "police/100", "police\nstop"] {
+            assert!(!valid_strip_effect_id(id), "expected {id:?} to be rejected");
+        }
+        assert!(!valid_strip_effect_id(&"a".repeat(65)));
+    }
+
+    #[test]
     fn strip_effects_exist_only_when_the_attached_board_advertises_them() {
         let snapshot = json!({
             "connected": true,
