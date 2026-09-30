@@ -42,6 +42,12 @@ pub fn is_live_media_target(target: &str) -> bool {
     })
 }
 
+pub fn prefers_rtsp_tcp(target: &str) -> bool {
+    media_scheme(target).is_some_and(|scheme| {
+        scheme.eq_ignore_ascii_case("rtsp") || scheme.eq_ignore_ascii_case("rtsps")
+    })
+}
+
 pub fn redact_media_target(target: &str) -> String {
     let trimmed = target.trim();
     let Some((scheme, remainder)) = trimmed.split_once("://") else {
@@ -91,6 +97,8 @@ mod tests {
         assert!(is_remote_media_target("srt://media.invalid:9000"));
         assert!(is_live_media_target("rtsp://camera.invalid/live"));
         assert!(!is_live_media_target("https://cdn.invalid/video.mp4"));
+        assert!(prefers_rtsp_tcp("rtsp://camera.invalid/live"));
+        assert!(!prefers_rtsp_tcp("https://cdn.invalid/video.mp4"));
         assert!(!is_remote_media_target(r"C:\media\clip.mp4"));
         assert!(!is_remote_media_target("notes:clip.mp4"));
     }

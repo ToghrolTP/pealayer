@@ -1751,7 +1751,22 @@ impl PealayerApp {
         let trimmed = url.trim();
         if !trimmed.is_empty() {
             let _ = self.mpv.set_property("keep-open", "always");
-            let _ = self.mpv.command("loadfile", &[trimmed, "replace"]);
+            let _ = if crate::media::prefers_rtsp_tcp(trimmed) {
+                // TCP interleaving is materially more reliable for surveillance
+                // cameras crossing Windows firewalls/NAT and avoids short UDP
+                // sessions being mistaken for finite clips.
+                self.mpv.command(
+                    "loadfile",
+                    &[
+                        trimmed,
+                        "replace",
+                        "-1",
+                        "demuxer-lavf-o=rtsp_transport=tcp",
+                    ],
+                )
+            } else {
+                self.mpv.command("loadfile", &[trimmed, "replace"])
+            };
             let path = std::path::PathBuf::from(trimmed);
             self.current_video_path = Some(path.clone());
             self.is_eof = false;
