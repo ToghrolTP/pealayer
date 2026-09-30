@@ -40,9 +40,13 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     ui.text_edit_singleline(&mut app.effect_library_draft.category);
                     ui.label(app.tr("Live renderer"));
                     let renderer_name = available.iter().find(|item| item.id == app.effect_library_draft.hardware_effect_id).map(|item| app.display_text(&item.name)).unwrap_or_else(|| app.tr("Not available on this board"));
+                    let renderer_options = available
+                        .iter()
+                        .map(|renderer| (renderer.id.clone(), app.display_text(&renderer.name)))
+                        .collect::<Vec<_>>();
                     egui::ComboBox::from_id_salt("effect_renderer").selected_text(renderer_name).show_ui(ui, |ui| {
-                        for renderer in &available {
-                            ui.selectable_value(&mut app.effect_library_draft.hardware_effect_id, renderer.id.clone(), app.display_text(&renderer.name));
+                        for (renderer_id, renderer_name) in renderer_options {
+                            ui.selectable_value(&mut app.effect_library_draft.hardware_effect_id, renderer_id, renderer_name);
                         }
                     });
                     ui.label(app.tr("Duration (milliseconds)"));
