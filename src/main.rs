@@ -441,6 +441,8 @@ fn main() -> eframe::Result {
                 is_window_operating: false,
                 show_shortcuts_dialog: false,
                 show_about_dialog: false,
+                about_tab: 0,
+                about_icon: None,
                 show_preferences_dialog: false,
                 preferences_tab: 0,
                 show_board_info_dialog: false,
@@ -481,11 +483,10 @@ fn main() -> eframe::Result {
 
             if app.auto_connect_hardware {
                 let configured_endpoint = app.serial_port.clone();
-                let selected_endpoint =
-                    crate::four_d::controller::select_autoconnect_endpoint(
-                        &configured_endpoint,
-                        std::time::Duration::from_millis(250),
-                    );
+                let selected_endpoint = crate::four_d::controller::select_autoconnect_endpoint(
+                    &configured_endpoint,
+                    std::time::Duration::from_millis(250),
+                );
                 if let Some(endpoint) = selected_endpoint {
                     app.serial_port = endpoint.clone();
                     if let Ok(mut selected) = app.engine_handle.serial_port.lock() {

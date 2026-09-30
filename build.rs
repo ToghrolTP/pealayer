@@ -1,5 +1,6 @@
 #[cfg(target_os = "windows")]
 fn main() {
+    emit_build_metadata();
     for name in [
         "APP_NAME",
         "APP_PUBLISHER",
@@ -29,12 +30,19 @@ fn main() {
     let brand_path = std::env::var_os("APPLICATION_BRAND").map(std::path::PathBuf::from);
     let brand = brand_path.as_ref().map(|path| {
         println!("cargo:rerun-if-changed={}", path.display());
-        let source = std::fs::read_to_string(path)
-            .unwrap_or_else(|error| panic!("could not read application branding file {}: {error}", path.display()));
+        let source = std::fs::read_to_string(path).unwrap_or_else(|error| {
+            panic!(
+                "could not read application branding file {}: {error}",
+                path.display()
+            )
+        });
         let value: serde_json::Value = serde_json::from_str(&source)
             .unwrap_or_else(|error| panic!("invalid branding JSON {}: {error}", path.display()));
         if let Some(format) = value.get("format").and_then(serde_json::Value::as_str) {
-            assert_eq!(format, "application-brand", "unsupported application branding format");
+            assert_eq!(
+                format, "application-brand",
+                "unsupported application branding format"
+            );
         }
         value
     });
@@ -75,7 +83,10 @@ fn main() {
     );
     let document_icon = brand.as_ref().and_then(|value| {
         let relative = value.get("windowsIcons")?.get("APP")?.as_str()?;
-        let base = brand_path.as_ref()?.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let base = brand_path
+            .as_ref()?
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
         Some(base.join(relative).to_string_lossy().into_owned())
     });
     let icon = std::env::var("APP_ICON_ICO")
@@ -99,8 +110,7 @@ fn main() {
     if std::path::Path::new(&icon).exists() {
         res.set_icon(&icon);
     }
-    res.compile()
-        .expect("failed to compile Windows resources");
+    res.compile().expect("failed to compile Windows resources");
 
     // This package exposes both a library and a binary.  GNU ld can discard
     // winres' otherwise-unreferenced static archive while linking the binary
@@ -111,10 +121,7 @@ fn main() {
             std::env::var_os("OUT_DIR").expect("Cargo did not provide OUT_DIR"),
         )
         .join("resource.o");
-        println!(
-            "cargo:rustc-link-arg-bin=pealayer={}",
-            resource.display()
-        );
+        println!("cargo:rustc-link-arg-bin=pealayer={}", resource.display());
     }
     println!("cargo:rerun-if-changed=assets/icon.ico");
     if icon != "assets/icon.ico" {
@@ -124,8 +131,12 @@ fn main() {
 
 #[cfg(not(target_os = "windows"))]
 fn main() {
+    emit_build_metadata();
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
-        if let Ok(output) = std::process::Command::new("brew").args(["--prefix", "mpv"]).output() {
+        if let Ok(output) = std::process::Command::new("brew")
+            .args(["--prefix", "mpv"])
+            .output()
+        {
             if output.status.success() {
                 let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 let lib_dir = std::path::PathBuf::from(&prefix).join("lib");
@@ -145,6 +156,84 @@ fn main() {
                 println!("cargo:rustc-link-search=native={path}");
                 println!("cargo:rustc-link-arg=-Wl,-rpath,{path}");
             }
+        }
+    }
+}
+
+fn emit_build_metadata() {
+    for name in [
+        "PROFILE",
+        "TARGET",
+        "SOURCE_DATE_EPOCH",
+        "GITHUB_SHA",
+        "GITHUB_REF_NAME",
+    ] {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
+
+    let git_output = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    let commit = std::env::var("GITHUB_SHA")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| git_output(&["rev-parse", "HEAD"]))
+        .unwrap_or_else(|| "unknown".to_string());
+    let branch = std::env::var("GITHUB_REF_NAME")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| git_output(&["rev-parse", "--abbrev-ref", "HEAD"]))
+        .unwrap_or_else(|| "unknown".to_string());
+    let dirty = std::process::Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .is_some_and(|output| !output.stdout.is_empty());
+    let rustc =
+        std::process::Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+            .arg("--version")
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+    println!("cargo:rustc-env=PEALAYER_GIT_COMMIT={commit}");
+    println!("cargo:rustc-env=PEALAYER_GIT_BRANCH={branch}");
+    println!("cargo:rustc-env=PEALAYER_GIT_DIRTY={dirty}");
+    println!(
+        "cargo:rustc-env=PEALAYER_BUILD_PROFILE={}",
+        std::env::var("PROFILE").unwrap_or_else(|_| "unknown".to_string())
+    );
+    println!(
+        "cargo:rustc-env=PEALAYER_BUILD_TARGET={}",
+        std::env::var("TARGET").unwrap_or_else(|_| "unknown".to_string())
+    );
+    println!("cargo:rustc-env=PEALAYER_RUSTC_VERSION={rustc}");
+    println!(
+        "cargo:rustc-env=PEALAYER_SOURCE_DATE_EPOCH={}",
+        std::env::var("SOURCE_DATE_EPOCH").unwrap_or_else(|_| "not supplied".to_string())
+    );
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    if let Some(git_dir) = git_output(&["rev-parse", "--git-dir"]) {
+        let head = std::fs::read_to_string(std::path::Path::new(&git_dir).join("HEAD")).ok();
+        if let Some(reference) = head.and_then(|value| {
+            value
+                .strip_prefix("ref: ")
+                .map(str::trim)
+                .map(str::to_string)
+        }) {
+            println!(
+                "cargo:rerun-if-changed={}",
+                std::path::Path::new(&git_dir).join(reference).display()
+            );
         }
     }
 }

@@ -209,6 +209,8 @@ pub struct PealayerApp {
     pub(crate) is_window_operating: bool,
     pub(crate) show_shortcuts_dialog: bool,
     pub(crate) show_about_dialog: bool,
+    pub(crate) about_tab: usize,
+    pub(crate) about_icon: Option<egui::TextureHandle>,
     pub(crate) show_preferences_dialog: bool,
     pub(crate) preferences_tab: usize,
     pub(crate) show_board_info_dialog: bool,
@@ -370,7 +372,12 @@ impl eframe::App for PealayerApp {
                     .as_ref()
                     .map(|p| p.to_string_lossy().to_string()),
                 fullscreen: is_fullscreen,
-                workspace: if self.show_four_d_editor { "nle" } else { "simple" }.to_string(),
+                workspace: if self.show_four_d_editor {
+                    "nle"
+                } else {
+                    "simple"
+                }
+                .to_string(),
                 controller_connected,
                 hardware_connected,
                 hardware: hardware.map(|capabilities| {
@@ -677,26 +684,6 @@ impl eframe::App for PealayerApp {
             .frame(frame)
             .show_inside(ui, |ui| {
                 if self.show_four_d_editor {
-                    let workspace_strip = ui.horizontal(|ui| {
-                        ui.menu_button(
-                            format!("{}  {}", crate::ui::icons::TABS, self.tr("Panels")),
-                            |ui| crate::ui::layout::draw_workspace_tab_menu(self, ui),
-                        );
-                        ui.separator();
-                        let visible = crate::ui::layout::visible_workspace_tab_count(self);
-                        ui.label(
-                            egui::RichText::new(format!("{visible}/5"))
-                                .small()
-                                .color(ui.visuals().weak_text_color()),
-                        );
-                        ui.allocate_response(
-                            egui::vec2(ui.available_width(), 20.0),
-                            egui::Sense::click(),
-                        )
-                    });
-                    workspace_strip.response.context_menu(|ui| {
-                        crate::ui::layout::draw_workspace_tab_menu(self, ui);
-                    });
                     let mut dock_state =
                         std::mem::replace(&mut self.dock_state, egui_dock::DockState::new(vec![]));
                     let dock_response = ui.scope(|ui| {
@@ -707,39 +694,43 @@ impl eframe::App for PealayerApp {
                     });
                     self.dock_state = dock_state;
                     dock_response.response.context_menu(|ui| {
-                            crate::ui::layout::draw_workspace_tab_menu(self, ui);
-                            ui.separator();
-                            if ui
-                                .button(format!(
-                                    "{} {}",
-                                    crate::ui::icons::TABS,
-                                    self.tr("Reset workspace layout")
-                                ))
-                                .clicked()
-                            {
-                                self.dock_state = crate::ui::layout::create_initial_layout();
-                                ui.close();
-                            }
-                            if ui
-                                .button(format!(
-                                    "{} {}",
-                                    crate::ui::icons::PLAY,
-                                    self.tr("Switch to Simple Player")
-                                ))
-                                .clicked()
-                            {
-                                self.show_four_d_editor = false;
-                                ui.close();
-                            }
-                            ui.separator();
-                            if ui
-                                .button(format!("{} {}", crate::ui::icons::GEAR, self.tr("Preferences...")))
-                                .clicked()
-                            {
-                                self.show_preferences_dialog = true;
-                                ui.close();
-                            }
-                        });
+                        crate::ui::layout::draw_workspace_tab_menu(self, ui);
+                        ui.separator();
+                        if ui
+                            .button(format!(
+                                "{} {}",
+                                crate::ui::icons::TABS,
+                                self.tr("Reset workspace layout")
+                            ))
+                            .clicked()
+                        {
+                            self.dock_state = crate::ui::layout::create_initial_layout();
+                            ui.close();
+                        }
+                        if ui
+                            .button(format!(
+                                "{} {}",
+                                crate::ui::icons::PLAY,
+                                self.tr("Switch to Simple Player")
+                            ))
+                            .clicked()
+                        {
+                            self.show_four_d_editor = false;
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui
+                            .button(format!(
+                                "{} {}",
+                                crate::ui::icons::GEAR,
+                                self.tr("Preferences...")
+                            ))
+                            .clicked()
+                        {
+                            self.show_preferences_dialog = true;
+                            ui.close();
+                        }
+                    });
                 } else {
                     crate::ui::video::draw(self, ui);
                     crate::ui::controls::draw(self, ui);
@@ -756,61 +747,69 @@ impl eframe::App for PealayerApp {
                     let mut open_url = false;
                     let mut close_dialog = false;
 
-                    egui::Window::new(format!("{} {}", crate::ui::icons::ARROW_SQUARE_OUT, self.tr("Open Location / URL")))
-                        .collapsible(false)
-                        .resizable(false)
-                        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                        .show(ui.ctx(), |ui| {
-                            ui.with_layout(crate::ui::i18n::vertical_layout(self.rtl), |ui| {
-                                ui.label(
-                                    self.tr(
-                                        "Enter direct video URL, HTTP/HTTPS stream, or HLS link:",
-                                    ),
-                                );
-                                ui.add_space(6.0);
+                    egui::Window::new(format!(
+                        "{} {}",
+                        crate::ui::icons::ARROW_SQUARE_OUT,
+                        self.tr("Open Location / URL")
+                    ))
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .show(ui.ctx(), |ui| {
+                        ui.with_layout(crate::ui::i18n::vertical_layout(self.rtl), |ui| {
+                            ui.label(
+                                self.tr("Enter direct video URL, HTTP/HTTPS stream, or HLS link:"),
+                            );
+                            ui.add_space(6.0);
 
-                                ui.with_layout(
-                                    crate::ui::i18n::layout(self.rtl, egui::Align::Center),
-                                    |ui| {
-                                        let text_edit = ui.add(
-                                            egui::TextEdit::singleline(&mut self.url_input_buffer)
-                                                .desired_width(340.0)
-                                                .hint_text("https://..."),
-                                        );
-                                        if text_edit.lost_focus()
-                                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                        {
-                                            open_url = true;
-                                        }
+                            ui.with_layout(
+                                crate::ui::i18n::layout(self.rtl, egui::Align::Center),
+                                |ui| {
+                                    let text_edit = ui.add(
+                                        egui::TextEdit::singleline(&mut self.url_input_buffer)
+                                            .desired_width(340.0)
+                                            .hint_text("https://..."),
+                                    );
+                                    if text_edit.lost_focus()
+                                        && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                    {
+                                        open_url = true;
+                                    }
 
-                                        if ui.button(format!("{} {}", crate::ui::icons::CLIPBOARD, self.tr("Paste"))).clicked()
-                                        {
-                                            if let Some(text) = ui.input(|i| {
-                                                i.raw.events.iter().find_map(|e| match e {
-                                                    egui::Event::Paste(t) => Some(t.clone()),
-                                                    _ => None,
-                                                })
-                                            }) {
-                                                self.url_input_buffer = text;
-                                            }
+                                    if ui
+                                        .button(format!(
+                                            "{} {}",
+                                            crate::ui::icons::CLIPBOARD,
+                                            self.tr("Paste")
+                                        ))
+                                        .clicked()
+                                    {
+                                        if let Some(text) = ui.input(|i| {
+                                            i.raw.events.iter().find_map(|e| match e {
+                                                egui::Event::Paste(t) => Some(t.clone()),
+                                                _ => None,
+                                            })
+                                        }) {
+                                            self.url_input_buffer = text;
                                         }
-                                    },
-                                );
+                                    }
+                                },
+                            );
 
-                                ui.add_space(10.0);
-                                ui.with_layout(
-                                    crate::ui::i18n::layout(self.rtl, egui::Align::Center),
-                                    |ui| {
-                                        if ui.button(self.tr("Open")).clicked() {
-                                            open_url = true;
-                                        }
-                                        if ui.button(self.tr("Cancel")).clicked() {
-                                            close_dialog = true;
-                                        }
-                                    },
-                                );
-                            });
+                            ui.add_space(10.0);
+                            ui.with_layout(
+                                crate::ui::i18n::layout(self.rtl, egui::Align::Center),
+                                |ui| {
+                                    if ui.button(self.tr("Open")).clicked() {
+                                        open_url = true;
+                                    }
+                                    if ui.button(self.tr("Cancel")).clicked() {
+                                        close_dialog = true;
+                                    }
+                                },
+                            );
                         });
+                    });
 
                     if open_url {
                         let url = self.url_input_buffer.clone();
@@ -824,117 +823,88 @@ impl eframe::App for PealayerApp {
 
                 if self.show_shortcuts_dialog {
                     let language = self.language;
-                    egui::Window::new(format!("{} {}", crate::ui::icons::KEYBOARD, self.tr("Keyboard Shortcuts & Controls")))
-                        .collapsible(false)
-                        .resizable(true)
-                        .default_size([460.0, 360.0])
-                        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                        .open(&mut self.show_shortcuts_dialog)
-                        .show(ui.ctx(), |ui| {
-                            egui::Grid::new("shortcuts_grid")
-                                .striped(true)
-                                .spacing([20.0, 8.0])
-                                .show(ui, |ui| {
-                                    ui.label(
-                                        egui::RichText::new(crate::ui::i18n::tr(
-                                            language, "Shortcut",
-                                        ))
+                    egui::Window::new(format!(
+                        "{} {}",
+                        crate::ui::icons::KEYBOARD,
+                        self.tr("Keyboard Shortcuts & Controls")
+                    ))
+                    .collapsible(false)
+                    .resizable(true)
+                    .default_size([460.0, 360.0])
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .open(&mut self.show_shortcuts_dialog)
+                    .show(ui.ctx(), |ui| {
+                        egui::Grid::new("shortcuts_grid")
+                            .striped(true)
+                            .spacing([20.0, 8.0])
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(crate::ui::i18n::tr(language, "Shortcut"))
                                         .strong(),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(crate::ui::i18n::tr(
-                                            language, "Action",
-                                        ))
+                                );
+                                ui.label(
+                                    egui::RichText::new(crate::ui::i18n::tr(language, "Action"))
                                         .strong(),
-                                    );
-                                    ui.end_row();
+                                );
+                                ui.end_row();
 
-                                    ui.label("Space");
-                                    ui.label(crate::ui::i18n::tr(language, "Play / Pause video"));
-                                    ui.end_row();
-                                    ui.label("F");
-                                    ui.label(crate::ui::i18n::tr(
-                                        language,
-                                        "Toggle Fullscreen mode",
-                                    ));
-                                    ui.end_row();
-                                    ui.label("M");
-                                    ui.label(crate::ui::i18n::tr(language, "Toggle Audio Mute"));
-                                    ui.end_row();
-                                    ui.label("← / →");
-                                    ui.label(crate::ui::i18n::tr(language, "Seek -5s / +5s"));
-                                    ui.end_row();
-                                    ui.label("↑ / ↓");
-                                    ui.label(crate::ui::i18n::tr(language, "Volume -5% / +5%"));
-                                    ui.end_row();
-                                    ui.label(".  or  ]");
-                                    ui.label(crate::ui::i18n::tr(
-                                        language,
-                                        "Frame Step Forward (+1 frame)",
-                                    ));
-                                    ui.end_row();
-                                    ui.label(",  or  [");
-                                    ui.label(crate::ui::i18n::tr(
-                                        language,
-                                        "Frame Step Backward (-1 frame)",
-                                    ));
-                                    ui.end_row();
-                                    ui.label("Mouse Wheel");
-                                    ui.label(crate::ui::i18n::tr(
-                                        language,
-                                        "Adjust Volume on player/bar",
-                                    ));
-                                    ui.end_row();
-                                    ui.label("Shift + Mouse Wheel");
-                                    ui.label(crate::ui::i18n::tr(
-                                        language,
-                                        "Seek forward / backward",
-                                    ));
-                                    ui.end_row();
-                                    ui.label("Double Click");
-                                    ui.label(crate::ui::i18n::tr(
-                                        language,
-                                        "Toggle Fullscreen / Open Video",
-                                    ));
-                                    ui.end_row();
-                                    ui.label("Right Click");
-                                    ui.label(crate::ui::i18n::tr(
-                                        language,
-                                        "Open Player Context Menu",
-                                    ));
-                                    ui.end_row();
-                                    ui.label("Drag & Drop");
-                                    ui.label(crate::ui::i18n::tr(
-                                        language,
-                                        "Drop media file onto window to play",
-                                    ));
-                                    ui.end_row();
-                                });
-                        });
+                                ui.label("Space");
+                                ui.label(crate::ui::i18n::tr(language, "Play / Pause video"));
+                                ui.end_row();
+                                ui.label("F");
+                                ui.label(crate::ui::i18n::tr(language, "Toggle Fullscreen mode"));
+                                ui.end_row();
+                                ui.label("M");
+                                ui.label(crate::ui::i18n::tr(language, "Toggle Audio Mute"));
+                                ui.end_row();
+                                ui.label("← / →");
+                                ui.label(crate::ui::i18n::tr(language, "Seek -5s / +5s"));
+                                ui.end_row();
+                                ui.label("↑ / ↓");
+                                ui.label(crate::ui::i18n::tr(language, "Volume -5% / +5%"));
+                                ui.end_row();
+                                ui.label(".  or  ]");
+                                ui.label(crate::ui::i18n::tr(
+                                    language,
+                                    "Frame Step Forward (+1 frame)",
+                                ));
+                                ui.end_row();
+                                ui.label(",  or  [");
+                                ui.label(crate::ui::i18n::tr(
+                                    language,
+                                    "Frame Step Backward (-1 frame)",
+                                ));
+                                ui.end_row();
+                                ui.label("Mouse Wheel");
+                                ui.label(crate::ui::i18n::tr(
+                                    language,
+                                    "Adjust Volume on player/bar",
+                                ));
+                                ui.end_row();
+                                ui.label("Shift + Mouse Wheel");
+                                ui.label(crate::ui::i18n::tr(language, "Seek forward / backward"));
+                                ui.end_row();
+                                ui.label("Double Click");
+                                ui.label(crate::ui::i18n::tr(
+                                    language,
+                                    "Toggle Fullscreen / Open Video",
+                                ));
+                                ui.end_row();
+                                ui.label("Right Click");
+                                ui.label(crate::ui::i18n::tr(language, "Open Player Context Menu"));
+                                ui.end_row();
+                                ui.label("Drag & Drop");
+                                ui.label(crate::ui::i18n::tr(
+                                    language,
+                                    "Drop media file onto window to play",
+                                ));
+                                ui.end_row();
+                            });
+                    });
                 }
 
                 if self.show_about_dialog {
-                    let app_name = self.app_name.clone();
-                    let app_publisher = self.app_publisher.clone();
-                    let app_copyright = self.app_copyright.clone();
-                    egui::Window::new(format!("{} {} {}", crate::ui::icons::INFO, self.tr("About"), self.app_name))
-                        .collapsible(false)
-                        .resizable(false)
-                        .default_size([380.0, 240.0])
-                        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                        .open(&mut self.show_about_dialog)
-                        .show(ui.ctx(), |ui| {
-                            ui.vertical_centered(|ui| {
-                                ui.add_space(8.0);
-                                ui.heading(format!("{} {app_name} v{}", crate::ui::icons::MONITOR_PLAY, env!("CARGO_PKG_VERSION")));
-                                if let Some(publisher) = &app_publisher {
-                                    ui.label(publisher);
-                                }
-                                if let Some(copyright) = &app_copyright {
-                                    ui.label(egui::RichText::new(copyright).small().weak());
-                                }
-                            });
-                        });
+                    crate::ui::about::draw(self, ui);
                 }
             });
     }
@@ -967,7 +937,9 @@ impl PealayerApp {
             if hwnd != 0 {
                 let result = crate::platform::windows::install_shell_message_hook(hwnd)
                     .and_then(|_| crate::platform::windows::init_taskbar_thumbnail_toolbar(hwnd))
-                    .and_then(|_| crate::platform::windows::register_system_tray_icon(hwnd, &self.app_name));
+                    .and_then(|_| {
+                        crate::platform::windows::register_system_tray_icon(hwnd, &self.app_name)
+                    });
                 self.shell_initialized = result.is_ok();
                 if let Err(error) = result {
                     log::warn!("Windows shell integration is not ready; retrying: {error}");
@@ -996,7 +968,9 @@ impl PealayerApp {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Video Files", &["mp4", "mkv", "avi", "webm", "mov", "flv"])
                         .pick_file()
-                    { self.load_video_file(path); }
+                    {
+                        self.load_video_file(path);
+                    }
                 }
                 crate::platform::windows::TRAY_CMD_EXIT => {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1051,6 +1025,13 @@ impl PealayerApp {
             .and_then(|capabilities| capabilities.clone())
     }
 
+    pub fn connected_board_display_name(&self) -> Option<String> {
+        self.advertised_hardware()
+            .filter(|capabilities| capabilities.board_connected)
+            .map(|capabilities| self.display_text(capabilities.board_name.trim()))
+            .filter(|name| !name.trim().is_empty())
+    }
+
     pub fn advertised_effect_presets(&self) -> Vec<EffectPreset> {
         let Some(capabilities) = self
             .advertised_hardware()
@@ -1066,7 +1047,12 @@ impl PealayerApp {
             .chain(
                 self.user_strip_effects
                     .iter()
-                    .filter(|preset| capabilities.strip_effects.iter().any(|effect| effect.id == preset.hardware_effect_id))
+                    .filter(|preset| {
+                        capabilities
+                            .strip_effects
+                            .iter()
+                            .any(|effect| effect.id == preset.hardware_effect_id)
+                    })
                     .map(controller_strip_effect_preset),
             )
             .collect()
@@ -1115,10 +1101,7 @@ impl PealayerApp {
     }
 
     pub(crate) fn refresh_hardware_effect_recording(&mut self) -> Result<(), String> {
-        self.request_hardware_effect_command(
-            "macro-status",
-            "macro record status".to_string(),
-        )
+        self.request_hardware_effect_command("macro-status", "macro record status".to_string())
     }
 
     pub(crate) fn save_hardware_effect_recording(&mut self) -> Result<(), String> {
@@ -1140,10 +1123,7 @@ impl PealayerApp {
         if !advertised {
             return Err("the selected strip effect is no longer advertised".to_string());
         }
-        self.request_hardware_effect_command(
-            "strip-preview",
-            format!("strip effect play {id}"),
-        )
+        self.request_hardware_effect_command("strip-preview", format!("strip effect play {id}"))
     }
 
     pub(crate) fn stop_strip_preview(&mut self) -> Result<(), String> {
@@ -1180,7 +1160,10 @@ impl PealayerApp {
                 .chars()
                 .all(|character| character.is_ascii_alphanumeric() || " -_".contains(character))
         {
-            return Err("Board name must be 1–8 ASCII letters, numbers, spaces, dashes, or underscores".to_string());
+            return Err(
+                "Board name must be 1–8 ASCII letters, numbers, spaces, dashes, or underscores"
+                    .to_string(),
+            );
         }
         let name = Self::controller_command_argument(name)
             .ok_or_else(|| "Board name is not safe to send".to_string())?;
@@ -1233,8 +1216,7 @@ impl PealayerApp {
                     match result.operation.as_str() {
                         "macro-start" => self.hardware_effect_authoring.active = true,
                         "macro-status" => {
-                            self.hardware_effect_authoring.active =
-                                output.contains("active=true");
+                            self.hardware_effect_authoring.active = output.contains("active=true");
                         }
                         "macro-save" => {
                             self.hardware_effect_authoring.active = false;
@@ -1562,9 +1544,8 @@ impl PealayerApp {
     }
 
     pub fn fullscreen_intent(&self, ctx: &egui::Context) -> bool {
-        self.desired_fullscreen.unwrap_or_else(|| {
-            ctx.input(|input| input.viewport().fullscreen.unwrap_or(false))
-        })
+        self.desired_fullscreen
+            .unwrap_or_else(|| ctx.input(|input| input.viewport().fullscreen.unwrap_or(false)))
     }
 
     fn apply_workspace_request(&mut self, nle: bool, observed_fullscreen: bool) {
@@ -1878,8 +1859,8 @@ impl PealayerApp {
         cfg.language = self.language_preference;
         cfg.direction = self.direction_preference;
         cfg.theme = self.theme_preference;
-        cfg.hardware_endpoint = (!self.serial_port.trim().is_empty())
-            .then(|| self.serial_port.clone());
+        cfg.hardware_endpoint =
+            (!self.serial_port.trim().is_empty()).then(|| self.serial_port.clone());
         cfg.auto_connect_hardware = self.auto_connect_hardware;
         cfg.pause_on_hardware_disconnect = self.pause_on_hardware_disconnect;
         cfg.click_player_to_toggle = self.click_player_to_toggle;
@@ -1994,15 +1975,15 @@ impl PealayerApp {
             &self.track_soloed,
         );
         let macros = crate::four_d::engine::compile_controller_macros(&self.timeline);
-        let strip_effects =
-            crate::four_d::engine::compile_controller_strip_effects(&self.timeline);
+        let strip_effects = crate::four_d::engine::compile_controller_strip_effects(&self.timeline);
         let _ = self
             .engine_handle
             .sender
             .send(crate::four_d::engine::EngineMessage::UpdateQueue(relays));
-        let _ = self.engine_handle.sender.send(
-            crate::four_d::engine::EngineMessage::UpdateControllerMacros(macros),
-        );
+        let _ = self
+            .engine_handle
+            .sender
+            .send(crate::four_d::engine::EngineMessage::UpdateControllerMacros(macros));
         let _ = self.engine_handle.sender.send(
             crate::four_d::engine::EngineMessage::UpdateControllerStripEffects(strip_effects),
         );
@@ -2243,6 +2224,8 @@ impl Default for PealayerApp {
             is_window_operating: false,
             show_shortcuts_dialog: false,
             show_about_dialog: false,
+            about_tab: 0,
+            about_icon: None,
             show_preferences_dialog: false,
             preferences_tab: 0,
             show_board_info_dialog: false,
@@ -2305,8 +2288,7 @@ fn hardware_connection_was_lost(
     was_board_connected: bool,
     board_connected: bool,
 ) -> bool {
-    (was_transport_connected && !transport_connected)
-        || (was_board_connected && !board_connected)
+    (was_transport_connected && !transport_connected) || (was_board_connected && !board_connected)
 }
 
 #[cfg(test)]
@@ -2574,7 +2556,10 @@ mod tests {
         let preset = controller_macro_effect_preset(&hardware_macro);
         assert_eq!(preset.effect.name, "Live Air Burst");
         assert!(preset.effect.actions.is_empty());
-        assert_eq!(preset.effect.target, crate::four_d::models::HardwareTarget::ControllerMacro);
+        assert_eq!(
+            preset.effect.target,
+            crate::four_d::models::HardwareTarget::ControllerMacro
+        );
         assert_eq!(preset.effect.controller_macro.as_ref().unwrap().id, 12);
         assert_eq!(preset.effect.duration_ms, 250);
     }

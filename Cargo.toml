@@ -2,6 +2,9 @@
 name = "pealayer"
 version = "0.2.0"
 edition = "2024"
+description = "Hardware-accelerated 4D cinema player and physical-effect authoring workstation"
+repository = "https://github.com/ToghrolTP/pealayer"
+license = "MIT"
 
 [dependencies]
 eframe = { version = "0.34.3", features = ["glow"] }
