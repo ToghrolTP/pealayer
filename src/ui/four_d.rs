@@ -102,14 +102,14 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 .striped(true)
                 .min_col_width(80.0)
                 .show(ui, |ui| {
-                    ui.label(app.tr("Icon"));
+                    ui.label(app.tr("Type"));
                     ui.label(app.tr("Name"));
                     ui.label(app.tr("Duration"));
                     ui.label(app.tr("Actions"));
                     ui.end_row();
 
                     for template in &app.timeline.templates {
-                        ui.label(&template.icon);
+                        ui.label(crate::ui::icons::SPARKLE);
                         ui.label(app.display_text(&template.name));
                         ui.label(format!("{}ms", template.duration_ms));
                         if ui.button(app.tr("Add to timeline")).clicked() {
@@ -354,13 +354,13 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             }
 
                             // Pick current time from seekbar/playback
-                            if ui.button("◇").on_hover_text(&set_current_label).clicked() {
+                            if ui.button(crate::ui::icons::RECORD).on_hover_text(&set_current_label).clicked() {
                                 instance.start_time_ms = (app.playback_time * 1000.0) as u64;
                                 dirty = true;
                             }
 
                             // Seek video to this event's start time
-                            if ui.button("🔍").on_hover_text(&seek_event_label).clicked() {
+                            if ui.button(crate::ui::icons::MAGNIFYING_GLASS).on_hover_text(&seek_event_label).clicked() {
                                 let seconds = instance.start_time_ms as f64 / 1000.0;
                                 let _ =
                                     app.mpv.command("seek", &[&seconds.to_string(), "absolute"]);

@@ -715,7 +715,7 @@ impl eframe::App for PealayerApp {
                     let mut open_url = false;
                     let mut close_dialog = false;
 
-                    egui::Window::new(format!("↗ {}", self.tr("Open Location / URL")))
+                    egui::Window::new(format!("{} {}", crate::ui::icons::ARROW_SQUARE_OUT, self.tr("Open Location / URL")))
                         .collapsible(false)
                         .resizable(false)
                         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
@@ -742,7 +742,7 @@ impl eframe::App for PealayerApp {
                                             open_url = true;
                                         }
 
-                                        if ui.button(format!("📋 {}", self.tr("Paste"))).clicked()
+                                        if ui.button(format!("{} {}", crate::ui::icons::CLIPBOARD, self.tr("Paste"))).clicked()
                                         {
                                             if let Some(text) = ui.input(|i| {
                                                 i.raw.events.iter().find_map(|e| match e {
@@ -783,7 +783,7 @@ impl eframe::App for PealayerApp {
 
                 if self.show_shortcuts_dialog {
                     let language = self.language;
-                    egui::Window::new(format!("⌨ {}", self.tr("Keyboard Shortcuts & Controls")))
+                    egui::Window::new(format!("{} {}", crate::ui::icons::KEYBOARD, self.tr("Keyboard Shortcuts & Controls")))
                         .collapsible(false)
                         .resizable(true)
                         .default_size([460.0, 360.0])
@@ -876,7 +876,7 @@ impl eframe::App for PealayerApp {
                     let app_name = self.app_name.clone();
                     let app_publisher = self.app_publisher.clone();
                     let app_copyright = self.app_copyright.clone();
-                    egui::Window::new(format!("ℹ {} {}", self.tr("About"), self.app_name))
+                    egui::Window::new(format!("{} {} {}", crate::ui::icons::INFO, self.tr("About"), self.app_name))
                         .collapsible(false)
                         .resizable(false)
                         .default_size([380.0, 240.0])
@@ -885,7 +885,7 @@ impl eframe::App for PealayerApp {
                         .show(ui.ctx(), |ui| {
                             ui.vertical_centered(|ui| {
                                 ui.add_space(8.0);
-                                ui.heading(format!("▣ {app_name} v{}", env!("CARGO_PKG_VERSION")));
+                                ui.heading(format!("{} {app_name} v{}", crate::ui::icons::MONITOR_PLAY, env!("CARGO_PKG_VERSION")));
                                 if let Some(publisher) = &app_publisher {
                                     ui.label(publisher);
                                 }

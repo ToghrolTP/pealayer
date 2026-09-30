@@ -170,7 +170,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     ui.separator();
                     if ui
                         .button(format!(
-                            "⚙ {}",
+                            "{} {}", crate::ui::icons::GEAR,
                             app.tr("Register as Default Media Player...")
                         ))
                         .clicked()
@@ -190,7 +190,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                 ui.menu_button(app.tr("Edit"), |ui| {
                     if ui
-                        .button(format!("⚙ {}", app.tr("Preferences...")))
+                        .button(format!("{} {}", crate::ui::icons::GEAR, app.tr("Preferences...")))
                         .clicked()
                     {
                         app.show_preferences_dialog = true;
@@ -344,14 +344,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     });
                     ui.separator();
                     if ui
-                        .button(format!("⌨ {}", app.tr("Keyboard Shortcuts...")))
+                        .button(format!("{} {}", crate::ui::icons::KEYBOARD, app.tr("Keyboard Shortcuts...")))
                         .clicked()
                     {
                         ui.close();
                         app.show_shortcuts_dialog = true;
                     }
                     if ui
-                        .button(format!("ℹ {} {}", app.tr("About"), app.app_name))
+                        .button(format!("{} {} {}", crate::ui::icons::INFO, app.tr("About"), app.app_name))
                         .clicked()
                     {
                         ui.close();

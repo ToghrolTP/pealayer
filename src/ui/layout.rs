@@ -450,11 +450,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             ui.add_enabled_ui(has_video, |ui| {
                                 ui.horizontal(|ui| {
                                     let play_icon = if self.app.is_playback_finished() {
-                                        "↺"
+                                        crate::ui::icons::ARROW_COUNTER_CLOCKWISE
                                     } else if self.app.is_paused {
-                                        "▶"
+                                        crate::ui::icons::PLAY
                                     } else {
-                                        "⏸"
+                                        crate::ui::icons::PAUSE
                                     };
                                     let play_tooltip = if self.app.is_playback_finished() {
                                         &replay_label
@@ -470,7 +470,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     {
                                         self.app.toggle_playback();
                                     }
-                                    if ui.add_sized([30.0, 22.0], egui::Button::new("⏹")).on_hover_text(&stop_label).clicked() {
+                                    if ui.add_sized([30.0, 22.0], egui::Button::new(crate::ui::icons::STOP_CIRCLE)).on_hover_text(&stop_label).clicked() {
                                         // Punch out on stop
                                         self.app.commit_recorded_samples();
 
@@ -542,7 +542,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         self.app.save_config();
                                     }
                                     if ui
-                                        .button("⛶")
+                                        .button(crate::ui::icons::ARROWS_OUT)
                                         .on_hover_text(format!("{} (F)", self.app.tr("Fullscreen")))
                                         .clicked()
                                     {
@@ -586,7 +586,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             if let Some(idx) = instance_idx {
                                 let identity_label = self.app.tr("Identity");
                                 let name_label = self.app.tr("Name:");
-                                let icon_label = self.app.tr("Icon:");
                                 let timing_label = self.app.tr("Timing constraints");
                                 let start_time_label = self.app.tr("Start time:");
                                 let duration_label = self.app.tr("Duration:");
@@ -624,13 +623,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         ui.horizontal(|ui| {
                                             ui.label(&name_label);
                                             if ui.text_edit_singleline(&mut template.name).changed() {
-                                                timeline_dirty = true;
-                                            }
-                                        });
-
-                                        ui.horizontal(|ui| {
-                                            ui.label(&icon_label);
-                                            if ui.text_edit_singleline(&mut template.icon).changed() {
                                                 timeline_dirty = true;
                                             }
                                         });
@@ -695,7 +687,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         ui.group(|ui| {
                                             ui.colored_label(
                                                 egui::Color32::from_rgb(245, 158, 11),
-                                                format!("△ Track mismatch: configured for {configured_name}"),
+                                                format!("{} Track mismatch: configured for {configured_name}", crate::ui::icons::WARNING),
                                             );
                                             if let Some(primary) = template.target.primary_relay_id() {
                                                 if advertised_relays.iter().any(|relay| relay.id == primary)
@@ -745,7 +737,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     }
 
                                     ui.add_space(12.0);
-                                    if ui.button(egui::RichText::new(format!("× {delete_cue_label}")).color(egui::Color32::from_rgb(231, 76, 60))).clicked() {
+                                    if ui.button(egui::RichText::new(format!("{} {delete_cue_label}", crate::ui::icons::X)).color(egui::Color32::from_rgb(231, 76, 60))).clicked() {
                                         delete_cue = true;
                                     }
                                 }
@@ -977,11 +969,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 display_language,
                                                                 &preset.effect.name,
                                                             );
-                                                        let effect_label = if preset.effect.icon.trim().is_empty() {
-                                                            displayed_effect_name
-                                                        } else {
-                                                            format!("{} {}", preset.effect.icon, displayed_effect_name)
-                                                        };
+                                                        let effect_label = format!(
+                                                            "{} {}",
+                                                            crate::ui::icons::SPARKLE,
+                                                            displayed_effect_name,
+                                                        );
                                                         ui.painter().text(
                                                             rect.left_center() + egui::vec2(8.0, 0.0),
                                                             egui::Align2::LEFT_CENTER,
@@ -1422,16 +1414,16 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             ui.label(egui::RichText::new(self.app.tr("Advertised capabilities")).strong());
                             ui.horizontal_wrapped(|ui| {
                                 if capabilities.supports_addressable_led {
-                                    ui.label("◉ Addressable RGB strip");
+                                    ui.label(format!("{} Addressable RGB strip", crate::ui::icons::LIGHTBULB));
                                 }
                                 if capabilities.supports_rf_transmit {
-                                    ui.label("⌁ RF transmitter");
+                                    ui.label(format!("{} RF transmitter", crate::ui::icons::RADIO));
                                 }
                                 if capabilities.supports_segment_display {
-                                    ui.label("▦ Segment display");
+                                    ui.label(format!("{} Segment display", crate::ui::icons::GAUGE));
                                 }
                                 if capabilities.supports_lcd_display {
-                                    ui.label("▤ LCD text display");
+                                    ui.label(format!("{} LCD text display", crate::ui::icons::MONITOR_PLAY));
                                 }
                             });
 
@@ -1443,7 +1435,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     if ui.text_edit_singleline(&mut text).changed() {
                                         ui.data_mut(|data| data.insert_temp(text_id, text.clone()));
                                     }
-                                    if ui.add_enabled(!text.trim().is_empty(), egui::Button::new("▸ Send")).clicked() {
+                                    if ui.add_enabled(!text.trim().is_empty(), egui::Button::new(format!("{} Send", crate::ui::icons::PAPER_PLANE_TILT))).clicked() {
                                         let target = if capabilities.supports_segment_display && capabilities.supports_lcd_display {
                                             "both"
                                         } else if capabilities.supports_lcd_display {
@@ -1495,7 +1487,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         .or_else(|| trimmed.strip_prefix("0X"))
                                         .map(|hex| u32::from_str_radix(hex, 16).ok())
                                         .unwrap_or_else(|| trimmed.parse::<u32>().ok());
-                                    if ui.add_enabled(parsed.is_some(), egui::Button::new("⌁ Send 24-bit")).clicked() {
+                                    if ui.add_enabled(parsed.is_some(), egui::Button::new(format!("{} Send 24-bit", crate::ui::icons::RADIO))).clicked() {
                                         let _ = self.app.engine_handle.sender.send(
                                             crate::four_d::engine::EngineMessage::ControllerCall {
                                                 method: "controller.rf.transmit".to_string(),
@@ -1511,7 +1503,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 for warning in &capabilities.warnings {
                                     ui.colored_label(
                                         ui.visuals().warn_fg_color,
-                                        format!("⚠ {} — {}", warning.code, warning.message),
+                                        format!("{} {} — {}", crate::ui::icons::WARNING, warning.code, warning.message),
                                     );
                                 }
                             }
@@ -2117,9 +2109,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 // Clip name label
                                                 let displayed_effect_name = crate::ui::i18n::visual_text(display_language, &effect.name);
                                                 let title = if is_mismatched {
-                                                    format!("△ {} {}", effect.icon, displayed_effect_name)
+                                                    format!("{} {} {}", crate::ui::icons::WARNING, crate::ui::icons::SPARKLE, displayed_effect_name)
                                                 } else {
-                                                    format!("{} {}", effect.icon, displayed_effect_name)
+                                                    format!("{} {}", crate::ui::icons::SPARKLE, displayed_effect_name)
                                                 };
                                                 painter.text(
                                                     clip_rect.left_center() + egui::vec2(12.0, 0.0),
@@ -2160,9 +2152,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             // Clip name label
                                             let displayed_effect_name = crate::ui::i18n::visual_text(display_language, &effect.name);
                                             let title = if is_mismatched {
-                                                format!("△ {} {}", effect.icon, displayed_effect_name)
+                                                format!("{} {} {}", crate::ui::icons::WARNING, crate::ui::icons::SPARKLE, displayed_effect_name)
                                             } else {
-                                                format!("{} {}", effect.icon, displayed_effect_name)
+                                                format!("{} {}", crate::ui::icons::SPARKLE, displayed_effect_name)
                                             };
                                             painter.text(
                                                 clip_rect.left_center() + egui::vec2(12.0, 0.0),
@@ -3171,7 +3163,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             response.context_menu(|ui| {
                                 ui.label(egui::RichText::new(self.app.tr("Timeline")).strong());
                                 ui.separator();
-                                if ui.button(format!("▣ {}", self.app.tr("Select all cues"))).clicked() {
+                                if ui.button(format!("{} {}", crate::ui::icons::SELECTION_ALL, self.app.tr("Select all cues"))).clicked() {
                                     self.app.selected_instance_ids = self.app.timeline.instances.iter().map(|instance| instance.id).collect();
                                     self.app.selected_keyframes.clear();
                                     for track in &self.app.timeline.analog_tracks {
@@ -3181,22 +3173,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     }
                                     ui.close();
                                 }
-                                if ui.button(format!("◇ {}", self.app.tr("Clear selection"))).clicked() {
+                                if ui.button(format!("{} {}", crate::ui::icons::ERASER, self.app.tr("Clear selection"))).clicked() {
                                     self.app.selected_instance_ids.clear();
                                     self.app.selected_keyframes.clear();
                                     ui.close();
                                 }
                                 ui.separator();
                                 ui.horizontal(|ui| {
-                                    ui.label(format!("⌕ {}", self.app.tr("Zoom")));
+                                    ui.label(format!("{} {}", crate::ui::icons::MAGNIFYING_GLASS, self.app.tr("Zoom")));
                                     ui.add(egui::Slider::new(&mut self.app.timeline_zoom, 20.0..=500.0).suffix(" px/s"));
                                 });
-                                if ui.button(format!("↺ {}", self.app.tr("Reset zoom"))).clicked() {
+                                if ui.button(format!("{} {}", crate::ui::icons::ARROW_COUNTER_CLOCKWISE, self.app.tr("Reset zoom"))).clicked() {
                                     self.app.timeline_zoom = 100.0;
                                     ui.close();
                                 }
                                 ui.separator();
-                                if ui.button(format!("⚙ {}", self.app.tr("Preferences..."))).clicked() {
+                                if ui.button(format!("{} {}", crate::ui::icons::GEAR, self.app.tr("Preferences..."))).clicked() {
                                     self.app.show_preferences_dialog = true;
                                     ui.close();
                                 }
