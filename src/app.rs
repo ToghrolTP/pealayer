@@ -671,6 +671,25 @@ impl eframe::App for PealayerApp {
             .frame(frame)
             .show_inside(ui, |ui| {
                 if self.show_four_d_editor {
+                    let workspace_strip = ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} {}",
+                                crate::ui::icons::TABS,
+                                self.tr("Workspace tabs")
+                            ))
+                            .small()
+                            .strong(),
+                        );
+                        ui.allocate_response(
+                            egui::vec2(ui.available_width(), 20.0),
+                            egui::Sense::click(),
+                        )
+                        .on_hover_text(self.tr("Right-click to show or hide workspace tabs"));
+                    });
+                    workspace_strip.response.context_menu(|ui| {
+                        crate::ui::layout::draw_workspace_tab_menu(self, ui);
+                    });
                     let mut dock_state =
                         std::mem::replace(&mut self.dock_state, egui_dock::DockState::new(vec![]));
                     let dock_response = ui.scope(|ui| {
@@ -680,7 +699,7 @@ impl eframe::App for PealayerApp {
                     });
                     self.dock_state = dock_state;
                     dock_response.response.context_menu(|ui| {
-                            ui.label(egui::RichText::new(self.tr("Workspace")).strong());
+                            crate::ui::layout::draw_workspace_tab_menu(self, ui);
                             ui.separator();
                             if ui
                                 .button(format!(

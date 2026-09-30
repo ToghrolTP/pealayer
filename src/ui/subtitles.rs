@@ -1,9 +1,11 @@
 use crate::app::PealayerApp;
 use eframe::egui;
 
-const SUBTITLE_DIALOG_WIDTH: f32 = 460.0;
-const SUBTITLE_DIALOG_MAX_HEIGHT: f32 = 480.0;
-const SUBTITLE_TRACK_POPUP_HEIGHT: f32 = 240.0;
+const SUBTITLE_DIALOG_WIDTH: f32 = 420.0;
+const SUBTITLE_DIALOG_MAX_HEIGHT: f32 = 440.0;
+const SUBTITLE_DIALOG_BODY_HEIGHT: f32 = 340.0;
+const SUBTITLE_TRACK_WIDTH: f32 = 240.0;
+const SUBTITLE_TRACK_POPUP_HEIGHT: f32 = 200.0;
 
 pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if !app.show_sub_settings {
@@ -11,6 +13,7 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 
     let mut open = app.show_sub_settings;
+    let mut close_requested = false;
 
     egui::Window::new(format!("CC {}", app.tr("Subtitle Settings")))
         // Use a new stable id so installs that remembered the old, accidentally
@@ -18,13 +21,18 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .id(egui::Id::new("subtitle_settings_dialog_compact"))
         .open(&mut open)
         .collapsible(false)
-        .resizable(false)
+        .resizable(true)
         .default_width(SUBTITLE_DIALOG_WIDTH)
         .max_height(SUBTITLE_DIALOG_MAX_HEIGHT)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ui.ctx(), |ui| {
+          ui.set_width(SUBTITLE_DIALOG_WIDTH - 24.0);
+          egui::ScrollArea::vertical()
+            .id_salt("subtitle_settings_body")
+            .max_height(SUBTITLE_DIALOG_BODY_HEIGHT)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
           ui.with_layout(crate::ui::i18n::vertical_layout(app.rtl), |ui| {
-            ui.set_min_width(SUBTITLE_DIALOG_WIDTH - 24.0);
             ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
 
             // Visibility
@@ -36,7 +44,10 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
             ui.separator();
 
             // Track Selection
-            ui.with_layout(crate::ui::i18n::layout(app.rtl, egui::Align::Center), |ui| {
+            egui::Grid::new("subtitle_track_row")
+              .num_columns(2)
+              .spacing([12.0, 8.0])
+              .show(ui, |ui| {
                 ui.label(app.tr("Track:"));
                 let current_label = if app.current_sid == "no" {
                     app.tr("None").to_string()
@@ -63,7 +74,7 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 let none_label = app.tr("None");
                 egui::ComboBox::from_id_salt("sub_track_combo")
                     .selected_text(current_label)
-                    .width(320.0)
+                    .width(SUBTITLE_TRACK_WIDTH)
                     // A media file may contain many subtitle tracks. The popup
                     // should scroll instead of stretching to viewport height.
                     .height(SUBTITLE_TRACK_POPUP_HEIGHT)
@@ -98,6 +109,7 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             }
                         }
                     });
+                ui.end_row();
             });
 
             ui.separator();
@@ -159,9 +171,16 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 }
             }
           });
+          });
+          ui.separator();
+          ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button(app.tr("Close")).clicked() {
+                close_requested = true;
+            }
+          });
         });
 
-    app.show_sub_settings = open;
+    app.show_sub_settings = open && !close_requested;
 }
 
 pub const MIN_SUB_DELAY: f64 = -600.0;
@@ -186,7 +205,8 @@ mod tests {
     #[test]
     fn subtitle_dialog_and_track_popup_remain_bounded() {
         assert!(SUBTITLE_DIALOG_MAX_HEIGHT < 500.0);
+        assert!(SUBTITLE_DIALOG_BODY_HEIGHT < SUBTITLE_DIALOG_MAX_HEIGHT);
         assert!(SUBTITLE_TRACK_POPUP_HEIGHT < SUBTITLE_DIALOG_MAX_HEIGHT);
-        assert!(SUBTITLE_DIALOG_WIDTH > SUBTITLE_TRACK_POPUP_HEIGHT);
+        assert!(SUBTITLE_TRACK_WIDTH < SUBTITLE_DIALOG_WIDTH - 100.0);
     }
 }

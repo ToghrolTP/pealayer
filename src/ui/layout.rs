@@ -78,6 +78,80 @@ fn relay_id_from_control_key(key: &str) -> Option<u8> {
     key.strip_prefix("relay.")?.parse().ok()
 }
 
+fn is_pwm_control(control: &crate::four_d::controller::HardwareControl) -> bool {
+    matches!(control.kind.as_str(), "mosfet" | "pwm") || control.key.starts_with("pwm.")
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ControlIndicatorState { Active, Available, Inactive }
+
+fn control_indicator_state(
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+) -> ControlIndicatorState {
+    if let Some(relay_id) = relay_id_from_control_key(&control.key) {
+        return if capabilities.active_relays.contains(&relay_id) {
+            ControlIndicatorState::Active
+        } else {
+            ControlIndicatorState::Inactive
+        };
+    }
+    if is_pwm_control(control) {
+        let channel = capabilities.pwm_channels.iter()
+            .find(|channel| channel.key == control.key)
+            .map(|channel| channel.id);
+        return match channel {
+            Some(channel) if capabilities.telemetry.pwm_channel == Some(channel) => {
+                if capabilities.telemetry.pwm_value.unwrap_or(0) > 0 {
+                    ControlIndicatorState::Active
+                } else {
+                    ControlIndicatorState::Inactive
+                }
+            }
+            _ => ControlIndicatorState::Available,
+        };
+    }
+    ControlIndicatorState::Available
+}
+
+fn control_grid_columns(available_width: f32) -> usize {
+    if available_width >= 620.0 { 2 } else { 1 }
+}
+
+fn action_grid_columns(available_width: f32, action_count: usize) -> usize {
+    match action_count {
+        0 | 1 => 1,
+        2 if available_width >= 230.0 => 2,
+        3 if available_width >= 360.0 => 3,
+        _ => 1,
+    }
+}
+
+fn draw_control_indicator(app: &PealayerApp, ui: &mut egui::Ui, state: ControlIndicatorState) {
+    let green = egui::Color32::from_rgb(34, 197, 94);
+    let neutral = ui.visuals().widgets.noninteractive.fg_stroke.color.gamma_multiply(0.42);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+    let center = rect.center();
+    match state {
+        ControlIndicatorState::Active => {
+            ui.painter().circle_filled(center, 7.0, green.gamma_multiply(0.18));
+            ui.painter().circle_filled(center, 4.5, green);
+        }
+        ControlIndicatorState::Available => {
+            ui.painter().circle_stroke(center, 5.5, egui::Stroke::new(1.8, green));
+            ui.painter().circle_filled(center, 2.0, green.gamma_multiply(0.65));
+        }
+        ControlIndicatorState::Inactive => {
+            ui.painter().circle_stroke(center, 5.0, egui::Stroke::new(1.4, neutral));
+        }
+    }
+    response.on_hover_text(match state {
+        ControlIndicatorState::Active => app.tr("Board reports ON"),
+        ControlIndicatorState::Available => app.tr("Live board control"),
+        ControlIndicatorState::Inactive => app.tr("Board reports OFF"),
+    });
+}
+
 fn humanize_machine_label(value: &str) -> String {
     value
         .split(['-', '_', '.'])
@@ -138,62 +212,66 @@ fn draw_control_card(
     let edit_id = ui.make_persistent_id(("control-name-editing", control.key.as_str()));
     let draft_id = ui.make_persistent_id(("control-name-draft", control.key.as_str()));
     let source_id = ui.make_persistent_id(("control-name-source", control.key.as_str()));
-    let relay_active = relay_id_from_control_key(&control.key)
-        .is_some_and(|id| capabilities.active_relays.contains(&id));
     let relay_id = relay_id_from_control_key(&control.key);
-    let indicator_color = if relay_active {
-        egui::Color32::from_rgb(52, 211, 153)
-    } else if relay_id.is_none() {
-        egui::Color32::from_rgb(56, 189, 248)
-    } else {
-        ui.visuals().widgets.noninteractive.fg_stroke.color.gamma_multiply(0.45)
-    };
+    let indicator_state = control_indicator_state(capabilities, control);
 
     let card = egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::symmetric(12, 10))
         .corner_radius(8.0)
         .show(ui, |ui| {
+            ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(crate::ui::icons::control(&control.kind, &control.icon))
                         .size(18.0),
                 );
-                let (indicator_rect, indicator_response) =
-                    ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-                ui.painter()
-                    .circle_filled(indicator_rect.center(), 4.0, indicator_color);
-                indicator_response.on_hover_text(if relay_active {
-                    app.tr("Board reports ON")
-                } else if relay_id.is_some() {
-                    app.tr("Board reports OFF")
-                } else {
-                    app.tr("Live board control")
-                });
+                draw_control_indicator(app, ui, indicator_state);
 
-                let mut editing = ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
-                if editing {
+                let editing = ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
+                if !editing {
+                    let title_text = crate::ui::i18n::visual_text(app.language, &control.name);
+                    let title = ui.add(
+                        egui::Label::new(egui::RichText::new(&title_text).strong().size(13.0))
+                            .truncate()
+                            .sense(egui::Sense::click()),
+                    );
+                    if title.clicked() {
+                        ui.data_mut(|data| data.insert_temp(edit_id, true));
+                    }
+                    title.on_hover_text(format!("{} — {}", title_text, app.tr("Rename")));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(crate::ui::icons::PENCIL_SIMPLE)
+                            .on_hover_text(app.tr("Rename")).clicked()
+                        {
+                            ui.data_mut(|data| data.insert_temp(edit_id, true));
+                        }
+                    });
+                }
+            });
+
+            let mut editing = ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
+            if editing {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
                     let mut draft = ui.data_mut(|data| {
                         let source = data.get_temp::<String>(source_id);
                         if source.as_deref() != Some(control.name.as_str()) {
                             data.insert_temp(source_id, control.name.clone());
                             data.insert_temp(draft_id, control.name.clone());
                         }
-                        data.get_temp::<String>(draft_id)
-                            .unwrap_or_else(|| control.name.clone())
+                        data.get_temp::<String>(draft_id).unwrap_or_else(|| control.name.clone())
                     });
                     let edit = ui.add(
                         egui::TextEdit::singleline(&mut draft)
-                            .desired_width(180.0)
+                            .desired_width((ui.available_width() - 64.0).max(96.0))
                             .hint_text(&control.default_name),
                     );
                     if edit.changed() {
                         ui.data_mut(|data| data.insert_temp(draft_id, draft.clone()));
                     }
-                    let save = ui
-                        .button(crate::ui::icons::FLOPPY_DISK)
+                    let save = ui.button(crate::ui::icons::FLOPPY_DISK)
                         .on_hover_text(app.tr("Save name"));
-                    let cancel = ui
-                        .button(crate::ui::icons::X)
+                    let cancel = ui.button(crate::ui::icons::X)
                         .on_hover_text(app.tr("Cancel"));
                     if save.clicked()
                         || (edit.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)))
@@ -206,75 +284,110 @@ fn draw_control_card(
                         editing = false;
                     }
                     ui.data_mut(|data| data.insert_temp(edit_id, editing));
-                } else {
-                    let title = ui.label(
-                        egui::RichText::new(crate::ui::i18n::visual_text(
-                            app.language,
-                            &control.name,
-                        ))
-                        .strong()
-                        .size(13.0),
+                });
+            } else if !control.group.trim().is_empty() {
+                ui.label(egui::RichText::new(&control.group).weak().small());
+            }
+
+            if is_pwm_control(control) {
+                if let Some(channel) = capabilities.pwm_channels.iter()
+                    .find(|channel| channel.key == control.key)
+                {
+                    let value_id = ui.make_persistent_id(("pwm_value", channel.id));
+                    let mut value = ui.data_mut(|data| {
+                        data.get_temp::<u16>(value_id).unwrap_or_else(|| {
+                            if capabilities.telemetry.pwm_channel == Some(channel.id) {
+                                capabilities.telemetry.pwm_value.unwrap_or(0)
+                            } else { 0 }
+                        })
+                    });
+                    ui.add_space(8.0);
+                    let response = ui.add_sized(
+                        [ui.available_width(), 24.0],
+                        egui::Slider::new(&mut value, 0..=4095).show_value(true),
                     );
-                    if title.double_clicked() {
-                        ui.data_mut(|data| data.insert_temp(edit_id, true));
+                    if response.changed() {
+                        ui.data_mut(|data| data.insert_temp(value_id, value));
                     }
-                    if !control.group.trim().is_empty() {
-                        ui.label(egui::RichText::new(&control.group).weak().small());
-                    }
-                    if ui
-                        .button(crate::ui::icons::PENCIL_SIMPLE)
-                        .on_hover_text(app.tr("Rename"))
-                        .clicked()
-                    {
-                        ui.data_mut(|data| data.insert_temp(edit_id, true));
+                    if response.drag_stopped() || response.lost_focus() {
+                        let _ = app.engine_handle.sender.send(
+                            crate::four_d::engine::EngineMessage::ControllerCall {
+                                method: "controller.pwm.set".to_string(),
+                                params: serde_json::json!({"channel": channel.id, "value": value}),
+                            },
+                        );
                     }
                 }
-            });
+            }
 
             if !control.actions.is_empty() {
                 ui.add_space(8.0);
-                ui.horizontal_wrapped(|ui| {
-                    for action in &control.actions {
-                        let label = format!(
-                            "{} {}",
-                            crate::ui::icons::action(&action.verb),
-                            crate::ui::i18n::visual_text(app.language, &action.name),
-                        );
-                        if ui
-                            .add_enabled(!app.estop_active, egui::Button::new(label))
-                            .clicked()
-                        {
-                            let _ = app.engine_handle.sender.send(
-                                crate::four_d::engine::EngineMessage::InvokeControllerAction {
-                                    action_id: action.id.clone(),
-                                },
+                let columns = action_grid_columns(ui.available_width(), control.actions.len());
+                for action_row in control.actions.chunks(columns) {
+                    ui.columns(columns, |uis| {
+                        for (index, action) in action_row.iter().enumerate() {
+                            let ui = &mut uis[index];
+                            let label = format!(
+                                "{} {}",
+                                crate::ui::icons::action(&action.verb),
+                                crate::ui::i18n::visual_text(app.language, &action.name),
                             );
+                            let verb = action.verb.to_ascii_lowercase();
+                            let selected = relay_id.is_some()
+                                && ((verb == "on" && indicator_state == ControlIndicatorState::Active)
+                                    || (verb == "off" && indicator_state == ControlIndicatorState::Inactive));
+                            let mut button = egui::Button::new(label)
+                                .truncate()
+                                .selected(selected);
+                            if selected && verb == "on" {
+                                button = button
+                                    .fill(egui::Color32::from_rgb(22, 163, 74))
+                                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(34, 197, 94)));
+                            }
+                            if ui.add_enabled_ui(!app.estop_active, |ui| {
+                                ui.add_sized([ui.available_width(), 28.0], button)
+                            }).inner.clicked() {
+                                let _ = app.engine_handle.sender.send(
+                                    crate::four_d::engine::EngineMessage::InvokeControllerAction {
+                                        action_id: action.id.clone(),
+                                    },
+                                );
+                            }
                         }
-                    }
-                });
+                    });
+                }
             }
         });
 
     card.response.context_menu(|ui| {
-        if ui
-            .button(format!(
-                "{} {}",
-                crate::ui::icons::PENCIL_SIMPLE,
-                app.tr("Rename")
-            ))
-            .clicked()
-        {
+        if ui.button(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, app.tr("Rename"))).clicked() {
             ui.data_mut(|data| data.insert_temp(edit_id, true));
             ui.close();
         }
-        if !control.default_name.is_empty()
-            && control.name != control.default_name
+        if !control.default_name.is_empty() && control.name != control.default_name
             && ui.button(app.tr("Restore default name")).clicked()
         {
             update_control_name(app, capabilities, control, String::new());
             ui.close();
         }
     });
+}
+
+fn draw_control_card_grid(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    controls: &[crate::four_d::controller::HardwareControl],
+) {
+    let columns = control_grid_columns(ui.available_width());
+    for row in controls.chunks(columns) {
+        ui.columns(columns, |uis| {
+            for (index, control) in row.iter().enumerate() {
+                draw_control_card(app, &mut uis[index], capabilities, control);
+            }
+        });
+        ui.add_space(8.0);
+    }
 }
 
 #[cfg(test)]
@@ -298,6 +411,36 @@ mod timeline_row_tests {
         assert_eq!(timeline_row_for_relay(&rows, 6), Some(1));
         assert_eq!(timeline_row_for_relay(&rows, 1), None);
     }
+
+    #[test]
+    fn narrow_hardware_sidebars_use_single_column_cards_and_actions() {
+        assert_eq!(control_grid_columns(420.0), 1);
+        assert_eq!(action_grid_columns(210.0, 2), 1);
+        assert_eq!(action_grid_columns(320.0, 3), 1);
+        assert_eq!(control_grid_columns(720.0), 2);
+        assert_eq!(action_grid_columns(280.0, 2), 2);
+        assert_eq!(action_grid_columns(420.0, 3), 3);
+    }
+
+    #[test]
+    fn indicators_use_authoritative_output_state() {
+        let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
+        capabilities.active_relays.insert(2);
+        capabilities.pwm_channels.push(crate::four_d::controller::HardwareOutput {
+            id: 0, key: "pwm.0".into(), name: "MOSFET 1".into(),
+            role: "user-output".into(), control: "pwm-user".into(),
+        });
+        capabilities.telemetry.pwm_channel = Some(0);
+        capabilities.telemetry.pwm_value = Some(1024);
+
+        let control = |key: &str, kind: &str| crate::four_d::controller::HardwareControl {
+            key: key.into(), kind: kind.into(), ..Default::default()
+        };
+        assert_eq!(control_indicator_state(&capabilities, &control("relay.2", "relay")), ControlIndicatorState::Active);
+        assert_eq!(control_indicator_state(&capabilities, &control("relay.3", "relay")), ControlIndicatorState::Inactive);
+        assert_eq!(control_indicator_state(&capabilities, &control("pwm.0", "mosfet")), ControlIndicatorState::Active);
+        assert_eq!(control_indicator_state(&capabilities, &control("seat.left", "motion")), ControlIndicatorState::Available);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -307,6 +450,46 @@ pub enum PealayerTab {
     EffectsLibrary,
     HardwareMonitor,
     Timeline,
+}
+
+const ALL_WORKSPACE_TABS: [PealayerTab; 5] = [
+    PealayerTab::ProgramMonitor,
+    PealayerTab::EffectControls,
+    PealayerTab::EffectsLibrary,
+    PealayerTab::HardwareMonitor,
+    PealayerTab::Timeline,
+];
+
+fn workspace_tab_name(app: &PealayerApp, tab: PealayerTab) -> String {
+    match tab {
+        PealayerTab::ProgramMonitor => app.tr("Program Monitor"),
+        PealayerTab::EffectControls => app.tr("Effect Controls"),
+        PealayerTab::EffectsLibrary => app.tr("Effects Library"),
+        PealayerTab::HardwareMonitor => app.tr("Hardware Monitor"),
+        PealayerTab::Timeline => app.tr("Timeline"),
+    }
+}
+
+pub fn draw_workspace_tab_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    ui.label(egui::RichText::new(app.tr("Workspace tabs")).strong());
+    ui.separator();
+    for tab in ALL_WORKSPACE_TABS {
+        let mut visible = app.dock_state.find_tab(&tab).is_some();
+        if ui.checkbox(&mut visible, workspace_tab_name(app, tab)).changed() {
+            if visible {
+                if app.dock_state.find_tab(&tab).is_none() {
+                    app.dock_state.push_to_focused_leaf(tab);
+                }
+            } else if let Some(path) = app.dock_state.find_tab(&tab) {
+                app.dock_state.remove_tab(path);
+            }
+        }
+    }
+    ui.separator();
+    if ui.button(format!("{} {}", crate::ui::icons::TABS, app.tr("Restore all workspace tabs"))).clicked() {
+        app.dock_state = create_initial_layout();
+        ui.close();
+    }
 }
 
 pub struct PealayerTabViewer<'a> {
@@ -1128,91 +1311,80 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let save_label = self.app.tr("Save and place");
                                 let discard_label = self.app.tr("Discard");
                                 let anchor_label = self.app.tr("Timeline anchor:");
+                                let record_open = self.app.hardware_effect_authoring.active
+                                    || self.app.hardware_effect_authoring.pending_operation.is_some();
                                 ui.add_space(8.0);
-                                ui.label(egui::RichText::new(record_title).strong());
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.label(&name_label);
-                                    ui.add_enabled(
-                                        !self.app.hardware_effect_authoring.active
-                                            && self.app.hardware_effect_authoring.pending_operation.is_none(),
-                                        egui::TextEdit::singleline(
-                                            &mut self.app.hardware_effect_authoring.name,
-                                        )
-                                        .desired_width(180.0)
-                                        .hint_text(&name_hint),
-                                    );
-                                    let pending = self
-                                        .app
-                                        .hardware_effect_authoring
-                                        .pending_operation
-                                        .is_some();
-                                    if ui
-                                        .add_enabled(
-                                            !pending
-                                                && !self.app.hardware_effect_authoring.active
-                                                && !self
-                                                    .app
-                                                    .hardware_effect_authoring
-                                                    .name
-                                                    .trim()
-                                                    .is_empty(),
-                                            egui::Button::new(&start_label),
-                                        )
-                                        .on_hover_text(&start_help)
-                                        .clicked()
-                                    {
-                                        if let Err(error) = self.app.start_hardware_effect_recording() {
-                                            self.app.set_osd(error);
+                                egui::CollapsingHeader::new(egui::RichText::new(record_title).strong())
+                                    .id_salt("hardware_effect_recording_panel")
+                                    .default_open(record_open)
+                                    .show(ui, |ui| {
+                                        egui::Grid::new("hardware_effect_recording_name")
+                                            .num_columns(2)
+                                            .spacing([12.0, 8.0])
+                                            .show(ui, |ui| {
+                                                ui.label(&name_label);
+                                                ui.add_enabled(
+                                                    !self.app.hardware_effect_authoring.active
+                                                        && self.app.hardware_effect_authoring.pending_operation.is_none(),
+                                                    egui::TextEdit::singleline(&mut self.app.hardware_effect_authoring.name)
+                                                        .desired_width(ui.available_width().min(280.0))
+                                                        .hint_text(&name_hint),
+                                                );
+                                                ui.end_row();
+                                            });
+                                        let pending = self.app.hardware_effect_authoring.pending_operation.is_some();
+                                        ui.add_space(6.0);
+                                        ui.columns(2, |uis| {
+                                            if uis[0].add_enabled(
+                                                !pending
+                                                    && !self.app.hardware_effect_authoring.active
+                                                    && !self.app.hardware_effect_authoring.name.trim().is_empty(),
+                                                egui::Button::new(&start_label).truncate(),
+                                            ).on_hover_text(&start_help).clicked()
+                                            {
+                                                if let Err(error) = self.app.start_hardware_effect_recording() {
+                                                    self.app.set_osd(error);
+                                                }
+                                            }
+                                            if uis[1].add_enabled(
+                                                !pending && self.app.hardware_effect_authoring.active,
+                                                egui::Button::new(&refresh_label).truncate(),
+                                            ).clicked()
+                                            {
+                                                if let Err(error) = self.app.refresh_hardware_effect_recording() {
+                                                    self.app.set_osd(error);
+                                                }
+                                            }
+                                        });
+                                        ui.columns(2, |uis| {
+                                            if uis[0].add_enabled(
+                                                !pending && self.app.hardware_effect_authoring.active,
+                                                egui::Button::new(&save_label).truncate(),
+                                            ).on_hover_text(format!(
+                                                "{} {:.3}s", anchor_label,
+                                                self.app.hardware_effect_authoring.anchor_ms as f64 / 1_000.0
+                                            )).clicked()
+                                            {
+                                                if let Err(error) = self.app.save_hardware_effect_recording() {
+                                                    self.app.set_osd(error);
+                                                }
+                                            }
+                                            if uis[1].add_enabled(
+                                                !pending && self.app.hardware_effect_authoring.active,
+                                                egui::Button::new(&discard_label).truncate(),
+                                            ).clicked()
+                                            {
+                                                if let Err(error) = self.app.discard_hardware_effect_recording() {
+                                                    self.app.set_osd(error);
+                                                }
+                                            }
+                                        });
+                                        if !self.app.hardware_effect_authoring.status.is_empty() {
+                                            ui.label(egui::RichText::new(
+                                                self.app.hardware_effect_authoring.status.clone()
+                                            ).weak().monospace());
                                         }
-                                    }
-                                    if ui
-                                        .add_enabled(
-                                            !pending && self.app.hardware_effect_authoring.active,
-                                            egui::Button::new(&refresh_label),
-                                        )
-                                        .clicked()
-                                    {
-                                        if let Err(error) = self.app.refresh_hardware_effect_recording() {
-                                            self.app.set_osd(error);
-                                        }
-                                    }
-                                    if ui
-                                        .add_enabled(
-                                            !pending && self.app.hardware_effect_authoring.active,
-                                            egui::Button::new(&save_label),
-                                        )
-                                        .on_hover_text(format!(
-                                            "{} {:.3}s",
-                                            anchor_label,
-                                            self.app.hardware_effect_authoring.anchor_ms as f64 / 1_000.0
-                                        ))
-                                        .clicked()
-                                    {
-                                        if let Err(error) = self.app.save_hardware_effect_recording() {
-                                            self.app.set_osd(error);
-                                        }
-                                    }
-                                    if ui
-                                        .add_enabled(
-                                            !pending && self.app.hardware_effect_authoring.active,
-                                            egui::Button::new(&discard_label),
-                                        )
-                                        .clicked()
-                                    {
-                                        if let Err(error) = self.app.discard_hardware_effect_recording() {
-                                            self.app.set_osd(error);
-                                        }
-                                    }
-                                });
-                                if !self.app.hardware_effect_authoring.status.is_empty() {
-                                    ui.label(
-                                        egui::RichText::new(
-                                            self.app.hardware_effect_authoring.status.clone(),
-                                        )
-                                        .weak()
-                                        .monospace(),
-                                    );
-                                }
+                                    });
                             }
 
                             if !capabilities.strip_effects.is_empty() {
@@ -1292,86 +1464,53 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 .as_ref()
                                 .filter(|profile| profile.attached && profile.configured)
                                 .map(|_| {
-                                    capabilities
-                                        .controls
-                                        .iter()
-                                        .filter(|control| relay_id_from_control_key(&control.key).is_none())
+                                    capabilities.controls.iter()
+                                        .filter(|control| {
+                                            relay_id_from_control_key(&control.key).is_none()
+                                                && !is_pwm_control(control)
+                                        })
+                                        .cloned()
                                         .collect::<Vec<_>>()
                                 })
                                 .unwrap_or_default();
                             if !semantic_controls.is_empty() {
                                 ui.add_space(8.0);
-                                ui.label(
-                                    egui::RichText::new(self.app.tr("Semantic board controls"))
-                                        .strong(),
-                                );
-                                egui::Grid::new("semantic_control_cards")
-                                    .num_columns(2)
-                                    .spacing([10.0, 10.0])
-                                    .show(ui, |ui| {
-                                        for (index, control) in semantic_controls.into_iter().enumerate() {
-                                            draw_control_card(self.app, ui, &capabilities, control);
-                                            if index % 2 == 1 {
-                                                ui.end_row();
-                                            }
-                                        }
-                                    });
+                                ui.label(egui::RichText::new(self.app.tr("Semantic board controls")).strong());
+                                ui.add_space(6.0);
+                                draw_control_card_grid(self.app, ui, &capabilities, &semantic_controls);
                             }
 
                             if !capabilities.relays.is_empty() {
-                                let relay_controls = capabilities
-                                    .controls
-                                    .iter()
+                                let relay_controls = capabilities.controls.iter()
                                     .filter(|control| relay_id_from_control_key(&control.key).is_some())
+                                    .cloned()
                                     .collect::<Vec<_>>();
                                 ui.label(egui::RichText::new(self.app.tr("Relay outputs")).strong());
-                                egui::Grid::new("hardware_monitor_relay_cards")
-                                    .num_columns(2)
-                                    .spacing([10.0, 10.0])
-                                    .show(ui, |ui| {
-                                        for (index, control) in relay_controls.into_iter().enumerate() {
-                                            draw_control_card(self.app, ui, &capabilities, control);
-                                            if index % 2 == 1 {
-                                                ui.end_row();
-                                            }
-                                        }
-                                    });
+                                ui.add_space(6.0);
+                                draw_control_card_grid(self.app, ui, &capabilities, &relay_controls);
                             }
 
                             if !capabilities.pwm_channels.is_empty() {
+                                let pwm_controls = capabilities.pwm_channels.iter()
+                                    .map(|channel| {
+                                        capabilities.controls.iter()
+                                            .find(|control| control.key == channel.key)
+                                            .cloned()
+                                            .unwrap_or_else(|| crate::four_d::controller::HardwareControl {
+                                                key: channel.key.clone(),
+                                                kind: "mosfet".to_string(),
+                                                name: channel.name.clone(),
+                                                default_name: channel.name.clone(),
+                                                control: channel.control.clone(),
+                                                group: channel.role.clone(),
+                                                ..Default::default()
+                                            })
+                                    })
+                                    .collect::<Vec<_>>();
                                 ui.add_space(8.0);
                                 ui.label(egui::RichText::new(self.app.tr("PWM / MOSFET outputs")).strong());
-                                for channel in &capabilities.pwm_channels {
-                                    let value_id = ui.make_persistent_id(("pwm_value", channel.id));
-                                    let mut value = ui.data_mut(|data| {
-                                        data.get_temp::<u16>(value_id).unwrap_or_else(|| {
-                                            if capabilities.telemetry.pwm_channel == Some(channel.id) {
-                                                capabilities.telemetry.pwm_value.unwrap_or(0)
-                                            } else {
-                                                0
-                                            }
-                                        })
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label(crate::ui::i18n::visual_text(display_language, &channel.name))
-                                            .on_hover_text(format!("{} · {}", channel.key, channel.role));
-                                        let response = ui.add(
-                                            egui::Slider::new(&mut value, 0..=4095)
-                                                .show_value(true),
-                                        );
-                                        if response.changed() {
-                                            ui.data_mut(|data| data.insert_temp(value_id, value));
-                                        }
-                                        if response.drag_stopped() || response.lost_focus() {
-                                            let _ = self.app.engine_handle.sender.send(
-                                                crate::four_d::engine::EngineMessage::ControllerCall {
-                                                    method: "controller.pwm.set".to_string(),
-                                                    params: serde_json::json!({"channel": channel.id, "value": value}),
-                                                },
-                                            );
-                                        }
-                                    });
-                                }
+                                ui.add_space(6.0);
+                                draw_control_card_grid(self.app, ui, &capabilities, &pwm_controls);
                             }
 
                             ui.add_space(8.0);

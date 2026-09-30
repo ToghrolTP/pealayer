@@ -67,6 +67,11 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Audio" => "صدا",
         "Subtitles" => "زیرنویس",
         "Workspace" => "فضای کاری",
+        "Workspace tabs" => "زبانه‌های فضای کاری",
+        "Right-click to show or hide workspace tabs" => {
+            "برای نمایش یا پنهان‌کردن زبانه‌ها کلیک راست کنید"
+        }
+        "Restore all workspace tabs" => "بازگردانی همهٔ زبانه‌های فضای کاری",
         "Help" => "راهنما",
         "Language" => "زبان",
         "System language" => "زبان سیستم",
@@ -166,6 +171,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Override requested" => "درخواست بازنویسی ارسال شد",
         "Board reports ON" => "برد حالت روشن را گزارش می‌کند",
         "Board reports OFF" => "برد حالت خاموش را گزارش می‌کند",
+        "Live board control" => "کنترل زندهٔ برد",
         "PCController macro catalog" => "فهرست ماکروهای PCController",
         "Record hardware effect" => "ضبط جلوهٔ سخت‌افزاری",
         "Seat motion take" => "برداشت حرکت صندلی",

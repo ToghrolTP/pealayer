@@ -22,9 +22,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .collapsible(false)
         .show(ui.ctx(), |ui| {
             let mut changed = false;
+            let content_height = ui.available_height().max(320.0);
             ui.horizontal_top(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_min_width(138.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(142.0, content_height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
                     ui.spacing_mut().item_spacing.y = 5.0;
                     for (index, (icon, tab)) in TABS.into_iter().enumerate() {
                         if ui.add_sized(
@@ -33,19 +36,33 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 .selected(app.preferences_tab == index),
                         ).clicked() { app.preferences_tab = index; }
                     }
-                });
+                    },
+                );
                 ui.separator();
-                egui::ScrollArea::vertical().id_salt("preferences_content").show(ui, |ui| {
-                    ui.set_min_width(330.0);
-                    ui.spacing_mut().item_spacing.y = 8.0;
-                    match app.preferences_tab {
-                        0 => appearance_preferences(app, ui, &mut changed),
-                        1 => playback_preferences(app, ui, &mut changed),
-                        2 => hardware_preferences(app, ui, &mut changed),
-                        3 => input_preferences(app, ui, &mut changed),
-                        _ => advanced_preferences(app, ui),
-                    }
-                });
+                let detail_width = ui.available_width().max(330.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(detail_width, content_height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("preferences_content")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.set_width(detail_width - 12.0);
+                                ui.vertical(|ui| {
+                                    ui.set_width(detail_width - 12.0);
+                                    ui.spacing_mut().item_spacing.y = 8.0;
+                                    match app.preferences_tab {
+                                        0 => appearance_preferences(app, ui, &mut changed),
+                                        1 => playback_preferences(app, ui, &mut changed),
+                                        2 => hardware_preferences(app, ui, &mut changed),
+                                        3 => input_preferences(app, ui, &mut changed),
+                                        _ => advanced_preferences(app, ui),
+                                    }
+                                });
+                            });
+                    },
+                );
             });
             if changed { app.save_config(); }
         });
