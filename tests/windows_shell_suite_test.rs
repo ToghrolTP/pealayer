@@ -28,13 +28,21 @@ fn test_windows_shell_lifecycle_integration() {
     // Initial state update without window handle is a safe no-op
     app.update_shell_state();
 
-    // Register a simulated HWND
+    // Register a simulated HWND. Windows must reject it instead of claiming
+    // that the tray/message hook was installed; the app will retry when the
+    // real eframe HWND arrives. Non-Windows shims remain successful no-ops.
     app.window_handle = Some(42);
     app.ensure_shell_initialized();
+    #[cfg(target_os = "windows")]
+    assert!(!app.shell_initialized);
+    #[cfg(not(target_os = "windows"))]
     assert!(app.shell_initialized);
 
-    // Ensure idempotent
+    // A retry with the same invalid handle must remain safe and truthful.
     app.ensure_shell_initialized();
+    #[cfg(target_os = "windows")]
+    assert!(!app.shell_initialized);
+    #[cfg(not(target_os = "windows"))]
     assert!(app.shell_initialized);
 
     // State update with playback time, duration, paused, and error
