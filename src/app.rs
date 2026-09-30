@@ -186,6 +186,10 @@ pub struct PealayerApp {
 
     // Phase 6 Preset Library state
     pub(crate) effects_search_query: String,
+    pub(crate) user_strip_effects: Vec<crate::effects_library::UserStripEffectPreset>,
+    pub(crate) show_effect_library_editor: bool,
+    pub(crate) effect_library_selection: Option<uuid::Uuid>,
+    pub(crate) effect_library_draft: crate::effects_library::UserStripEffectPreset,
     pub(crate) track_muted: std::collections::BTreeSet<u8>,
     pub(crate) track_soloed: std::collections::BTreeSet<u8>,
     pub(crate) track_locked: std::collections::BTreeSet<u8>,
@@ -705,6 +709,7 @@ impl eframe::App for PealayerApp {
                 crate::ui::subtitles::draw_settings_dialog(self, ui);
                 crate::ui::audio::draw_settings_dialog(self, ui);
                 crate::ui::preferences::draw(self, ui);
+                crate::ui::effects_library::draw_editor(self, ui);
 
                 if self.show_open_url_dialog {
                     let mut open_url = false;
@@ -980,9 +985,9 @@ impl PealayerApp {
             .iter()
             .map(controller_macro_effect_preset)
             .chain(
-                capabilities
-                    .strip_effects
+                self.user_strip_effects
                     .iter()
+                    .filter(|preset| capabilities.strip_effects.iter().any(|effect| effect.id == preset.hardware_effect_id))
                     .map(controller_strip_effect_preset),
             )
             .collect()
@@ -1934,14 +1939,14 @@ fn controller_macro_effect_preset(
 }
 
 fn controller_strip_effect_preset(
-    strip_effect: &crate::four_d::controller::HardwareStripEffect,
+    strip_effect: &crate::effects_library::UserStripEffectPreset,
 ) -> EffectPreset {
     EffectPreset {
-        category: "Addressable strip".to_string(),
+        category: strip_effect.category.clone(),
         effect: crate::four_d::models::Effect::controller_strip_effect(
             strip_effect.name.clone(),
-            5_000,
-            strip_effect.id.clone(),
+            strip_effect.duration_ms,
+            strip_effect.hardware_effect_id.clone(),
         ),
     }
 }
@@ -2056,6 +2061,10 @@ impl Default for PealayerApp {
             recording_keys: std::collections::HashMap::new(),
             relay_overrides: std::collections::BTreeSet::new(),
             effects_search_query: String::new(),
+            user_strip_effects: crate::effects_library::load_or_seed(),
+            show_effect_library_editor: false,
+            effect_library_selection: None,
+            effect_library_draft: crate::effects_library::UserStripEffectPreset::default(),
             track_muted: std::collections::BTreeSet::new(),
             track_soloed: std::collections::BTreeSet::new(),
             track_locked: std::collections::BTreeSet::new(),

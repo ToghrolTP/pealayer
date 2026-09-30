@@ -872,7 +872,19 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         }
                     }
                     PealayerTab::EffectsLibrary => {
-                        ui.heading(self.app.tr("Effects Library"));
+                        ui.horizontal(|ui| {
+                            ui.heading(self.app.tr("Effects Library"));
+                            if ui
+                                .button(format!(
+                                    "{} {}",
+                                    crate::ui::icons::PENCIL_SIMPLE,
+                                    self.app.tr("Manage effects")
+                                ))
+                                .clicked()
+                            {
+                                self.app.show_effect_library_editor = true;
+                            }
+                        });
                         ui.add_space(4.0);
 
                         // 1. Instant search edit field
@@ -1215,11 +1227,28 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let strip_title = self.app.tr("Addressable strip effects");
                                 let stop_label = self.app.tr("Stop preview");
                                 let preview_label = self.app.tr("Preview");
+                                let user_effects = self
+                                    .app
+                                    .user_strip_effects
+                                    .iter()
+                                    .filter(|preset| capabilities.strip_effects.iter().any(|effect| effect.id == preset.hardware_effect_id))
+                                    .cloned()
+                                    .collect::<Vec<_>>();
                                 ui.add_space(8.0);
                                 ui.horizontal(|ui| {
                                     ui.label(
                                         egui::RichText::new(&strip_title).strong(),
                                     );
+                                    if ui
+                                        .button(format!(
+                                            "{} {}",
+                                            crate::ui::icons::PENCIL_SIMPLE,
+                                            self.app.tr("Manage effects")
+                                        ))
+                                        .clicked()
+                                    {
+                                        self.app.show_effect_library_editor = true;
+                                    }
                                     if ui
                                         .add_enabled(
                                             self.app.hardware_effect_authoring.pending_operation.is_none(),
@@ -1232,7 +1261,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
                                     }
                                 });
-                                for strip_effect in &capabilities.strip_effects {
+                                for strip_effect in &user_effects {
                                     ui.horizontal_wrapped(|ui| {
                                         ui.label(
                                             egui::RichText::new(crate::ui::i18n::visual_text(
@@ -1241,23 +1270,23 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             ))
                                             .strong(),
                                         );
-                                        if let Some(fps) = strip_effect.default_fps {
-                                            ui.label(egui::RichText::new(format!("{fps} FPS")).weak());
-                                        }
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{:.1} s",
+                                                strip_effect.duration_ms as f64 / 1_000.0
+                                            ))
+                                            .weak(),
+                                        );
                                         if ui
                                             .add_enabled(
                                                 self.app.hardware_effect_authoring.pending_operation.is_none(),
                                                 egui::Button::new(&preview_label),
                                             )
-                                            .on_hover_text(if strip_effect.description.is_empty() {
-                                                strip_effect.id.clone()
-                                            } else {
-                                                format!("{}\n{}", strip_effect.id, strip_effect.description)
-                                            })
+                                            .on_hover_text(format!("{} ms", strip_effect.duration_ms))
                                             .clicked()
                                         {
                                             if let Err(error) =
-                                                self.app.preview_strip_effect(&strip_effect.id)
+                                                self.app.preview_strip_effect(&strip_effect.hardware_effect_id)
                                             {
                                                 self.app.set_osd(error);
                                             }
