@@ -211,6 +211,12 @@ pub struct PealayerApp {
     pub(crate) show_about_dialog: bool,
     pub(crate) show_preferences_dialog: bool,
     pub(crate) preferences_tab: usize,
+    pub(crate) show_board_info_dialog: bool,
+    pub(crate) board_info_tab: usize,
+    pub(crate) board_name_draft: String,
+    pub(crate) board_operation: Option<String>,
+    pub(crate) board_operation_status: String,
+    pub(crate) board_reboot_armed: bool,
     pub(crate) pause_on_hardware_disconnect: bool,
     pub(crate) auto_connect_hardware: bool,
     pub(crate) click_player_to_toggle: bool,
@@ -672,20 +678,21 @@ impl eframe::App for PealayerApp {
             .show_inside(ui, |ui| {
                 if self.show_four_d_editor {
                     let workspace_strip = ui.horizontal(|ui| {
+                        ui.menu_button(
+                            format!("{}  {}", crate::ui::icons::TABS, self.tr("Panels")),
+                            |ui| crate::ui::layout::draw_workspace_tab_menu(self, ui),
+                        );
+                        ui.separator();
+                        let visible = crate::ui::layout::visible_workspace_tab_count(self);
                         ui.label(
-                            egui::RichText::new(format!(
-                                "{} {}",
-                                crate::ui::icons::TABS,
-                                self.tr("Workspace tabs")
-                            ))
-                            .small()
-                            .strong(),
+                            egui::RichText::new(format!("{visible}/5"))
+                                .small()
+                                .color(ui.visuals().weak_text_color()),
                         );
                         ui.allocate_response(
                             egui::vec2(ui.available_width(), 20.0),
                             egui::Sense::click(),
                         )
-                        .on_hover_text(self.tr("Right-click to show or hide workspace tabs"));
                     });
                     workspace_strip.response.context_menu(|ui| {
                         crate::ui::layout::draw_workspace_tab_menu(self, ui);
@@ -695,6 +702,7 @@ impl eframe::App for PealayerApp {
                     let dock_response = ui.scope(|ui| {
                         let mut tab_viewer = crate::ui::layout::PealayerTabViewer { app: self };
                         egui_dock::DockArea::new(&mut dock_state)
+                            .show_leaf_collapse_buttons(false)
                             .show_inside(ui, &mut tab_viewer);
                     });
                     self.dock_state = dock_state;
@@ -742,6 +750,7 @@ impl eframe::App for PealayerApp {
                 crate::ui::audio::draw_settings_dialog(self, ui);
                 crate::ui::preferences::draw(self, ui);
                 crate::ui::effects_library::draw_editor(self, ui);
+                crate::ui::board_info::draw(self, ui);
 
                 if self.show_open_url_dialog {
                     let mut open_url = false;
@@ -968,7 +977,11 @@ impl PealayerApp {
     }
 
     fn process_shell_commands(&mut self, ctx: &egui::Context) {
-        crate::platform::windows::update_shell_command_state(self.is_paused, self.is_muted);
+        crate::platform::windows::update_shell_command_state(
+            self.is_paused,
+            self.is_muted,
+            self.current_video_path.is_some(),
+        );
         while let Some(command) = crate::platform::windows::take_shell_command() {
             match command {
                 crate::platform::windows::THUMB_BUTTON_PREV => self.seek_relative(-10.0),
@@ -1137,6 +1150,63 @@ impl PealayerApp {
         self.request_hardware_effect_command("strip-stop", "strip stop".to_string())
     }
 
+    fn request_board_operation(
+        &mut self,
+        operation: &str,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<(), String> {
+        if self.board_operation.is_some() {
+            return Err("another board operation is still running".to_string());
+        }
+        if !self
+            .advertised_hardware()
+            .is_some_and(|capabilities| capabilities.board_connected)
+        {
+            return Err("no live board is connected".to_string());
+        }
+        self.engine_handle
+            .request_controller_call(operation, method, params)?;
+        self.board_operation = Some(operation.to_string());
+        self.board_operation_status = "Waiting for PCController…".to_string();
+        Ok(())
+    }
+
+    pub(crate) fn rename_board(&mut self) -> Result<(), String> {
+        let name = self.board_name_draft.trim();
+        if name.is_empty()
+            || name.len() > 8
+            || !name
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || " -_".contains(character))
+        {
+            return Err("Board name must be 1–8 ASCII letters, numbers, spaces, dashes, or underscores".to_string());
+        }
+        let name = Self::controller_command_argument(name)
+            .ok_or_else(|| "Board name is not safe to send".to_string())?;
+        self.request_board_operation(
+            "board-name",
+            "controller.command.execute",
+            serde_json::json!({"command": format!("board name set {name}")}),
+        )
+    }
+
+    pub(crate) fn set_board_silent(&mut self, silent: bool) -> Result<(), String> {
+        self.request_board_operation(
+            "board-silent",
+            "controller.command.execute",
+            serde_json::json!({"command": format!("silent board {}", if silent { "on" } else { "off" })}),
+        )
+    }
+
+    pub(crate) fn reboot_board(&mut self) -> Result<(), String> {
+        self.request_board_operation(
+            "board-reboot",
+            "controller.reset",
+            serde_json::json!({"pulse_ms": 50}),
+        )
+    }
+
     fn process_controller_call_results(&mut self) {
         let results = self
             .engine_handle
@@ -1146,7 +1216,13 @@ impl PealayerApp {
             .map(|mut queue| queue.drain(..).collect::<Vec<_>>())
             .unwrap_or_default();
         for result in results {
-            self.hardware_effect_authoring.pending_operation = None;
+            let is_board_operation = result.operation.starts_with("board-");
+            if is_board_operation {
+                self.board_operation = None;
+                self.board_reboot_armed = false;
+            } else {
+                self.hardware_effect_authoring.pending_operation = None;
+            }
             match result.result {
                 Ok(value) => {
                     let output = value
@@ -1170,13 +1246,24 @@ impl PealayerApp {
                             self.hardware_effect_authoring.active = false;
                             self.hardware_effect_authoring.pending_saved_macro_id = None;
                         }
+                        "board-name" | "board-silent" | "board-reboot" => {
+                            self.engine_handle.request_catalog_refresh();
+                        }
                         _ => {}
                     }
-                    self.hardware_effect_authoring.status = output.clone();
+                    if is_board_operation {
+                        self.board_operation_status = output.clone();
+                    } else {
+                        self.hardware_effect_authoring.status = output.clone();
+                    }
                     self.set_osd(output);
                 }
                 Err(error) => {
-                    self.hardware_effect_authoring.status = error.clone();
+                    if is_board_operation {
+                        self.board_operation_status = error.clone();
+                    } else {
+                        self.hardware_effect_authoring.status = error.clone();
+                    }
                     self.set_osd(error);
                 }
             }
@@ -2158,6 +2245,12 @@ impl Default for PealayerApp {
             show_about_dialog: false,
             show_preferences_dialog: false,
             preferences_tab: 0,
+            show_board_info_dialog: false,
+            board_info_tab: 0,
+            board_name_draft: String::new(),
+            board_operation: None,
+            board_operation_status: String::new(),
+            board_reboot_armed: false,
             pause_on_hardware_disconnect: true,
             auto_connect_hardware: true,
             click_player_to_toggle: true,

@@ -356,10 +356,53 @@ fn draw_control_card(
                         }
                     });
                 }
+            } else if let Some(relay_id) = relay_id {
+                ui.add_space(8.0);
+                ui.columns(2, |uis| {
+                    for (index, (state, label, icon)) in [
+                        (true, app.tr("ON"), crate::ui::icons::LIGHTNING),
+                        (false, app.tr("OFF"), crate::ui::icons::STOP_CIRCLE),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let selected = capabilities.active_relays.contains(&relay_id) == state;
+                        let mut button = egui::Button::new(format!("{icon} {label}"))
+                            .truncate()
+                            .selected(selected);
+                        if selected && state {
+                            button = button
+                                .fill(egui::Color32::from_rgb(22, 163, 74))
+                                .stroke(egui::Stroke::new(
+                                    1.0,
+                                    egui::Color32::from_rgb(34, 197, 94),
+                                ));
+                        }
+                        if uis[index]
+                            .add_enabled_ui(!app.estop_active, |ui| {
+                                ui.add_sized([ui.available_width(), 28.0], button)
+                            })
+                            .inner
+                            .clicked()
+                        {
+                            let _ = app.engine_handle.sender.send(
+                                crate::four_d::engine::EngineMessage::ControllerCall {
+                                    method: "controller.command.execute".to_string(),
+                                    params: serde_json::json!({
+                                        "command": format!(
+                                            "relay {relay_id} {}",
+                                            if state { "on" } else { "off" }
+                                        )
+                                    }),
+                                },
+                            );
+                        }
+                    }
+                });
             }
         });
 
-    card.response.context_menu(|ui| {
+    card.response.interact(egui::Sense::click()).context_menu(|ui| {
         if ui.button(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, app.tr("Rename"))).clicked() {
             ui.data_mut(|data| data.insert_temp(edit_id, true));
             ui.close();
@@ -470,12 +513,28 @@ fn workspace_tab_name(app: &PealayerApp, tab: PealayerTab) -> String {
     }
 }
 
+pub fn visible_workspace_tab_count(app: &PealayerApp) -> usize {
+    ALL_WORKSPACE_TABS
+        .into_iter()
+        .filter(|tab| app.dock_state.find_tab(tab).is_some())
+        .count()
+}
+
 pub fn draw_workspace_tab_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    ui.label(egui::RichText::new(app.tr("Workspace tabs")).strong());
-    ui.separator();
     for tab in ALL_WORKSPACE_TABS {
         let mut visible = app.dock_state.find_tab(&tab).is_some();
-        if ui.checkbox(&mut visible, workspace_tab_name(app, tab)).changed() {
+        let icon = if visible {
+            crate::ui::icons::EYE
+        } else {
+            crate::ui::icons::EYE_SLASH
+        };
+        if ui
+            .checkbox(
+                &mut visible,
+                format!("{icon}  {}", workspace_tab_name(app, tab)),
+            )
+            .changed()
+        {
             if visible {
                 if app.dock_state.find_tab(&tab).is_none() {
                     app.dock_state.push_to_focused_leaf(tab);
@@ -484,11 +543,6 @@ pub fn draw_workspace_tab_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 app.dock_state.remove_tab(path);
             }
         }
-    }
-    ui.separator();
-    if ui.button(format!("{} {}", crate::ui::icons::TABS, app.tr("Restore all workspace tabs"))).clicked() {
-        app.dock_state = create_initial_layout();
-        ui.close();
     }
 }
 
@@ -1105,94 +1159,185 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 .id_salt("effects_scroll")
                                 .show(ui, |ui| {
                                     for (category, presets) in categorized {
-                                        let header = egui::CollapsingHeader::new(
-                                            crate::ui::i18n::visual_text(
-                                                display_language,
-                                                &category,
-                                            ),
-                                        )
-                                            .default_open(true)
-                                            .open(if force_open { Some(true) } else { None });
-
-                                        header.show(ui, |ui| {
-                                            ui.indent("preset_indent", |ui| {
-                                                for preset in presets {
-                                                    let item_id = egui::Id::new(&preset.effect.name);
-                                                    let payload = EffectDragPayload {
-                                                        name: preset.effect.name.clone(),
-                                                        icon: preset.effect.icon.clone(),
-                                                        duration_ms: preset.effect.duration_ms,
-                                                        target: preset.effect.target,
-                                                        actions: preset.effect.actions.clone(),
-                                                        controller_macro: preset.effect.controller_macro.clone(),
-                                                        controller_strip_effect: preset.effect.controller_strip_effect.clone(),
-                                                    };
-
-                                                    // Wrap item in drag source
-                                                    ui.dnd_drag_source(item_id, payload, |ui| {
-                                                        let (rect, response) = ui.allocate_exact_size(
-                                                            egui::vec2(ui.available_width(), 26.0),
-                                                            egui::Sense::click_and_drag(),
-                                                        );
-
-                                                        let hovered = response.hovered();
-                                                        let is_dragged = ui.ctx().is_being_dragged(response.id);
-
-                                                        // Hover state background
-                                                        let bg_color = if is_dragged {
-                                                            ui.visuals().widgets.hovered.bg_fill
-                                                        } else if hovered {
-                                                            ui.visuals().widgets.inactive.bg_fill
-                                                        } else {
-                                                            egui::Color32::TRANSPARENT
-                                                        };
-
-                                                        ui.painter().rect_filled(rect, 4.0, bg_color);
-
-                                                        // Render Name and Icon
-                                                        let displayed_effect_name =
-                                                            crate::ui::i18n::visual_text(
-                                                                display_language,
-                                                                &preset.effect.name,
-                                                            );
-                                                        let effect_label = format!(
-                                                            "{} {}",
-                                                            crate::ui::icons::SPARKLE,
-                                                            displayed_effect_name,
-                                                        );
-                                                        ui.painter().text(
-                                                            rect.left_center() + egui::vec2(8.0, 0.0),
-                                                            egui::Align2::LEFT_CENTER,
-                                                            effect_label.clone(),
-                                                            egui::FontId::proportional(11.0),
-                                                            ui.visuals().text_color(),
-                                                        );
-
-                                                        // Change cursor to Grab on hover, Grabbing on active drag
-                                                        if hovered {
-                                                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-                                                        }
-                                                        if is_dragged {
-                                                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-
-                                                            egui::Tooltip::always_open(
-                                                                ui.ctx().clone(),
-                                                                ui.layer_id(),
-                                                                egui::Id::new("dnd_tooltip"),
-                                                                egui::PopupAnchor::Pointer,
-                                                            )
-                                                            .show(|ui| {
-                                                                ui.horizontal(|ui| {
-                                                                    ui.label(effect_label);
-                                                                    ui.label(egui::RichText::new(format!("({}ms)", preset.effect.duration_ms)).weak());
-                                                                });
-                                                            });
-                                                        }
-                                                    });
-                                                    ui.add_space(2.0);
-                                                }
-                                            });
+                                        let group_id = ui.make_persistent_id(("effect-group", &category));
+                                        let mut open = ui.data_mut(|data| {
+                                            data.get_persisted::<bool>(group_id).unwrap_or(true)
                                         });
+                                        if force_open {
+                                            open = true;
+                                        }
+                                        let displayed_category = crate::ui::i18n::visual_text(
+                                            display_language,
+                                            &category,
+                                        );
+                                        let group_header = egui::Frame::new()
+                                            .fill(ui.visuals().widgets.inactive.weak_bg_fill)
+                                            .stroke(egui::Stroke::new(
+                                                1.0,
+                                                ui.visuals().widgets.noninteractive.bg_stroke.color,
+                                            ))
+                                            .corner_radius(7.0)
+                                            .inner_margin(egui::Margin::symmetric(9, 6))
+                                            .show(ui, |ui| {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(if open {
+                                                        crate::ui::icons::CARET_DOWN
+                                                    } else {
+                                                        crate::ui::icons::CARET_RIGHT
+                                                    });
+                                                    ui.label(crate::ui::icons::FOLDER_OPEN);
+                                                    ui.label(
+                                                        egui::RichText::new(displayed_category)
+                                                            .strong(),
+                                                    );
+                                                    ui.with_layout(
+                                                        egui::Layout::right_to_left(
+                                                            egui::Align::Center,
+                                                        ),
+                                                        |ui| {
+                                                            egui::Frame::new()
+                                                                .fill(
+                                                                    ui.visuals()
+                                                                        .selection
+                                                                        .bg_fill
+                                                                        .gamma_multiply(0.22),
+                                                                )
+                                                                .corner_radius(9.0)
+                                                                .inner_margin(egui::Margin::symmetric(7, 2))
+                                                                .show(ui, |ui| {
+                                                                    ui.label(
+                                                                        egui::RichText::new(
+                                                                            presets.len().to_string(),
+                                                                        )
+                                                                        .small()
+                                                                        .strong(),
+                                                                    );
+                                                                });
+                                                        },
+                                                    );
+                                                });
+                                            });
+                                        if group_header.response.interact(egui::Sense::click()).clicked() {
+                                            open = !open;
+                                        }
+                                        ui.data_mut(|data| data.insert_persisted(group_id, open));
+
+                                        if open {
+                                            ui.add_space(5.0);
+                                            for preset in presets {
+                                                let item_id = ui.make_persistent_id((
+                                                    "effect-card",
+                                                    preset.effect.id,
+                                                ));
+                                                let payload = EffectDragPayload {
+                                                    name: preset.effect.name.clone(),
+                                                    icon: preset.effect.icon.clone(),
+                                                    duration_ms: preset.effect.duration_ms,
+                                                    target: preset.effect.target,
+                                                    actions: preset.effect.actions.clone(),
+                                                    controller_macro: preset.effect.controller_macro.clone(),
+                                                    controller_strip_effect: preset.effect.controller_strip_effect.clone(),
+                                                };
+                                                let target_label = if preset
+                                                    .effect
+                                                    .controller_strip_effect
+                                                    .is_some()
+                                                {
+                                                    self.app.tr("Strip")
+                                                } else if preset.effect.controller_macro.is_some() {
+                                                    self.app.tr("Macro")
+                                                } else if let crate::four_d::models::HardwareTarget::Relay(id) =
+                                                    preset.effect.target
+                                                {
+                                                    format!("{} {id}", self.app.tr("Relay"))
+                                                } else {
+                                                    self.app.tr("Effect")
+                                                };
+                                                let displayed_effect_name =
+                                                    crate::ui::i18n::visual_text(
+                                                        display_language,
+                                                        &preset.effect.name,
+                                                    );
+                                                let card = egui::Frame::group(ui.style())
+                                                    .inner_margin(egui::Margin::symmetric(9, 7))
+                                                    .corner_radius(8.0)
+                                                    .show(ui, |ui| {
+                                                        ui.set_width(ui.available_width());
+                                                        ui.horizontal(|ui| {
+                                                            ui.label(
+                                                                egui::RichText::new(
+                                                                    crate::ui::icons::SPARKLE,
+                                                                )
+                                                                .size(16.0),
+                                                            );
+                                                            ui.add(
+                                                                egui::Label::new(
+                                                                    egui::RichText::new(
+                                                                        &displayed_effect_name,
+                                                                    )
+                                                                    .strong(),
+                                                                )
+                                                                .truncate(),
+                                                            );
+                                                        });
+                                                        ui.add_space(5.0);
+                                                        ui.horizontal(|ui| {
+                                                            for text in [
+                                                                target_label.clone(),
+                                                                format!(
+                                                                    "{} ms",
+                                                                    preset.effect.duration_ms
+                                                                ),
+                                                            ] {
+                                                                egui::Frame::new()
+                                                                    .fill(
+                                                                        ui.visuals()
+                                                                            .selection
+                                                                            .bg_fill
+                                                                            .gamma_multiply(0.18),
+                                                                    )
+                                                                    .corner_radius(8.0)
+                                                                    .inner_margin(
+                                                                        egui::Margin::symmetric(7, 2),
+                                                                    )
+                                                                    .show(ui, |ui| {
+                                                                        ui.label(
+                                                                            egui::RichText::new(text)
+                                                                                .small(),
+                                                                        );
+                                                                    });
+                                                            }
+                                                        });
+                                                    });
+                                                let response = ui.interact(
+                                                    card.response.rect,
+                                                    item_id,
+                                                    egui::Sense::click_and_drag(),
+                                                );
+                                                response.dnd_set_drag_payload(payload);
+                                                if response.hovered() {
+                                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                                                }
+                                                if response.dragged() {
+                                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                                    egui::Tooltip::always_open(
+                                                        ui.ctx().clone(),
+                                                        ui.layer_id(),
+                                                        item_id.with("drag-label"),
+                                                        egui::PopupAnchor::Pointer,
+                                                    )
+                                                    .show(|ui| {
+                                                        ui.label(format!(
+                                                            "{}  {}",
+                                                            crate::ui::icons::SPARKLE,
+                                                            displayed_effect_name
+                                                        ));
+                                                    });
+                                                }
+                                                ui.add_space(5.0);
+                                            }
+                                        }
+                                        ui.add_space(7.0);
                                     }
                                 });
                         }
@@ -1243,7 +1388,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         if let Some(capabilities) = capabilities
                             .filter(|capabilities| capabilities.board_connected)
                         {
-                            egui::Frame::group(ui.style())
+                            let board_card = egui::Frame::group(ui.style())
                                 .inner_margin(egui::Margin::symmetric(14, 12))
                                 .corner_radius(10.0)
                                 .show(ui, |ui| {
@@ -1262,7 +1407,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 display_language,
                                                 &capabilities.board_name,
                                             );
-                                            ui.label(
+                                            let name_response = ui.add(
+                                                egui::Label::new(
                                                 egui::RichText::new(if board_name.trim().is_empty() {
                                                     profile_name.clone().unwrap_or_else(|| self.app.tr("Connected board"))
                                                 } else {
@@ -1270,7 +1416,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 })
                                                     .heading()
                                                     .strong(),
+                                                )
+                                                .sense(egui::Sense::click()),
                                             );
+                                            if name_response
+                                                .on_hover_text(self.app.tr("Rename board"))
+                                                .clicked()
+                                            {
+                                                self.app.board_name_draft = capabilities.board_name.clone();
+                                                self.app.board_info_tab = 0;
+                                                self.app.show_board_info_dialog = true;
+                                            }
                                             if let Some(profile_name) = profile_name {
                                                 ui.label(
                                                     egui::RichText::new(profile_name)
@@ -1281,6 +1437,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         ui.with_layout(
                                             egui::Layout::right_to_left(egui::Align::Center),
                                             |ui| {
+                                                if ui
+                                                    .button(crate::ui::icons::INFO)
+                                                    .on_hover_text(self.app.tr("Board information"))
+                                                    .clicked()
+                                                {
+                                                    self.app.board_name_draft = capabilities.board_name.clone();
+                                                    self.app.show_board_info_dialog = true;
+                                                }
                                                 let (rect, _) = ui.allocate_exact_size(
                                                     egui::vec2(14.0, 14.0),
                                                     egui::Sense::hover(),
@@ -1295,6 +1459,33 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         );
                                     });
                                 });
+                            board_card.response.context_menu(|ui| {
+                                if ui
+                                    .button(format!(
+                                        "{} {}",
+                                        crate::ui::icons::INFO,
+                                        self.app.tr("Board information")
+                                    ))
+                                    .clicked()
+                                {
+                                    self.app.board_name_draft = capabilities.board_name.clone();
+                                    self.app.show_board_info_dialog = true;
+                                    ui.close();
+                                }
+                                if ui
+                                    .button(format!(
+                                        "{} {}",
+                                        crate::ui::icons::PENCIL_SIMPLE,
+                                        self.app.tr("Rename board")
+                                    ))
+                                    .clicked()
+                                {
+                                    self.app.board_name_draft = capabilities.board_name.clone();
+                                    self.app.board_info_tab = 0;
+                                    self.app.show_board_info_dialog = true;
+                                    ui.close();
+                                }
+                            });
 
                             let can_record = capabilities.board_profile.as_ref().is_some_and(|profile| {
                                 profile.attached && profile.configured
@@ -1481,9 +1672,21 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                             if !capabilities.relays.is_empty() {
-                                let relay_controls = capabilities.controls.iter()
-                                    .filter(|control| relay_id_from_control_key(&control.key).is_some())
-                                    .cloned()
+                                let relay_controls = capabilities.relays.iter()
+                                    .map(|relay| {
+                                        capabilities.controls.iter()
+                                            .find(|control| control.key == relay.key)
+                                            .cloned()
+                                            .unwrap_or_else(|| crate::four_d::controller::HardwareControl {
+                                                key: relay.key.clone(),
+                                                kind: "relay".to_string(),
+                                                name: relay.name.clone(),
+                                                default_name: relay.name.clone(),
+                                                control: relay.control.clone(),
+                                                group: relay.role.clone(),
+                                                ..Default::default()
+                                            })
+                                    })
                                     .collect::<Vec<_>>();
                                 ui.label(egui::RichText::new(self.app.tr("Relay outputs")).strong());
                                 ui.add_space(6.0);

@@ -1,5 +1,5 @@
 [
-  {"id":"129160c3-8bda-4e5e-b771-e9243d084ba8","name":"Police sweep","category":"Addressable strip","hardware_effect_id":"police","duration_ms":5000},
-  {"id":"f71654f8-427b-4d95-b740-72798c2ca929","name":"White thunder","category":"Addressable strip","hardware_effect_id":"white-thunder","duration_ms":3500},
-  {"id":"5e30156d-7ac5-418c-a69e-359a6f90b963","name":"Converging red dots","category":"Addressable strip","hardware_effect_id":"converging-red","duration_ms":5000}
+  {"id":"129160c3-8bda-4e5e-b771-e9243d084ba8","name":"Police sweep","category":"Addressable strip","description":"Alternating red and blue sweep for emergency-light sequences.","hardware_effect_id":"police","duration_ms":5000},
+  {"id":"f71654f8-427b-4d95-b740-72798c2ca929","name":"White thunder","category":"Addressable strip","description":"A sharp white strike with secondary flashes and decay.","hardware_effect_id":"white-thunder","duration_ms":3500},
+  {"id":"5e30156d-7ac5-418c-a69e-359a6f90b963","name":"Converging red dots","category":"Addressable strip","description":"Fading red points travel inward from both ends.","hardware_effect_id":"converging-red","duration_ms":5000}
 ]

@@ -306,18 +306,15 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         ui.close();
                     }
                     ui.separator();
-                    if ui
-                        .button(format!(
+                    ui.label(
+                        egui::RichText::new(format!(
                             "{} {}",
                             crate::ui::icons::TABS,
-                            app.tr("Restore all workspace tabs")
+                            app.tr("Panels")
                         ))
-                        .clicked()
-                    {
-                        app.dock_state = crate::ui::layout::create_initial_layout();
-                        app.show_four_d_editor = true;
-                        ui.close();
-                    }
+                        .strong(),
+                    );
+                    crate::ui::layout::draw_workspace_tab_menu(app, ui);
                 });
 
                 // Add right-aligned E-STOP and Serial controls
@@ -455,10 +452,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     // paths are valid even when they are not visible to the local enumerator.
                     let mut endpoint_changed = false;
                     ui.add_enabled_ui(!app.is_connected && !connection_requested, |ui| {
-                        ui.allocate_ui(egui::vec2(188.0, 20.0), |ui| {
+                        ui.allocate_ui(egui::vec2(154.0, 20.0), |ui| {
                             egui::ComboBox::from_id_salt("hardware_endpoint_select")
                                 .selected_text(&app.serial_port)
-                                .width(240.0)
+                                .width(154.0)
                                 .height(240.0)
                                 .show_ui(ui, |ui| {
                                     for endpoint in crate::four_d::controller::available_endpoints()
@@ -510,7 +507,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                     let status_lbl = if app.is_connected {
                         if crate::four_d::controller::is_controller_endpoint(&app.serial_port) {
-                            app.tr("PCController coordinator connected").to_string()
+                            app.advertised_hardware()
+                                .filter(|capabilities| capabilities.board_connected)
+                                .map(|capabilities| app.display_text(&capabilities.board_name))
+                                .filter(|name| !name.trim().is_empty())
+                                .unwrap_or_else(|| app.tr("PCController"))
                         } else {
                             format!("{} direct diagnostic connection", app.serial_port)
                         }
@@ -519,7 +520,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     } else {
                         app.tr("Hardware Disconnected").to_string()
                     };
-                    ui.label(egui::RichText::new(status_lbl).size(10.0).weak());
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(status_lbl).size(10.0).weak())
+                            .truncate(),
+                    )
+                    .on_hover_text(&app.serial_port);
                 });
             });
         });

@@ -54,11 +54,13 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         });
     });
 
-    panel.response.context_menu(|ui| {
+    panel.response.interact(egui::Sense::click()).context_menu(|ui| {
         let title = app.tr("Status bar");
         let media_rate = app.tr("Media frame rate");
         let hardware = app.tr("Hardware connection");
         let telemetry = app.tr("Hardware telemetry");
+        let status_rgb = app.tr("Physical status RGB");
+        let warnings = app.tr("Hardware warnings");
         let workspace = app.tr("Workspace mode");
         ui.strong(title);
         ui.separator();
@@ -66,6 +68,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         changed |= ui.checkbox(&mut app.status_bar.media_rate, media_rate).changed();
         changed |= ui.checkbox(&mut app.status_bar.hardware, hardware).changed();
         changed |= ui.checkbox(&mut app.status_bar.telemetry, telemetry).changed();
+        changed |= ui.checkbox(&mut app.status_bar.status_rgb, status_rgb).changed();
+        changed |= ui.checkbox(&mut app.status_bar.warnings, warnings).changed();
         changed |= ui.checkbox(&mut app.status_bar.workspace, workspace).changed();
         if changed { app.save_config(); }
     });
@@ -117,14 +121,18 @@ fn draw_hardware_status(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if let Some(notice) = &app.connection_notice { connection_label.on_hover_text(notice); }
 
     let Some(capabilities) = capabilities.as_ref().filter(|value| value.board_connected) else { return; };
-    if let Some(status_led) = &capabilities.status_led {
+    if app.status_bar.status_rgb && let Some(status_led) = &capabilities.status_led {
         let brightness = f32::from(status_led.brightness) / 255.0;
-        let color = egui::Color32::from_rgb(
-            (f32::from(status_led.red) * brightness).round() as u8,
-            (f32::from(status_led.green) * brightness).round() as u8,
-            (f32::from(status_led.blue) * brightness).round() as u8,
-        );
+        // PCController publishes the already-composited physical RGB result.
+        // Do not multiply it by brightness a second time: the Web UI mirrors
+        // these raw channels directly and Pealayer must show the same hue.
+        let color = status_led_display_color(status_led);
         let (led_rect, led_response) = ui.allocate_exact_size(egui::vec2(17.0, 17.0), egui::Sense::click());
+        ui.painter().circle_filled(
+            led_rect.center(),
+            8.0,
+            color.gamma_multiply((0.12 + brightness * 0.20).clamp(0.12, 0.32)),
+        );
         ui.painter().circle_filled(led_rect.center(), 6.0, color);
         ui.painter().circle_stroke(
             led_rect.center(),
@@ -148,11 +156,33 @@ fn draw_hardware_status(app: &mut PealayerApp, ui: &mut egui::Ui) {
         if let Some(current_ma) = telemetry.current_ma { ui.label(format!("{current_ma} mA")); }
         if let Some(temperature) = telemetry.led_temperature_centi_c { ui.label(format!("{:.1} °C", f64::from(temperature) / 100.0)); }
     }
-    if let Some(warning) = capabilities.warnings.first() {
+    if app.status_bar.warnings && let Some(warning) = capabilities.warnings.first() {
         let response = ui.colored_label(ui.visuals().warn_fg_color, format!("{} {}", crate::ui::icons::WARNING, warning.code));
         if response.on_hover_text(&warning.message).clicked() {
             app.preferences_tab = 2;
             app.show_preferences_dialog = true;
         }
+    }
+}
+
+fn status_led_display_color(status_led: &crate::four_d::controller::HardwareStatusLed) -> egui::Color32 {
+    egui::Color32::from_rgb(status_led.red, status_led.green, status_led.blue)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn physical_status_led_uses_authoritative_rgb_without_double_dimming() {
+        let led = crate::four_d::controller::HardwareStatusLed {
+            red: 0,
+            green: 255,
+            blue: 0,
+            brightness: 32,
+            effect: 0,
+            condition: 0,
+        };
+        assert_eq!(status_led_display_color(&led), egui::Color32::from_rgb(0, 255, 0));
     }
 }

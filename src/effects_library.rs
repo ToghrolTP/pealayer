@@ -3,17 +3,35 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct UserStripEffectPreset {
     pub id: Uuid,
     pub name: String,
     pub category: String,
+    pub description: String,
     pub hardware_effect_id: String,
     pub duration_ms: u64,
 }
 
 impl Default for UserStripEffectPreset {
     fn default() -> Self {
-        Self { id: Uuid::new_v4(), name: String::new(), category: "Addressable strip".to_string(), hardware_effect_id: String::new(), duration_ms: 5_000 }
+        Self {
+            id: Uuid::new_v4(),
+            name: String::new(),
+            category: "Addressable strip".to_string(),
+            description: String::new(),
+            hardware_effect_id: String::new(),
+            duration_ms: 5_000,
+        }
+    }
+}
+
+impl UserStripEffectPreset {
+    pub fn duplicate(&self) -> Self {
+        let mut duplicate = self.clone();
+        duplicate.id = Uuid::new_v4();
+        duplicate.name = format!("{} copy", self.name);
+        duplicate
     }
 }
 
@@ -39,4 +57,33 @@ pub fn save(presets: &[UserStripEffectPreset]) -> Result<(), String> {
     if let Some(parent) = path.parent() { std::fs::create_dir_all(parent).map_err(|error| format!("create effect library directory: {error}"))?; }
     let json = serde_json::to_string_pretty(presets).map_err(|error| format!("encode effect library: {error}"))?;
     std::fs::write(&path, json).map_err(|error| format!("save effect library {}: {error}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_effect_files_gain_new_optional_fields_without_losing_identity() {
+        let preset: UserStripEffectPreset = serde_json::from_str(
+            r#"{"id":"129160c3-8bda-4e5e-b771-e9243d084ba8","name":"Police","category":"Lighting","hardware_effect_id":"police","duration_ms":5000}"#,
+        )
+        .expect("old effect JSON should remain readable");
+        assert_eq!(preset.name, "Police");
+        assert!(preset.description.is_empty());
+    }
+
+    #[test]
+    fn duplicating_an_effect_preserves_content_but_allocates_a_new_id() {
+        let original = UserStripEffectPreset {
+            name: "Thunder".into(),
+            description: "Sharp flash".into(),
+            hardware_effect_id: "white-thunder".into(),
+            ..Default::default()
+        };
+        let duplicate = original.duplicate();
+        assert_ne!(duplicate.id, original.id);
+        assert_eq!(duplicate.hardware_effect_id, original.hardware_effect_id);
+        assert_eq!(duplicate.description, original.description);
+    }
 }

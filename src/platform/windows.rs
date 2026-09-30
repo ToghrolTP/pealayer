@@ -6,6 +6,7 @@ static ORIGINAL_WINDOW_PROC: AtomicIsize = AtomicIsize::new(0);
 static SHELL_COMMAND: AtomicU32 = AtomicU32::new(0);
 static SHELL_PAUSED: AtomicBool = AtomicBool::new(true);
 static SHELL_MUTED: AtomicBool = AtomicBool::new(false);
+static SHELL_HAS_MEDIA: AtomicBool = AtomicBool::new(false);
 
 #[cfg(target_os = "windows")]
 pub struct GuiOwnershipGuard(windows::Win32::Foundation::HANDLE);
@@ -616,6 +617,7 @@ unsafe extern "system" fn shell_window_proc(
                 hwnd.0 as isize,
                 SHELL_PAUSED.load(Ordering::Relaxed),
                 SHELL_MUTED.load(Ordering::Relaxed),
+                SHELL_HAS_MEDIA.load(Ordering::Relaxed),
             ) {
                 SHELL_COMMAND.store(command, Ordering::Release);
             }
@@ -675,9 +677,10 @@ pub fn install_shell_message_hook(hwnd_raw: isize) -> Result<(), String> {
 #[cfg(not(target_os = "windows"))]
 pub fn install_shell_message_hook(_hwnd_raw: isize) -> Result<(), String> { Ok(()) }
 
-pub fn update_shell_command_state(is_paused: bool, is_muted: bool) {
+pub fn update_shell_command_state(is_paused: bool, is_muted: bool, has_media: bool) {
     SHELL_PAUSED.store(is_paused, Ordering::Relaxed);
     SHELL_MUTED.store(is_muted, Ordering::Relaxed);
+    SHELL_HAS_MEDIA.store(has_media, Ordering::Relaxed);
 }
 
 pub fn take_shell_command() -> Option<u32> {
@@ -828,12 +831,93 @@ pub fn remove_system_tray_icon(hwnd_raw: isize) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
-pub fn show_tray_popup_menu(hwnd_raw: isize, is_paused: bool, is_muted: bool) -> Option<u32> {
+fn install_tray_menu_icons(menu: isize) -> Vec<isize> {
+    #[link(name = "gdi32")]
+    unsafe extern "system" {
+        fn CreateBitmap(
+            width: i32,
+            height: i32,
+            planes: u32,
+            bits_per_pixel: u32,
+            bits: *const std::ffi::c_void,
+        ) -> isize;
+    }
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn SetMenuItemBitmaps(
+            menu: isize,
+            item: u32,
+            flags: u32,
+            unchecked: isize,
+            checked: isize,
+        ) -> i32;
+    }
+
+    const WINDOW: [u16; 16] = [0x0000, 0x7FFE, 0x4002, 0x5FFA, 0x4002, 0x4002, 0x4002, 0x4002, 0x4002, 0x4002, 0x4002, 0x4002, 0x4002, 0x7FFE, 0x0000, 0x0000];
+    const PLAY: [u16; 16] = [0x0000, 0x1000, 0x1800, 0x1C00, 0x1E00, 0x1F00, 0x1F80, 0x1FC0, 0x1FC0, 0x1F80, 0x1F00, 0x1E00, 0x1C00, 0x1800, 0x1000, 0x0000];
+    const SPEAKER: [u16; 16] = [0x0000, 0x0300, 0x0700, 0x0F30, 0x1F18, 0x3F0C, 0x7F66, 0x7F62, 0x7F62, 0x7F66, 0x3F0C, 0x1F18, 0x0F30, 0x0700, 0x0300, 0x0000];
+    const FOLDER: [u16; 16] = [0x0000, 0x0000, 0x3C00, 0x4200, 0x7FF0, 0x4010, 0x4010, 0x7FFE, 0x4002, 0x4002, 0x4002, 0x4002, 0x4002, 0x7FFE, 0x0000, 0x0000];
+    const CLOSE: [u16; 16] = [0x0000, 0x4002, 0x6006, 0x300C, 0x1818, 0x0C30, 0x0660, 0x03C0, 0x03C0, 0x0660, 0x0C30, 0x1818, 0x300C, 0x6006, 0x4002, 0x0000];
+
+    [
+        (TRAY_CMD_SHOW, WINDOW),
+        (TRAY_CMD_PLAYPAUSE, PLAY),
+        (TRAY_CMD_MUTE, SPEAKER),
+        (TRAY_CMD_OPEN, FOLDER),
+        (TRAY_CMD_EXIT, CLOSE),
+    ]
+    .into_iter()
+    .filter_map(|(command, bits)| {
+        let bitmap = unsafe {
+            CreateBitmap(16, 16, 1, 1, bits.as_ptr().cast::<std::ffi::c_void>())
+        };
+        if bitmap == 0 {
+            return None;
+        }
+        unsafe {
+            let _ = SetMenuItemBitmaps(menu, command, 0, bitmap, bitmap);
+        }
+        Some(bitmap)
+    })
+    .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn delete_tray_menu_icons(icons: &[isize]) {
+    #[link(name = "gdi32")]
+    unsafe extern "system" {
+        fn DeleteObject(object: isize) -> i32;
+    }
+    for icon in icons {
+        unsafe {
+            let _ = DeleteObject(*icon);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn set_menu_default_item(menu: isize, command: u32) {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn SetMenuDefaultItem(menu: isize, item: u32, by_position: i32) -> i32;
+    }
+    unsafe {
+        let _ = SetMenuDefaultItem(menu, command, 0);
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn show_tray_popup_menu(
+    hwnd_raw: isize,
+    is_paused: bool,
+    is_muted: bool,
+    has_media: bool,
+) -> Option<u32> {
     use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, PostMessageW,
-        SetForegroundWindow, TrackPopupMenu, MF_SEPARATOR, MF_STRING, TPM_NONOTIFY,
-        TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_NULL,
+        SetForegroundWindow, TrackPopupMenu, MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING,
+        TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_NULL,
     };
     use windows::core::PCWSTR;
 
@@ -848,19 +932,26 @@ pub fn show_tray_popup_menu(hwnd_raw: isize, is_paused: bool, is_muted: bool) ->
 
         let hmenu = CreatePopupMenu().ok()?;
 
-        let playpause_text: Vec<u16> = tray_menu_label(TRAY_CMD_PLAYPAUSE, is_paused)
+        let show_text: Vec<u16> = format!("{}\tWin+Shift+P", tray_menu_label(TRAY_CMD_SHOW, false))
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
-        let mute_text: Vec<u16> = tray_menu_label(TRAY_CMD_MUTE, is_muted)
+        let playpause_text: Vec<u16> = format!(
+            "{}\tSpace",
+            tray_menu_label(TRAY_CMD_PLAYPAUSE, is_paused)
+        )
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
-        let open_text: Vec<u16> = tray_menu_label(TRAY_CMD_OPEN, false)
+        let mute_text: Vec<u16> = format!("{}\tM", tray_menu_label(TRAY_CMD_MUTE, is_muted))
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
-        let exit_text: Vec<u16> = tray_menu_label(TRAY_CMD_EXIT, false)
+        let open_text: Vec<u16> = format!("{}\tCtrl+O", tray_menu_label(TRAY_CMD_OPEN, false))
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let exit_text: Vec<u16> = format!("{}\tAlt+F4", tray_menu_label(TRAY_CMD_EXIT, false))
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
@@ -868,12 +959,24 @@ pub fn show_tray_popup_menu(hwnd_raw: isize, is_paused: bool, is_muted: bool) ->
         let _ = AppendMenuW(
             hmenu,
             MF_STRING,
+            TRAY_CMD_SHOW as usize,
+            PCWSTR(show_text.as_ptr()),
+        );
+        let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
+        let media_flags = if has_media {
+            MF_STRING
+        } else {
+            MF_STRING | MF_DISABLED | MF_GRAYED
+        };
+        let _ = AppendMenuW(
+            hmenu,
+            media_flags,
             TRAY_CMD_PLAYPAUSE as usize,
             PCWSTR(playpause_text.as_ptr()),
         );
         let _ = AppendMenuW(
             hmenu,
-            MF_STRING,
+            media_flags,
             TRAY_CMD_MUTE as usize,
             PCWSTR(mute_text.as_ptr()),
         );
@@ -891,6 +994,9 @@ pub fn show_tray_popup_menu(hwnd_raw: isize, is_paused: bool, is_muted: bool) ->
             PCWSTR(exit_text.as_ptr()),
         );
 
+        let icons = install_tray_menu_icons(hmenu.0 as isize);
+        set_menu_default_item(hmenu.0 as isize, TRAY_CMD_SHOW);
+
         let _ = SetForegroundWindow(hwnd);
         let cmd = TrackPopupMenu(
             hmenu,
@@ -903,6 +1009,7 @@ pub fn show_tray_popup_menu(hwnd_raw: isize, is_paused: bool, is_muted: bool) ->
         );
         let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
         let _ = DestroyMenu(hmenu);
+        delete_tray_menu_icons(&icons);
 
         if cmd.0 != 0 {
             Some(cmd.0 as u32)
@@ -928,7 +1035,12 @@ pub fn remove_system_tray_icon(_hwnd_raw: isize) -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn show_tray_popup_menu(_hwnd_raw: isize, _is_paused: bool, _is_muted: bool) -> Option<u32> {
+pub fn show_tray_popup_menu(
+    _hwnd_raw: isize,
+    _is_paused: bool,
+    _is_muted: bool,
+    _has_media: bool,
+) -> Option<u32> {
     None
 }
 
@@ -1055,14 +1167,14 @@ mod tests {
             assert!(register_system_tray_icon(0, "test").is_err());
             assert!(update_system_tray_icon(0, "test").is_err());
             assert!(remove_system_tray_icon(0).is_err());
-            assert_eq!(show_tray_popup_menu(0, false, false), None);
+            assert_eq!(show_tray_popup_menu(0, false, false, false), None);
         }
         #[cfg(not(target_os = "windows"))]
         {
             assert!(register_system_tray_icon(0, "test").is_ok());
             assert!(update_system_tray_icon(0, "test").is_ok());
             assert!(remove_system_tray_icon(0).is_ok());
-            assert_eq!(show_tray_popup_menu(0, false, false), None);
+            assert_eq!(show_tray_popup_menu(0, false, false, false), None);
         }
     }
 

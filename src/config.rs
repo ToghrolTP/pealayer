@@ -69,6 +69,8 @@ pub struct StatusBarConfig {
     pub media_rate: bool,
     pub hardware: bool,
     pub telemetry: bool,
+    pub status_rgb: bool,
+    pub warnings: bool,
     pub workspace: bool,
 }
 
@@ -78,6 +80,8 @@ impl Default for StatusBarConfig {
             media_rate: true,
             hardware: true,
             telemetry: true,
+            status_rgb: true,
+            warnings: true,
             workspace: true,
         }
     }

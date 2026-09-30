@@ -61,6 +61,8 @@ pub struct HardwareBoardProfile {
 pub struct HardwareCapabilities {
     pub board_connected: bool,
     pub board_name: String,
+    pub board_identity: HardwareBoardIdentity,
+    pub port: HardwarePort,
     pub host_instance_id: String,
     pub capability_bits: u32,
     pub active_relays: std::collections::BTreeSet<u8>,
@@ -76,10 +78,57 @@ pub struct HardwareCapabilities {
     pub supports_addressable_led: bool,
     pub status_led: Option<HardwareStatusLed>,
     pub status_led_revision: u64,
+    pub settings: Option<HardwareBoardSettings>,
+    pub front_panel: Option<HardwareFrontPanel>,
     pub telemetry: HardwareTelemetry,
     pub warnings: Vec<HardwareWarning>,
     pub strip_effects: Vec<HardwareStripEffect>,
     pub macros: Vec<HardwareMacro>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HardwareBoardIdentity {
+    pub board_kind: u64,
+    pub identity_schema: u64,
+    pub build_hash: Option<u64>,
+    pub build_timestamp: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HardwarePort {
+    pub name: String,
+    pub product: String,
+    pub vid: String,
+    pub pid: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HardwareBoardSettings {
+    pub silent: bool,
+    pub light_mode: u8,
+    pub on_brightness: u8,
+    pub off_brightness: u8,
+    pub display_brightness: u8,
+    pub status_brightness: u8,
+    pub output_persistence: u8,
+    pub stream_period_ms: u64,
+    pub default_page: u8,
+    pub motion_break_ms: u64,
+    pub persisted: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HardwareFrontPanel {
+    pub raw_segments: Vec<u8>,
+    pub brightness: u8,
+    pub blink: bool,
+    pub pressed_keys: u8,
+    pub menu_page: u8,
+    pub program_mode: u8,
+    pub lcd_available: bool,
+    pub lcd_address: u8,
+    pub lcd_line_1: String,
+    pub lcd_line_2: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -725,6 +774,44 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    let board_identity = HardwareBoardIdentity {
+        board_kind: snapshot
+            .pointer("/hello/board_kind")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        identity_schema: snapshot
+            .pointer("/hello/identity_schema")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        build_hash: snapshot.pointer("/hello/build_hash").and_then(Value::as_u64),
+        build_timestamp: snapshot
+            .pointer("/hello/build_timestamp")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string),
+    };
+    let port = HardwarePort {
+        name: snapshot
+            .pointer("/port/name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        product: snapshot
+            .pointer("/port/product")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        vid: snapshot
+            .pointer("/port/vid")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        pid: snapshot
+            .pointer("/port/pid")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    };
     let host_instance_id = snapshot
         .get("host_instance_id")
         .and_then(Value::as_str)
@@ -843,7 +930,6 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
             ))
         })
         .collect::<std::collections::BTreeMap<_, _>>();
-    let has_control_catalog = catalog.get("controls").and_then(Value::as_array).is_some();
     let mut controls = catalog
         .get("controls")
         .and_then(Value::as_array)
@@ -942,17 +1028,6 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
             .then_with(|| left.key.cmp(&right.key))
     });
 
-    let relay_control_keys = controls
-        .iter()
-        .filter(|control| control.kind == "relay")
-        .map(|control| control.key.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    let pwm_control_keys = controls
-        .iter()
-        .filter(|control| control.kind == "mosfet")
-        .map(|control| control.key.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-
     let relays = if board_connected && capability_bits & CAPABILITY_RELAY_MOTION != 0 {
         outputs
             .iter()
@@ -960,7 +1035,6 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
                 kind == "relay"
                     && output.control == "relay"
                     && output.id != 0
-                    && (!has_control_catalog || relay_control_keys.contains(output.key.as_str()))
             })
             .map(|(_, output)| output.clone())
             .collect()
@@ -971,9 +1045,7 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
         outputs
             .iter()
             .filter(|(kind, output)| {
-                kind == "pwm"
-                    && output.control == "pwm-user"
-                    && (!has_control_catalog || pwm_control_keys.contains(output.key.as_str()))
+                kind == "pwm" && output.control == "pwm-user"
             })
             .map(|(_, output)| output.clone())
             .collect()
@@ -1002,6 +1074,109 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
         .get("status_led_revision")
         .and_then(value_as_u64)
         .unwrap_or(0);
+    let settings = (board_connected
+        && snapshot
+            .get("have_settings")
+            .and_then(Value::as_bool)
+            .unwrap_or(false))
+    .then(|| HardwareBoardSettings {
+        silent: snapshot
+            .pointer("/settings/flags")
+            .and_then(Value::as_u64)
+            .is_some_and(|flags| flags & 1 != 0),
+        light_mode: snapshot
+            .pointer("/settings/light_mode")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
+        on_brightness: snapshot
+            .pointer("/settings/on_brightness")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
+        off_brightness: snapshot
+            .pointer("/settings/off_brightness")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
+        display_brightness: snapshot
+            .pointer("/settings/display_brightness")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
+        status_brightness: snapshot
+            .pointer("/settings/status_brightness")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
+        output_persistence: snapshot
+            .pointer("/settings/output_persistence")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
+        stream_period_ms: snapshot
+            .pointer("/settings/stream_period_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        default_page: snapshot
+            .pointer("/settings/default_page")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
+        motion_break_ms: snapshot
+            .pointer("/settings/motion_break_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        persisted: snapshot
+            .pointer("/settings/persisted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    });
+    let front_panel = (board_connected
+        && snapshot
+            .get("have_front_panel")
+            .and_then(Value::as_bool)
+            .unwrap_or(false))
+    .then(|| HardwareFrontPanel {
+        raw_segments: snapshot
+            .pointer("/front_panel/raw_segments")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value.as_u64().and_then(|value| u8::try_from(value).ok()))
+            .collect(),
+        brightness: snapshot
+            .pointer("/front_panel/brightness")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
+        blink: snapshot
+            .pointer("/front_panel/blink")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        pressed_keys: snapshot
+            .pointer("/front_panel/pressed_keys")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
+        menu_page: snapshot
+            .pointer("/front_panel/menu_page")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
+        program_mode: snapshot
+            .pointer("/front_panel/program_mode")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
+        lcd_available: snapshot
+            .pointer("/front_panel/lcd_available")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        lcd_address: snapshot
+            .pointer("/front_panel/lcd_address")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
+        lcd_line_1: snapshot
+            .pointer("/front_panel/lcd_line_1")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        lcd_line_2: snapshot
+            .pointer("/front_panel/lcd_line_2")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    });
     let empty_status = Value::Null;
     let status = snapshot.get("status").unwrap_or(&empty_status);
     let telemetry = telemetry_from_status(status, board_connected);
@@ -1097,6 +1272,8 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
     HardwareCapabilities {
         board_connected,
         board_name,
+        board_identity,
+        port,
         host_instance_id,
         capability_bits,
         active_relays,
@@ -1112,6 +1289,8 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
         supports_addressable_led: board_connected && capability_bits & CAPABILITY_ADDRESSABLE_LED != 0,
         status_led,
         status_led_revision,
+        settings,
+        front_panel,
         telemetry,
         warnings,
         strip_effects,
@@ -1401,12 +1580,89 @@ mod tests {
     }
 
     #[test]
+    fn semantic_profiles_do_not_hide_advertised_raw_relay_outputs() {
+        let snapshot = json!({
+            "connected": true,
+            "hello": {"capabilities": CAPABILITY_RELAY_MOTION}
+        });
+        let catalog = json!({
+            "peripherals": [
+                {"key":"relay.1","kind":"relay","role":"motion-left-up","index":1,"default_name":"R1","control":"relay"},
+                {"key":"relay.2","kind":"relay","role":"motion-left-down","index":2,"default_name":"R2","control":"relay"},
+                {"key":"relay.3","kind":"relay","role":"motion-right-up","index":3,"default_name":"R3","control":"relay"},
+                {"key":"relay.4","kind":"relay","role":"motion-right-down","index":4,"default_name":"R4","control":"relay"}
+            ],
+            "controls": [
+                {"key":"seat.left","kind":"motion","default_name":"Left seat","control":"seat","actions":[]}
+            ]
+        });
+        let parsed = parse_hardware_capabilities(&snapshot, &catalog);
+        assert_eq!(
+            parsed.relays.iter().map(|relay| relay.id).collect::<Vec<_>>(),
+            [1, 2, 3, 4]
+        );
+    }
+
+    #[test]
     fn disconnected_snapshot_exposes_no_live_controls() {
         let snapshot = json!({"connected": false, "hello": {"capabilities": u32::MAX}});
         let catalog = json!({"peripherals": [{"key":"relay.5","kind":"relay","role":"user-output","index":5,"default_name":"Relay","control":"relay"}]});
         let parsed = parse_hardware_capabilities(&snapshot, &catalog);
         assert!(parsed.relays.is_empty());
         assert!(parsed.pwm_channels.is_empty());
+    }
+
+    #[test]
+    fn parses_live_board_identity_settings_port_and_front_panel_without_defaults() {
+        let snapshot = json!({
+            "connected": true,
+            "hello": {
+                "name": "CAFE-01",
+                "board_kind": 7,
+                "identity_schema": 2,
+                "build_hash": 0xA97EC116_u64,
+                "build_timestamp": "260929223718",
+                "capabilities": 0
+            },
+            "port": {"name":"COM3", "product":"USB-SERIAL CH340", "vid":"1A86", "pid":"7523"},
+            "have_settings": true,
+            "settings": {
+                "flags": 1,
+                "light_mode": 2,
+                "on_brightness": 210,
+                "off_brightness": 12,
+                "display_brightness": 5,
+                "status_brightness": 128,
+                "output_persistence": 3,
+                "stream_period_ms": 25,
+                "default_page": 4,
+                "motion_break_ms": 180,
+                "persisted": true
+            },
+            "have_front_panel": true,
+            "front_panel": {
+                "raw_segments": [63, 6, 91, 79],
+                "brightness": 5,
+                "blink": true,
+                "pressed_keys": 3,
+                "menu_page": 4,
+                "program_mode": 2,
+                "lcd_available": true,
+                "lcd_address": 39,
+                "lcd_line_1": "Cinema",
+                "lcd_line_2": "Ready"
+            }
+        });
+        let parsed = parse_hardware_capabilities(&snapshot, &json!({}));
+        assert_eq!(parsed.board_name, "CAFE-01");
+        assert_eq!(parsed.board_identity.build_hash, Some(0xA97EC116));
+        assert_eq!(parsed.port.name, "COM3");
+        let settings = parsed.settings.expect("settings must be advertised");
+        assert!(settings.silent);
+        assert_eq!(settings.stream_period_ms, 25);
+        let front_panel = parsed.front_panel.expect("front panel must be advertised");
+        assert_eq!(front_panel.raw_segments, [63, 6, 91, 79]);
+        assert_eq!(front_panel.lcd_line_2, "Ready");
     }
 
     fn live_capabilities() -> HardwareCapabilities {
