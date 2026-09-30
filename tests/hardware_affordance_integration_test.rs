@@ -33,6 +33,7 @@ fn effect_drop_uses_only_the_live_advertised_output() {
         target: HardwareTarget::Relay(42),
         actions: generate_constant(42, true, 500),
         controller_macro: None,
+        controller_strip_effect: None,
     };
 
     assert!(app.handle_effect_drop(&payload, 0, 1.0));
@@ -66,6 +67,7 @@ fn a_different_advertised_output_rejects_the_payload() {
         target: HardwareTarget::Relay(42),
         actions: generate_constant(42, true, 500),
         controller_macro: None,
+        controller_strip_effect: None,
     };
     assert!(!app.handle_effect_drop(&payload, 0, 1.0));
     assert!(app.timeline.instances.is_empty());
