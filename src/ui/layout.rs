@@ -2,6 +2,58 @@ use crate::app::{EffectDragPayload, PealayerApp};
 use eframe::egui;
 use egui_dock::TabViewer;
 
+fn drag_translation(
+    pointer: egui::Pos2,
+    source_min: egui::Pos2,
+    grab_offset: egui::Vec2,
+) -> egui::Vec2 {
+    pointer - source_min - grab_offset
+}
+
+fn pwm_percent(raw: u16) -> f64 {
+    f64::from(raw.min(4095)) * 100.0 / 4095.0
+}
+
+fn pwm_raw(percent: f64) -> u16 {
+    (percent.clamp(0.0, 100.0) * 4095.0 / 100.0).round() as u16
+}
+
+fn effect_drag_source<R>(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    payload: EffectDragPayload,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    let offset_id = id.with("pointer-offset");
+    if ui.ctx().is_being_dragged(id) {
+        egui::DragAndDrop::set_payload(ui.ctx(), payload);
+        let layer_id = egui::LayerId::new(egui::Order::Tooltip, id);
+        let response = ui.scope_builder(egui::UiBuilder::new().layer_id(layer_id), add_contents);
+        if let Some(pointer) = ui.ctx().pointer_interact_pos() {
+            let offset = ui
+                .data_mut(|data| data.get_temp::<egui::Vec2>(offset_id))
+                .unwrap_or_else(|| response.response.rect.size() * 0.5);
+            let translation = drag_translation(pointer, response.response.rect.min, offset);
+            ui.ctx().transform_layer_shapes(
+                layer_id,
+                egui::emath::TSTransform::from_translation(translation),
+            );
+        }
+        response
+    } else {
+        let response = ui.scope(add_contents);
+        let drag = ui
+            .interact(response.response.rect, id, egui::Sense::drag())
+            .on_hover_cursor(egui::CursorIcon::Grab);
+        if drag.drag_started()
+            && let Some(pointer) = ui.ctx().pointer_interact_pos()
+        {
+            ui.data_mut(|data| data.insert_temp(offset_id, pointer - response.response.rect.min));
+        }
+        egui::InnerResponse::new(response.inner, drag | response.response)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum TimelineTrackKind {
     Video,
@@ -234,7 +286,61 @@ fn update_control_name(
     );
 }
 
-fn draw_control_card(
+fn update_control_group(
+    app: &PealayerApp,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+    requested_group: String,
+) {
+    let expected_revision = capabilities
+        .board_profile
+        .as_ref()
+        .map(|profile| profile.revision.clone())
+        .filter(|revision| !revision.is_empty());
+    let _ = app.engine_handle.sender.send(
+        crate::four_d::engine::EngineMessage::UpdatePeripheralPresentation {
+            key: control.key.clone(),
+            name: None,
+            icon: None,
+            group: Some(requested_group.trim().to_string()),
+            expected_revision,
+            fallback_names: capabilities.peripheral_names.clone(),
+        },
+    );
+}
+
+fn is_motion_control(control: &crate::four_d::controller::HardwareControl) -> bool {
+    control.kind.eq_ignore_ascii_case("motion")
+        || control.control.to_ascii_lowercase().contains("motion")
+        || control.actions.iter().any(|action| {
+            matches!(
+                action.verb.to_ascii_lowercase().as_str(),
+                "up" | "down" | "stop"
+            )
+        })
+}
+
+fn invoke_control_action(app: &PealayerApp, action_id: &str) {
+    let _ = app.engine_handle.sender.send(
+        crate::four_d::engine::EngineMessage::InvokeControllerAction {
+            action_id: action_id.to_string(),
+        },
+    );
+}
+
+fn responsive_action_label(
+    action: &crate::four_d::controller::HardwareAction,
+    width: f32,
+) -> String {
+    let icon = crate::ui::icons::action(&action.verb);
+    if width < 92.0 {
+        icon.to_string()
+    } else {
+        format!("{icon} {}", action.name)
+    }
+}
+
+fn draw_compact_control_card(
     app: &mut PealayerApp,
     ui: &mut egui::Ui,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
@@ -242,7 +348,280 @@ fn draw_control_card(
 ) {
     let edit_id = ui.make_persistent_id(("control-name-editing", control.key.as_str()));
     let draft_id = ui.make_persistent_id(("control-name-draft", control.key.as_str()));
+    let group_edit_id = ui.make_persistent_id(("control-group-editing", control.key.as_str()));
+    let group_draft_id = ui.make_persistent_id(("control-group-draft", control.key.as_str()));
+    let relay_id = relay_id_from_control_key(&control.key);
+    let indicator_state = control_indicator_state(capabilities, control);
+    let card = egui::Frame::group(ui.style())
+        .inner_margin(egui::Margin::symmetric(9, 6))
+        .corner_radius(7.0)
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.set_max_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(crate::ui::icons::control(&control.kind, &control.icon))
+                        .size(17.0),
+                );
+                let indicator = draw_control_indicator(app, ui, indicator_state, relay_id.is_some());
+                if indicator.clicked() && let Some(id) = relay_id {
+                    let turn_on = indicator_state != ControlIndicatorState::Active;
+                    let _ = app.engine_handle.sender.send(
+                        crate::four_d::engine::EngineMessage::ControllerCall {
+                            method: "controller.command.execute".to_string(),
+                            params: serde_json::json!({
+                                "command": format!("relay {id} {}", if turn_on { "on" } else { "off" }),
+                            }),
+                        },
+                    );
+                }
+
+                let editing = ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
+                let editing_group = ui
+                    .data_mut(|data| data.get_temp::<bool>(group_edit_id).unwrap_or(false));
+                if editing {
+                    let mut draft = ui.data_mut(|data| {
+                        data.get_temp::<String>(draft_id)
+                            .unwrap_or_else(|| control.name.clone())
+                    });
+                    let edit_width = (ui.available_width() * 0.42).clamp(64.0, 190.0);
+                    let edit = ui.add_sized(
+                        [edit_width, 24.0],
+                        egui::TextEdit::singleline(&mut draft).hint_text(&control.default_name),
+                    );
+                    if edit.changed() {
+                        ui.data_mut(|data| data.insert_temp(draft_id, draft.clone()));
+                    }
+                    if ui.button(crate::ui::icons::FLOPPY_DISK).clicked()
+                        || (edit.lost_focus()
+                            && ui.input(|input| input.key_pressed(egui::Key::Enter)))
+                    {
+                        update_control_name(app, capabilities, control, draft);
+                        ui.data_mut(|data| data.insert_temp(edit_id, false));
+                    }
+                    if ui.button(crate::ui::icons::X).clicked() {
+                        ui.data_mut(|data| data.insert_temp(edit_id, false));
+                    }
+                } else if editing_group {
+                    let mut draft = ui.data_mut(|data| {
+                        data.get_temp::<String>(group_draft_id)
+                            .unwrap_or_else(|| control.group.clone())
+                    });
+                    let edit_width = (ui.available_width() * 0.42).clamp(64.0, 190.0);
+                    let edit = ui.add_sized(
+                        [edit_width, 24.0],
+                        egui::TextEdit::singleline(&mut draft).hint_text(app.tr("No group")),
+                    );
+                    if edit.changed() {
+                        ui.data_mut(|data| data.insert_temp(group_draft_id, draft.clone()));
+                    }
+                    if ui.button(crate::ui::icons::FLOPPY_DISK).clicked()
+                        || (edit.lost_focus()
+                            && ui.input(|input| input.key_pressed(egui::Key::Enter)))
+                    {
+                        update_control_group(app, capabilities, control, draft);
+                        ui.data_mut(|data| data.insert_temp(group_edit_id, false));
+                    }
+                    if ui.button(crate::ui::icons::X).clicked() {
+                        ui.data_mut(|data| data.insert_temp(group_edit_id, false));
+                    }
+                } else {
+                    let title = crate::ui::i18n::visual_text(app.language, &control.name);
+                    let reserved = if is_pwm_control(control) {
+                        150.0
+                    } else if !control.actions.is_empty() {
+                        (control.actions.len().min(3) as f32 * 34.0) + 8.0
+                    } else if relay_id.is_some() {
+                        76.0
+                    } else {
+                        8.0
+                    };
+                    let response = ui.add_sized(
+                        [(ui.available_width() - reserved).max(48.0), 24.0],
+                        egui::Label::new(egui::RichText::new(&title).strong())
+                            .truncate()
+                            .sense(egui::Sense::click()),
+                    );
+                    if response.clicked() {
+                        ui.data_mut(|data| {
+                            data.insert_temp(draft_id, control.name.clone());
+                            data.insert_temp(edit_id, true);
+                        });
+                    }
+                    response.on_hover_text(format!("{} — {}", title, app.tr("Rename")));
+                }
+
+                if is_pwm_control(control) {
+                    if let Some(channel) = capabilities
+                        .pwm_channels
+                        .iter()
+                        .find(|channel| channel.key == control.key)
+                    {
+                        let value_id = ui.make_persistent_id(("pwm_value", channel.id));
+                        let raw = ui.data_mut(|data| {
+                            data.get_temp::<u16>(value_id).unwrap_or_else(|| {
+                                if capabilities.telemetry.pwm_channel == Some(channel.id) {
+                                    capabilities.telemetry.pwm_value.unwrap_or(0)
+                                } else {
+                                    0
+                                }
+                            })
+                        });
+                        let mut percent = pwm_percent(raw);
+                        let width = ui.available_width().max(96.0);
+                        let response = ui.add_sized(
+                            [width, 24.0],
+                            egui::Slider::new(&mut percent, 0.0..=100.0)
+                                .fixed_decimals(1)
+                                .suffix("%"),
+                        );
+                        let raw = pwm_raw(percent);
+                        ui.data_mut(|data| data.insert_temp(value_id, raw));
+                        if response.drag_stopped() || response.lost_focus() {
+                            let _ = app.engine_handle.sender.send(
+                                crate::four_d::engine::EngineMessage::ControllerCall {
+                                    method: "controller.pwm.set".to_string(),
+                                    params: serde_json::json!({"channel": channel.id, "value": raw}),
+                                },
+                            );
+                        }
+                    }
+                } else if !control.actions.is_empty() {
+                    let is_motion = is_motion_control(control);
+                    let stop = control
+                        .actions
+                        .iter()
+                        .find(|action| action.verb.eq_ignore_ascii_case("stop"));
+                    let show_stop = stop.is_some()
+                        && (app.motion_control_mode == crate::config::MotionControlMode::Hold
+                            || !capabilities.active_relays.is_empty());
+                    let mut ordered = control
+                        .actions
+                        .iter()
+                        .filter(|action| !action.verb.eq_ignore_ascii_case("stop"))
+                        .collect::<Vec<_>>();
+                    if show_stop && let Some(stop) = stop {
+                        ordered.insert(ordered.len().min(1), stop);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        for action in ordered.into_iter().rev() {
+                            let response = ui
+                                .add_enabled(
+                                    !app.estop_active,
+                                    egui::Button::new(crate::ui::icons::action(&action.verb))
+                                        .min_size(egui::vec2(28.0, 26.0)),
+                                )
+                                .on_hover_text(crate::ui::i18n::visual_text(
+                                    app.language,
+                                    &action.name,
+                                ));
+                            if is_motion
+                                && !action.verb.eq_ignore_ascii_case("stop")
+                                && app.motion_control_mode == crate::config::MotionControlMode::Hold
+                                && stop.is_some()
+                            {
+                                let held_id = ui.make_persistent_id((
+                                    "compact-held-motion-action",
+                                    action.id.as_str(),
+                                ));
+                                let was_held = ui.data_mut(|data| {
+                                    data.get_temp::<bool>(held_id).unwrap_or(false)
+                                });
+                                let held = response.is_pointer_button_down_on();
+                                if held && !was_held {
+                                    invoke_control_action(app, &action.id);
+                                } else if !held && was_held {
+                                    invoke_control_action(app, &stop.expect("checked above").id);
+                                }
+                                ui.data_mut(|data| data.insert_temp(held_id, held));
+                            } else if response.clicked() {
+                                invoke_control_action(app, &action.id);
+                            }
+                        }
+                    });
+                } else if let Some(id) = relay_id {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        for (state, icon, label) in [
+                            (false, crate::ui::icons::STOP_CIRCLE, app.tr("OFF")),
+                            (true, crate::ui::icons::LIGHTNING, app.tr("ON")),
+                        ] {
+                            if ui
+                                .add_enabled(
+                                    !app.estop_active,
+                                    egui::Button::new(icon).min_size(egui::vec2(28.0, 26.0)),
+                                )
+                                .on_hover_text(label)
+                                .clicked()
+                            {
+                                let _ = app.engine_handle.sender.send(
+                                    crate::four_d::engine::EngineMessage::ControllerCall {
+                                        method: "controller.command.execute".to_string(),
+                                        params: serde_json::json!({
+                                            "command": format!("relay {id} {}", if state { "on" } else { "off" })
+                                        }),
+                                    },
+                                );
+                            }
+                        }
+                    });
+                }
+            });
+        });
+
+    card.response.context_menu(|ui| {
+        if ui
+            .button(format!(
+                "{} {}",
+                crate::ui::icons::PENCIL_SIMPLE,
+                app.tr("Rename")
+            ))
+            .clicked()
+        {
+            ui.data_mut(|data| {
+                data.insert_temp(draft_id, control.name.clone());
+                data.insert_temp(edit_id, true);
+            });
+            ui.close();
+        }
+        if ui
+            .button(format!(
+                "{} {}",
+                crate::ui::icons::FOLDER_OPEN,
+                app.tr("Change group")
+            ))
+            .clicked()
+        {
+            ui.data_mut(|data| {
+                data.insert_temp(group_draft_id, control.group.clone());
+                data.insert_temp(group_edit_id, true);
+            });
+            ui.close();
+        }
+        if !control.default_name.is_empty()
+            && control.name != control.default_name
+            && ui.button(app.tr("Restore default name")).clicked()
+        {
+            update_control_name(app, capabilities, control, String::new());
+            ui.close();
+        }
+    });
+}
+
+fn draw_control_card(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+) {
+    if app.compact_hardware_controls {
+        draw_compact_control_card(app, ui, capabilities, control);
+        return;
+    }
+    let edit_id = ui.make_persistent_id(("control-name-editing", control.key.as_str()));
+    let draft_id = ui.make_persistent_id(("control-name-draft", control.key.as_str()));
     let source_id = ui.make_persistent_id(("control-name-source", control.key.as_str()));
+    let group_edit_id = ui.make_persistent_id(("control-group-editing", control.key.as_str()));
+    let group_draft_id = ui.make_persistent_id(("control-group-draft", control.key.as_str()));
     let relay_id = relay_id_from_control_key(&control.key);
     let indicator_state = control_indicator_state(capabilities, control);
 
@@ -250,7 +629,8 @@ fn draw_control_card(
         .inner_margin(egui::Margin::symmetric(12, 10))
         .corner_radius(8.0)
         .show(ui, |ui| {
-            ui.set_width(ui.available_width());
+            ui.set_min_width(ui.available_width());
+            ui.set_max_width(ui.available_width());
             let mut editing = ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
             ui.horizontal(|ui| {
                 ui.label(
@@ -279,27 +659,35 @@ fn draw_control_card(
                         }
                         data.get_temp::<String>(draft_id).unwrap_or_else(|| control.name.clone())
                     });
-                    let edit = ui.add(
-                        egui::TextEdit::singleline(&mut draft)
-                            .desired_width((ui.available_width() - 58.0).max(72.0))
-                            .hint_text(&control.default_name),
-                    );
+                    let mut edit_response = None;
+                    let mut save_clicked = false;
+                    let mut cancel_clicked = false;
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        cancel_clicked = ui
+                            .button(crate::ui::icons::X)
+                            .on_hover_text(app.tr("Cancel"))
+                            .clicked();
+                        save_clicked = ui
+                            .button(crate::ui::icons::FLOPPY_DISK)
+                            .on_hover_text(app.tr("Save name"))
+                            .clicked();
+                        let width = ui.available_width().max(56.0);
+                        edit_response = Some(ui.add_sized(
+                            [width, 24.0],
+                            egui::TextEdit::singleline(&mut draft).hint_text(&control.default_name),
+                        ));
+                    });
+                    let edit = edit_response.expect("rename editor is always rendered");
                     if edit.changed() {
                         ui.data_mut(|data| data.insert_temp(draft_id, draft.clone()));
                     }
-                    let save = ui
-                        .button(crate::ui::icons::FLOPPY_DISK)
-                        .on_hover_text(app.tr("Save name"));
-                    let cancel = ui
-                        .button(crate::ui::icons::X)
-                        .on_hover_text(app.tr("Cancel"));
-                    if save.clicked()
+                    if save_clicked
                         || (edit.lost_focus()
                             && ui.input(|input| input.key_pressed(egui::Key::Enter)))
                     {
                         update_control_name(app, capabilities, control, draft);
                         editing = false;
-                    } else if cancel.clicked()
+                    } else if cancel_clicked
                         || ui.input(|input| input.key_pressed(egui::Key::Escape))
                     {
                         editing = false;
@@ -307,27 +695,58 @@ fn draw_control_card(
                     ui.data_mut(|data| data.insert_temp(edit_id, editing));
                 } else {
                     let title_text = crate::ui::i18n::visual_text(app.language, &control.name);
-                    let title = ui.add(
-                        egui::Label::new(egui::RichText::new(&title_text).strong().size(13.0))
-                            .truncate()
-                            .sense(egui::Sense::click()),
-                    );
-                    if title.clicked() {
-                        ui.data_mut(|data| data.insert_temp(edit_id, true));
-                    }
-                    title.on_hover_text(format!("{} — {}", title_text, app.tr("Rename")));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button(crate::ui::icons::PENCIL_SIMPLE)
                             .on_hover_text(app.tr("Rename")).clicked()
                         {
                             ui.data_mut(|data| data.insert_temp(edit_id, true));
                         }
+                        let title = ui.add_sized(
+                            [ui.available_width().max(52.0), 24.0],
+                            egui::Label::new(
+                                egui::RichText::new(&title_text).strong().size(13.0),
+                            )
+                            .truncate()
+                            .sense(egui::Sense::click()),
+                        );
+                        if title.clicked() {
+                            ui.data_mut(|data| data.insert_temp(edit_id, true));
+                        }
+                        title.on_hover_text(format!("{} — {}", title_text, app.tr("Rename")));
                     });
                 }
             });
 
-            if !editing && !control.group.trim().is_empty() {
-                ui.label(egui::RichText::new(&control.group).weak().small());
+            let mut editing_group = ui
+                .data_mut(|data| data.get_temp::<bool>(group_edit_id).unwrap_or(false));
+            if editing_group {
+                let mut draft = ui.data_mut(|data| {
+                    data.get_temp::<String>(group_draft_id)
+                        .unwrap_or_else(|| control.group.clone())
+                });
+                ui.horizontal(|ui| {
+                    ui.label(app.tr("Group"));
+                    let edit = ui.add_sized(
+                        [ui.available_width().max(80.0) - 52.0, 24.0],
+                        egui::TextEdit::singleline(&mut draft).hint_text(app.tr("No group")),
+                    );
+                    if edit.changed() {
+                        ui.data_mut(|data| data.insert_temp(group_draft_id, draft.clone()));
+                    }
+                    if ui.button(crate::ui::icons::FLOPPY_DISK).clicked()
+                        || (edit.lost_focus()
+                            && ui.input(|input| input.key_pressed(egui::Key::Enter)))
+                    {
+                        update_control_group(app, capabilities, control, draft);
+                        editing_group = false;
+                    }
+                    if ui.button(crate::ui::icons::X).clicked()
+                        || ui.input(|input| input.key_pressed(egui::Key::Escape))
+                    {
+                        editing_group = false;
+                    }
+                });
+                ui.data_mut(|data| data.insert_temp(group_edit_id, editing_group));
             }
 
             if is_pwm_control(control) {
@@ -335,26 +754,43 @@ fn draw_control_card(
                     .find(|channel| channel.key == control.key)
                 {
                     let value_id = ui.make_persistent_id(("pwm_value", channel.id));
-                    let mut value = ui.data_mut(|data| {
+                    let raw_value = ui.data_mut(|data| {
                         data.get_temp::<u16>(value_id).unwrap_or_else(|| {
                             if capabilities.telemetry.pwm_channel == Some(channel.id) {
                                 capabilities.telemetry.pwm_value.unwrap_or(0)
                             } else { 0 }
                         })
                     });
-                    ui.add_space(8.0);
-                    let response = ui.add_sized(
-                        [ui.available_width(), 24.0],
-                        egui::Slider::new(&mut value, 0..=4095).show_value(true),
-                    );
-                    if response.changed() {
-                        ui.data_mut(|data| data.insert_temp(value_id, value));
-                    }
-                    if response.drag_stopped() || response.lost_focus() {
+                    let mut percent = pwm_percent(raw_value);
+                    ui.add_space(if app.compact_hardware_controls { 3.0 } else { 8.0 });
+                    let mut commit = false;
+                    ui.horizontal(|ui| {
+                        let number_width = 66.0;
+                        let slider_width = (ui.available_width() - number_width - 8.0).max(72.0);
+                        let slider = ui.add_sized(
+                            [slider_width, 24.0],
+                            egui::Slider::new(&mut percent, 0.0..=100.0).show_value(false),
+                        );
+                        let value = ui.add_sized(
+                            [number_width, 24.0],
+                            egui::DragValue::new(&mut percent)
+                                .range(0.0..=100.0)
+                                .speed(0.1)
+                                .fixed_decimals(1)
+                                .suffix("%"),
+                        );
+                        commit = slider.drag_stopped()
+                            || value.lost_focus()
+                            || (value.changed()
+                                && ui.input(|input| input.key_pressed(egui::Key::Enter)));
+                    });
+                    let raw = pwm_raw(percent);
+                    ui.data_mut(|data| data.insert_temp(value_id, raw));
+                    if commit {
                         let _ = app.engine_handle.sender.send(
                             crate::four_d::engine::EngineMessage::ControllerCall {
                                 method: "controller.pwm.set".to_string(),
-                                params: serde_json::json!({"channel": channel.id, "value": value}),
+                                params: serde_json::json!({"channel": channel.id, "value": raw}),
                             },
                         );
                     }
@@ -362,17 +798,28 @@ fn draw_control_card(
             }
 
             if !control.actions.is_empty() {
-                ui.add_space(8.0);
-                let columns = action_grid_columns(ui.available_width(), control.actions.len());
-                for action_row in control.actions.chunks(columns) {
+                ui.add_space(if app.compact_hardware_controls { 3.0 } else { 8.0 });
+                let is_motion = is_motion_control(control);
+                let stop_action = control
+                    .actions
+                    .iter()
+                    .find(|action| action.verb.eq_ignore_ascii_case("stop"));
+                let directional = control
+                    .actions
+                    .iter()
+                    .filter(|action| !action.verb.eq_ignore_ascii_case("stop"))
+                    .collect::<Vec<_>>();
+                let show_stop = stop_action.is_some()
+                    && (app.motion_control_mode == crate::config::MotionControlMode::Hold
+                        || capabilities.active_relays.iter().next().is_some());
+                let action_rows = if is_motion { vec![directional] } else { vec![control.actions.iter().collect()] };
+                for action_row in action_rows {
+                    let columns = action_grid_columns(ui.available_width(), action_row.len());
                     ui.columns(columns, |uis| {
-                        for (index, action) in action_row.iter().enumerate() {
+                        for (index, action) in action_row.into_iter().enumerate() {
                             let ui = &mut uis[index];
-                            let label = format!(
-                                "{} {}",
-                                crate::ui::icons::action(&action.verb),
-                                crate::ui::i18n::visual_text(app.language, &action.name),
-                            );
+                            let visual_name = crate::ui::i18n::visual_text(app.language, &action.name);
+                            let label = responsive_action_label(action, ui.available_width());
                             let verb = action.verb.to_ascii_lowercase();
                             let selected = relay_id.is_some()
                                 && ((verb == "on" && indicator_state == ControlIndicatorState::Active)
@@ -385,15 +832,42 @@ fn draw_control_card(
                                     .fill(egui::Color32::from_rgb(22, 163, 74))
                                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(34, 197, 94)));
                             }
-                            if ui.add_enabled_ui(!app.estop_active, |ui| {
+                            let response = ui.add_enabled_ui(!app.estop_active, |ui| {
                                 ui.add_sized([ui.available_width(), 28.0], button)
-                            }).inner.clicked() {
-                                let _ = app.engine_handle.sender.send(
-                                    crate::four_d::engine::EngineMessage::InvokeControllerAction {
-                                        action_id: action.id.clone(),
-                                    },
-                                );
+                            }).inner.on_hover_text(visual_name);
+                            if is_motion
+                                && app.motion_control_mode == crate::config::MotionControlMode::Hold
+                                && stop_action.is_some()
+                            {
+                                let held_id = ui.make_persistent_id(("held-motion-action", action.id.as_str()));
+                                let was_held = ui.data_mut(|data| data.get_temp::<bool>(held_id).unwrap_or(false));
+                                let held = response.is_pointer_button_down_on();
+                                if held && !was_held {
+                                    invoke_control_action(app, &action.id);
+                                } else if !held && was_held {
+                                    invoke_control_action(app, &stop_action.expect("checked above").id);
+                                }
+                                ui.data_mut(|data| data.insert_temp(held_id, held));
+                            } else if response.clicked() {
+                                invoke_control_action(app, &action.id);
                             }
+                        }
+                    });
+                }
+                if show_stop && let Some(stop) = stop_action {
+                    ui.add_space(5.0);
+                    ui.horizontal_centered(|ui| {
+                        let width = ui.available_width().clamp(86.0, 160.0);
+                        let label = responsive_action_label(stop, width);
+                        if ui
+                            .add_enabled(
+                                !app.estop_active,
+                                egui::Button::new(label).min_size(egui::vec2(width, 28.0)),
+                            )
+                            .on_hover_text(crate::ui::i18n::visual_text(app.language, &stop.name))
+                            .clicked()
+                        {
+                            invoke_control_action(app, &stop.id);
                         }
                     });
                 }
@@ -443,28 +917,42 @@ fn draw_control_card(
             }
         });
 
-    card.response
-        .interact(egui::Sense::click())
-        .context_menu(|ui| {
-            if ui
-                .button(format!(
-                    "{} {}",
-                    crate::ui::icons::PENCIL_SIMPLE,
-                    app.tr("Rename")
-                ))
-                .clicked()
-            {
-                ui.data_mut(|data| data.insert_temp(edit_id, true));
-                ui.close();
-            }
-            if !control.default_name.is_empty()
-                && control.name != control.default_name
-                && ui.button(app.tr("Restore default name")).clicked()
-            {
-                update_control_name(app, capabilities, control, String::new());
-                ui.close();
-            }
-        });
+    // Use the frame's own response for the context menu. A second full-card
+    // interaction layer would sit above and steal clicks from every child.
+    card.response.context_menu(|ui| {
+        if ui
+            .button(format!(
+                "{} {}",
+                crate::ui::icons::PENCIL_SIMPLE,
+                app.tr("Rename")
+            ))
+            .clicked()
+        {
+            ui.data_mut(|data| data.insert_temp(edit_id, true));
+            ui.close();
+        }
+        if ui
+            .button(format!(
+                "{} {}",
+                crate::ui::icons::FOLDER_OPEN,
+                app.tr("Change group")
+            ))
+            .clicked()
+        {
+            ui.data_mut(|data| {
+                data.insert_temp(group_draft_id, control.group.clone());
+                data.insert_temp(group_edit_id, true);
+            });
+            ui.close();
+        }
+        if !control.default_name.is_empty()
+            && control.name != control.default_name
+            && ui.button(app.tr("Restore default name")).clicked()
+        {
+            update_control_name(app, capabilities, control, String::new());
+            ui.close();
+        }
+    });
 }
 
 fn draw_control_card_grid(
@@ -473,14 +961,41 @@ fn draw_control_card_grid(
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     controls: &[crate::four_d::controller::HardwareControl],
 ) {
-    let columns = control_grid_columns(ui.available_width());
-    for row in controls.chunks(columns) {
-        ui.columns(columns, |uis| {
-            for (index, control) in row.iter().enumerate() {
-                draw_control_card(app, &mut uis[index], capabilities, control);
-            }
-        });
-        ui.add_space(8.0);
+    let mut groups: Vec<(String, Vec<&crate::four_d::controller::HardwareControl>)> = Vec::new();
+    for control in controls {
+        let group = control.group.trim();
+        if let Some((_, members)) = groups.iter_mut().find(|(name, _)| name == group) {
+            members.push(control);
+        } else {
+            groups.push((group.to_string(), vec![control]));
+        }
+    }
+    let show_group_headers = groups.iter().any(|(name, _)| !name.is_empty());
+    for (group, members) in groups {
+        if show_group_headers && !group.is_empty() {
+            ui.horizontal(|ui| {
+                ui.label(crate::ui::icons::FOLDER_OPEN);
+                ui.label(
+                    egui::RichText::new(crate::ui::i18n::visual_text(app.language, &group))
+                        .small()
+                        .strong(),
+                );
+                ui.separator();
+            });
+            ui.add_space(4.0);
+        }
+        let columns = control_grid_columns(ui.available_width());
+        for row in members.chunks(columns) {
+            ui.columns(columns, |uis| {
+                for (index, control) in row.iter().enumerate() {
+                    draw_control_card(app, &mut uis[index], capabilities, control);
+                }
+            });
+            ui.add_space(8.0);
+        }
+        if show_group_headers && !group.is_empty() {
+            ui.add_space(3.0);
+        }
     }
 }
 
@@ -514,6 +1029,24 @@ mod timeline_row_tests {
         assert_eq!(control_grid_columns(720.0), 2);
         assert_eq!(action_grid_columns(280.0, 2), 2);
         assert_eq!(action_grid_columns(420.0, 3), 3);
+    }
+
+    #[test]
+    fn pwm_editor_maps_full_raw_range_to_decimal_percentages() {
+        assert_eq!(pwm_percent(0), 0.0);
+        assert_eq!(pwm_percent(4095), 100.0);
+        assert_eq!(pwm_raw(0.0), 0);
+        assert_eq!(pwm_raw(100.0), 4095);
+        assert_eq!(pwm_raw(12.5), 512);
+    }
+
+    #[test]
+    fn effect_drag_translation_preserves_the_pointer_grab_offset() {
+        let source_min = egui::pos2(100.0, 80.0);
+        let grab_offset = egui::vec2(17.0, 11.0);
+        let pointer = egui::pos2(430.0, 260.0);
+        let translation = drag_translation(pointer, source_min, grab_offset);
+        assert_eq!(source_min + translation + grab_offset, pointer);
     }
 
     #[test]
@@ -741,6 +1274,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
         {
             self.app.show_preferences_dialog = true;
             ui.close();
+        }
+    }
+
+    fn on_tab_button(&mut self, _tab: &mut Self::Tab, response: &egui::Response) {
+        let id = egui::Id::new("workspace-tab-button-rects");
+        response.ctx.data_mut(|data| {
+            let mut rects = data.get_temp::<Vec<egui::Rect>>(id).unwrap_or_default();
+            rects.push(response.rect);
+            data.insert_temp(id, rects);
+        });
+    }
+
+    fn scroll_bars(&self, tab: &Self::Tab) -> [bool; 2] {
+        match tab {
+            PealayerTab::EffectsLibrary | PealayerTab::HardwareMonitor => [false, true],
+            _ => [true, true],
         }
     }
 
@@ -1347,9 +1896,60 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     );
                                                 });
                                             });
-                                        if group_header.response.interact(egui::Sense::click()).clicked() {
+                                        let group_response = group_header.response.interact(egui::Sense::click());
+                                        if group_response.clicked() {
                                             open = !open;
                                         }
+                                        group_response.context_menu(|ui| {
+                                            ui.strong(crate::ui::i18n::visual_text(
+                                                display_language,
+                                                &category,
+                                            ));
+                                            ui.separator();
+                                            if ui
+                                                .button(format!(
+                                                    "{} {}",
+                                                    crate::ui::icons::SPARKLE,
+                                                    self.app.tr("New effect in this group")
+                                                ))
+                                                .clicked()
+                                            {
+                                                let mut draft = crate::effects_library::UserStripEffectPreset::default();
+                                                draft.category = category.clone();
+                                                if let Some(effect) = self
+                                                    .app
+                                                    .advertised_hardware()
+                                                    .and_then(|capabilities| capabilities.strip_effects.into_iter().next())
+                                                {
+                                                    draft.hardware_effect_id = effect.id;
+                                                }
+                                                self.app.effect_library_selection = Some(draft.id);
+                                                self.app.effect_library_draft = draft;
+                                                self.app.show_effect_library_editor = true;
+                                                ui.close();
+                                            }
+                                            if ui
+                                                .button(format!(
+                                                    "{} {}",
+                                                    crate::ui::icons::PENCIL_SIMPLE,
+                                                    self.app.tr("Manage effects")
+                                                ))
+                                                .clicked()
+                                            {
+                                                self.app.show_effect_library_editor = true;
+                                                ui.close();
+                                            }
+                                            ui.separator();
+                                            let collapse_label = if open {
+                                                self.app.tr("Collapse group")
+                                            } else {
+                                                self.app.tr("Expand group")
+                                            };
+                                            if ui.button(collapse_label).clicked() {
+                                                open = !open;
+                                                ui.close();
+                                            }
+                                        });
                                         ui.data_mut(|data| data.insert_persisted(group_id, open));
 
                                         if open {
@@ -1388,82 +1988,151 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         display_language,
                                                         &preset.effect.name,
                                                     );
-                                                let card = egui::Frame::group(ui.style())
-                                                    .inner_margin(egui::Margin::symmetric(9, 7))
-                                                    .corner_radius(8.0)
-                                                    .show(ui, |ui| {
-                                                        ui.set_width(ui.available_width());
-                                                        ui.horizontal(|ui| {
-                                                            ui.label(
-                                                                egui::RichText::new(
-                                                                    crate::ui::icons::SPARKLE,
-                                                                )
-                                                                .size(16.0),
-                                                            );
-                                                            ui.add(
-                                                                egui::Label::new(
-                                                                    egui::RichText::new(
-                                                                        &displayed_effect_name,
-                                                                    )
-                                                                    .strong(),
-                                                                )
-                                                                .truncate(),
-                                                            );
-                                                        });
-                                                        ui.add_space(5.0);
-                                                        ui.horizontal(|ui| {
-                                                            for text in [
-                                                                target_label.clone(),
-                                                                format!(
-                                                                    "{} ms",
-                                                                    preset.effect.duration_ms
-                                                                ),
-                                                            ] {
-                                                                egui::Frame::new()
-                                                                    .fill(
-                                                                        ui.visuals()
-                                                                            .selection
-                                                                            .bg_fill
-                                                                            .gamma_multiply(0.18),
-                                                                    )
-                                                                    .corner_radius(8.0)
-                                                                    .inner_margin(
-                                                                        egui::Margin::symmetric(7, 2),
-                                                                    )
-                                                                    .show(ui, |ui| {
-                                                                        ui.label(
-                                                                            egui::RichText::new(text)
-                                                                                .small(),
-                                                                        );
-                                                                    });
-                                                            }
-                                                        });
-                                                    });
-                                                let response = ui.interact(
-                                                    card.response.rect,
+                                                let source = preset.source;
+                                                let response = effect_drag_source(
+                                                    ui,
                                                     item_id,
-                                                    egui::Sense::click_and_drag(),
+                                                    payload,
+                                                    |ui| {
+                                                        egui::Frame::group(ui.style())
+                                                            .inner_margin(egui::Margin::symmetric(9, 7))
+                                                            .corner_radius(8.0)
+                                                            .show(ui, |ui| {
+                                                                ui.set_min_width(ui.available_width());
+                                                                ui.set_max_width(ui.available_width());
+                                                                ui.horizontal(|ui| {
+                                                                    ui.label(
+                                                                        egui::RichText::new(
+                                                                            crate::ui::icons::SPARKLE,
+                                                                        )
+                                                                        .size(16.0),
+                                                                    );
+                                                                    ui.add(
+                                                                        egui::Label::new(
+                                                                            egui::RichText::new(
+                                                                                &displayed_effect_name,
+                                                                            )
+                                                                            .strong(),
+                                                                        )
+                                                                        .truncate(),
+                                                                    );
+                                                                });
+                                                                ui.add_space(5.0);
+                                                                ui.horizontal(|ui| {
+                                                                    for text in [
+                                                                        target_label.clone(),
+                                                                        format!(
+                                                                            "{} ms",
+                                                                            preset.effect.duration_ms
+                                                                        ),
+                                                                    ] {
+                                                                        egui::Frame::new()
+                                                                            .fill(
+                                                                                ui.visuals()
+                                                                                    .selection
+                                                                                    .bg_fill
+                                                                                    .gamma_multiply(0.18),
+                                                                            )
+                                                                            .corner_radius(8.0)
+                                                                            .inner_margin(
+                                                                                egui::Margin::symmetric(7, 2),
+                                                                            )
+                                                                            .show(ui, |ui| {
+                                                                                ui.label(
+                                                                                    egui::RichText::new(text)
+                                                                                        .small(),
+                                                                                );
+                                                                            });
+                                                                    }
+                                                                });
+                                                            })
+                                                    },
                                                 );
-                                                response.dnd_set_drag_payload(payload);
-                                                if response.hovered() {
-                                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-                                                }
-                                                if response.dragged() {
+                                                if response.response.dragged() {
                                                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                                                    egui::Tooltip::always_open(
-                                                        ui.ctx().clone(),
-                                                        ui.layer_id(),
-                                                        item_id.with("drag-label"),
-                                                        egui::PopupAnchor::Pointer,
-                                                    )
-                                                    .show(|ui| {
-                                                        ui.label(format!(
-                                                            "{}  {}",
-                                                            crate::ui::icons::SPARKLE,
-                                                            displayed_effect_name
-                                                        ));
-                                                    });
                                                 }
+                                                response.response.context_menu(|ui| {
+                                                    ui.strong(&displayed_effect_name);
+                                                    ui.separator();
+                                                    match source {
+                                                        crate::app::EffectPresetSource::UserStrip(id) => {
+                                                            if ui
+                                                                .button(format!(
+                                                                    "{} {}",
+                                                                    crate::ui::icons::PENCIL_SIMPLE,
+                                                                    self.app.tr("Edit effect")
+                                                                ))
+                                                                .clicked()
+                                                            {
+                                                                if let Some(effect) = self
+                                                                    .app
+                                                                    .user_strip_effects
+                                                                    .iter()
+                                                                    .find(|effect| effect.id == id)
+                                                                    .cloned()
+                                                                {
+                                                                    self.app.effect_library_selection = Some(id);
+                                                                    self.app.effect_library_draft = effect;
+                                                                    self.app.show_effect_library_editor = true;
+                                                                }
+                                                                ui.close();
+                                                            }
+                                                            if ui
+                                                                .button(format!(
+                                                                    "{} {}",
+                                                                    crate::ui::icons::COPY,
+                                                                    self.app.tr("Duplicate")
+                                                                ))
+                                                                .clicked()
+                                                            {
+                                                                if let Some(effect) = self
+                                                                    .app
+                                                                    .user_strip_effects
+                                                                    .iter()
+                                                                    .find(|effect| effect.id == id)
+                                                                    .cloned()
+                                                                {
+                                                                    let duplicate = effect.duplicate();
+                                                                    self.app.effect_library_selection = Some(duplicate.id);
+                                                                    self.app.effect_library_draft = duplicate;
+                                                                    self.app.show_effect_library_editor = true;
+                                                                }
+                                                                ui.close();
+                                                            }
+                                                            ui.separator();
+                                                            if ui
+                                                                .button(format!(
+                                                                    "{} {}",
+                                                                    crate::ui::icons::TRASH,
+                                                                    self.app.tr("Delete")
+                                                                ))
+                                                                .clicked()
+                                                            {
+                                                                self.app.user_strip_effects.retain(|effect| effect.id != id);
+                                                                if let Err(error) = crate::effects_library::save(
+                                                                    &self.app.user_strip_effects,
+                                                                ) {
+                                                                    self.app.set_osd(error);
+                                                                }
+                                                                ui.close();
+                                                            }
+                                                        }
+                                                        crate::app::EffectPresetSource::ControllerMacro(_) => {
+                                                            if ui
+                                                                .button(format!(
+                                                                    "{} {}",
+                                                                    crate::ui::icons::GAUGE,
+                                                                    self.app.tr("Hardware preferences")
+                                                                ))
+                                                                .clicked()
+                                                            {
+                                                                self.app.preferences_tab = 2;
+                                                                self.app.show_preferences_dialog = true;
+                                                                ui.close();
+                                                            }
+                                                        }
+                                                    }
+                                                });
                                                 ui.add_space(5.0);
                                             }
                                         }

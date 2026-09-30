@@ -192,15 +192,11 @@ fn decoration_colors(dark: bool) -> (u32, u32) {
 #[cfg(target_os = "windows")]
 pub fn apply_windows_window_decorations(hwnd_raw: isize) {
     use windows::Win32::Foundation::{BOOL, HWND};
-    use windows::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute,
-        DWMWA_CAPTION_COLOR,
-        DWMWA_SYSTEMBACKDROP_TYPE,
-        DWMWA_TEXT_COLOR,
-        DWMWA_USE_IMMERSIVE_DARK_MODE,
-        DWMSBT_MAINWINDOW,
-    };
     use windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE;
+    use windows::Win32::Graphics::Dwm::{
+        DWMSBT_MAINWINDOW, DWMWA_CAPTION_COLOR, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_TEXT_COLOR,
+        DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
+    };
 
     if hwnd_raw == 0 {
         return;
@@ -217,7 +213,9 @@ pub fn apply_windows_window_decorations(hwnd_raw: isize) {
             DWMWA_USE_IMMERSIVE_DARK_MODE,
             &dark_mode as *const _ as *const _,
             std::mem::size_of::<BOOL>() as u32,
-        ).is_err() {
+        )
+        .is_err()
+        {
             let _ = DwmSetWindowAttribute(
                 hwnd,
                 DWMWINDOWATTRIBUTE(19),
@@ -233,7 +231,9 @@ pub fn apply_windows_window_decorations(hwnd_raw: isize) {
             DWMWA_SYSTEMBACKDROP_TYPE,
             &backdrop as *const _ as *const _,
             std::mem::size_of::<u32>() as u32,
-        ).is_err() {
+        )
+        .is_err()
+        {
             // Fallback for Windows 11 22000: DWMWA_MICA_EFFECT = 1029
             let mica_compat = BOOL::from(true);
             let _ = DwmSetWindowAttribute(
@@ -266,7 +266,6 @@ pub fn apply_windows_window_decorations(_hwnd_raw: isize) {
     // No-op on non-Windows platforms
 }
 
-
 #[cfg(target_os = "windows")]
 pub fn update_windows_taskbar_state_ext(
     progress: f64,
@@ -275,8 +274,10 @@ pub fn update_windows_taskbar_state_ext(
     has_error: bool,
 ) {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
-    use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList, TBPFLAG};
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+    };
+    use windows::Win32::UI::Shell::{ITaskbarList3, TBPFLAG, TaskbarList};
 
     let hwnd_raw = get_registered_hwnd();
     if hwnd_raw == 0 {
@@ -288,7 +289,9 @@ pub fn update_windows_taskbar_state_ext(
 
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        if let Ok(taskbar) = CoCreateInstance::<_, ITaskbarList3>(&TaskbarList, None, CLSCTX_INPROC_SERVER) {
+        if let Ok(taskbar) =
+            CoCreateInstance::<_, ITaskbarList3>(&TaskbarList, None, CLSCTX_INPROC_SERVER)
+        {
             match state.to_progress_flag() {
                 TaskbarProgressFlag::NoProgress => {
                     let _ = taskbar.SetProgressState(hwnd, TBPFLAG(0));
@@ -335,7 +338,7 @@ pub fn update_windows_taskbar_state(_progress: f64, _duration: f64, _is_paused: 
 pub fn sync_windows_jump_list(recent_media: &[std::path::PathBuf]) {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::UI::Shell::{SHAddToRecentDocs, SHARD_PATHW};
+    use windows::Win32::UI::Shell::{SHARD_PATHW, SHAddToRecentDocs};
 
     for path in recent_media.iter().take(10) {
         if let Some(path_str) = path.to_str() {
@@ -382,10 +385,10 @@ fn str_to_u16_buf_260(text: &str) -> [u16; 260] {
 pub fn init_taskbar_thumbnail_toolbar(hwnd_raw: isize) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     };
     use windows::Win32::UI::Shell::{
-        ITaskbarList3, TaskbarList, THB_FLAGS, THB_TOOLTIP, THBF_ENABLED, THUMBBUTTON,
+        ITaskbarList3, THB_FLAGS, THB_TOOLTIP, THBF_ENABLED, THUMBBUTTON, TaskbarList,
     };
     use windows::Win32::UI::WindowsAndMessaging::HICON;
 
@@ -447,11 +450,11 @@ pub fn update_taskbar_thumbnail_buttons(
 ) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     };
     use windows::Win32::UI::Shell::{
-        ITaskbarList3, TaskbarList, THB_FLAGS, THB_TOOLTIP, THBF_DISABLED, THBF_ENABLED,
-        THUMBBUTTON,
+        ITaskbarList3, THB_FLAGS, THB_TOOLTIP, THBF_DISABLED, THBF_ENABLED, THUMBBUTTON,
+        TaskbarList,
     };
     use windows::Win32::UI::WindowsAndMessaging::HICON;
 
@@ -485,7 +488,10 @@ pub fn update_taskbar_thumbnail_buttons(
                 iId: THUMB_BUTTON_PLAYPAUSE,
                 iBitmap: 0,
                 hIcon: HICON(std::ptr::null_mut()),
-                szTip: str_to_u16_buf_260(thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, is_paused)),
+                szTip: str_to_u16_buf_260(thumbnail_button_tooltip(
+                    THUMB_BUTTON_PLAYPAUSE,
+                    is_paused,
+                )),
                 dwFlags: flags,
             },
             THUMBBUTTON {
@@ -520,7 +526,11 @@ pub fn compute_thumbnail_clip_ratio(
     window_height: f32,
     video_rect: [f32; 4],
 ) -> [f32; 4] {
-    if window_width <= 0.0 || window_height <= 0.0 || window_width.is_nan() || window_height.is_nan() {
+    if window_width <= 0.0
+        || window_height <= 0.0
+        || window_width.is_nan()
+        || window_height.is_nan()
+    {
         return [0.0, 0.0, 1.0, 1.0];
     }
 
@@ -543,7 +553,7 @@ pub fn compute_thumbnail_clip_ratio(
 #[cfg(target_os = "windows")]
 pub fn configure_video_taskbar_thumbnail(hwnd_raw: isize) -> Result<(), String> {
     use windows::Win32::Foundation::{BOOL, HWND};
-    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_FORCE_ICONIC_REPRESENTATION};
+    use windows::Win32::Graphics::Dwm::{DWMWA_FORCE_ICONIC_REPRESENTATION, DwmSetWindowAttribute};
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
@@ -557,7 +567,9 @@ pub fn configure_video_taskbar_thumbnail(hwnd_raw: isize) -> Result<(), String> 
             &enable as *const _ as *const _,
             std::mem::size_of::<BOOL>() as u32,
         )
-        .map_err(|e| format!("DwmSetWindowAttribute DWMWA_FORCE_ICONIC_REPRESENTATION failed: {e}"))?;
+        .map_err(|e| {
+            format!("DwmSetWindowAttribute DWMWA_FORCE_ICONIC_REPRESENTATION failed: {e}")
+        })?;
     }
     Ok(())
 }
@@ -606,8 +618,7 @@ unsafe extern "system" fn shell_window_proc(
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Foundation::LRESULT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_RBUTTONUP,
-        WNDPROC,
+        CallWindowProcW, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_RBUTTONUP, WNDPROC,
     };
 
     if message == WM_TRAYICON {
@@ -633,7 +644,10 @@ unsafe extern "system" fn shell_window_proc(
         let command = packed & 0xffff;
         const THBN_CLICKED: u32 = 0x1800;
         if notification == THBN_CLICKED
-            && matches!(command, THUMB_BUTTON_PREV | THUMB_BUTTON_PLAYPAUSE | THUMB_BUTTON_NEXT)
+            && matches!(
+                command,
+                THUMB_BUTTON_PREV | THUMB_BUTTON_PLAYPAUSE | THUMB_BUTTON_NEXT
+            )
         {
             SHELL_COMMAND.store(command, Ordering::Release);
             return LRESULT(0);
@@ -642,7 +656,9 @@ unsafe extern "system" fn shell_window_proc(
 
     let original = ORIGINAL_WINDOW_PROC.load(Ordering::Acquire);
     if original == 0 {
-        unsafe { windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, message, wparam, lparam) }
+        unsafe {
+            windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, message, wparam, lparam)
+        }
     } else {
         let original: WNDPROC = unsafe { std::mem::transmute(original) };
         unsafe { CallWindowProcW(original, hwnd, message, wparam, lparam) }
@@ -652,7 +668,7 @@ unsafe extern "system" fn shell_window_proc(
 #[cfg(target_os = "windows")]
 pub fn install_shell_message_hook(hwnd_raw: isize) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{SetWindowLongPtrW, GWLP_WNDPROC};
+    use windows::Win32::UI::WindowsAndMessaging::{GWLP_WNDPROC, SetWindowLongPtrW};
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
@@ -675,7 +691,9 @@ pub fn install_shell_message_hook(hwnd_raw: isize) -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn install_shell_message_hook(_hwnd_raw: isize) -> Result<(), String> { Ok(()) }
+pub fn install_shell_message_hook(_hwnd_raw: isize) -> Result<(), String> {
+    Ok(())
+}
 
 pub fn update_shell_command_state(is_paused: bool, is_muted: bool, has_media: bool) {
     SHELL_PAUSED.store(is_paused, Ordering::Relaxed);
@@ -700,11 +718,11 @@ fn str_to_u16_buf_128(text: &str) -> [u16; 128] {
 #[cfg(target_os = "windows")]
 pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::Shell::{
-        Shell_NotifyIconW, NOTIFYICONDATAW, NIM_ADD, NIF_ICON, NIF_MESSAGE, NIF_TIP,
-    };
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows::Win32::UI::WindowsAndMessaging::{GetClassLongPtrW, GCLP_HICON, LoadIconW, HICON};
+    use windows::Win32::UI::Shell::{
+        NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NOTIFYICONDATAW, Shell_NotifyIconW,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{GCLP_HICON, GetClassLongPtrW, HICON, LoadIconW};
     use windows::core::PCWSTR;
 
     if hwnd_raw == 0 {
@@ -713,8 +731,8 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
     let hwnd = HWND(hwnd_raw as *mut _);
 
     unsafe {
-        let module = GetModuleHandleW(None)
-            .map_err(|error| format!("GetModuleHandleW failed: {error}"))?;
+        let module =
+            GetModuleHandleW(None).map_err(|error| format!("GetModuleHandleW failed: {error}"))?;
         let instance: windows::Win32::Foundation::HINSTANCE = module.into();
         let hicon = LoadIconW(Some(&instance), PCWSTR(1usize as *const u16))
             .unwrap_or_else(|_| HICON(GetClassLongPtrW(hwnd, GCLP_HICON) as *mut _));
@@ -746,13 +764,19 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
 pub fn show_system_notification(hwnd_raw: isize, title: &str, message: &str) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::Shell::{
-        Shell_NotifyIconW, NIIF_INFO, NIF_INFO, NIM_MODIFY, NOTIFYICONDATAW,
+        NIF_INFO, NIIF_INFO, NIM_MODIFY, NOTIFYICONDATAW, Shell_NotifyIconW,
     };
-    if hwnd_raw == 0 { return Err("invalid window handle (HWND is 0)".to_string()); }
+    if hwnd_raw == 0 {
+        return Err("invalid window handle (HWND is 0)".to_string());
+    }
     let mut info = [0u16; 256];
-    for (index, unit) in message.encode_utf16().take(255).enumerate() { info[index] = unit; }
+    for (index, unit) in message.encode_utf16().take(255).enumerate() {
+        info[index] = unit;
+    }
     let mut info_title = [0u16; 64];
-    for (index, unit) in title.encode_utf16().take(63).enumerate() { info_title[index] = unit; }
+    for (index, unit) in title.encode_utf16().take(63).enumerate() {
+        info_title[index] = unit;
+    }
     let mut nid = NOTIFYICONDATAW {
         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
         hWnd: HWND(hwnd_raw as *mut _),
@@ -764,18 +788,25 @@ pub fn show_system_notification(hwnd_raw: isize, title: &str, message: &str) -> 
         ..Default::default()
     };
     let result = unsafe { Shell_NotifyIconW(NIM_MODIFY, &mut nid) };
-    result.as_bool().then_some(()).ok_or_else(|| "Shell_NotifyIconW notification failed".to_string())
+    result
+        .as_bool()
+        .then_some(())
+        .ok_or_else(|| "Shell_NotifyIconW notification failed".to_string())
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn show_system_notification(_hwnd_raw: isize, _title: &str, _message: &str) -> Result<(), String> { Ok(()) }
+pub fn show_system_notification(
+    _hwnd_raw: isize,
+    _title: &str,
+    _message: &str,
+) -> Result<(), String> {
+    Ok(())
+}
 
 #[cfg(target_os = "windows")]
 pub fn update_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::Shell::{
-        Shell_NotifyIconW, NOTIFYICONDATAW, NIM_MODIFY, NIF_TIP,
-    };
+    use windows::Win32::UI::Shell::{NIF_TIP, NIM_MODIFY, NOTIFYICONDATAW, Shell_NotifyIconW};
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
@@ -804,9 +835,7 @@ pub fn update_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), String>
 #[cfg(target_os = "windows")]
 pub fn remove_system_tray_icon(hwnd_raw: isize) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::Shell::{
-        Shell_NotifyIconW, NOTIFYICONDATAW, NIM_DELETE,
-    };
+    use windows::Win32::UI::Shell::{NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW};
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
@@ -832,14 +861,41 @@ pub fn remove_system_tray_icon(hwnd_raw: isize) -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 fn install_tray_menu_icons(menu: isize) -> Vec<isize> {
+    #[repr(C)]
+    struct BitmapInfoHeader {
+        size: u32,
+        width: i32,
+        height: i32,
+        planes: u16,
+        bit_count: u16,
+        compression: u32,
+        size_image: u32,
+        x_pixels_per_meter: i32,
+        y_pixels_per_meter: i32,
+        colors_used: u32,
+        colors_important: u32,
+    }
+    #[repr(C)]
+    struct RgbQuad {
+        blue: u8,
+        green: u8,
+        red: u8,
+        reserved: u8,
+    }
+    #[repr(C)]
+    struct BitmapInfo {
+        header: BitmapInfoHeader,
+        colors: [RgbQuad; 1],
+    }
     #[link(name = "gdi32")]
     unsafe extern "system" {
-        fn CreateBitmap(
-            width: i32,
-            height: i32,
-            planes: u32,
-            bits_per_pixel: u32,
-            bits: *const std::ffi::c_void,
+        fn CreateDIBSection(
+            dc: isize,
+            info: *const BitmapInfo,
+            usage: u32,
+            bits: *mut *mut std::ffi::c_void,
+            section: isize,
+            offset: u32,
         ) -> isize;
     }
     #[link(name = "user32")]
@@ -851,14 +907,77 @@ fn install_tray_menu_icons(menu: isize) -> Vec<isize> {
             unchecked: isize,
             checked: isize,
         ) -> i32;
+        fn GetSysColor(index: i32) -> u32;
     }
 
-    const WINDOW: [u16; 16] = [0x0000, 0x7FFE, 0x4002, 0x5FFA, 0x4002, 0x4002, 0x4002, 0x4002, 0x4002, 0x4002, 0x4002, 0x4002, 0x4002, 0x7FFE, 0x0000, 0x0000];
-    const PLAY: [u16; 16] = [0x0000, 0x1000, 0x1800, 0x1C00, 0x1E00, 0x1F00, 0x1F80, 0x1FC0, 0x1FC0, 0x1F80, 0x1F00, 0x1E00, 0x1C00, 0x1800, 0x1000, 0x0000];
-    const SPEAKER: [u16; 16] = [0x0000, 0x0300, 0x0700, 0x0F30, 0x1F18, 0x3F0C, 0x7F66, 0x7F62, 0x7F62, 0x7F66, 0x3F0C, 0x1F18, 0x0F30, 0x0700, 0x0300, 0x0000];
-    const FOLDER: [u16; 16] = [0x0000, 0x0000, 0x3C00, 0x4200, 0x7FF0, 0x4010, 0x4010, 0x7FFE, 0x4002, 0x4002, 0x4002, 0x4002, 0x4002, 0x7FFE, 0x0000, 0x0000];
-    const CLOSE: [u16; 16] = [0x0000, 0x4002, 0x6006, 0x300C, 0x1818, 0x0C30, 0x0660, 0x03C0, 0x03C0, 0x0660, 0x0C30, 0x1818, 0x300C, 0x6006, 0x4002, 0x0000];
+    const WINDOW: [u16; 16] = [
+        0x0000, 0x7FFE, 0x4002, 0x5FFA, 0x4002, 0x4002, 0x4002, 0x4002, 0x4002, 0x4002, 0x4002,
+        0x4002, 0x4002, 0x7FFE, 0x0000, 0x0000,
+    ];
+    const PLAY: [u16; 16] = [
+        0x0000, 0x1000, 0x1800, 0x1C00, 0x1E00, 0x1F00, 0x1F80, 0x1FC0, 0x1FC0, 0x1F80, 0x1F00,
+        0x1E00, 0x1C00, 0x1800, 0x1000, 0x0000,
+    ];
+    const SPEAKER: [u16; 16] = [
+        0x0000, 0x0300, 0x0700, 0x0F30, 0x1F18, 0x3F0C, 0x7F66, 0x7F62, 0x7F62, 0x7F66, 0x3F0C,
+        0x1F18, 0x0F30, 0x0700, 0x0300, 0x0000,
+    ];
+    const FOLDER: [u16; 16] = [
+        0x0000, 0x0000, 0x3C00, 0x4200, 0x7FF0, 0x4010, 0x4010, 0x7FFE, 0x4002, 0x4002, 0x4002,
+        0x4002, 0x4002, 0x7FFE, 0x0000, 0x0000,
+    ];
+    const CLOSE: [u16; 16] = [
+        0x0000, 0x4002, 0x6006, 0x300C, 0x1818, 0x0C30, 0x0660, 0x03C0, 0x03C0, 0x0660, 0x0C30,
+        0x1818, 0x300C, 0x6006, 0x4002, 0x0000,
+    ];
 
+    fn create_argb_bitmap(mask: [u16; 16], color: u32) -> isize {
+        const BI_RGB: u32 = 0;
+        const DIB_RGB_COLORS: u32 = 0;
+        let info = BitmapInfo {
+            header: BitmapInfoHeader {
+                size: std::mem::size_of::<BitmapInfoHeader>() as u32,
+                width: 16,
+                // Negative height creates a top-down bitmap, matching the icon rows.
+                height: -16,
+                planes: 1,
+                bit_count: 32,
+                compression: BI_RGB,
+                size_image: 16 * 16 * 4,
+                x_pixels_per_meter: 0,
+                y_pixels_per_meter: 0,
+                colors_used: 0,
+                colors_important: 0,
+            },
+            colors: [RgbQuad {
+                blue: 0,
+                green: 0,
+                red: 0,
+                reserved: 0,
+            }],
+        };
+        let mut pixels = std::ptr::null_mut();
+        let bitmap = unsafe { CreateDIBSection(0, &info, DIB_RGB_COLORS, &mut pixels, 0, 0) };
+        if bitmap == 0 || pixels.is_null() {
+            return 0;
+        }
+        let red = color & 0xFF;
+        let green = (color >> 8) & 0xFF;
+        let blue = (color >> 16) & 0xFF;
+        let argb = 0xFF00_0000 | (red << 16) | (green << 8) | blue;
+        let pixels = unsafe { std::slice::from_raw_parts_mut(pixels.cast::<u32>(), 16 * 16) };
+        pixels.fill(0);
+        for (y, row) in mask.into_iter().enumerate() {
+            for x in 0..16 {
+                if row & (1 << (15 - x)) != 0 {
+                    pixels[y * 16 + x] = argb;
+                }
+            }
+        }
+        bitmap
+    }
+
+    let menu_text = unsafe { GetSysColor(7) }; // COLOR_MENUTEXT
     [
         (TRAY_CMD_SHOW, WINDOW),
         (TRAY_CMD_PLAYPAUSE, PLAY),
@@ -868,9 +987,7 @@ fn install_tray_menu_icons(menu: isize) -> Vec<isize> {
     ]
     .into_iter()
     .filter_map(|(command, bits)| {
-        let bitmap = unsafe {
-            CreateBitmap(16, 16, 1, 1, bits.as_ptr().cast::<std::ffi::c_void>())
-        };
+        let bitmap = create_argb_bitmap(bits, menu_text);
         if bitmap == 0 {
             return None;
         }
@@ -915,9 +1032,9 @@ pub fn show_tray_popup_menu(
 ) -> Option<u32> {
     use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
-        AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, PostMessageW,
-        SetForegroundWindow, TrackPopupMenu, MF_DISABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING,
-        TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_NULL,
+        AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, MF_DISABLED, MF_GRAYED,
+        MF_SEPARATOR, MF_STRING, PostMessageW, SetForegroundWindow, TPM_NONOTIFY, TPM_RETURNCMD,
+        TPM_RIGHTBUTTON, TrackPopupMenu, WM_NULL,
     };
     use windows::core::PCWSTR;
 
@@ -936,13 +1053,11 @@ pub fn show_tray_popup_menu(
             .encode_utf16()
             .chain(std::iter::once(0))
             .collect();
-        let playpause_text: Vec<u16> = format!(
-            "{}\tSpace",
-            tray_menu_label(TRAY_CMD_PLAYPAUSE, is_paused)
-        )
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
+        let playpause_text: Vec<u16> =
+            format!("{}\tSpace", tray_menu_label(TRAY_CMD_PLAYPAUSE, is_paused))
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
         let mute_text: Vec<u16> = format!("{}\tM", tray_menu_label(TRAY_CMD_MUTE, is_muted))
             .encode_utf16()
             .chain(std::iter::once(0))
@@ -1011,11 +1126,7 @@ pub fn show_tray_popup_menu(
         let _ = DestroyMenu(hmenu);
         delete_tray_menu_icons(&icons);
 
-        if cmd.0 != 0 {
-            Some(cmd.0 as u32)
-        } else {
-            None
-        }
+        if cmd.0 != 0 { Some(cmd.0 as u32) } else { None }
     }
 }
 
@@ -1112,10 +1223,7 @@ mod tests {
 
     #[test]
     fn gui_mutex_namespace_is_stable_and_brand_specific() {
-        assert_eq!(
-            gui_mutex_name(" Pealayer "),
-            gui_mutex_name("pealayer")
-        );
+        assert_eq!(gui_mutex_name(" Pealayer "), gui_mutex_name("pealayer"));
         assert_ne!(
             gui_mutex_name("Pealayer"),
             gui_mutex_name("Workshop Player")
@@ -1144,9 +1252,18 @@ mod tests {
 
     #[test]
     fn test_thumbnail_button_tooltips() {
-        assert_eq!(thumbnail_button_tooltip(THUMB_BUTTON_PREV, false), "Previous");
-        assert_eq!(thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, true), "Play");
-        assert_eq!(thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, false), "Pause");
+        assert_eq!(
+            thumbnail_button_tooltip(THUMB_BUTTON_PREV, false),
+            "Previous"
+        );
+        assert_eq!(
+            thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, true),
+            "Play"
+        );
+        assert_eq!(
+            thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, false),
+            "Pause"
+        );
         assert_eq!(thumbnail_button_tooltip(THUMB_BUTTON_NEXT, false), "Next");
     }
 
@@ -1189,12 +1306,21 @@ mod tests {
         assert_eq!(ratio[2], 1.0);
 
         // Non-positive dimensions return default full frame
-        assert_eq!(compute_thumbnail_clip_ratio(0.0, 1080.0, video_rect), [0.0, 0.0, 1.0, 1.0]);
-        assert_eq!(compute_thumbnail_clip_ratio(1920.0, -10.0, video_rect), [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(
+            compute_thumbnail_clip_ratio(0.0, 1080.0, video_rect),
+            [0.0, 0.0, 1.0, 1.0]
+        );
+        assert_eq!(
+            compute_thumbnail_clip_ratio(1920.0, -10.0, video_rect),
+            [0.0, 0.0, 1.0, 1.0]
+        );
 
         // Clamping bounds
         let out_of_bounds = [-100.0, -50.0, 2500.0, 2000.0];
-        assert_eq!(compute_thumbnail_clip_ratio(win_w, win_h, out_of_bounds), [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(
+            compute_thumbnail_clip_ratio(win_w, win_h, out_of_bounds),
+            [0.0, 0.0, 1.0, 1.0]
+        );
     }
 
     #[test]

@@ -17,6 +17,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     ensure_icon(app, ui.ctx());
 
     let mut open = true;
+    let bounds = ui.ctx().content_rect().shrink(18.0);
+    let default_size = egui::vec2(bounds.width().min(640.0), bounds.height().min(500.0));
+    let min_size = egui::vec2(bounds.width().min(400.0), bounds.height().min(330.0));
     egui::Window::new(format!(
         "{} {} {}",
         crate::ui::icons::INFO,
@@ -24,9 +27,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         app.app_name
     ))
     .open(&mut open)
-    .default_size([720.0, 520.0])
-    .min_size([570.0, 410.0])
-    .max_size([1050.0, 850.0])
+    .default_size(default_size)
+    .min_size(min_size)
+    .max_size(bounds.size())
+    .constrain_to(bounds)
     .resizable(true)
     .collapsible(false)
     .show(ui.ctx(), |ui| {
@@ -35,37 +39,23 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         ui.separator();
         ui.add_space(6.0);
 
-        let content_height = ui.available_height().max(280.0);
-        ui.horizontal_top(|ui| {
-            ui.allocate_ui_with_layout(
-                egui::vec2(172.0, content_height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    for (index, (icon, label)) in TABS.into_iter().enumerate() {
-                        if ui
-                            .add_sized(
-                                [166.0, 36.0],
-                                egui::Button::new(format!("{icon}  {}", app.tr(label)))
-                                    .selected(app.about_tab == index),
-                            )
-                            .clicked()
-                        {
-                            app.about_tab = index;
-                        }
-                    }
-                },
-            );
+        let narrow = ui.available_width() < 560.0;
+        if narrow {
+            ui.horizontal_wrapped(|ui| draw_tabs(app, ui, true));
             ui.separator();
-            egui::ScrollArea::vertical()
-                .id_salt("about_content")
-                .auto_shrink([false, false])
-                .show(ui, |ui| match app.about_tab {
-                    0 => overview(app, ui),
-                    1 => build_and_system(app, ui),
-                    2 => connected_board(app, ui),
-                    _ => libraries_and_licenses(app, ui),
-                });
-        });
+            draw_content(app, ui);
+        } else {
+            let content_height = ui.available_height();
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(150.0, content_height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| draw_tabs(app, ui, false),
+                );
+                ui.separator();
+                draw_content(app, ui);
+            });
+        }
     });
     app.show_about_dialog = open;
 }
@@ -81,15 +71,57 @@ fn ensure_icon(app: &mut PealayerApp, ctx: &egui::Context) {
             [icon.width as usize, icon.height as usize],
             &icon.rgba,
         );
-        app.about_icon =
-            Some(ctx.load_texture("pealayer_about_icon", image, egui::TextureOptions::LINEAR));
+        app.about_icon = Some(ctx.load_texture(
+            "pealayer_about_icon",
+            image,
+            egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear)),
+        ));
     }
+}
+
+fn draw_tabs(app: &mut PealayerApp, ui: &mut egui::Ui, compact: bool) {
+    for (index, (icon, label)) in TABS.into_iter().enumerate() {
+        let text = if compact {
+            format!("{icon} {}", app.tr(label))
+        } else {
+            format!("{icon}  {}", app.tr(label))
+        };
+        let width = if compact {
+            (ui.available_width() / 2.0 - 4.0).max(118.0)
+        } else {
+            144.0
+        };
+        if ui
+            .add_sized(
+                [width, 34.0],
+                egui::Button::new(text).selected(app.about_tab == index),
+            )
+            .clicked()
+        {
+            app.about_tab = index;
+        }
+    }
+}
+
+fn draw_content(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    egui::ScrollArea::vertical()
+        .id_salt("about_content")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_max_width(ui.available_width());
+            match app.about_tab {
+                0 => overview(app, ui),
+                1 => build_and_system(app, ui),
+                2 => connected_board(app, ui),
+                _ => libraries_and_licenses(app, ui),
+            }
+        });
 }
 
 fn header(app: &PealayerApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         if let Some(icon) = &app.about_icon {
-            ui.add(egui::Image::new(icon).fit_to_exact_size(egui::vec2(76.0, 76.0)));
+            ui.add(egui::Image::new(icon).fit_to_exact_size(egui::vec2(64.0, 64.0)));
         } else {
             ui.label(egui::RichText::new(crate::ui::icons::MONITOR_PLAY).size(52.0));
         }
@@ -111,20 +143,21 @@ fn header(app: &PealayerApp, ui: &mut egui::Ui) {
                     );
                 }
             });
-            ui.hyperlink_to(REPOSITORY, REPOSITORY);
+            ui.hyperlink_to("GitHub repository", REPOSITORY);
         });
     });
 }
 
 fn overview(app: &PealayerApp, ui: &mut egui::Ui) {
     section(ui, "Project", |ui| {
-        ui.label(env!("CARGO_PKG_DESCRIPTION"));
+        ui.add(egui::Label::new(env!("CARGO_PKG_DESCRIPTION")).wrap());
         ui.add_space(5.0);
-        ui.label("Pealayer combines media playback, a non-linear physical-effect timeline, live hardware monitoring, and PCController integration for immersive cinema production and playback.");
+        ui.add(egui::Label::new("Pealayer combines media playback, a non-linear physical-effect timeline, live hardware monitoring, and PCController integration for immersive cinema production and playback.").wrap());
     });
     section(ui, "Release identity", |ui| {
         egui::Grid::new("about_release_identity")
             .num_columns(2)
+            .max_col_width((ui.available_width() * 0.62).max(160.0))
             .spacing([20.0, 8.0])
             .show(ui, |ui| {
                 strong_row(ui, "Version", env!("CARGO_PKG_VERSION"));
@@ -133,7 +166,7 @@ fn overview(app: &PealayerApp, ui: &mut egui::Ui) {
                 ui.end_row();
                 strong_row(ui, "Branch / ref", env!("PEALAYER_GIT_BRANCH"));
                 ui.label(egui::RichText::new("Repository").strong());
-                ui.hyperlink_to(REPOSITORY, REPOSITORY);
+                ui.hyperlink_to("Open repository", REPOSITORY);
                 ui.end_row();
                 strong_row(ui, "License", env!("CARGO_PKG_LICENSE"));
             });
@@ -150,6 +183,7 @@ fn build_and_system(app: &PealayerApp, ui: &mut egui::Ui) {
     section(ui, "Build", |ui| {
         egui::Grid::new("about_build")
             .num_columns(2)
+            .max_col_width((ui.available_width() * 0.68).max(170.0))
             .spacing([20.0, 8.0])
             .show(ui, |ui| {
                 row(ui, "Profile", env!("PEALAYER_BUILD_PROFILE"));
@@ -165,6 +199,7 @@ fn build_and_system(app: &PealayerApp, ui: &mut egui::Ui) {
             .unwrap_or_else(|_| "Not reported".to_string());
         egui::Grid::new("about_system")
             .num_columns(2)
+            .max_col_width((ui.available_width() * 0.68).max(170.0))
             .spacing([20.0, 8.0])
             .show(ui, |ui| {
                 row(ui, "Host", &host);
@@ -207,6 +242,7 @@ fn connected_board(app: &PealayerApp, ui: &mut egui::Ui) {
             .unwrap_or("Not advertised");
         egui::Grid::new("about_board_identity")
             .num_columns(2)
+            .max_col_width((ui.available_width() * 0.68).max(170.0))
             .spacing([20.0, 8.0])
             .show(ui, |ui| {
                 strong_row(ui, "Board name", &board.board_name);
@@ -227,6 +263,7 @@ fn connected_board(app: &PealayerApp, ui: &mut egui::Ui) {
     section(ui, "Connection and capabilities", |ui| {
         egui::Grid::new("about_board_connection")
             .num_columns(2)
+            .max_col_width((ui.available_width() * 0.68).max(170.0))
             .spacing([20.0, 8.0])
             .show(ui, |ui| {
                 row(ui, "Port", &board.port.name);
@@ -265,6 +302,7 @@ fn libraries_and_licenses(_app: &PealayerApp, ui: &mut egui::Ui) {
     section(ui, "Core libraries", |ui| {
         egui::Grid::new("about_libraries")
             .num_columns(3)
+            .max_col_width((ui.available_width() * 0.46).max(120.0))
             .spacing([18.0, 8.0])
             .striped(true)
             .show(ui, |ui| {
@@ -317,7 +355,7 @@ fn libraries_and_licenses(_app: &PealayerApp, ui: &mut egui::Ui) {
                 }
             });
         ui.add_space(6.0);
-        ui.label(egui::RichText::new("This is a concise runtime inventory. Packaged notices and each dependency's source license remain authoritative.").small().weak());
+        ui.add(egui::Label::new(egui::RichText::new("This is a concise runtime inventory. Packaged notices and each dependency's source license remain authoritative.").small().weak()).wrap());
         ui.hyperlink_to(
             "Inspect the complete dependency manifest",
             format!("{REPOSITORY}/blob/main/Cargo.toml"),
@@ -341,13 +379,13 @@ fn section(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
 
 fn row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.label(egui::RichText::new(label).strong());
-    ui.label(value);
+    ui.add(egui::Label::new(value).wrap());
     ui.end_row();
 }
 
 fn strong_row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.label(egui::RichText::new(label).strong());
-    ui.label(egui::RichText::new(value).strong());
+    ui.add(egui::Label::new(egui::RichText::new(value).strong()).wrap());
     ui.end_row();
 }
 

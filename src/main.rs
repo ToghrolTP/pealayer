@@ -462,6 +462,8 @@ fn main() -> eframe::Result {
                 paused_drag_action: loaded_config.paused_drag_action,
                 playing_drag_action: loaded_config.playing_drag_action,
                 fullscreen_video_background: loaded_config.fullscreen_video_background,
+                motion_control_mode: loaded_config.motion_control_mode,
+                compact_hardware_controls: loaded_config.compact_hardware_controls,
                 status_bar: loaded_config.status_bar,
                 config_fingerprint: crate::config::AppConfig::fingerprint(
                     &crate::config::AppConfig::get_config_path(),

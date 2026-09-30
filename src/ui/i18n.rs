@@ -150,6 +150,10 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Timeline" => "خط زمانی",
         "Hardware Monitor Dashboard" => "داشبورد پایش سخت‌افزار",
         "Panels" => "پنل‌ها",
+        "Collapse group" => "جمع‌کردن گروه",
+        "Expand group" => "بازکردن گروه",
+        "New effect in this group" => "جلوهٔ جدید در این گروه",
+        "Edit effect" => "ویرایش جلوه",
         "My effects" => "جلوه‌های من",
         "Macro" => "ماکرو",
         "Strip" => "نوار نور",
@@ -195,9 +199,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "The attached board does not advertise front-panel state." => {
             "برد متصل وضعیت پنل جلویی را اعلام نمی‌کند."
         }
-        "The attached board does not advertise settings." => {
-            "برد متصل تنظیمات را اعلام نمی‌کند."
-        }
+        "The attached board does not advertise settings." => "برد متصل تنظیمات را اعلام نمی‌کند.",
         "Raw segments" => "بخش‌های خام",
         "Brightness" => "روشنایی",
         "Blink" => "چشمک",
@@ -225,13 +227,24 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Position" => "موقعیت",
         "Player controls" => "کنترل‌های پخش‌کننده",
         "Connection" => "اتصال",
+        "Motion controls" => "کنترل‌های حرکتی",
+        "Button behavior" => "رفتار دکمه",
+        "Toggle on press" => "تغییر حالت با فشردن",
+        "Run only while held" => "حرکت فقط هنگام نگه‌داشتن",
+        "Use one-row compact hardware controls" => "استفاده از کنترل سخت‌افزار فشردهٔ یک‌ردیفه",
+        "Toggle mode keeps a direction active until another action is chosen. Hold mode sends Stop when the pressed direction is released." => {
+            "در حالت تغییر وضعیت، جهت تا انتخاب فرمان بعدی فعال می‌ماند. در حالت نگه‌داشتن، با رهاکردن دکمه فرمان توقف فرستاده می‌شود."
+        }
         "Video surface" => "سطح ویدئو",
         "Status bar" => "نوار وضعیت",
+        "Hide" => "پنهان‌کردن",
         "Hardware connection" => "اتصال سخت‌افزار",
+        "Hardware telemetry" => "دورسنجی سخت‌افزار",
         "Physical status RGB" => "چراغ RGB فیزیکی",
         "Hardware warnings" => "هشدارهای سخت‌افزار",
         "Clock" => "ساعت",
         "Media rate" => "نرخ رسانه",
+        "Media frame rate" => "نرخ قاب رسانه",
         "Telemetry" => "دورسنجی",
         "Workspace mode" => "حالت فضای کاری",
         "Search" => "جست‌وجو",
@@ -249,6 +262,9 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
             "برد متصل هیچ کنترل رله‌ای اعلام نکرده است."
         }
         "Connected board" => "برد متصل",
+        "Group" => "گروه",
+        "No group" => "بدون گروه",
+        "Change group" => "تغییر گروه",
         "Connected board:" => "برد متصل:",
         "Force ON" => "روشن‌کردن اجباری",
         "ON" => "روشن",

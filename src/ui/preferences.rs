@@ -1,5 +1,7 @@
 use crate::app::PealayerApp;
-use crate::config::{AppLanguage, AppTheme, OsdPosition, PlayerDragAction, VideoBackground};
+use crate::config::{
+    AppLanguage, AppTheme, MotionControlMode, OsdPosition, PlayerDragAction, VideoBackground,
+};
 use eframe::egui;
 
 const TABS: [(&str, &str); 5] = [
@@ -15,71 +17,84 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         return;
     }
     let mut open = app.show_preferences_dialog;
+    let bounds = ui.ctx().content_rect().shrink(18.0);
+    let default_size = egui::vec2(bounds.width().min(540.0), bounds.height().min(470.0));
+    let min_size = egui::vec2(bounds.width().min(390.0), bounds.height().min(330.0));
     egui::Window::new(format!(
         "{} {}",
         crate::ui::icons::GEAR,
         app.tr("Preferences")
     ))
     .open(&mut open)
-    .default_size([560.0, 470.0])
-    .min_size([460.0, 360.0])
-    .max_size([900.0, 820.0])
+    .default_size(default_size)
+    .min_size(min_size)
+    .max_size(bounds.size())
+    .constrain_to(bounds)
     .resizable(true)
     .collapsible(false)
     .show(ui.ctx(), |ui| {
         let mut changed = false;
-        let content_height = ui.available_height().max(320.0);
-        ui.horizontal_top(|ui| {
-            ui.allocate_ui_with_layout(
-                egui::vec2(134.0, content_height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    ui.spacing_mut().item_spacing.y = 5.0;
-                    for (index, (icon, tab)) in TABS.into_iter().enumerate() {
-                        if ui
-                            .add_sized(
-                                [126.0, 34.0],
-                                egui::Button::new(format!("{icon}  {}", app.tr(tab)))
-                                    .selected(app.preferences_tab == index),
-                            )
-                            .clicked()
-                        {
-                            app.preferences_tab = index;
-                        }
-                    }
-                },
-            );
+        let narrow = ui.available_width() < 500.0;
+        if narrow {
+            ui.horizontal_wrapped(|ui| draw_tabs(app, ui, true));
             ui.separator();
-            let detail_width = ui.available_width().max(280.0);
-            ui.allocate_ui_with_layout(
-                egui::vec2(detail_width, content_height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("preferences_content")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            ui.set_width(detail_width - 12.0);
-                            ui.vertical(|ui| {
-                                ui.set_width(detail_width - 12.0);
-                                ui.spacing_mut().item_spacing.y = 8.0;
-                                match app.preferences_tab {
-                                    0 => appearance_preferences(app, ui, &mut changed),
-                                    1 => playback_preferences(app, ui, &mut changed),
-                                    2 => hardware_preferences(app, ui, &mut changed),
-                                    3 => input_preferences(app, ui, &mut changed),
-                                    _ => advanced_preferences(app, ui),
-                                }
-                            });
-                        });
-                },
-            );
-        });
+            draw_preferences_content(app, ui, &mut changed);
+        } else {
+            let content_height = ui.available_height();
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(126.0, content_height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| draw_tabs(app, ui, false),
+                );
+                ui.separator();
+                draw_preferences_content(app, ui, &mut changed);
+            });
+        }
         if changed {
             app.save_config();
         }
     });
     app.show_preferences_dialog = open;
+}
+
+fn draw_tabs(app: &mut PealayerApp, ui: &mut egui::Ui, compact: bool) {
+    ui.spacing_mut().item_spacing.y = 5.0;
+    for (index, (icon, tab)) in TABS.into_iter().enumerate() {
+        let width = if compact {
+            (ui.available_width() / 2.0 - 4.0).max(112.0)
+        } else {
+            120.0
+        };
+        if ui
+            .add_sized(
+                [width, 32.0],
+                egui::Button::new(format!("{icon}  {}", app.tr(tab)))
+                    .selected(app.preferences_tab == index),
+            )
+            .clicked()
+        {
+            app.preferences_tab = index;
+        }
+    }
+}
+
+fn draw_preferences_content(app: &mut PealayerApp, ui: &mut egui::Ui, changed: &mut bool) {
+    let detail_width = ui.available_width();
+    egui::ScrollArea::vertical()
+        .id_salt("preferences_content")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_max_width((detail_width - 8.0).max(180.0));
+            ui.spacing_mut().item_spacing.y = 8.0;
+            match app.preferences_tab {
+                0 => appearance_preferences(app, ui, changed),
+                1 => playback_preferences(app, ui, changed),
+                2 => hardware_preferences(app, ui, changed),
+                3 => input_preferences(app, ui, changed),
+                _ => advanced_preferences(app, ui),
+            }
+        });
 }
 
 fn appearance_preferences(app: &mut PealayerApp, ui: &mut egui::Ui, changed: &mut bool) {
@@ -267,6 +282,51 @@ fn hardware_preferences(app: &mut PealayerApp, ui: &mut egui::Ui, changed: &mut 
             ui.colored_label(ui.visuals().warn_fg_color, notice);
         }
     });
+    preference_section(
+        ui,
+        crate::ui::icons::SEAT,
+        &app.tr("Motion controls"),
+        |ui| {
+            let toggle_label = app.tr("Toggle on press");
+            let hold_label = app.tr("Run only while held");
+            let compact_label = app.tr("Use one-row compact hardware controls");
+            preference_grid(ui, "motion_control_preferences", |ui| {
+                ui.label(app.tr("Button behavior"));
+                egui::ComboBox::from_id_salt("motion_control_mode")
+                    .selected_text(match app.motion_control_mode {
+                        MotionControlMode::Toggle => toggle_label.clone(),
+                        MotionControlMode::Hold => hold_label.clone(),
+                    })
+                    .show_ui(ui, |ui| {
+                        *changed |= ui
+                            .selectable_value(
+                                &mut app.motion_control_mode,
+                                MotionControlMode::Toggle,
+                                &toggle_label,
+                            )
+                            .changed();
+                        *changed |= ui
+                            .selectable_value(
+                                &mut app.motion_control_mode,
+                                MotionControlMode::Hold,
+                                &hold_label,
+                            )
+                            .changed();
+                    });
+                ui.end_row();
+            });
+            *changed |= ui
+                .checkbox(&mut app.compact_hardware_controls, compact_label)
+                .changed();
+            ui.label(
+                egui::RichText::new(app.tr(
+                    "Toggle mode keeps a direction active until another action is chosen. Hold mode sends Stop when the pressed direction is released.",
+                ))
+                .small()
+                .weak(),
+            );
+        },
+    );
 }
 
 fn input_preferences(app: &mut PealayerApp, ui: &mut egui::Ui, changed: &mut bool) {

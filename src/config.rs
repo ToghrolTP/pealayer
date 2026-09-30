@@ -63,6 +63,14 @@ pub enum VideoBackground {
     Theme,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MotionControlMode {
+    #[default]
+    Toggle,
+    Hold,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct StatusBarConfig {
@@ -113,6 +121,8 @@ pub struct AppConfig {
     pub paused_drag_action: PlayerDragAction,
     pub playing_drag_action: PlayerDragAction,
     pub fullscreen_video_background: VideoBackground,
+    pub motion_control_mode: MotionControlMode,
+    pub compact_hardware_controls: bool,
     pub status_bar: StatusBarConfig,
 }
 
@@ -142,6 +152,8 @@ impl Default for AppConfig {
             paused_drag_action: PlayerDragAction::MoveWindow,
             playing_drag_action: PlayerDragAction::TemporaryFastForward,
             fullscreen_video_background: VideoBackground::Black,
+            motion_control_mode: MotionControlMode::Toggle,
+            compact_hardware_controls: false,
             status_bar: StatusBarConfig::default(),
         }
     }
@@ -824,6 +836,8 @@ mod tests {
                 "theme": "dark",
                 "hardware_endpoint": "pccontroller://cafe-pc:8787",
                 "pause_on_hardware_disconnect": false,
+                "motion_control_mode": "hold",
+                "compact_hardware_controls": true,
                 "status_bar": {
                     "media_rate": false,
                     "hardware": true,
@@ -840,6 +854,8 @@ mod tests {
             Some("pccontroller://cafe-pc:8787")
         );
         assert!(!updated.pause_on_hardware_disconnect);
+        assert_eq!(updated.motion_control_mode, MotionControlMode::Hold);
+        assert!(updated.compact_hardware_controls);
         assert!(!updated.status_bar.media_rate);
         assert!(!updated.status_bar.workspace);
         assert!(

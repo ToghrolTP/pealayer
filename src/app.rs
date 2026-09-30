@@ -55,6 +55,13 @@ pub struct ActiveDragState {
 pub struct EffectPreset {
     pub category: String,
     pub effect: crate::four_d::models::Effect,
+    pub source: EffectPresetSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectPresetSource {
+    ControllerMacro(u64),
+    UserStrip(uuid::Uuid),
 }
 
 #[derive(Debug, Clone)]
@@ -229,6 +236,8 @@ pub struct PealayerApp {
     pub(crate) paused_drag_action: crate::config::PlayerDragAction,
     pub(crate) playing_drag_action: crate::config::PlayerDragAction,
     pub(crate) fullscreen_video_background: crate::config::VideoBackground,
+    pub(crate) motion_control_mode: crate::config::MotionControlMode,
+    pub(crate) compact_hardware_controls: bool,
     pub(crate) status_bar: crate::config::StatusBarConfig,
     pub(crate) config_fingerprint: Option<u64>,
     pub(crate) last_config_poll: std::time::Instant,
@@ -688,15 +697,49 @@ impl eframe::App for PealayerApp {
             .frame(frame)
             .show_inside(ui, |ui| {
                 if self.show_four_d_editor {
+                    let workspace_tab_rects_id = egui::Id::new("workspace-tab-button-rects");
+                    ui.ctx().data_mut(|data| {
+                        data.insert_temp(workspace_tab_rects_id, Vec::<egui::Rect>::new());
+                    });
                     let mut dock_state =
                         std::mem::replace(&mut self.dock_state, egui_dock::DockState::new(vec![]));
                     let dock_response = ui.scope(|ui| {
                         let mut tab_viewer = crate::ui::layout::PealayerTabViewer { app: self };
                         egui_dock::DockArea::new(&mut dock_state)
-                            .show_leaf_collapse_buttons(false)
+                            .show_leaf_collapse_buttons(true)
                             .show_inside(ui, &mut tab_viewer);
                     });
                     self.dock_state = dock_state;
+                    let tab_rects = ui.ctx().data_mut(|data| {
+                        data.get_temp::<Vec<egui::Rect>>(workspace_tab_rects_id)
+                            .unwrap_or_default()
+                    });
+                    let pointer = ui.ctx().pointer_hover_pos();
+                    let open_empty_tab_menu = ui.ctx().input(|input| {
+                        input.pointer.button_clicked(egui::PointerButton::Secondary)
+                    }) && pointer.is_some_and(|position| {
+                        dock_response.response.rect.contains(position)
+                            && tab_rects
+                                .iter()
+                                .any(|rect| rect.y_range().contains(position.y))
+                            && !tab_rects.iter().any(|rect| rect.contains(position))
+                    });
+                    let popup_anchor = ui.interact(
+                        dock_response.response.rect,
+                        egui::Id::new("workspace-empty-tabbar-context-anchor"),
+                        egui::Sense::hover(),
+                    );
+                    egui::Popup::menu(&popup_anchor)
+                        .id(egui::Id::new("workspace-empty-tabbar-context-menu"))
+                        .at_pointer_fixed()
+                        .open_memory(
+                            open_empty_tab_menu.then_some(egui::SetOpenCommand::Bool(true)),
+                        )
+                        .show(|ui| {
+                            ui.strong(self.tr("Panels"));
+                            ui.separator();
+                            crate::ui::layout::draw_workspace_tab_menu(self, ui);
+                        });
                     dock_response.response.context_menu(|ui| {
                         crate::ui::layout::draw_workspace_tab_menu(self, ui);
                         ui.separator();
@@ -1896,6 +1939,8 @@ impl PealayerApp {
         cfg.paused_drag_action = self.paused_drag_action;
         cfg.playing_drag_action = self.playing_drag_action;
         cfg.fullscreen_video_background = self.fullscreen_video_background;
+        cfg.motion_control_mode = self.motion_control_mode;
+        cfg.compact_hardware_controls = self.compact_hardware_controls;
         cfg.status_bar = self.status_bar;
         cfg
     }
@@ -1957,6 +2002,8 @@ impl PealayerApp {
         self.paused_drag_action = config.paused_drag_action;
         self.playing_drag_action = config.playing_drag_action;
         self.fullscreen_video_background = config.fullscreen_video_background;
+        self.motion_control_mode = config.motion_control_mode;
+        self.compact_hardware_controls = config.compact_hardware_controls;
         self.status_bar = config.status_bar;
 
         let _ = self.mpv.set_property("volume", self.volume);
@@ -2217,6 +2264,7 @@ fn controller_macro_effect_preset(
 ) -> EffectPreset {
     EffectPreset {
         category: hardware_macro.category.clone(),
+        source: EffectPresetSource::ControllerMacro(hardware_macro.id),
         effect: crate::four_d::models::Effect::controller_macro(
             hardware_macro.name.clone(),
             String::new(),
@@ -2232,6 +2280,7 @@ fn controller_strip_effect_preset(
 ) -> EffectPreset {
     EffectPreset {
         category: strip_effect.category.clone(),
+        source: EffectPresetSource::UserStrip(strip_effect.id),
         effect: crate::four_d::models::Effect::controller_strip_effect(
             strip_effect.name.clone(),
             strip_effect.duration_ms,
@@ -2399,6 +2448,8 @@ impl Default for PealayerApp {
             paused_drag_action: crate::config::PlayerDragAction::MoveWindow,
             playing_drag_action: crate::config::PlayerDragAction::TemporaryFastForward,
             fullscreen_video_background: crate::config::VideoBackground::Black,
+            motion_control_mode: crate::config::MotionControlMode::Toggle,
+            compact_hardware_controls: false,
             status_bar: crate::config::StatusBarConfig::default(),
             config_fingerprint: crate::config::AppConfig::fingerprint(
                 &crate::config::AppConfig::get_config_path(),

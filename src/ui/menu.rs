@@ -306,15 +306,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         ui.close();
                     }
                     ui.separator();
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{} {}",
-                            crate::ui::icons::TABS,
-                            app.tr("Panels")
-                        ))
-                        .strong(),
+                    ui.menu_button(
+                        format!("{} {}", crate::ui::icons::TABS, app.tr("Panels")),
+                        |ui| crate::ui::layout::draw_workspace_tab_menu(app, ui),
                     );
-                    crate::ui::layout::draw_workspace_tab_menu(app, ui);
                 });
 
                 // Add right-aligned E-STOP and Serial controls
