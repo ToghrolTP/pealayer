@@ -113,7 +113,14 @@ fn main() -> eframe::Result {
             #[cfg(target_os = "windows")]
             {
                 let config = crate::config::AppConfig::load();
-                let app_identity = crate::config::resolved_app_name(&config);
+                let mut app_identity = crate::config::resolved_app_name(&config);
+                if let Ok(instance_id) = std::env::var("PEALAYER_INSTANCE_ID") {
+                    let instance_id = instance_id.trim();
+                    if !instance_id.is_empty() {
+                        app_identity.push(':');
+                        app_identity.push_str(instance_id);
+                    }
+                }
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
                 loop {
                     match crate::platform::windows::acquire_gui_ownership(&app_identity) {
