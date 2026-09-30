@@ -37,6 +37,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     );
 
                     let has_video = app.current_video_path.is_some();
+                    let can_seek = has_video && app.is_seekable && app.duration > 0.0;
 
                     ui.add_enabled_ui(has_video, |ui| {
                         let play_icon = if app.is_playback_finished() {
@@ -81,7 +82,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         app.show_remaining_time = !app.show_remaining_time;
                     }
 
-                    ui.add_enabled_ui(has_video, |ui| {
+                    ui.add_enabled_ui(can_seek, |ui| {
                         let mut current_pos = if has_video {
                             app.seek_pos.unwrap_or(app.playback_time)
                         } else {
@@ -101,10 +102,26 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         let response = ui.add(slider);
                         ui.spacing_mut().slider_width = old_width;
 
-                        if has_video && response.dragged() {
+                        if let Some(buffered_until) = app.buffered_until() {
+                            let fraction = (buffered_until / app.duration).clamp(0.0, 1.0) as f32;
+                            let buffered_rect = egui::Rect::from_min_max(
+                                egui::pos2(response.rect.left(), response.rect.bottom() - 2.0),
+                                egui::pos2(
+                                    response.rect.left() + response.rect.width() * fraction,
+                                    response.rect.bottom(),
+                                ),
+                            );
+                            ui.painter().rect_filled(
+                                buffered_rect,
+                                1.0,
+                                ui.visuals().selection.bg_fill.linear_multiply(0.55),
+                            );
+                        }
+
+                        if can_seek && response.dragged() {
                             app.scrub_to(current_pos);
                         }
-                        if has_video && response.drag_stopped() {
+                        if can_seek && response.drag_stopped() {
                             app.finish_scrub(current_pos);
                         }
                     });
@@ -198,7 +215,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             }
                         });
 
-                        let total_str = format_time(display_total);
+                        let total_str = if has_video && !can_seek && app.is_live_media() {
+                            "LIVE".to_string()
+                        } else {
+                            format_time(display_total)
+                        };
                         let total_resp = ui.add_enabled(has_video, egui::Label::new(total_str).sense(egui::Sense::click()));
                         if has_video && total_resp.clicked() {
                             app.show_remaining_time = !app.show_remaining_time;

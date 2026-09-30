@@ -340,7 +340,14 @@ pub fn sync_windows_jump_list(recent_media: &[std::path::PathBuf]) {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::UI::Shell::{SHARD_PATHW, SHAddToRecentDocs};
 
-    for path in recent_media.iter().take(10) {
+    // Windows' shell history is file-oriented and may be visible outside the
+    // app. Keep network locations (especially credential-bearing URLs) in
+    // Pealayer's own recent list only.
+    for path in recent_media
+        .iter()
+        .filter(|path| !crate::media::is_remote_media_target(&path.to_string_lossy()))
+        .take(10)
+    {
         if let Some(path_str) = path.to_str() {
             let wide_path: Vec<u16> = OsStr::new(path_str)
                 .encode_wide()

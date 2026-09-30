@@ -184,18 +184,15 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 ui.label(app.tr("No recent media"));
             } else {
                 for path in app.recent_media.clone() {
-                    let file_name = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| app.tr("Unknown"));
+                    let target = path.to_string_lossy();
+                    let label = crate::media::media_target_label(&target);
                     if ui
-                        .button(app.display_text(&file_name))
-                        .on_hover_text(path.display().to_string())
+                        .button(app.display_text(&label))
+                        .on_hover_text(crate::media::redact_media_target(&target))
                         .clicked()
                     {
                         ui.close();
-                        app.load_video_file(path);
+                        app.load_media_target(&target);
                     }
                 }
                 ui.separator();

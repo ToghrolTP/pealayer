@@ -1,236 +1,222 @@
-name: CI/CD
+name: "🚀 Build · Test · Release"
+run-name: "🚀 Pealayer · ${{ github.ref_name }} · ${{ github.event_name }}"
 
 on:
   push:
-    branches:
-      - "**"
-    tags:
-      - "*"
+    branches: ["**"]
+    tags: ["*"]
   pull_request:
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
     inputs:
       publish_release:
-        description: "Create a GitHub release from the selected branch"
+        description: Create a GitHub release from the selected branch
         required: false
         default: false
         type: boolean
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
+  actions: read
   contents: read
 
 env:
   LIBMPV_WINDOWS_RELEASES_API_URL: https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest
   UPX_WINDOWS_URL: https://github.com/upx/upx/releases/download/v5.2.0/upx-5.2.0-win64.zip
   UPX_WINDOWS_SHA256: b471ebf1b7f20f4a89150264ed9a008a2a5bfd247f3c6d1184a75bb59ca08f5d
-  ARTIFACT_RETENTION_DAYS: "30"
+  CARGO_TERM_COLOR: always
+  FORCE_COLOR: "1"
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  RUST_BACKTRACE: "1"
+  TZ: UTC
 
 jobs:
+  quality:
+    name: "🛡️ Repository health · Web UI"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: "📥 Check out source without persisted credentials"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: "🟢 Install Node.js"
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web_ui/package-lock.json
+      - name: "📦 Restore locked web dependencies"
+        run: npm ci --prefix web_ui --ignore-scripts --no-audit --no-fund
+      - name: "🌐 Type-check and build the web UI"
+        run: npm run build --prefix web_ui
+      - name: "🐹 Install Go for actionlint"
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          cache: false
+          go-version: "1.25.x"
+      - name: "✅ Validate every GitHub Actions workflow"
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: "🧹 Check whitespace"
+        run: git diff --check HEAD^ HEAD -- .
+      - name: "⬆️ Upload verified web application"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: web-ui-${{ github.sha }}
+          path: web_ui/dist
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'pull_request' && 14 || 90 }}
+      - name: "✨ Publish repository quality summary"
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'MARKDOWN'
+          # ✅ Repository health passed
+
+          | Quality gate | Result |
+          |---|---|
+          | Web dependency restore | ✅ locked with `npm ci` |
+          | TypeScript + Vite build | ✅ passed |
+          | Generated web artifact | ✅ rebuilt from source |
+          | Actions syntax | ✅ actionlint passed |
+          | Whitespace | ✅ clean |
+          MARKDOWN
+
   build:
-    name: Build (${{ matrix.platform }})
+    name: "${{ matrix.icon }} ${{ matrix.label }}"
+    needs: quality
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: linux-x86_64
-            os: ubuntu-latest
-            binary_name: pealayer
-            archive_ext: tar.gz
-          - platform: windows-x86_64
-            os: windows-latest
-            binary_name: pealayer.exe
-            archive_ext: zip
-          - platform: macos-aarch64
-            os: macos-15
-            binary_name: pealayer
-            archive_ext: zip
-          - platform: macos-x86_64
-            os: macos-15-intel
-            binary_name: pealayer
-            archive_ext: zip
-
+          - { platform: linux-x86_64, label: "Linux · x86-64", icon: "🐧", os: ubuntu-24.04, binary_name: pealayer, archive_ext: tar.gz }
+          - { platform: windows-x86_64, label: "Windows · x86-64", icon: "🪟", os: windows-2025, binary_name: pealayer.exe, archive_ext: zip }
+          - { platform: macos-aarch64, label: "macOS · Apple silicon", icon: "🍎", os: macos-15, binary_name: pealayer, archive_ext: zip }
+          - { platform: macos-x86_64, label: "macOS · Intel", icon: "🍎", os: macos-15-intel, binary_name: pealayer, archive_ext: zip }
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install MinGW toolchain (Windows)
+      - name: "📥 Check out source without persisted credentials"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: "⬇️ Download verified web application"
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: web-ui-${{ github.sha }}
+          path: web_ui/dist
+      - name: "🦀 Install stable Rust toolchain"
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - name: "⚡ Restore Rust build cache"
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: ${{ matrix.platform }}
+      - name: "🧰 Install MinGW toolchain"
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $mingwBin = 'C:\msys64\mingw64\bin'
-          if (-not (Test-Path $mingwBin)) {
-            throw "Could not find MSYS2 MinGW64 bin directory at $mingwBin"
-          }
+          if (-not (Test-Path $mingwBin)) { throw "Missing $mingwBin" }
           Add-Content -Path $env:GITHUB_PATH -Value $mingwBin
           rustup target add x86_64-pc-windows-gnu
-
-      - name: Install Linux build dependencies
+      - name: "📦 Install Linux native dependencies"
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libmpv-dev pkg-config libasound2-dev libx11-dev libxcb-shape0-dev libxcb-xfixes0-dev libudev-dev
-
-      - name: Install macOS build dependencies
+      - name: "📦 Install macOS native dependencies"
         if: runner.os == 'macOS'
         run: |
           brew list mpv &>/dev/null || brew install mpv
           brew list pkg-config &>/dev/null || brew install pkg-config
-          if [[ "${RUNNER_ARCH}" == "ARM64" ]]; then
-            BREW_PREFIX="/opt/homebrew"
-          else
-            BREW_PREFIX="/usr/local"
-          fi
-          echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/mpv/lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "DYLD_FALLBACK_LIBRARY_PATH=${BREW_PREFIX}/lib:${BREW_PREFIX}/opt/mpv/lib" >> "$GITHUB_ENV"
-          echo "LIBRARY_PATH=${BREW_PREFIX}/lib:${BREW_PREFIX}/opt/mpv/lib" >> "$GITHUB_ENV"
-          echo "RUSTFLAGS=-L native=${BREW_PREFIX}/lib -L native=${BREW_PREFIX}/opt/mpv/lib -C link-arg=-L${BREW_PREFIX}/lib -C link-arg=-L${BREW_PREFIX}/opt/mpv/lib -C link-arg=-Wl,-rpath,${BREW_PREFIX}/lib -C link-arg=-Wl,-rpath,${BREW_PREFIX}/opt/mpv/lib" >> "$GITHUB_ENV"
-          echo "${BREW_PREFIX}/bin" >> "$GITHUB_PATH"
-
-      - name: Run tests (Linux)
-        if: runner.os == 'Linux'
-        run: cargo test --locked
-
-      - name: Run tests (macOS)
-        if: runner.os == 'macOS'
-        run: cargo test --locked
-
-      - name: Download latest libmpv from GitHub releases (Windows)
+          if [[ "$RUNNER_ARCH" == ARM64 ]]; then BREW_PREFIX=/opt/homebrew; else BREW_PREFIX=/usr/local; fi
+          {
+            echo "PKG_CONFIG_PATH=${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/mpv/lib/pkgconfig"
+            echo "DYLD_FALLBACK_LIBRARY_PATH=${BREW_PREFIX}/lib:${BREW_PREFIX}/opt/mpv/lib"
+            echo "LIBRARY_PATH=${BREW_PREFIX}/lib:${BREW_PREFIX}/opt/mpv/lib"
+            echo "RUSTFLAGS=-L native=${BREW_PREFIX}/lib -L native=${BREW_PREFIX}/opt/mpv/lib -C link-arg=-Wl,-rpath,${BREW_PREFIX}/lib -C link-arg=-Wl,-rpath,${BREW_PREFIX}/opt/mpv/lib"
+          } >> "$GITHUB_ENV"
+      - name: "🎬 Download checksum-verified libmpv"
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $apiUrl = '${{ env.LIBMPV_WINDOWS_RELEASES_API_URL }}'
-          $headers = @{
-            Accept = 'application/vnd.github+json'
-            'X-GitHub-Api-Version' = '2022-11-28'
-          }
-          if ($env:GITHUB_TOKEN) {
-            $headers.Authorization = ('token ' + $env:GITHUB_TOKEN)
-          }
-          $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers
+          $headers = @{ Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
+          if ($env:GITHUB_TOKEN) { $headers.Authorization = 'token ' + $env:GITHUB_TOKEN }
+          $release = Invoke-RestMethod -Uri '${{ env.LIBMPV_WINDOWS_RELEASES_API_URL }}' -Headers $headers
           $assets = @($release.assets) | Where-Object { $_.name -match '^mpv-dev-x86_64(?:-v3)?-.*\.7z$' }
-          if (-not $assets) {
-            throw 'Could not find latest x86_64 mpv-dev .7z asset in the GitHub release.'
-          }
           $asset = $assets | Where-Object { $_.name -notmatch '^mpv-dev-x86_64-v3-' } | Select-Object -First 1
-          if (-not $asset) {
-            $asset = $assets | Select-Object -First 1
-          }
-
-          $downloadUrl = $asset.browser_download_url
-          $archiveName = $asset.name
-
-          $archivePath = Join-Path $env:RUNNER_TEMP $archiveName
-          $extractDir = Join-Path $env:RUNNER_TEMP 'libmpv'
-          Write-Host "Using libmpv package: $archiveName"
-
-          Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath
-          $actualHash = (Get-FileHash -Path $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-          $expectedHash = [string]$asset.digest -replace '^sha256:', ''
-          if (-not $expectedHash -or $actualHash -ne $expectedHash.ToLowerInvariant()) {
-            throw "libmpv archive SHA-256 mismatch: expected $expectedHash, found $actualHash"
-          }
-          & 7z x $archivePath "-o$extractDir" -y
-
-          # This job targets MinGW/GNU, so never let filesystem enumeration
-          # accidentally select the MSVC import library first.
-          $importLib = Get-ChildItem -Path $extractDir -Recurse -File -Filter 'libmpv.dll.a' |
-            Select-Object -First 1
-          if (-not $importLib) {
-            $importLib = Get-ChildItem -Path $extractDir -Recurse -File -Filter 'libmpv.a' |
-              Select-Object -First 1
-          }
-          if (-not $importLib) {
-            throw 'No supported libmpv import library was found in the extracted package.'
-          }
-
-          $mpvDllCandidates = Get-ChildItem -Path $extractDir -Recurse -File | Where-Object {
-            $_.Name -in @('libmpv-2.dll', 'mpv-2.dll')
-          }
-          $mpvDll = $mpvDllCandidates | Where-Object { $_.Name -eq 'libmpv-2.dll' } | Select-Object -First 1
-          if (-not $mpvDll) {
-            $mpvDll = $mpvDllCandidates | Where-Object { $_.Name -eq 'mpv-2.dll' } | Select-Object -First 1
-          }
-          if (-not $mpvDll) {
-            throw 'Neither mpv-2.dll nor libmpv-2.dll was found in the extracted package.'
-          }
-
-          "MPV_IMPORT_LIB_PATH=$($importLib.FullName)" >> $env:GITHUB_ENV
+          if (-not $asset) { $asset = $assets | Select-Object -First 1 }
+          if (-not $asset) { throw 'No x86_64 mpv-dev archive found.' }
+          $archive = Join-Path $env:RUNNER_TEMP $asset.name
+          $extract = Join-Path $env:RUNNER_TEMP libmpv
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archive
+          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = [string]$asset.digest -replace '^sha256:', ''
+          if (-not $expected -or $actual -ne $expected.ToLowerInvariant()) { throw "libmpv SHA-256 mismatch: $actual" }
+          & 7z x $archive "-o$extract" -y
+          $importLib = Get-ChildItem $extract -Recurse -File -Filter libmpv.dll.a | Select-Object -First 1
+          if (-not $importLib) { $importLib = Get-ChildItem $extract -Recurse -File -Filter libmpv.a | Select-Object -First 1 }
+          if (-not $importLib) { throw 'No GNU-compatible libmpv import library found.' }
+          $dlls = Get-ChildItem $extract -Recurse -File | Where-Object { $_.Name -in @('libmpv-2.dll', 'mpv-2.dll') }
+          $mpvDll = $dlls | Where-Object Name -eq libmpv-2.dll | Select-Object -First 1
+          if (-not $mpvDll) { $mpvDll = $dlls | Select-Object -First 1 }
+          if (-not $mpvDll) { throw 'No libmpv runtime DLL found.' }
           "MPV_DLL_PATH=$($mpvDll.FullName)" >> $env:GITHUB_ENV
           "RUSTFLAGS=-L native=$($importLib.DirectoryName)" >> $env:GITHUB_ENV
-          Add-Content -Path $env:GITHUB_PATH -Value $mpvDll.DirectoryName
-
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Windows libmpv package"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Source: $downloadUrl"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Import library: $($importLib.Name)"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Runtime DLL: $($mpvDll.FullName)"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- SHA256: $actualHash"
-
-      - name: Install hash-locked UPX (Windows)
+          Add-Content $env:GITHUB_PATH $mpvDll.DirectoryName
+          @('### 🎬 Windows libmpv', '| Property | Value |', '|---|---|', "| Package | ``$($asset.name)`` |", "| Runtime | ``$($mpvDll.Name)`` |", "| SHA-256 | ``$actual`` |") | Add-Content $env:GITHUB_STEP_SUMMARY
+      - name: "🗜️ Install checksum-verified UPX"
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $archive = Join-Path $env:RUNNER_TEMP 'upx-5.2.0-win64.zip'
-          $extract = Join-Path $env:RUNNER_TEMP 'upx'
-          Invoke-WebRequest -Uri '${{ env.UPX_WINDOWS_URL }}' -OutFile $archive
-          $actual = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne '${{ env.UPX_WINDOWS_SHA256 }}') {
-            throw "UPX archive SHA-256 mismatch: $actual"
-          }
-          Expand-Archive -Path $archive -DestinationPath $extract
-          $upx = Get-ChildItem -Path $extract -Recurse -Filter upx.exe | Select-Object -First 1
-          if (-not $upx) { throw 'UPX executable was not found after extraction.' }
-          Add-Content -Path $env:GITHUB_PATH -Value $upx.DirectoryName
+          $archive = Join-Path $env:RUNNER_TEMP upx.zip
+          $extract = Join-Path $env:RUNNER_TEMP upx
+          Invoke-WebRequest '${{ env.UPX_WINDOWS_URL }}' -OutFile $archive
+          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '${{ env.UPX_WINDOWS_SHA256 }}') { throw "UPX SHA-256 mismatch: $actual" }
+          Expand-Archive $archive $extract
+          $upx = Get-ChildItem $extract -Recurse -Filter upx.exe | Select-Object -First 1
+          if (-not $upx) { throw 'UPX executable not found.' }
           "UPX_PATH=$($upx.FullName)" >> $env:GITHUB_ENV
-          & $upx.FullName --version
-
-      - name: Run tests (Windows GNU)
+      - name: "🧪 Run Rust tests"
+        if: runner.os != 'Windows'
+        run: cargo test --locked
+      - name: "🧪 Run Rust tests · Windows GNU"
         if: runner.os == 'Windows'
-        shell: pwsh
         env:
           CARGO_BUILD_JOBS: "1"
         run: cargo test --locked --jobs 1 --target x86_64-pc-windows-gnu
-
-      - name: Build release binary
+      - name: "🚀 Build release binary"
         if: runner.os != 'Windows'
         run: cargo build --release --locked
-
-      - name: Build release binary (Windows GNU)
+      - name: "🚀 Build release binary · Windows GNU"
         if: runner.os == 'Windows'
         run: cargo build --release --locked --target x86_64-pc-windows-gnu
-
-      - name: Pack and smoke-test Windows binary
+      - name: "🧪 Pack and smoke-test Windows binary"
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
           $binary = Join-Path $PWD 'target\x86_64-pc-windows-gnu\release\pealayer.exe'
-          Copy-Item -LiteralPath $env:MPV_DLL_PATH -Destination (Split-Path $binary) -Force
+          Copy-Item $env:MPV_DLL_PATH (Split-Path $binary) -Force
           & $env:UPX_PATH --best --lzma $binary
-          if ($LASTEXITCODE -ne 0) { throw "UPX compression failed: $LASTEXITCODE" }
+          if ($LASTEXITCODE) { throw "UPX compression failed: $LASTEXITCODE" }
           & $env:UPX_PATH -t $binary
-          if ($LASTEXITCODE -ne 0) { throw "UPX validation failed: $LASTEXITCODE" }
-          $smoke = Start-Process -FilePath $binary -ArgumentList '--smoke-test' -WorkingDirectory (Split-Path $binary) -Wait -PassThru
-          if ($smoke.ExitCode -ne 0) { throw "Packed libmpv smoke test failed: $($smoke.ExitCode)" }
-
-      - name: Smoke-test binary (macOS)
+          if ($LASTEXITCODE) { throw "UPX validation failed: $LASTEXITCODE" }
+          $smoke = Start-Process $binary -ArgumentList --smoke-test -WorkingDirectory (Split-Path $binary) -Wait -PassThru
+          if ($smoke.ExitCode) { throw "Smoke test failed: $($smoke.ExitCode)" }
+      - name: "🧪 Smoke-test macOS binary"
         if: runner.os == 'macOS'
-        run: |
-          ./target/release/pealayer --smoke-test
-
-      - name: Package build output
+        run: ./target/release/pealayer --smoke-test
+      - name: "📦 Package build output"
         id: package
         shell: bash
         env:
@@ -239,143 +225,157 @@ jobs:
           ARCHIVE_EXT: ${{ matrix.archive_ext }}
         run: |
           set -euo pipefail
-          DIST_DIR="dist/${PLATFORM}"
-          mkdir -p "${DIST_DIR}"
-          binary_path="target/release/${BINARY_NAME}"
-          if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            binary_path="target/x86_64-pc-windows-gnu/release/${BINARY_NAME}"
+          output="dist/$PLATFORM"
+          mkdir -p "$output/assets/fonts" "$output/web_ui"
+          binary="target/release/$BINARY_NAME"
+          if [[ "$RUNNER_OS" == Windows ]]; then binary="target/x86_64-pc-windows-gnu/release/$BINARY_NAME"; fi
+          cp "$binary" README.md LICENSE "$output/"
+          cp assets/fonts/Vazirmatn-Regular.ttf "$output/assets/fonts/"
+          cp -r web_ui/dist "$output/web_ui/"
+          if [[ "$RUNNER_OS" == Windows ]]; then cp "${MPV_DLL_PATH//\\//}" "$output/"; fi
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            if [[ "$RUNNER_ARCH" == ARM64 ]]; then prefix=/opt/homebrew; else prefix=/usr/local; fi
+            for dylib in libmpv.dylib libmpv.2.dylib; do
+              if [[ -f "$prefix/lib/$dylib" ]]; then cp -L "$prefix/lib/$dylib" "$output/"; fi
+            done
+            install_name_tool -add_rpath @executable_path "$output/$BINARY_NAME" 2>/dev/null || true
           fi
-          cp "${binary_path}" "${DIST_DIR}/"
-          cp README.md LICENSE "${DIST_DIR}/"
-          mkdir -p "${DIST_DIR}/assets/fonts"
-          cp assets/fonts/Vazirmatn-Regular.ttf "${DIST_DIR}/assets/fonts/"
-
-          if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            dll_source="${MPV_DLL_PATH//\\//}"
-            dll_name="$(basename "${dll_source}")"
-            cp "${dll_source}" "${DIST_DIR}/${dll_name}"
-          fi
-
-          if [[ "${RUNNER_OS}" == "macOS" ]]; then
-            if [[ "${RUNNER_ARCH}" == "ARM64" ]]; then
-              BREW_PREFIX="/opt/homebrew"
-            else
-              BREW_PREFIX="/usr/local"
-            fi
-            if [[ -f "${BREW_PREFIX}/lib/libmpv.dylib" ]]; then
-              cp -L "${BREW_PREFIX}/lib/libmpv.dylib" "${DIST_DIR}/" 2>/dev/null || true
-            fi
-            if [[ -f "${BREW_PREFIX}/lib/libmpv.2.dylib" ]]; then
-              cp -L "${BREW_PREFIX}/lib/libmpv.2.dylib" "${DIST_DIR}/" 2>/dev/null || true
-            fi
-            install_name_tool -add_rpath "@executable_path" "${DIST_DIR}/${BINARY_NAME}" 2>/dev/null || true
-          fi
-
-          if [[ -d "web_ui/dist" ]]; then
-            mkdir -p "${DIST_DIR}/web_ui"
-            cp -r "web_ui/dist" "${DIST_DIR}/web_ui/"
-          fi
-
-          SAFE_REF="${GITHUB_REF_NAME//\//-}"
-          BUNDLE_BASE="Pealayer-${PLATFORM}-${SAFE_REF}-${GITHUB_SHA::7}"
-          if [[ "${ARCHIVE_EXT}" == "zip" ]]; then
-            if command -v 7z >/dev/null 2>&1; then
-              (cd dist && 7z a "${BUNDLE_BASE}.zip" "${PLATFORM}")
-            else
-              (cd dist && zip -r "${BUNDLE_BASE}.zip" "${PLATFORM}")
-            fi
-            ARCHIVE_PATH="dist/${BUNDLE_BASE}.zip"
-          else
-            tar -C dist -czf "dist/${BUNDLE_BASE}.tar.gz" "${PLATFORM}"
-            ARCHIVE_PATH="dist/${BUNDLE_BASE}.tar.gz"
-          fi
-
-          BUNDLE_GLOB="dist/${PLATFORM}/**"
-          echo "archive_path=${ARCHIVE_PATH}" >> "$GITHUB_OUTPUT"
-          echo "archive_name=$(basename "${ARCHIVE_PATH}")" >> "$GITHUB_OUTPUT"
-          echo "bundle_glob=${BUNDLE_GLOB}" >> "$GITHUB_OUTPUT"
-          echo "safe_ref=${SAFE_REF}" >> "$GITHUB_OUTPUT"
-          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-
-      - name: Summarize build
+          safe_ref="${GITHUB_REF_NAME//\//-}"
+          base="Pealayer-$PLATFORM-$safe_ref-${GITHUB_SHA::7}"
+          if [[ "$ARCHIVE_EXT" == zip ]]; then (cd dist && 7z a "$base.zip" "$PLATFORM"); archive="dist/$base.zip"; else archive="dist/$base.tar.gz"; tar -C dist -czf "$archive" "$PLATFORM"; fi
+          {
+            echo "archive_path=$archive"
+            echo "archive_name=$(basename "$archive")"
+            echo "safe_ref=$safe_ref"
+            echo "short_sha=${GITHUB_SHA::7}"
+          } >> "$GITHUB_OUTPUT"
+      - name: "✨ Publish platform build summary"
         shell: pwsh
         run: |
-          $archive = "${{ steps.package.outputs.archive_path }}"
-          $hash = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLower()
+          $archive = '${{ steps.package.outputs.archive_path }}'
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           $size = (Get-Item $archive).Length
-
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Build summary (${{ matrix.platform }})"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '- Ref: `${{ github.ref }}`'
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '- Commit: `${{ github.sha }}`'
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '- Archive: `${{ steps.package.outputs.archive_name }}`'
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Size (bytes): $size"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- SHA256: $hash"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
+          @('## ${{ matrix.icon }} ${{ matrix.label }}', '| Property | Result |', '|---|---|', '| Tests | ✅ passed |', '| Release build | ✅ passed |', '| Smoke test | ${{ runner.os == 'Linux' && '— build-only' || '✅ passed' }} |', '| Archive | `${{ steps.package.outputs.archive_name }}` |', "| Size | $size bytes |", "| SHA-256 | ``$hash`` |") | Add-Content $env:GITHUB_STEP_SUMMARY
+      - name: "⬆️ Upload installable bundle"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: Pealayer-${{ matrix.platform }}-${{ steps.package.outputs.safe_ref }}-${{ steps.package.outputs.short_sha }}
-          path: ${{ steps.package.outputs.bundle_glob }}
+          path: dist/${{ matrix.platform }}/**
           if-no-files-found: error
-          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
-
-      - name: Upload release archive
+          retention-days: ${{ github.event_name == 'pull_request' && 14 || 90 }}
+      - name: "⬆️ Stage release archive"
         if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-${{ matrix.platform }}-${{ steps.package.outputs.safe_ref }}-${{ steps.package.outputs.short_sha }}
           path: ${{ steps.package.outputs.archive_path }}
           if-no-files-found: error
-          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+          retention-days: 90
+          compression-level: 0
 
   release:
-    name: Publish release
+    name: "✨ Release · Attested packages"
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
     permissions:
+      attestations: write
       contents: write
-
+      id-token: write
     steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v8
+      - name: "⬇️ Download release packages"
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: release-*
           merge-multiple: true
           path: release-assets
-
-      - name: Summarize release assets
+      - name: "🏷️ Prepare release identity"
+        id: meta
+        shell: bash
         run: |
-          {
-            echo "### Release assets"
-            echo "- Trigger: \`${{ github.event_name }}\`"
-            echo "- Source ref: \`${{ github.ref }}\`"
-            echo "- Files:"
-            find release-assets -type f -printf '  - `%P`\n'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Prepare release metadata
-        id: release_meta
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            { echo "tag=$GITHUB_REF_NAME"; echo "name=Pealayer $GITHUB_REF_NAME"; echo 'prerelease=false'; } >> "$GITHUB_OUTPUT"
+          else
+            safe="${GITHUB_REF_NAME//\//-}"
+            { echo "tag=branch-$safe"; echo "name=Pealayer branch build ($safe)"; echo 'prerelease=true'; } >> "$GITHUB_OUTPUT"
+          fi
+      - name: "📝 Generate release notes, manifest, and checksums"
+        env:
+          RELEASE_NAME: ${{ steps.meta.outputs.name }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            echo "tag_name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-            echo "release_name=Pealayer ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-          else
-            safe_ref="${GITHUB_REF_NAME//\//-}"
-            echo "tag_name=branch-${safe_ref}" >> "$GITHUB_OUTPUT"
-            echo "release_name=Pealayer branch build (${safe_ref})" >> "$GITHUB_OUTPUT"
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v3
+          mapfile -t archives < <(find release-assets -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) -printf '%f\n' | sort)
+          [[ ${#archives[@]} -eq 4 ]] || { echo "Expected 4 archives, found ${#archives[@]}" >&2; exit 1; }
+          jq -n --arg tag "$RELEASE_TAG" --arg sha "$GITHUB_SHA" --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --argjson assets "$(printf '%s\n' "${archives[@]}" | jq -R . | jq -s .)" '{format:"pealayer-release-manifest-v1",product:"Pealayer",tag:$tag,sourceSha:$sha,runUrl:$run,assets:$assets,integrity:{algorithm:"SHA-256",provenance:"GitHub artifact attestation"}}' > release-assets/release-manifest.json
+          {
+            echo "# 🚀 $RELEASE_NAME"; echo
+            echo '> [!IMPORTANT]'; echo '> Every native package passed its platform test/build matrix and carries GitHub build provenance.'; echo
+            echo '| Platform package | Verification |'; echo '|---|---|'
+            for archive in "${archives[@]}"; do echo "| \`$archive\` | SHA-256 + attestation |"; done
+            echo; echo '## 🔐 Verify'; echo; echo '```bash'; echo 'sha256sum --check SHA256SUMS.txt'; echo "gh attestation verify Pealayer-ARCHIVE --repo $GITHUB_REPOSITORY"; echo '```'; echo
+            echo "Built from [\`${GITHUB_SHA:0:12}\`]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA) · [workflow run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+          } > release-assets/RELEASE-NOTES.md
+          (
+            cd release-assets
+            find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum | sed 's#  \./#  #' > SHA256SUMS.tmp
+            mv SHA256SUMS.tmp SHA256SUMS.txt
+            sha256sum --check SHA256SUMS.txt
+          )
+      - name: "🛡️ Attest release provenance"
+        uses: actions/attest-build-provenance@8beda2b7ed98355c0e97c0a63bec38ae472e66c4 # v4
         with:
-          tag_name: ${{ steps.release_meta.outputs.tag_name }}
+          subject-path: release-assets/*
+      - name: "🚀 Create or update GitHub release"
+        uses: softprops/action-gh-release@5113cdc90fd4d541c801c55356214017bf5ae34b # v3
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: ${{ steps.release_meta.outputs.release_name }}
-          prerelease: ${{ steps.release_meta.outputs.prerelease }}
-          files: |
-            release-assets/**/*
+          name: ${{ steps.meta.outputs.name }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          body_path: release-assets/RELEASE-NOTES.md
+          files: release-assets/*
+      - name: "✨ Publish release summary"
+        run: cat release-assets/RELEASE-NOTES.md >> "$GITHUB_STEP_SUMMARY"
+
+  complete:
+    name: "🚦 Pealayer · Complete"
+    if: always()
+    needs: [quality, build, release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: "📋 Publish consolidated CI/CD summary"
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          result() { case "$1" in success) printf '✅ passed';; skipped) printf '⏭️ skipped';; cancelled) printf '⚪ cancelled';; *) printf '❌ %s' "$1";; esac; }
+          quality_status=$(result "$QUALITY_RESULT")
+          build_status=$(result "$BUILD_RESULT")
+          release_status=$(result "$RELEASE_RESULT")
+          cat >> "$GITHUB_STEP_SUMMARY" <<MARKDOWN
+          # 🚀 Pealayer CI/CD
+
+          | Stage | Result | Coverage |
+          |---|---|---|
+          | 🛡️ Repository health | $quality_status | Web UI · generated assets · actionlint · whitespace |
+          | 🧪 Native matrix | $build_status | Linux x86-64 · Windows x86-64 · macOS Intel · macOS Apple silicon |
+          | ✨ Release | $release_status | SHA-256 · provenance attestation · GitHub Release |
+
+          ## 📦 Run artifacts
+
+          | Artifact | Size | Expires |
+          |---|---:|---|
+          MARKDOWN
+          # shellcheck disable=SC2016
+          artifact_rows=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --jq '.artifacts[] | "| `\(.name)` | \(.size_in_bytes) bytes | \(.expires_at) |"') || artifact_rows='| Inventory unavailable | — | — |'
+          printf '%s\n' "$artifact_rows" >> "$GITHUB_STEP_SUMMARY"
+          [[ "$QUALITY_RESULT" == success && "$BUILD_RESULT" == success ]]
+          [[ "$RELEASE_RESULT" == success || "$RELEASE_RESULT" == skipped ]]
