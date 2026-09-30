@@ -141,6 +141,7 @@ mod tests {
 
     #[test]
     fn test_non_windows_registry_stubs() {
+        #[cfg(not(target_os = "windows"))]
         let cfg = AppConfig::default();
         #[cfg(not(target_os = "windows"))]
         {

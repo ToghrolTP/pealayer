@@ -65,6 +65,17 @@ pub struct EffectDragPayload {
     pub target: crate::four_d::models::HardwareTarget,
     pub actions: Vec<crate::four_d::models::AtomicAction>,
     pub controller_macro: Option<crate::four_d::models::ControllerMacroCue>,
+    pub controller_strip_effect: Option<crate::four_d::models::ControllerStripEffectCue>,
+}
+
+#[derive(Debug, Default)]
+pub struct HardwareEffectAuthoringState {
+    pub name: String,
+    pub active: bool,
+    pub anchor_ms: u64,
+    pub pending_operation: Option<String>,
+    pub pending_saved_macro_id: Option<u64>,
+    pub status: String,
 }
 
 pub struct RttState {
@@ -161,6 +172,7 @@ pub struct PealayerApp {
     pub(crate) recording_session: crate::four_d::curve_record::RecordingSession,
     pub(crate) input_capture: crate::four_d::input_capture::InputCaptureState,
     pub(crate) is_recording: bool,
+    pub(crate) hardware_effect_authoring: HardwareEffectAuthoringState,
 
     // Phase 4 & 5 Selection/Override state
     pub(crate) selected_instance_ids: std::collections::HashSet<uuid::Uuid>,
@@ -255,6 +267,7 @@ impl eframe::App for PealayerApp {
         }
 
         self.ensure_shell_initialized();
+        self.process_controller_call_results();
 
         if self.media_controls.is_none() {
             let hwnd = self
@@ -971,7 +984,168 @@ impl PealayerApp {
             .macros
             .iter()
             .map(controller_macro_effect_preset)
+            .chain(
+                capabilities
+                    .strip_effects
+                    .iter()
+                    .map(controller_strip_effect_preset),
+            )
             .collect()
+    }
+
+    fn controller_command_argument(value: &str) -> Option<String> {
+        let value = value.trim();
+        (!value.is_empty()
+            && value.len() <= 64
+            && value
+                .chars()
+                .all(|character| character.is_alphanumeric() || " -_".contains(character)))
+        .then(|| format!("\"{value}\""))
+    }
+
+    fn request_hardware_effect_command(
+        &mut self,
+        operation: &str,
+        command: String,
+    ) -> Result<(), String> {
+        if self.hardware_effect_authoring.pending_operation.is_some() {
+            return Err("another hardware effect operation is still running".to_string());
+        }
+        self.engine_handle.request_controller_call(
+            operation,
+            "controller.command.execute",
+            serde_json::json!({"command": command}),
+        )?;
+        self.hardware_effect_authoring.pending_operation = Some(operation.to_string());
+        self.hardware_effect_authoring.status = "Waiting for PCController…".to_string();
+        Ok(())
+    }
+
+    pub(crate) fn start_hardware_effect_recording(&mut self) -> Result<(), String> {
+        let name = Self::controller_command_argument(&self.hardware_effect_authoring.name)
+            .ok_or_else(|| {
+                "Effect name must be 1–64 letters, numbers, spaces, dashes, or underscores"
+                    .to_string()
+            })?;
+        self.hardware_effect_authoring.anchor_ms =
+            (self.seek_pos.unwrap_or(self.playback_time).max(0.0) * 1_000.0) as u64;
+        self.request_hardware_effect_command(
+            "macro-start",
+            format!("macro record start-board {name} Pealayer violet"),
+        )
+    }
+
+    pub(crate) fn refresh_hardware_effect_recording(&mut self) -> Result<(), String> {
+        self.request_hardware_effect_command(
+            "macro-status",
+            "macro record status".to_string(),
+        )
+    }
+
+    pub(crate) fn save_hardware_effect_recording(&mut self) -> Result<(), String> {
+        self.request_hardware_effect_command("macro-save", "macro record save".to_string())
+    }
+
+    pub(crate) fn discard_hardware_effect_recording(&mut self) -> Result<(), String> {
+        self.request_hardware_effect_command("macro-discard", "macro record discard".to_string())
+    }
+
+    pub(crate) fn preview_strip_effect(&mut self, id: &str) -> Result<(), String> {
+        let advertised = self.advertised_hardware().is_some_and(|capabilities| {
+            capabilities.board_connected
+                && capabilities
+                    .strip_effects
+                    .iter()
+                    .any(|effect| effect.id == id)
+        });
+        if !advertised {
+            return Err("the selected strip effect is no longer advertised".to_string());
+        }
+        self.request_hardware_effect_command(
+            "strip-preview",
+            format!("strip effect play {id}"),
+        )
+    }
+
+    pub(crate) fn stop_strip_preview(&mut self) -> Result<(), String> {
+        self.request_hardware_effect_command("strip-stop", "strip stop".to_string())
+    }
+
+    fn process_controller_call_results(&mut self) {
+        let results = self
+            .engine_handle
+            .controller_call_results
+            .lock()
+            .ok()
+            .map(|mut queue| queue.drain(..).collect::<Vec<_>>())
+            .unwrap_or_default();
+        for result in results {
+            self.hardware_effect_authoring.pending_operation = None;
+            match result.result {
+                Ok(value) => {
+                    let output = value
+                        .get("output")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("PCController accepted the operation")
+                        .to_string();
+                    match result.operation.as_str() {
+                        "macro-start" => self.hardware_effect_authoring.active = true,
+                        "macro-status" => {
+                            self.hardware_effect_authoring.active =
+                                output.contains("active=true");
+                        }
+                        "macro-save" => {
+                            self.hardware_effect_authoring.active = false;
+                            self.hardware_effect_authoring.pending_saved_macro_id =
+                                saved_macro_id(&output);
+                            self.engine_handle.request_catalog_refresh();
+                        }
+                        "macro-discard" => {
+                            self.hardware_effect_authoring.active = false;
+                            self.hardware_effect_authoring.pending_saved_macro_id = None;
+                        }
+                        _ => {}
+                    }
+                    self.hardware_effect_authoring.status = output.clone();
+                    self.set_osd(output);
+                }
+                Err(error) => {
+                    self.hardware_effect_authoring.status = error.clone();
+                    self.set_osd(error);
+                }
+            }
+        }
+        self.insert_pending_saved_macro();
+    }
+
+    fn insert_pending_saved_macro(&mut self) {
+        let Some(id) = self.hardware_effect_authoring.pending_saved_macro_id else {
+            return;
+        };
+        let Some(hardware_macro) = self
+            .advertised_hardware()
+            .and_then(|capabilities| capabilities.macros.into_iter().find(|item| item.id == id))
+        else {
+            return;
+        };
+        let effect = controller_macro_effect_preset(&hardware_macro).effect;
+        let effect_id = effect.id;
+        self.undo_stack.push(self.snapshot_timeline());
+        self.timeline.templates.push(effect);
+        let instance = crate::four_d::models::EffectInstance::new(
+            effect_id,
+            self.hardware_effect_authoring.anchor_ms,
+        );
+        self.selected_instance_ids.clear();
+        self.selected_instance_ids.insert(instance.id);
+        self.timeline.instances.push(instance);
+        self.hardware_effect_authoring.pending_saved_macro_id = None;
+        self.hardware_effect_authoring.status = format!(
+            "Saved '{}' and placed it at {:.3}s",
+            hardware_macro.name,
+            self.hardware_effect_authoring.anchor_ms as f64 / 1_000.0
+        );
+        self.sync_timeline_engine();
     }
 
     fn apply_interop_command(
@@ -1665,12 +1839,17 @@ impl PealayerApp {
             &self.track_soloed,
         );
         let macros = crate::four_d::engine::compile_controller_macros(&self.timeline);
+        let strip_effects =
+            crate::four_d::engine::compile_controller_strip_effects(&self.timeline);
         let _ = self
             .engine_handle
             .sender
             .send(crate::four_d::engine::EngineMessage::UpdateQueue(relays));
         let _ = self.engine_handle.sender.send(
             crate::four_d::engine::EngineMessage::UpdateControllerMacros(macros),
+        );
+        let _ = self.engine_handle.sender.send(
+            crate::four_d::engine::EngineMessage::UpdateControllerStripEffects(strip_effects),
         );
     }
 
@@ -1755,6 +1934,28 @@ fn controller_macro_effect_preset(
             hardware_macro.mode.clone(),
         ),
     }
+}
+
+fn controller_strip_effect_preset(
+    strip_effect: &crate::four_d::controller::HardwareStripEffect,
+) -> EffectPreset {
+    EffectPreset {
+        category: "Addressable strip".to_string(),
+        effect: crate::four_d::models::Effect::controller_strip_effect(
+            strip_effect.name.clone(),
+            5_000,
+            strip_effect.id.clone(),
+        ),
+    }
+}
+
+fn saved_macro_id(output: &str) -> Option<u64> {
+    output
+        .strip_prefix("macro ")?
+        .split_once('/')?
+        .0
+        .parse()
+        .ok()
 }
 
 fn get_shared_mpv() -> &'static libmpv2::Mpv {
@@ -1849,6 +2050,7 @@ impl Default for PealayerApp {
             recording_session: crate::four_d::curve_record::RecordingSession::new(),
             input_capture: crate::four_d::input_capture::InputCaptureState::new(),
             is_recording: false,
+            hardware_effect_authoring: HardwareEffectAuthoringState::default(),
             selected_instance_ids: std::collections::HashSet::new(),
             selected_keyframes: std::collections::HashSet::new(),
             active_keyframe_drag: None,
@@ -1946,6 +2148,15 @@ mod tests {
     use super::{
         DroppedFileKind, contextual_window_title, controller_macro_effect_preset, dropped_file_kind,
     };
+
+    #[test]
+    fn extracts_saved_controller_macro_id_for_catalog_reconciliation() {
+        assert_eq!(
+            super::saved_macro_id("macro 6/seat-motion saved with 7 mcu-timed steps"),
+            Some(6)
+        );
+        assert_eq!(super::saved_macro_id("recording is empty"), None);
+    }
 
     #[test]
     fn test_recent_media_deduplication_and_cap() {

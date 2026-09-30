@@ -184,6 +184,12 @@ Hardware discovery and connection are enabled by default and can be disabled in 
 
 PCController's peripheral catalog is authoritative for stable control/action keys and mutable names, icons, and groups. Pealayer renders semantic controls only from advertised action IDs, invokes them through `controller.action.invoke`, and edits channel names through the presentation contract. Older coordinators remain rename-compatible through `controller.peripherals.set`. Renames made in PCController WebUI/TUI are refreshed into Pealayer after the `peripherals.changed` notification (with periodic catalog refresh as recovery), while saved projects continue to identify hardware by stable keys rather than labels.
 
+#### Hardware effect authoring
+
+With an attached, configured board, open **Hardware Monitor → Record hardware effect**. Enter a take name and choose **Start board recording** at the desired video playhead. PCController records the board-applied actions coming from Pealayer, its TUI/Web/API, RF, or the physical front panel. **Refresh status** reports the captured step count; **Save and place** persists the take in PCController, refreshes the authoritative macro catalog, and inserts its durable macro cue at the original video anchor. **Discard** keeps neither the take nor a timeline cue.
+
+Addressable-strip effects are never synthesized by Pealayer. Only stable effect IDs advertised by the connected PCController are shown. Use **Preview**/**Stop preview** in Hardware Monitor for the live board, or drag an advertised strip effect from **Effects Library** onto **Controller effects**. The cue duration controls when Pealayer sends the matching start and stop commands during video playback; pause and seek stop an active preview so lighting cannot drift from the playhead.
+
 Pealayer also registers a leased `pealayer` application instance over PCController's `/ipc` WebSocket, subscribes to pushed state/event/opcode streams, and advertises exact-target player actions. PCController or a board mapping can send `pealayer.play`, `pealayer.pause`, `pealayer.toggle`, `pealayer.seek`, `pealayer.seek_absolute`, `pealayer.volume.set`, `pealayer.open`, or the compatible `app.page` navigation aliases. Pealayer deduplicates each operation/delivery pair, rejects malformed, expired, or unsupported deliveries, applies valid commands on the player thread, and acknowledges the coordinator's delivery nonce.
 
 ### 2. Direct PCController Wire Contract (Diagnostic/Fallback Only)

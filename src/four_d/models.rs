@@ -57,6 +57,14 @@ pub struct ControllerMacroCue {
     pub mode: String,
 }
 
+/// Durable reference to an effect advertised by PCController's addressable
+/// strip catalog. The coordinator owns rendering and board transport; Pealayer
+/// only schedules the stable ID and the authored cue duration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ControllerStripEffectCue {
+    pub id: String,
+}
+
 pub fn default_hardware_target() -> HardwareTarget {
     HardwareTarget::Any
 }
@@ -80,6 +88,9 @@ pub struct Effect {
     /// Opaque controller-owned macro executed as one synchronized cue.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controller_macro: Option<ControllerMacroCue>,
+    /// Opaque PCController strip-effect ID advertised by the active board.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_strip_effect: Option<ControllerStripEffectCue>,
 }
 
 impl Effect {
@@ -92,6 +103,7 @@ impl Effect {
             target: HardwareTarget::Any,
             actions,
             controller_macro: None,
+            controller_strip_effect: None,
         }
     }
 
@@ -110,6 +122,7 @@ impl Effect {
             target,
             actions,
             controller_macro: None,
+            controller_strip_effect: None,
         }
     }
 
@@ -128,6 +141,24 @@ impl Effect {
             target: HardwareTarget::ControllerMacro,
             actions: Vec::new(),
             controller_macro: Some(ControllerMacroCue { id: macro_id, mode }),
+            controller_strip_effect: None,
+        }
+    }
+
+    pub fn controller_strip_effect(
+        name: String,
+        duration_ms: u64,
+        effect_id: String,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name,
+            icon: String::new(),
+            duration_ms: duration_ms.max(1),
+            target: HardwareTarget::ControllerMacro,
+            actions: Vec::new(),
+            controller_macro: None,
+            controller_strip_effect: Some(ControllerStripEffectCue { id: effect_id }),
         }
     }
 }

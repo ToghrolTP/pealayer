@@ -388,6 +388,7 @@ fn main() -> eframe::Result {
                 recording_session: crate::four_d::curve_record::RecordingSession::new(),
                 input_capture: crate::four_d::input_capture::InputCaptureState::new(),
                 is_recording: false,
+                hardware_effect_authoring: crate::app::HardwareEffectAuthoringState::default(),
                 recording_keys: std::collections::HashMap::new(),
                 dock_state: crate::ui::layout::create_initial_layout(),
                 rtt_state: Arc::new(Mutex::new(crate::app::RttState {

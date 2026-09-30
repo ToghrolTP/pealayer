@@ -42,7 +42,7 @@ fn timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
         .advertised_hardware()
         .filter(|capabilities| capabilities.board_connected)
     {
-        if !capabilities.macros.is_empty() {
+        if !capabilities.macros.is_empty() || !capabilities.strip_effects.is_empty() {
             rows.push(TimelineTrackRow {
                 name: app.tr("Controller effects"),
                 kind: TimelineTrackKind::ControllerMacros,
@@ -475,7 +475,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                     ui.add_space(8.0);
 
+                                    let is_controller_owned = template.controller_macro.is_some()
+                                        || template.controller_strip_effect.is_some();
                                     let current_relay_id = template.actions.first().map(|a| a.relay_id).unwrap_or(0);
+                                    if !is_controller_owned {
                                     let is_mismatched = !template.target.is_compatible_with_relay(current_relay_id);
                                     if is_mismatched {
                                         let configured_name = template
@@ -539,6 +542,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             timeline_dirty = true;
                                         }
                                     });
+                                    }
 
                                     ui.add_space(12.0);
                                     if ui.button(egui::RichText::new(format!("× {delete_cue_label}")).color(egui::Color32::from_rgb(231, 76, 60))).clicked() {
@@ -599,8 +603,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                             if timeline_dirty {
-                                let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
-                                let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                                self.app.sync_timeline_engine();
                                 ui.ctx().request_repaint();
                             }
                         } else if selected_count > 1 {
@@ -623,9 +626,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             // Apply the advertised target to all selected instances' templates.
                                             let selected_ids = &self.app.selected_instance_ids;
                                             for inst in &mut self.app.timeline.instances {
-                                                if selected_ids.contains(&inst.id) {
-                                                    if let Some(template) = self.app.timeline.templates.iter_mut().find(|t| t.id == inst.effect_id) {
-                                                        template.actions = crate::four_d::patterns::generate_constant(relay.id, true, template.duration_ms);
+                                                    if selected_ids.contains(&inst.id) {
+                                                        if let Some(template) = self.app.timeline.templates.iter_mut().find(|t| t.id == inst.effect_id) {
+                                                            if template.controller_macro.is_some()
+                                                                || template.controller_strip_effect.is_some()
+                                                            {
+                                                                continue;
+                                                            }
+                                                            template.actions = crate::four_d::patterns::generate_constant(relay.id, true, template.duration_ms);
                                                         template.target = crate::four_d::models::HardwareTarget::Relay(relay.id);
                                                     }
                                                 }
@@ -655,8 +663,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                             if timeline_dirty {
-                                let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
-                                let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                                self.app.sync_timeline_engine();
                             }
                         } else {
                             ui.centered_and_justified(|ui| {
@@ -728,6 +735,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         target: preset.effect.target,
                                                         actions: preset.effect.actions.clone(),
                                                         controller_macro: preset.effect.controller_macro.clone(),
+                                                        controller_strip_effect: preset.effect.controller_strip_effect.clone(),
                                                     };
 
                                                     // Wrap item in drag source
@@ -880,6 +888,163 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         );
                                     }
                                 });
+                            }
+
+                            let can_record = capabilities.board_profile.as_ref().is_some_and(|profile| {
+                                profile.attached && profile.configured
+                            }) && !capabilities.controls.is_empty();
+                            if can_record {
+                                let record_title = self.app.tr("Record hardware effect");
+                                let name_label = self.app.tr("Name");
+                                let name_hint = self.app.tr("Seat motion take");
+                                let start_label = self.app.tr("Start board recording");
+                                let start_help = self.app.tr(
+                                    "Anchor at the current video time and capture board-applied actions from every PCController surface.",
+                                );
+                                let refresh_label = self.app.tr("Refresh status");
+                                let save_label = self.app.tr("Save and place");
+                                let discard_label = self.app.tr("Discard");
+                                let anchor_label = self.app.tr("Timeline anchor:");
+                                ui.add_space(8.0);
+                                ui.label(egui::RichText::new(record_title).strong());
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(&name_label);
+                                    ui.add_enabled(
+                                        !self.app.hardware_effect_authoring.active
+                                            && self.app.hardware_effect_authoring.pending_operation.is_none(),
+                                        egui::TextEdit::singleline(
+                                            &mut self.app.hardware_effect_authoring.name,
+                                        )
+                                        .desired_width(180.0)
+                                        .hint_text(&name_hint),
+                                    );
+                                    let pending = self
+                                        .app
+                                        .hardware_effect_authoring
+                                        .pending_operation
+                                        .is_some();
+                                    if ui
+                                        .add_enabled(
+                                            !pending
+                                                && !self.app.hardware_effect_authoring.active
+                                                && !self
+                                                    .app
+                                                    .hardware_effect_authoring
+                                                    .name
+                                                    .trim()
+                                                    .is_empty(),
+                                            egui::Button::new(&start_label),
+                                        )
+                                        .on_hover_text(&start_help)
+                                        .clicked()
+                                    {
+                                        if let Err(error) = self.app.start_hardware_effect_recording() {
+                                            self.app.set_osd(error);
+                                        }
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            !pending && self.app.hardware_effect_authoring.active,
+                                            egui::Button::new(&refresh_label),
+                                        )
+                                        .clicked()
+                                    {
+                                        if let Err(error) = self.app.refresh_hardware_effect_recording() {
+                                            self.app.set_osd(error);
+                                        }
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            !pending && self.app.hardware_effect_authoring.active,
+                                            egui::Button::new(&save_label),
+                                        )
+                                        .on_hover_text(format!(
+                                            "{} {:.3}s",
+                                            anchor_label,
+                                            self.app.hardware_effect_authoring.anchor_ms as f64 / 1_000.0
+                                        ))
+                                        .clicked()
+                                    {
+                                        if let Err(error) = self.app.save_hardware_effect_recording() {
+                                            self.app.set_osd(error);
+                                        }
+                                    }
+                                    if ui
+                                        .add_enabled(
+                                            !pending && self.app.hardware_effect_authoring.active,
+                                            egui::Button::new(&discard_label),
+                                        )
+                                        .clicked()
+                                    {
+                                        if let Err(error) = self.app.discard_hardware_effect_recording() {
+                                            self.app.set_osd(error);
+                                        }
+                                    }
+                                });
+                                if !self.app.hardware_effect_authoring.status.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new(
+                                            self.app.hardware_effect_authoring.status.clone(),
+                                        )
+                                        .weak()
+                                        .monospace(),
+                                    );
+                                }
+                            }
+
+                            if !capabilities.strip_effects.is_empty() {
+                                let strip_title = self.app.tr("Addressable strip effects");
+                                let stop_label = self.app.tr("Stop preview");
+                                let preview_label = self.app.tr("Preview");
+                                ui.add_space(8.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(&strip_title).strong(),
+                                    );
+                                    if ui
+                                        .add_enabled(
+                                            self.app.hardware_effect_authoring.pending_operation.is_none(),
+                                            egui::Button::new(&stop_label),
+                                        )
+                                        .clicked()
+                                    {
+                                        if let Err(error) = self.app.stop_strip_preview() {
+                                            self.app.set_osd(error);
+                                        }
+                                    }
+                                });
+                                for strip_effect in &capabilities.strip_effects {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(crate::ui::i18n::visual_text(
+                                                display_language,
+                                                &strip_effect.name,
+                                            ))
+                                            .strong(),
+                                        );
+                                        if let Some(fps) = strip_effect.default_fps {
+                                            ui.label(egui::RichText::new(format!("{fps} FPS")).weak());
+                                        }
+                                        if ui
+                                            .add_enabled(
+                                                self.app.hardware_effect_authoring.pending_operation.is_none(),
+                                                egui::Button::new(&preview_label),
+                                            )
+                                            .on_hover_text(if strip_effect.description.is_empty() {
+                                                strip_effect.id.clone()
+                                            } else {
+                                                format!("{}\n{}", strip_effect.id, strip_effect.description)
+                                            })
+                                            .clicked()
+                                        {
+                                            if let Err(error) =
+                                                self.app.preview_strip_effect(&strip_effect.id)
+                                            {
+                                                self.app.set_osd(error);
+                                            }
+                                        }
+                                    });
+                                }
                             }
 
                             let semantic_controls = capabilities
@@ -1614,7 +1779,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         for instance in &self.app.timeline.instances {
                                             if let Some(effect) = self.app.timeline.templates.iter().find(|t| t.id == instance.effect_id) {
-                                                if effect.controller_macro.is_some() {
+                                                if effect.controller_macro.is_some()
+                                                    || effect.controller_strip_effect.is_some()
+                                                {
                                                     let Some(track_index) = timeline_rows
                                                         .iter()
                                                         .position(|row| row.kind == TimelineTrackKind::ControllerMacros)
@@ -2637,7 +2804,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     let hovered_track_index = (relative_y / 32.0).floor() as i32;
 
                                                     for (i, track_row) in timeline_rows.iter().enumerate() {
-                                                        if payload.controller_macro.is_some() {
+                                                        if payload.controller_macro.is_some()
+                                                            || payload.controller_strip_effect.is_some()
+                                                        {
                                                             if track_row.kind == TimelineTrackKind::ControllerMacros {
                                                                 let row_y = tracks_top + (i as f32 * 32.0);
                                                                 let track_rect = egui::Rect::from_min_max(
@@ -2725,7 +2894,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     if timeline_rows
                                                         .get(usize::try_from(hovered_track_index).unwrap_or(usize::MAX))
                                                         .is_some_and(|row| {
-                                                            if payload.controller_macro.is_some() {
+                                                            if payload.controller_macro.is_some()
+                                                                || payload.controller_strip_effect.is_some()
+                                                            {
                                                                 row.kind != TimelineTrackKind::ControllerMacros
                                                             } else {
                                                                 !matches!(row.kind, TimelineTrackKind::Relay(_))
@@ -3097,7 +3268,7 @@ impl PealayerApp {
         drop_time_secs: f64,
     ) -> bool {
         let timeline_rows = timeline_track_rows(self);
-        if let Some(controller_macro) = payload.controller_macro.as_ref() {
+        if payload.controller_macro.is_some() || payload.controller_strip_effect.is_some() {
             let valid_track = usize::try_from(track_index)
                 .ok()
                 .and_then(|index| timeline_rows.get(index))
@@ -3117,17 +3288,31 @@ impl PealayerApp {
             }
             self.undo_stack.push(self.snapshot_timeline());
             let template_id = if let Some(existing) = self.timeline.templates.iter().find(|effect| {
-                effect.controller_macro.as_ref() == Some(controller_macro)
+                effect.controller_macro == payload.controller_macro
+                    && effect.controller_strip_effect == payload.controller_strip_effect
             }) {
                 existing.id
             } else {
-                let effect = crate::four_d::models::Effect::controller_macro(
-                    payload.name.clone(),
-                    payload.icon.clone(),
-                    payload.duration_ms,
-                    controller_macro.id,
-                    controller_macro.mode.clone(),
-                );
+                let effect = if let Some(controller_macro) = payload.controller_macro.as_ref() {
+                    crate::four_d::models::Effect::controller_macro(
+                        payload.name.clone(),
+                        payload.icon.clone(),
+                        payload.duration_ms,
+                        controller_macro.id,
+                        controller_macro.mode.clone(),
+                    )
+                } else {
+                    crate::four_d::models::Effect::controller_strip_effect(
+                        payload.name.clone(),
+                        payload.duration_ms,
+                        payload
+                            .controller_strip_effect
+                            .as_ref()
+                            .expect("controller effect payload has one durable reference")
+                            .id
+                            .clone(),
+                    )
+                };
                 let id = effect.id;
                 self.timeline.templates.push(effect);
                 id

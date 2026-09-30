@@ -166,6 +166,19 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Board reports ON" => "برد حالت روشن را گزارش می‌کند",
         "Board reports OFF" => "برد حالت خاموش را گزارش می‌کند",
         "PCController macro catalog" => "فهرست ماکروهای PCController",
+        "Record hardware effect" => "ضبط جلوهٔ سخت‌افزاری",
+        "Seat motion take" => "برداشت حرکت صندلی",
+        "Start board recording" => "آغاز ضبط از برد",
+        "Anchor at the current video time and capture board-applied actions from every PCController surface." => {
+            "ضبط را به زمان کنونی ویدئو متصل کنید و فرمان‌های اعمال‌شدهٔ برد را از همهٔ رابط‌های PCController بگیرید."
+        }
+        "Refresh status" => "تازه‌سازی وضعیت",
+        "Save and place" => "ذخیره و جای‌گذاری",
+        "Discard" => "دور انداختن",
+        "Timeline anchor:" => "نقطهٔ خط زمانی:",
+        "Addressable strip effects" => "جلوه‌های نوار نور آدرس‌پذیر",
+        "Stop preview" => "توقف پیش‌نمایش",
+        "Preview" => "پیش‌نمایش",
         "No compatible relay effects are advertised by the connected PCController." => {
             "PCController متصل هیچ جلوهٔ رله‌ای سازگاری اعلام نکرده است."
         }
