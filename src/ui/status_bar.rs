@@ -99,7 +99,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             ui.painter().circle_stroke(
                                 led_rect.center(),
                                 6.0,
-                                egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.fg_stroke.color),
+                                egui::Stroke::new(
+                                    1.0_f32,
+                                    ui.visuals().widgets.noninteractive.fg_stroke.color,
+                                ),
                             );
                             if led_response
                                 .on_hover_text(format!(
