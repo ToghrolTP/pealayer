@@ -3308,6 +3308,104 @@ pub fn sanitize_dock_rects<Tab>(dock_state: &mut egui_dock::DockState<Tab>) {
     }
 }
 
+/// Restores a tab to its canonical dock location if it is closed, respecting sibling groupings and anchors.
+pub fn restore_tab_to_canonical_slot(dock_state: &mut egui_dock::DockState<PealayerTab>, tab: PealayerTab) {
+    if dock_state.find_tab(&tab).is_some() {
+        return;
+    }
+
+    if dock_state.iter_all_tabs().count() == 0 {
+        *dock_state = egui_dock::DockState::new(vec![tab]);
+        sanitize_dock_rects(dock_state);
+        return;
+    }
+
+    match tab {
+        PealayerTab::EffectControls => {
+            if let Some(sibling_path) = dock_state.find_tab(&PealayerTab::HardwareMonitor) {
+                let node_path = sibling_path.node_path();
+                if let Ok(leaf) = dock_state.leaf_mut(node_path) {
+                    leaf.tabs.push(tab);
+                    sanitize_dock_rects(dock_state);
+                    return;
+                }
+            }
+            if let Some(anchor_path) = dock_state
+                .find_tab(&PealayerTab::ProgramMonitor)
+                .or_else(|| dock_state.find_tab(&PealayerTab::Timeline))
+            {
+                let node_index = anchor_path.node;
+                dock_state.main_surface_mut().split_left(node_index, 0.25, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+        }
+        PealayerTab::HardwareMonitor => {
+            if let Some(sibling_path) = dock_state.find_tab(&PealayerTab::EffectControls) {
+                let node_path = sibling_path.node_path();
+                if let Ok(leaf) = dock_state.leaf_mut(node_path) {
+                    leaf.tabs.push(tab);
+                    sanitize_dock_rects(dock_state);
+                    return;
+                }
+            }
+            if let Some(anchor_path) = dock_state
+                .find_tab(&PealayerTab::ProgramMonitor)
+                .or_else(|| dock_state.find_tab(&PealayerTab::Timeline))
+            {
+                let node_index = anchor_path.node;
+                dock_state.main_surface_mut().split_left(node_index, 0.25, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+        }
+        PealayerTab::Timeline => {
+            if let Some(anchor_path) = dock_state
+                .find_tab(&PealayerTab::ProgramMonitor)
+                .or_else(|| dock_state.find_tab(&PealayerTab::EffectControls))
+                .or_else(|| dock_state.find_tab(&PealayerTab::EffectsLibrary))
+                .or_else(|| dock_state.find_tab(&PealayerTab::HardwareMonitor))
+            {
+                let node_index = anchor_path.node;
+                dock_state.main_surface_mut().split_below(node_index, 0.7, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+        }
+        PealayerTab::EffectsLibrary => {
+            if let Some(anchor_path) = dock_state
+                .find_tab(&PealayerTab::ProgramMonitor)
+                .or_else(|| dock_state.find_tab(&PealayerTab::Timeline))
+            {
+                let node_index = anchor_path.node;
+                dock_state.main_surface_mut().split_right(node_index, 0.75, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+        }
+        PealayerTab::ProgramMonitor => {
+            if let Some(anchor_path) = dock_state.find_tab(&PealayerTab::Timeline) {
+                let node_index = anchor_path.node;
+                dock_state.main_surface_mut().split_above(node_index, 0.7, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+            if let Some(anchor_path) = dock_state
+                .find_tab(&PealayerTab::EffectControls)
+                .or_else(|| dock_state.find_tab(&PealayerTab::HardwareMonitor))
+            {
+                let node_index = anchor_path.node;
+                dock_state.main_surface_mut().split_right(node_index, 0.5, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+        }
+    }
+
+    dock_state.push_to_first_leaf(tab);
+    sanitize_dock_rects(dock_state);
+}
+
 fn format_timecode(t: f64) -> String {
     let secs = t.floor() as i64;
     let h = secs / 3600;

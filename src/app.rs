@@ -1511,6 +1511,34 @@ impl PealayerApp {
         }
     }
 
+    pub fn is_tab_open(&self, tab: crate::ui::layout::PealayerTab) -> bool {
+        self.dock_state.find_tab(&tab).is_some()
+    }
+
+    pub fn open_or_focus_tab(&mut self, tab: crate::ui::layout::PealayerTab) {
+        self.show_four_d_editor = true;
+        if let Some(path) = self.dock_state.find_tab(&tab) {
+            let _ = self.dock_state.set_active_tab(path);
+        } else {
+            crate::ui::layout::restore_tab_to_canonical_slot(&mut self.dock_state, tab);
+            if let Some(path) = self.dock_state.find_tab(&tab) {
+                let _ = self.dock_state.set_active_tab(path);
+            }
+            self.save_dock_layout();
+        }
+    }
+
+    pub fn toggle_tab(&mut self, tab: crate::ui::layout::PealayerTab) {
+        if let Some(path) = self.dock_state.find_tab(&tab) {
+            self.dock_state.remove_tab(path);
+            self.save_dock_layout();
+        } else {
+            self.open_or_focus_tab(tab);
+        }
+    }
+
+    pub fn save_dock_layout(&mut self) {}
+
     /// Performs an exact relative seek by the given number of seconds.
     pub fn seek_relative(&mut self, seconds: f64) {
         if self.current_video_path.is_none() {

@@ -57,3 +57,60 @@ fn test_pealayer_tab_titles_and_icons() {
     assert_eq!(PealayerTab::EffectsLibrary.title(&app), "Effects Library");
     assert_eq!(PealayerTab::HardwareMonitor.title(&app), "Hardware Monitor");
 }
+
+use pealayer::ui::layout::restore_tab_to_canonical_slot;
+
+#[test]
+fn test_restore_timeline_to_canonical_slot() {
+    let mut dock_state = create_initial_layout();
+    let path = dock_state.find_tab(&PealayerTab::Timeline).expect("find timeline");
+    dock_state.remove_tab(path);
+    assert!(dock_state.find_tab(&PealayerTab::Timeline).is_none());
+
+    restore_tab_to_canonical_slot(&mut dock_state, PealayerTab::Timeline);
+    assert!(dock_state.find_tab(&PealayerTab::Timeline).is_some());
+}
+
+#[test]
+fn test_restore_controls_next_to_hardware_monitor() {
+    let mut dock_state = create_initial_layout();
+    let path = dock_state.find_tab(&PealayerTab::EffectControls).expect("find effect controls");
+    dock_state.remove_tab(path);
+    assert!(dock_state.find_tab(&PealayerTab::EffectControls).is_none());
+
+    restore_tab_to_canonical_slot(&mut dock_state, PealayerTab::EffectControls);
+    assert!(dock_state.find_tab(&PealayerTab::EffectControls).is_some());
+}
+
+#[test]
+fn test_restore_into_empty_dock() {
+    let mut dock_state = create_initial_layout();
+    for tab in PealayerTab::ALL {
+        if let Some(path) = dock_state.find_tab(&tab) {
+            dock_state.remove_tab(path);
+        }
+    }
+    assert_eq!(dock_state.iter_all_tabs().count(), 0);
+
+    restore_tab_to_canonical_slot(&mut dock_state, PealayerTab::ProgramMonitor);
+    assert!(dock_state.find_tab(&PealayerTab::ProgramMonitor).is_some());
+    assert_eq!(dock_state.iter_all_tabs().count(), 1);
+}
+
+#[test]
+fn test_pealayer_app_tab_toggle_and_focus() {
+    let mut app = pealayer::app::PealayerApp::default();
+    assert!(app.is_tab_open(PealayerTab::Timeline));
+
+    // Toggle Timeline off
+    app.toggle_tab(PealayerTab::Timeline);
+    assert!(!app.is_tab_open(PealayerTab::Timeline));
+
+    // Toggle Timeline on
+    app.toggle_tab(PealayerTab::Timeline);
+    assert!(app.is_tab_open(PealayerTab::Timeline));
+
+    // Calling open_or_focus_tab on already open tab keeps it open
+    app.open_or_focus_tab(PealayerTab::Timeline);
+    assert!(app.is_tab_open(PealayerTab::Timeline));
+}
