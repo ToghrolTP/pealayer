@@ -97,8 +97,18 @@ fn test_restore_into_empty_dock() {
     assert_eq!(dock_state.iter_all_tabs().count(), 1);
 }
 
+static CONFIG_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn test_pealayer_app_tab_toggle_and_focus() {
+    let _guard = CONFIG_TEST_MUTEX.lock().unwrap();
+    let temp_dir = std::env::temp_dir().join(format!("pealayer_dock_toggle_{}", uuid::Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let config_path = temp_dir.join("config.json");
+    unsafe {
+        std::env::set_var("PEALAYER_CONFIG_FILE", &config_path);
+    }
+
     let mut app = pealayer::app::PealayerApp::default();
     assert!(app.is_tab_open(PealayerTab::Timeline));
 
@@ -113,6 +123,11 @@ fn test_pealayer_app_tab_toggle_and_focus() {
     // Calling open_or_focus_tab on already open tab keeps it open
     app.open_or_focus_tab(PealayerTab::Timeline);
     assert!(app.is_tab_open(PealayerTab::Timeline));
+
+    unsafe {
+        std::env::remove_var("PEALAYER_CONFIG_FILE");
+    }
+    let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
@@ -128,6 +143,14 @@ fn test_corrupt_dock_json_fallback() {
 
 #[test]
 fn test_app_save_dock_layout_persists_to_config() {
+    let _guard = CONFIG_TEST_MUTEX.lock().unwrap();
+    let temp_dir = std::env::temp_dir().join(format!("pealayer_dock_persist_{}", uuid::Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let config_path = temp_dir.join("config.json");
+    unsafe {
+        std::env::set_var("PEALAYER_CONFIG_FILE", &config_path);
+    }
+
     let mut app = pealayer::app::PealayerApp::default();
     app.save_dock_layout();
 
@@ -136,6 +159,11 @@ fn test_app_save_dock_layout_persists_to_config() {
     let layout_json = cfg.workspace_dock_layout.unwrap();
     let deserialized: DockState<PealayerTab> = serde_json::from_str(&layout_json).expect("valid dock state JSON");
     assert!(deserialized.find_tab(&PealayerTab::ProgramMonitor).is_some());
+
+    unsafe {
+        std::env::remove_var("PEALAYER_CONFIG_FILE");
+    }
+    let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 #[test]

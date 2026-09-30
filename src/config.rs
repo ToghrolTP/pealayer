@@ -390,36 +390,47 @@ impl AppConfig {
                 Self::default()
             }
             StorageMode::System | StorageMode::Auto => {
-                // On Windows, try reading from Registry first
+                // Read system configuration file (contains full structured state including workspace_dock_layout)
+                #[allow(unused_mut)]
+                let mut config = {
+                    let path = resolve_system_config_path();
+                    if path.exists() {
+                        if let Ok(data) = std::fs::read_to_string(&path) {
+                            serde_json::from_str::<AppConfig>(&data).ok()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+                .unwrap_or_else(|| {
+                    // Transparent Migration from legacy recent.json if present
+                    let legacy_path = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
+                        .join(".config")
+                        .join("pealayer")
+                        .join("recent.json");
+
+                    let mut cfg = Self::default();
+                    if legacy_path.exists() {
+                        if let Ok(data) = std::fs::read_to_string(&legacy_path) {
+                            if let Ok(list) = serde_json::from_str::<Vec<PathBuf>>(&data) {
+                                cfg.recent_media = list;
+                            }
+                        }
+                    }
+                    cfg
+                });
+
+                // On Windows, overlay settings from Registry if present
                 #[cfg(target_os = "windows")]
                 {
                     if let Ok(Some(reg_cfg)) = crate::platform::registry::load_settings_from_registry() {
-                        return reg_cfg;
-                    }
-                }
-
-                // Fall back to system configuration file
-                let path = resolve_system_config_path();
-                if path.exists() {
-                    if let Ok(data) = std::fs::read_to_string(&path) {
-                        if let Ok(cfg) = serde_json::from_str::<AppConfig>(&data) {
-                            return cfg;
-                        }
-                    }
-                }
-
-                // Transparent Migration from legacy recent.json if present
-                let legacy_path = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
-                    .join(".config")
-                    .join("pealayer")
-                    .join("recent.json");
-
-                let mut config = Self::default();
-                if legacy_path.exists() {
-                    if let Ok(data) = std::fs::read_to_string(&legacy_path) {
-                        if let Ok(list) = serde_json::from_str::<Vec<PathBuf>>(&data) {
-                            config.recent_media = list;
-                        }
+                        config.volume = reg_cfg.volume;
+                        config.is_muted = reg_cfg.is_muted;
+                        config.pin_controls = reg_cfg.pin_controls;
+                        config.show_remaining_time = reg_cfg.show_remaining_time;
+                        config.recent_media = reg_cfg.recent_media;
                     }
                 }
 
