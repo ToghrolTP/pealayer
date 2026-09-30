@@ -214,13 +214,13 @@ fn draw_control_indicator(
         }
         ControlIndicatorState::Available => {
             ui.painter()
-                .circle_stroke(center, 5.5, egui::Stroke::new(1.8, green));
+                .circle_stroke(center, 5.5, egui::Stroke::new(1.8_f32, green));
             ui.painter()
                 .circle_filled(center, 2.0, green.gamma_multiply(0.65));
         }
         ControlIndicatorState::Inactive => {
             ui.painter()
-                .circle_stroke(center, 5.0, egui::Stroke::new(1.4, neutral));
+                .circle_stroke(center, 5.0, egui::Stroke::new(1.4_f32, neutral));
         }
     }
     let status = match state {
@@ -830,7 +830,7 @@ fn draw_control_card(
                             if selected && verb == "on" {
                                 button = button
                                     .fill(egui::Color32::from_rgb(22, 163, 74))
-                                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(34, 197, 94)));
+                                    .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(34, 197, 94)));
                             }
                             let response = ui.add_enabled_ui(!app.estop_active, |ui| {
                                 ui.add_sized([ui.available_width(), 28.0], button)
@@ -889,7 +889,7 @@ fn draw_control_card(
                             button = button
                                 .fill(egui::Color32::from_rgb(22, 163, 74))
                                 .stroke(egui::Stroke::new(
-                                    1.0,
+                                    1.0_f32,
                                     egui::Color32::from_rgb(34, 197, 94),
                                 ));
                         }
@@ -1098,53 +1098,60 @@ pub enum PealayerTab {
     Timeline,
 }
 
-const ALL_WORKSPACE_TABS: [PealayerTab; 5] = [
-    PealayerTab::ProgramMonitor,
-    PealayerTab::EffectControls,
-    PealayerTab::EffectsLibrary,
-    PealayerTab::HardwareMonitor,
-    PealayerTab::Timeline,
-];
+impl PealayerTab {
+    pub const ALL: [PealayerTab; 5] = [
+        PealayerTab::ProgramMonitor,
+        PealayerTab::Timeline,
+        PealayerTab::EffectControls,
+        PealayerTab::EffectsLibrary,
+        PealayerTab::HardwareMonitor,
+    ];
 
-fn workspace_tab_name(app: &PealayerApp, tab: PealayerTab) -> String {
-    match tab {
-        PealayerTab::ProgramMonitor => app.tr("Program Monitor"),
-        PealayerTab::EffectControls => app.tr("Effect Controls"),
-        PealayerTab::EffectsLibrary => app.tr("Effects Library"),
-        PealayerTab::HardwareMonitor => app.tr("Hardware Monitor"),
-        PealayerTab::Timeline => app.tr("Timeline"),
+    pub fn title(self, app: &crate::app::PealayerApp) -> String {
+        match self {
+            PealayerTab::ProgramMonitor => app.tr("Program Monitor"),
+            PealayerTab::Timeline => app.tr("Timeline"),
+            PealayerTab::EffectControls => app.tr("Effect Controls"),
+            PealayerTab::EffectsLibrary => app.tr("Effects Library"),
+            PealayerTab::HardwareMonitor => app.tr("Hardware Monitor"),
+        }
+    }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            PealayerTab::ProgramMonitor => crate::ui::icons::MONITOR_PLAY,
+            PealayerTab::Timeline => crate::ui::icons::WAVEFORM,
+            PealayerTab::EffectControls => crate::ui::icons::SLIDERS_HORIZONTAL,
+            PealayerTab::EffectsLibrary => crate::ui::icons::SPARKLE,
+            PealayerTab::HardwareMonitor => crate::ui::icons::GAUGE,
+        }
     }
 }
 
 pub fn visible_workspace_tab_count(app: &PealayerApp) -> usize {
-    ALL_WORKSPACE_TABS
+    PealayerTab::ALL
         .into_iter()
-        .filter(|tab| app.dock_state.find_tab(tab).is_some())
+        .filter(|tab| app.is_tab_open(*tab))
         .count()
 }
 
 pub fn draw_workspace_tab_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    for tab in ALL_WORKSPACE_TABS {
-        let mut visible = app.dock_state.find_tab(&tab).is_some();
-        let icon = if visible {
+    for tab in PealayerTab::ALL {
+        let is_open = app.is_tab_open(tab);
+        let mut visible = is_open;
+        let visibility_icon = if is_open {
             crate::ui::icons::EYE
         } else {
             crate::ui::icons::EYE_SLASH
         };
-        if ui
-            .checkbox(
-                &mut visible,
-                format!("{icon}  {}", workspace_tab_name(app, tab)),
-            )
-            .changed()
-        {
-            if visible {
-                if app.dock_state.find_tab(&tab).is_none() {
-                    app.dock_state.push_to_focused_leaf(tab);
-                }
-            } else if let Some(path) = app.dock_state.find_tab(&tab) {
-                app.dock_state.remove_tab(path);
+        let label = format!("{visibility_icon}  {}  {}", tab.icon(), tab.title(app));
+        if ui.checkbox(&mut visible, label).changed() {
+            if visible && !is_open {
+                app.open_or_focus_tab(tab);
+            } else if !visible && is_open {
+                app.toggle_tab(tab);
             }
+            ui.close();
         }
     }
 }
@@ -1157,45 +1164,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
     type Tab = PealayerTab;
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        match tab {
-            PealayerTab::ProgramMonitor => format!(
-                "{} {}",
-                crate::ui::icons::MONITOR_PLAY,
-                self.app.tr("Program Monitor")
-            )
-            .into(),
-            PealayerTab::EffectControls => format!(
-                "{} {}",
-                crate::ui::icons::SLIDERS_HORIZONTAL,
-                self.app.tr("Effect Controls")
-            )
-            .into(),
-            PealayerTab::EffectsLibrary => format!(
-                "{} {}",
-                crate::ui::icons::SPARKLE,
-                self.app.tr("Effects Library")
-            )
-            .into(),
-            PealayerTab::HardwareMonitor => format!(
-                "{} {}",
-                crate::ui::icons::GAUGE,
-                self.app.tr("Hardware Monitor")
-            )
-            .into(),
-            PealayerTab::Timeline => {
-                format!("{} {}", crate::ui::icons::WAVEFORM, self.app.tr("Timeline")).into()
-            }
-        }
+        format!("{} {}", tab.icon(), tab.title(self.app)).into()
     }
 
     fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab, _path: egui_dock::NodePath) {
-        let title = match tab {
-            PealayerTab::ProgramMonitor => self.app.tr("Program Monitor"),
-            PealayerTab::EffectControls => self.app.tr("Effect Controls"),
-            PealayerTab::EffectsLibrary => self.app.tr("Effects Library"),
-            PealayerTab::HardwareMonitor => self.app.tr("Hardware Monitor"),
-            PealayerTab::Timeline => self.app.tr("Timeline"),
-        };
+        let title = tab.title(self.app);
         ui.label(egui::RichText::new(title).strong());
         ui.separator();
         match tab {
@@ -1886,7 +1859,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let group_header = egui::Frame::new()
                                             .fill(ui.visuals().widgets.inactive.weak_bg_fill)
                                             .stroke(egui::Stroke::new(
-                                                1.0,
+                                                1.0_f32,
                                                 ui.visuals().widgets.noninteractive.bg_stroke.color,
                                             ))
                                             .corner_radius(7.0)
@@ -4452,7 +4425,140 @@ pub fn create_initial_layout() -> egui_dock::DockState<PealayerTab> {
         vec![PealayerTab::EffectsLibrary],
     );
 
+    sanitize_dock_rects(&mut dock_state);
+
     dock_state
+}
+
+/// Sanitizes all node rectangles and viewports in a `DockState` to finite values (`Rect::ZERO`),
+/// preventing non-finite floats (e.g. `Rect::NOTHING` where Pos2 is +/-INFINITY) from serializing
+/// as `null` in JSON formats such as `serde_json`.
+pub fn sanitize_dock_rects<Tab>(dock_state: &mut egui_dock::DockState<Tab>) {
+    for (_path, node) in dock_state.iter_all_nodes_mut() {
+        if let Some(rect) = node.rect()
+            && !rect.is_finite()
+        {
+            node.set_rect(egui::Rect::ZERO);
+        }
+        if let Some(leaf) = node.get_leaf_mut()
+            && !leaf.viewport.is_finite()
+        {
+            leaf.viewport = egui::Rect::ZERO;
+        }
+    }
+}
+
+/// Restores a tab to its canonical dock location if it is closed, respecting sibling groupings and anchors.
+pub fn restore_tab_to_canonical_slot(
+    dock_state: &mut egui_dock::DockState<PealayerTab>,
+    tab: PealayerTab,
+) {
+    if dock_state.find_tab(&tab).is_some() {
+        return;
+    }
+
+    if dock_state.iter_all_tabs().count() == 0 {
+        *dock_state = egui_dock::DockState::new(vec![tab]);
+        sanitize_dock_rects(dock_state);
+        return;
+    }
+
+    match tab {
+        PealayerTab::EffectControls => {
+            if let Some(sibling_path) = dock_state.find_tab(&PealayerTab::HardwareMonitor) {
+                let node_path = sibling_path.node_path();
+                if let Ok(leaf) = dock_state.leaf_mut(node_path) {
+                    leaf.tabs.push(tab);
+                    sanitize_dock_rects(dock_state);
+                    return;
+                }
+            }
+            if let Some(anchor_path) = dock_state
+                .find_tab(&PealayerTab::ProgramMonitor)
+                .or_else(|| dock_state.find_tab(&PealayerTab::Timeline))
+            {
+                let node_index = anchor_path.node;
+                dock_state
+                    .main_surface_mut()
+                    .split_left(node_index, 0.25, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+        }
+        PealayerTab::HardwareMonitor => {
+            if let Some(sibling_path) = dock_state.find_tab(&PealayerTab::EffectControls) {
+                let node_path = sibling_path.node_path();
+                if let Ok(leaf) = dock_state.leaf_mut(node_path) {
+                    leaf.tabs.push(tab);
+                    sanitize_dock_rects(dock_state);
+                    return;
+                }
+            }
+            if let Some(anchor_path) = dock_state
+                .find_tab(&PealayerTab::ProgramMonitor)
+                .or_else(|| dock_state.find_tab(&PealayerTab::Timeline))
+            {
+                let node_index = anchor_path.node;
+                dock_state
+                    .main_surface_mut()
+                    .split_left(node_index, 0.25, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+        }
+        PealayerTab::Timeline => {
+            if let Some(anchor_path) = dock_state
+                .find_tab(&PealayerTab::ProgramMonitor)
+                .or_else(|| dock_state.find_tab(&PealayerTab::EffectControls))
+                .or_else(|| dock_state.find_tab(&PealayerTab::EffectsLibrary))
+                .or_else(|| dock_state.find_tab(&PealayerTab::HardwareMonitor))
+            {
+                let node_index = anchor_path.node;
+                dock_state
+                    .main_surface_mut()
+                    .split_below(node_index, 0.7, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+        }
+        PealayerTab::EffectsLibrary => {
+            if let Some(anchor_path) = dock_state
+                .find_tab(&PealayerTab::ProgramMonitor)
+                .or_else(|| dock_state.find_tab(&PealayerTab::Timeline))
+            {
+                let node_index = anchor_path.node;
+                dock_state
+                    .main_surface_mut()
+                    .split_right(node_index, 0.75, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+        }
+        PealayerTab::ProgramMonitor => {
+            if let Some(anchor_path) = dock_state.find_tab(&PealayerTab::Timeline) {
+                let node_index = anchor_path.node;
+                dock_state
+                    .main_surface_mut()
+                    .split_above(node_index, 0.7, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+            if let Some(anchor_path) = dock_state
+                .find_tab(&PealayerTab::EffectControls)
+                .or_else(|| dock_state.find_tab(&PealayerTab::HardwareMonitor))
+            {
+                let node_index = anchor_path.node;
+                dock_state
+                    .main_surface_mut()
+                    .split_right(node_index, 0.5, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+        }
+    }
+
+    dock_state.push_to_first_leaf(tab);
+    sanitize_dock_rects(dock_state);
 }
 
 fn format_timecode(t: f64) -> String {

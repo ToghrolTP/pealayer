@@ -124,6 +124,8 @@ pub struct AppConfig {
     pub motion_control_mode: MotionControlMode,
     pub compact_hardware_controls: bool,
     pub status_bar: StatusBarConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_dock_layout: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -155,6 +157,7 @@ impl Default for AppConfig {
             motion_control_mode: MotionControlMode::Toggle,
             compact_hardware_controls: false,
             status_bar: StatusBarConfig::default(),
+            workspace_dock_layout: None,
         }
     }
 }

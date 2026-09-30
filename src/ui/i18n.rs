@@ -71,6 +71,13 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Right-click to show or hide workspace tabs" => {
             "برای نمایش یا پنهان‌کردن زبانه‌ها کلیک راست کنید"
         }
+        "Window" => "پنجره",
+        "Panels" => "پنل‌ها",
+        "Reset Workspace to Default" => "بازنشانی فضای کاری به حالت پیش‌فرض",
+        "All workspace panels are closed" => "همه پنل‌های فضای کاری بسته شده‌اند",
+        "Open panels from the Window menu above, or reset the workspace." => {
+            "پنل‌ها را از منوی پنجره در بالا باز کنید یا فضای کاری را بازنشانی نمایید."
+        }
         "Help" => "راهنما",
         "Language" => "زبان",
         "System language" => "زبان سیستم",
@@ -149,7 +156,6 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Hardware Monitor" => "پایش سخت‌افزار",
         "Timeline" => "خط زمانی",
         "Hardware Monitor Dashboard" => "داشبورد پایش سخت‌افزار",
-        "Panels" => "پنل‌ها",
         "Collapse group" => "جمع‌کردن گروه",
         "Expand group" => "بازکردن گروه",
         "New effect in this group" => "جلوهٔ جدید در این گروه",

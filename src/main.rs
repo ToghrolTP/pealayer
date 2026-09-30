@@ -364,6 +364,19 @@ fn main() -> eframe::Result {
                 engine_handle.controller_push_target(),
             );
 
+            let dock_state = loaded_config
+                .workspace_dock_layout
+                .as_deref()
+                .and_then(|json| {
+                    let mut ds = serde_json::from_str::<
+                        egui_dock::DockState<crate::ui::layout::PealayerTab>,
+                    >(json)
+                    .ok()?;
+                    crate::ui::layout::sanitize_dock_rects(&mut ds);
+                    Some(ds)
+                })
+                .unwrap_or_else(crate::ui::layout::create_initial_layout);
+
             let mut app = PealayerApp {
                 app_name: app_name.clone(),
                 app_publisher: crate::config::resolved_app_publisher(&loaded_config),
@@ -415,7 +428,7 @@ fn main() -> eframe::Result {
                 is_recording: false,
                 hardware_effect_authoring: crate::app::HardwareEffectAuthoringState::default(),
                 recording_keys: std::collections::HashMap::new(),
-                dock_state: crate::ui::layout::create_initial_layout(),
+                dock_state,
                 rtt_state: Arc::new(Mutex::new(crate::app::RttState {
                     video_texture: None,
                     video_fbo: None,

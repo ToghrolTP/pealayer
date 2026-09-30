@@ -1410,9 +1410,16 @@ mod tests {
 
     #[test]
     fn compiles_advertised_strip_effect_into_bounded_start_and_stop_cues() {
+        // Effect identifiers are opaque, runtime-advertised values. Generate
+        // fixtures here so no PCController effect catalog is baked into Rust.
+        let primary_effect_id = uuid::Uuid::new_v4().simple().to_string();
+        let overlapping_effect_id = uuid::Uuid::new_v4().simple().to_string();
         let mut timeline = Timeline::new();
-        let effect =
-            Effect::controller_strip_effect("Police".to_string(), 5_000, "police".to_string());
+        let effect = Effect::controller_strip_effect(
+            "Advertised effect".to_string(),
+            5_000,
+            primary_effect_id.clone(),
+        );
         let effect_id = effect.id;
         timeline.templates.push(effect);
         timeline
@@ -1424,12 +1431,12 @@ mod tests {
             vec![
                 CompiledControllerStripEffect {
                     time_ms: 2_250,
-                    id: "police".to_string(),
+                    id: primary_effect_id.clone(),
                     start: true,
                 },
                 CompiledControllerStripEffect {
                     time_ms: 7_250,
-                    id: "police".to_string(),
+                    id: primary_effect_id.clone(),
                     start: false,
                 },
             ]
@@ -1438,42 +1445,42 @@ mod tests {
         assert_eq!(active_controller_strip_effect_at(&compiled, 2_249), None);
         assert_eq!(
             active_controller_strip_effect_at(&compiled, 2_250),
-            Some("police")
+            Some(primary_effect_id.as_str())
         );
         assert_eq!(active_controller_strip_effect_at(&compiled, 7_250), None);
 
         let overlap = vec![
             CompiledControllerStripEffect {
                 time_ms: 0,
-                id: "police".to_string(),
+                id: primary_effect_id.clone(),
                 start: true,
             },
             CompiledControllerStripEffect {
                 time_ms: 50,
-                id: "white-thunder".to_string(),
+                id: overlapping_effect_id.clone(),
                 start: true,
             },
             CompiledControllerStripEffect {
                 time_ms: 100,
-                id: "police".to_string(),
+                id: primary_effect_id.clone(),
                 start: false,
             },
             CompiledControllerStripEffect {
                 time_ms: 150,
-                id: "white-thunder".to_string(),
+                id: overlapping_effect_id.clone(),
                 start: false,
             },
         ];
         assert_eq!(
             active_controller_strip_effect_at(&overlap, 100),
-            Some("white-thunder")
+            Some(overlapping_effect_id.as_str())
         );
         assert_eq!(active_controller_strip_effect_at(&overlap, 150), None);
 
         let unsafe_effect = Effect::controller_strip_effect(
             "Malformed".to_string(),
             5_000,
-            "police 100 30".to_string(),
+            format!("{primary_effect_id} 100 30"),
         );
         let unsafe_effect_id = unsafe_effect.id;
         timeline.templates.push(unsafe_effect);
@@ -1482,7 +1489,7 @@ mod tests {
             .push(EffectInstance::new(unsafe_effect_id, 10_000));
         let compiled = compile_controller_strip_effects(&timeline);
         assert_eq!(compiled.len(), 2);
-        assert!(compiled.iter().all(|cue| cue.id == "police"));
+        assert!(compiled.iter().all(|cue| cue.id == primary_effect_id));
     }
 
     #[test]

@@ -312,6 +312,38 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     );
                 });
 
+                ui.menu_button(app.tr("Window"), |ui| {
+                    ui.label(egui::RichText::new(app.tr("Panels")).strong());
+                    ui.separator();
+
+                    for tab in crate::ui::layout::PealayerTab::ALL {
+                        let is_open = app.is_tab_open(tab);
+                        let icon = tab.icon();
+                        let name = tab.title(app);
+                        let label = format!("{icon}  {name}");
+
+                        let mut checked = is_open;
+                        if ui.checkbox(&mut checked, label).clicked() {
+                            app.toggle_tab(tab);
+                            ui.close();
+                        }
+                    }
+
+                    ui.separator();
+                    if ui
+                        .button(format!(
+                            "{}  {}",
+                            crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                            app.tr("Reset Workspace to Default")
+                        ))
+                        .clicked()
+                    {
+                        app.dock_state = crate::ui::layout::create_initial_layout();
+                        app.save_dock_layout();
+                        ui.close();
+                    }
+                });
+
                 // Add right-aligned E-STOP and Serial controls
                 ui.menu_button(app.tr("Help"), |ui| {
                     ui.menu_button(app.tr("Language"), |ui| {
