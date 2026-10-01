@@ -481,6 +481,7 @@ fn main() -> eframe::Result {
                 url_input_buffer: String::new(),
                 open_url_multiline: loaded_config.open_url_multiline,
                 open_url_history_expanded: loaded_config.open_url_history_expanded,
+                open_url_recent_click_edits: loaded_config.open_url_recent_click_edits,
                 open_url_use_proxy: loaded_config.open_url_use_proxy,
                 open_url_proxy_url: loaded_config.open_url_proxy_url.clone().unwrap_or_default(),
                 url_inspector: crate::ui::open_url::UrlInspector::default(),

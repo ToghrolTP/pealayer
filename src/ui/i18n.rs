@@ -345,6 +345,13 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
             "برای استفاده از تنظیمات محیط سیستم‌عامل، نشانی پراکسی سفارشی را خالی بگذارید."
         }
         "Clear remote history" => "پاک‌کردن تاریخچهٔ راه‌دور",
+        "Clear from history" => "پاک‌کردن از تاریخچه",
+        "Edit is the default click action (otherwise Play)" => {
+            "عمل پیش‌فرض کلیک ویرایش باشد (در غیر این صورت پخش)"
+        }
+        "Clicking a recent location edits it (otherwise plays it)" => {
+            "کلیک روی نشانی اخیر آن را ویرایش کند (در غیر این صورت پخش کند)"
+        }
         "Inspect now" => "بررسی اکنون",
         "Fetching details…" => "در حال دریافت جزئیات…",
         "Refresh details" => "تازه‌سازی جزئیات",

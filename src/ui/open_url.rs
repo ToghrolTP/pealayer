@@ -440,7 +440,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         .auto_shrink([false, true])
                                         .show(ui, |ui| {
                                             for target in &remote_history {
-                                                match draw_recent_location(ui, app, target) {
+                                                match draw_recent_location(
+                                                    ui,
+                                                    app.language,
+                                                    app.open_url_recent_click_edits,
+                                                    target,
+                                                ) {
                                                     Some(RecentLocationAction::Play) => {
                                                         history_play_requested =
                                                             Some(target.clone());
@@ -452,6 +457,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                                     Some(RecentLocationAction::Remove) => {
                                                         history_remove_requested =
                                                             Some(target.clone());
+                                                    }
+                                                    Some(
+                                                        RecentLocationAction::DefaultClickEdits(
+                                                            value,
+                                                        ),
+                                                    ) => {
+                                                        app.open_url_recent_click_edits = value;
+                                                        app.save_config();
                                                     }
                                                     None => {}
                                                 }
@@ -959,11 +972,13 @@ enum RecentLocationAction {
     Play,
     Edit,
     Remove,
+    DefaultClickEdits(bool),
 }
 
 fn draw_recent_location(
     ui: &mut egui::Ui,
-    app: &PealayerApp,
+    language: crate::config::AppLanguage,
+    default_click_edits: bool,
     target: &str,
 ) -> Option<RecentLocationAction> {
     let row_height = 30.0;
@@ -978,42 +993,128 @@ fn draw_recent_location(
     }
 
     let mut action = None;
-    ui.allocate_ui_with_layout(
-        row_rect.size(),
-        egui::Layout::left_to_right(egui::Align::Center),
-        |ui| {
-            let actions_width = if hovered { 184.0 } else { 0.0 };
-            let label_width = (ui.available_width() - actions_width).max(80.0);
-            // `truncate()` already supplies the full text on hover. Adding an
-            // explicit hover tooltip here would render the same tooltip twice.
-            ui.add_sized([label_width, 26.0], egui::Label::new(target).truncate());
-            if hovered {
-                if ui
-                    .button(format!("{}  {}", crate::ui::icons::PLAY, app.tr("Play")))
-                    .clicked()
-                {
-                    action = Some(RecentLocationAction::Play);
+    let row_response = ui
+        .scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(row_rect)
+                .layout(egui::Layout::left_to_right(egui::Align::Center))
+                .sense(egui::Sense::click()),
+            |ui| {
+                ui.set_min_size(row_rect.size());
+                let actions_width = if hovered { 176.0 } else { 0.0 };
+                let label_width = (ui.available_width() - actions_width).max(80.0);
+                // `truncate()` already supplies the full text on hover. Adding an
+                // explicit hover tooltip here would render the same tooltip twice.
+                let label_response = ui.add_sized(
+                    [label_width, 26.0],
+                    egui::Label::new(target)
+                        .truncate()
+                        .sense(egui::Sense::click()),
+                );
+                if label_response.clicked() {
+                    action = Some(if default_click_edits {
+                        RecentLocationAction::Edit
+                    } else {
+                        RecentLocationAction::Play
+                    });
                 }
-                if ui
-                    .button(format!(
-                        "{}  {}",
-                        crate::ui::icons::PENCIL_SIMPLE,
-                        app.tr("Edit")
-                    ))
-                    .clicked()
-                {
-                    action = Some(RecentLocationAction::Edit);
+                if hovered {
+                    // A trailing right-to-left action area pins × to the actual row
+                    // edge; the previous fixed-width reservation left dead space
+                    // after it on wider rows.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .button(crate::ui::icons::X)
+                            .on_hover_text(tr(language, "Remove from history"))
+                            .clicked()
+                        {
+                            action = Some(RecentLocationAction::Remove);
+                        }
+                        if ui
+                            .button(format!(
+                                "{}  {}",
+                                crate::ui::icons::PENCIL_SIMPLE,
+                                tr(language, "Edit")
+                            ))
+                            .clicked()
+                        {
+                            action = Some(RecentLocationAction::Edit);
+                        }
+                        if ui
+                            .button(format!(
+                                "{}  {}",
+                                crate::ui::icons::PLAY,
+                                tr(language, "Play")
+                            ))
+                            .clicked()
+                        {
+                            action = Some(RecentLocationAction::Play);
+                        }
+                    });
                 }
-                if ui
-                    .button(crate::ui::icons::X)
-                    .on_hover_text(app.tr("Remove from history"))
-                    .clicked()
-                {
-                    action = Some(RecentLocationAction::Remove);
-                }
-            }
-        },
-    );
+            },
+        )
+        .response;
+    row_response.context_menu(|ui| {
+        if ui
+            .button(format!(
+                "{}  {}",
+                crate::ui::icons::PLAY,
+                tr(language, "Play")
+            ))
+            .clicked()
+        {
+            action = Some(RecentLocationAction::Play);
+            ui.close();
+        }
+        if ui
+            .button(format!(
+                "{}  {}",
+                crate::ui::icons::PENCIL_SIMPLE,
+                tr(language, "Edit")
+            ))
+            .clicked()
+        {
+            action = Some(RecentLocationAction::Edit);
+            ui.close();
+        }
+        if ui
+            .button(format!(
+                "{}  {}",
+                crate::ui::icons::COPY,
+                tr(language, "Copy")
+            ))
+            .clicked()
+        {
+            ui.ctx().copy_text(target.to_owned());
+            ui.close();
+        }
+        if ui
+            .button(format!(
+                "{}  {}",
+                crate::ui::icons::TRASH,
+                tr(language, "Clear from history")
+            ))
+            .clicked()
+        {
+            action = Some(RecentLocationAction::Remove);
+            ui.close();
+        }
+        ui.separator();
+        let mut edit_is_default = default_click_edits;
+        if ui
+            .checkbox(
+                &mut edit_is_default,
+                tr(
+                    language,
+                    "Edit is the default click action (otherwise Play)",
+                ),
+            )
+            .changed()
+        {
+            action = Some(RecentLocationAction::DefaultClickEdits(edit_is_default));
+        }
+    });
     action
 }
 

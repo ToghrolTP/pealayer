@@ -124,6 +124,7 @@ pub struct AppConfig {
     pub show_remaining_time: bool,
     pub open_url_multiline: bool,
     pub open_url_history_expanded: bool,
+    pub open_url_recent_click_edits: bool,
     pub open_url_use_proxy: bool,
     pub open_url_proxy_url: Option<String>,
     pub recent_media: Vec<PathBuf>,
@@ -167,6 +168,7 @@ impl Default for AppConfig {
             show_remaining_time: false,
             open_url_multiline: true,
             open_url_history_expanded: true,
+            open_url_recent_click_edits: true,
             open_url_use_proxy: true,
             open_url_proxy_url: None,
             recent_media: Vec::new(),
@@ -769,6 +771,7 @@ mod tests {
         assert_eq!(cfg.direction, AppDirection::Auto);
         assert!(cfg.open_url_multiline);
         assert!(cfg.open_url_history_expanded);
+        assert!(cfg.open_url_recent_click_edits);
         assert!(cfg.open_url_use_proxy);
         assert!(cfg.open_url_proxy_url.is_none());
     }
@@ -780,6 +783,7 @@ mod tests {
         cfg.pin_controls = true;
         cfg.open_url_multiline = false;
         cfg.open_url_history_expanded = false;
+        cfg.open_url_recent_click_edits = false;
         cfg.open_url_use_proxy = false;
         cfg.open_url_proxy_url = Some("http://127.0.0.1:8080".to_string());
         cfg.recent_media.push(PathBuf::from("/test/file.mp4"));
@@ -791,6 +795,7 @@ mod tests {
         assert!(loaded.pin_controls);
         assert!(!loaded.open_url_multiline);
         assert!(!loaded.open_url_history_expanded);
+        assert!(!loaded.open_url_recent_click_edits);
         assert!(!loaded.open_url_use_proxy);
         assert_eq!(
             loaded.open_url_proxy_url.as_deref(),

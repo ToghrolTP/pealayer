@@ -220,6 +220,7 @@ pub struct PealayerApp {
     pub(crate) url_input_buffer: String,
     pub(crate) open_url_multiline: bool,
     pub(crate) open_url_history_expanded: bool,
+    pub(crate) open_url_recent_click_edits: bool,
     pub(crate) open_url_use_proxy: bool,
     pub(crate) open_url_proxy_url: String,
     pub(crate) url_inspector: crate::ui::open_url::UrlInspector,
@@ -2105,6 +2106,7 @@ impl PealayerApp {
         cfg.show_remaining_time = self.show_remaining_time;
         cfg.open_url_multiline = self.open_url_multiline;
         cfg.open_url_history_expanded = self.open_url_history_expanded;
+        cfg.open_url_recent_click_edits = self.open_url_recent_click_edits;
         cfg.open_url_use_proxy = self.open_url_use_proxy;
         cfg.open_url_proxy_url = (!self.open_url_proxy_url.trim().is_empty())
             .then(|| self.open_url_proxy_url.trim().to_string());
@@ -2182,6 +2184,7 @@ impl PealayerApp {
         self.show_remaining_time = config.show_remaining_time;
         self.open_url_multiline = config.open_url_multiline;
         self.open_url_history_expanded = config.open_url_history_expanded;
+        self.open_url_recent_click_edits = config.open_url_recent_click_edits;
         self.open_url_use_proxy = config.open_url_use_proxy;
         self.open_url_proxy_url = config.open_url_proxy_url.clone().unwrap_or_default();
         self.recent_media = config.recent_media.clone();
@@ -2664,6 +2667,7 @@ impl Default for PealayerApp {
             url_input_buffer: String::new(),
             open_url_multiline: true,
             open_url_history_expanded: true,
+            open_url_recent_click_edits: true,
             open_url_use_proxy: true,
             open_url_proxy_url: String::new(),
             url_inspector: crate::ui::open_url::UrlInspector::default(),
