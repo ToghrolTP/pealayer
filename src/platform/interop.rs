@@ -39,9 +39,12 @@ impl LaunchRequest {
             || self
                 .target
                 .as_ref()
-                .is_some_and(|value| value.len() > 32_768)
+                .is_some_and(|value| value.trim().is_empty() || value.len() > 32_768)
         {
-            return Err("launch path fields must not exceed 32768 bytes".to_string());
+            return Err(
+                "launch target must be non-empty and path fields must not exceed 32768 bytes"
+                    .to_string(),
+            );
         }
         if self
             .volume
@@ -174,8 +177,11 @@ impl InteropCommand {
     pub fn validate(&self) -> Result<(), String> {
         match self {
             Self::Launch { request } => request.validate(),
-            Self::Seek { seconds } | Self::SeekTo { seconds } if !seconds.is_finite() => {
+            Self::Seek { seconds } if !seconds.is_finite() => {
                 Err("seek value must be finite".to_string())
+            }
+            Self::SeekTo { seconds } if !seconds.is_finite() || *seconds < 0.0 => {
+                Err("absolute seek time must be a finite non-negative value".to_string())
             }
             Self::SeekAbs { percentage }
                 if !percentage.is_finite() || !(0.0..=100.0).contains(percentage) =>
@@ -191,6 +197,7 @@ impl InteropCommand {
             Self::Open { target } if target.trim().is_empty() || target.len() > 32_768 => {
                 Err("media target must contain 1 to 32768 bytes".to_string())
             }
+            Self::UpdateConfig { values } => crate::config::AppConfig::validate_patch_shape(values),
             _ => Ok(()),
         }
     }
@@ -1459,6 +1466,14 @@ mod tests {
         assert_eq!(command_from_json_rpc(&request).unwrap(), Some(text));
         assert!(parse_text_command("volume 131").is_err());
         assert!(parse_text_command("rate 0").is_err());
+        assert!(parse_text_command("seek-to -1").is_err());
+        assert!(
+            InteropCommand::UpdateConfig {
+                values: serde_json::json!({"not_a_setting": true}),
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[cfg(windows)]
