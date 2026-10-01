@@ -448,6 +448,45 @@ impl eframe::App for PealayerApp {
                         supports_lcd_display: capabilities.supports_lcd_display,
                     }
                 }),
+                recording: self.is_recording,
+                effects: self
+                    .timeline
+                    .templates
+                    .iter()
+                    .map(|effect| crate::platform::interop::WebEffectProfile {
+                        id: effect.id.to_string(),
+                        name: effect.name.clone(),
+                        duration_ms: effect.duration_ms,
+                        action_count: effect.actions.len(),
+                        target: match effect.target {
+                            crate::four_d::models::HardwareTarget::Any => "any".to_string(),
+                            crate::four_d::models::HardwareTarget::Relay(relay) => {
+                                format!("relay:{relay}")
+                            }
+                            crate::four_d::models::HardwareTarget::ControllerMacro => {
+                                "controller".to_string()
+                            }
+                        },
+                    })
+                    .collect(),
+                cues: self
+                    .timeline
+                    .instances
+                    .iter()
+                    .filter_map(|instance| {
+                        self.timeline
+                            .templates
+                            .iter()
+                            .find(|effect| effect.id == instance.effect_id)
+                            .map(|effect| crate::platform::interop::WebEffectCue {
+                                id: instance.id.to_string(),
+                                effect_id: effect.id.to_string(),
+                                name: effect.name.clone(),
+                                start_time_ms: instance.start_time_ms,
+                                duration_ms: effect.duration_ms,
+                            })
+                    })
+                    .collect(),
             };
             crate::platform::interop::set_live_status(status_resp.clone());
             if let Ok(json) = serde_json::to_string(&status_resp) {
@@ -1493,6 +1532,49 @@ impl PealayerApp {
             InteropCommand::SetWorkspace { nle } => {
                 let observed = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
                 self.apply_workspace_request(nle, observed);
+            }
+            InteropCommand::AddEffectCue {
+                effect_id,
+                start_time_ms,
+            } => {
+                let Ok(effect_id) = uuid::Uuid::parse_str(&effect_id) else {
+                    self.set_osd(self.tr("Effect is no longer available"));
+                    return;
+                };
+                if !self
+                    .timeline
+                    .templates
+                    .iter()
+                    .any(|effect| effect.id == effect_id)
+                {
+                    self.set_osd(self.tr("Effect is no longer available"));
+                    return;
+                }
+                let instance = crate::four_d::models::EffectInstance::new(effect_id, start_time_ms);
+                self.selected_instance_ids.clear();
+                self.selected_instance_ids.insert(instance.id);
+                self.timeline.instances.push(instance);
+                self.sync_timeline_engine();
+            }
+            InteropCommand::RemoveEffectCue { instance_id } => {
+                let Ok(instance_id) = uuid::Uuid::parse_str(&instance_id) else {
+                    self.set_osd(self.tr("Cue is no longer available"));
+                    return;
+                };
+                let previous_len = self.timeline.instances.len();
+                self.timeline
+                    .instances
+                    .retain(|instance| instance.id != instance_id);
+                self.selected_instance_ids.remove(&instance_id);
+                if previous_len != self.timeline.instances.len() {
+                    self.sync_timeline_engine();
+                }
+            }
+            InteropCommand::SetRecording { enabled } => {
+                if self.is_recording && !enabled {
+                    self.commit_recorded_samples();
+                }
+                self.is_recording = enabled;
             }
             InteropCommand::UpdateConfig { values } => {
                 match self.apply_config_patch(ctx, &values) {

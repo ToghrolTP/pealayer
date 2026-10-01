@@ -166,6 +166,16 @@ pub enum InteropCommand {
     SetWorkspace {
         nle: bool,
     },
+    AddEffectCue {
+        effect_id: String,
+        start_time_ms: u64,
+    },
+    RemoveEffectCue {
+        instance_id: String,
+    },
+    SetRecording {
+        enabled: bool,
+    },
     UpdateConfig {
         values: Value,
     },
@@ -197,6 +207,16 @@ impl InteropCommand {
             Self::Open { target } if target.trim().is_empty() || target.len() > 32_768 => {
                 Err("media target must contain 1 to 32768 bytes".to_string())
             }
+            Self::AddEffectCue { effect_id, .. }
+                if uuid::Uuid::parse_str(effect_id.trim()).is_err() =>
+            {
+                Err("effect_id must be a valid effect UUID".to_string())
+            }
+            Self::RemoveEffectCue { instance_id }
+                if uuid::Uuid::parse_str(instance_id.trim()).is_err() =>
+            {
+                Err("instance_id must be a valid cue UUID".to_string())
+            }
             Self::UpdateConfig { values } => crate::config::AppConfig::validate_patch_shape(values),
             _ => Ok(()),
         }
@@ -212,7 +232,7 @@ pub fn command_catalog() -> Value {
             "seek", "seek_to", "seek_abs", "set_volume", "set_mute", "toggle_mute",
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
             "maximize", "restore", "set_workspace", "update_config", "reload_config",
-            "get_status", "quit"
+            "add_effect_cue", "remove_effect_cue", "set_recording", "get_status", "quit"
         ],
         "json_rpc_prefix": "pealayer",
         "discovery": "/api/player/commands"
@@ -240,6 +260,30 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "1" | "true" | "on" | "yes" => Ok(true),
         "0" | "false" | "off" | "no" => Ok(false),
         _ => Err("expected on/off, true/false, or 1/0".to_string()),
+    };
+    let effect_cue = || {
+        let mut values = argument.split_whitespace();
+        let effect_id = values
+            .next()
+            .ok_or_else(|| "add-effect-cue requires an effect UUID".to_string())?;
+        let start_time_ms = values
+            .next()
+            .map(|value| {
+                value
+                    .parse::<u64>()
+                    .map_err(|_| "add-effect-cue start time must be milliseconds".to_string())
+            })
+            .transpose()?
+            .unwrap_or_default();
+        if values.next().is_some() {
+            return Err(
+                "add-effect-cue accepts an effect UUID and optional start time".to_string(),
+            );
+        }
+        Ok(InteropCommand::AddEffectCue {
+            effect_id: effect_id.to_string(),
+            start_time_ms,
+        })
     };
     let command = match name.to_ascii_lowercase().as_str() {
         "play" => InteropCommand::Play,
@@ -285,6 +329,13 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
                 _ => return Err("workspace must be nle or simple".to_string()),
             }
         }
+        "add_effect_cue" | "add-effect-cue" => effect_cue()?,
+        "remove_effect_cue" | "remove-effect-cue" => InteropCommand::RemoveEffectCue {
+            instance_id: argument.to_string(),
+        },
+        "recording" | "set_recording" | "set-recording" => InteropCommand::SetRecording {
+            enabled: boolean()?,
+        },
         "status" | "get_status" | "get-status" => InteropCommand::GetStatus,
         "reload_config" | "reload-config" => InteropCommand::ReloadConfig,
         "quit" | "exit" => InteropCommand::Quit,
@@ -324,6 +375,30 @@ pub struct PlayerStatusResponse {
     pub hardware_connected: bool,
     #[serde(default)]
     pub hardware: Option<HardwareStatusSummary>,
+    #[serde(default)]
+    pub recording: bool,
+    #[serde(default)]
+    pub effects: Vec<WebEffectProfile>,
+    #[serde(default)]
+    pub cues: Vec<WebEffectCue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebEffectProfile {
+    pub id: String,
+    pub name: String,
+    pub duration_ms: u64,
+    pub action_count: usize,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebEffectCue {
+    pub id: String,
+    pub effect_id: String,
+    pub name: String,
+    pub start_time_ms: u64,
+    pub duration_ms: u64,
 }
 
 fn default_playback_rate() -> f64 {
@@ -350,6 +425,9 @@ impl Default for PlayerStatusResponse {
             controller_connected: false,
             hardware_connected: false,
             hardware: None,
+            recording: false,
+            effects: Vec::new(),
+            cues: Vec::new(),
         }
     }
 }
@@ -474,6 +552,30 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 "simple" | "player" => Some(InteropCommand::SetWorkspace { nle: false }),
                 _ => return Err("workspace must be nle or simple".to_string()),
             }
+        }
+        "effect_cue.add" | "pealayer.effect_cue.add" | "pealayer.timeline.effect.add" => {
+            Some(InteropCommand::AddEffectCue {
+                effect_id: string(&["effect_id", "effect"])?,
+                start_time_ms: request
+                    .params
+                    .get("start_time_ms")
+                    .or_else(|| request.params.get("time_ms"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+            })
+        }
+        "effect_cue.remove" | "pealayer.effect_cue.remove" | "pealayer.timeline.effect.remove" => {
+            Some(InteropCommand::RemoveEffectCue {
+                instance_id: string(&["instance_id", "cue_id"])?,
+            })
+        }
+        "recording" | "recording.set" | "pealayer.recording.set" => {
+            let enabled = request
+                .params
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "missing boolean parameter: enabled".to_string())?;
+            Some(InteropCommand::SetRecording { enabled })
         }
         "config.update" | "pealayer.config.update" => {
             crate::config::AppConfig::validate_patch_shape(&request.params)?;

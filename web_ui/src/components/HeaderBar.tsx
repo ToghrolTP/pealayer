@@ -1,7 +1,7 @@
 import React from 'react';
 import { Layout, Typography, Space, Tag, Button } from 'antd';
 import {
-  SyncOutlined,
+  ApiOutlined,
   CheckCircleOutlined,
   DisconnectOutlined,
   MenuFoldOutlined,
@@ -31,52 +31,41 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
 }) => {
   return (
     <Header
-      style={{
-        padding: '0 24px',
-        background: '#0a2239',
-        borderBottom: '1px solid rgba(23, 96, 135, 0.4)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        position: 'sticky',
-        top: 0,
-        zIndex: 100,
-        height: 64,
-      }}
+      className="studio-header"
     >
-      <Space size="large">
+      <Space size={14} className="studio-header__leading">
         <Button
           type="text"
           icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
           onClick={onToggleCollapse}
-          style={{ fontSize: 18, color: '#53a2be' }}
+          className="studio-header__menu-button"
         />
-        <Space size="middle" align="center">
-          <img
-            src="/pealayer-icon.svg"
-            alt={appName ? `${appName} ${tr(locale, 'Application logo')}` : tr(locale, 'Application logo')}
-            style={{ width: 28, height: 28, borderRadius: 6, objectFit: 'contain' }}
-          />
-          <Title level={4} style={{ margin: 0, color: '#f8fafc', fontWeight: 700 }}>
-            {appName ? `${appName} — ${tr(locale, 'Control Center')}` : tr(locale, 'Control Center')}
-          </Title>
+        <Space size={10} align="center" className="studio-brand">
+          <span className="studio-brand__mark">
+            <img
+              src="/pealayer-icon.svg"
+              alt={appName ? `${appName} ${tr(locale, 'Application logo')}` : tr(locale, 'Application logo')}
+            />
+          </span>
+          <div className="studio-brand__copy">
+            <Title level={4}>{appName || 'Pealayer'}</Title>
+            <span>{tr(locale, 'Control Center')}</span>
+          </div>
         </Space>
       </Space>
 
-      <div>
+      <div className="connection-cluster" aria-live="polite">
         {connected ? (
           <Tag
-            icon={connectionMode === 'ws' ? <SyncOutlined spin /> : <CheckCircleOutlined />}
-            color="success"
-            style={{ borderRadius: 12, padding: '4px 12px', fontSize: 13 }}
+            icon={connectionMode === 'ws' ? <ApiOutlined /> : <CheckCircleOutlined />}
+            className="connection-pill connection-pill--online"
           >
-            {connectionMode === 'ws' ? tr(locale, 'WebSocket Live') : tr(locale, 'HTTP Polling')}
+            {connectionMode === 'ws' ? tr(locale, 'Live') : tr(locale, 'Polling')}
           </Tag>
         ) : (
           <Tag
             icon={<DisconnectOutlined />}
-            color="error"
-            style={{ borderRadius: 12, padding: '4px 12px', fontSize: 13 }}
+            className="connection-pill connection-pill--offline"
           >
             {tr(locale, 'Offline')}
           </Tag>

@@ -113,6 +113,21 @@ if (-not $SkipTests) {
     if ($LASTEXITCODE -ne 0) { throw "cargo test failed with exit code $LASTEXITCODE" }
 }
 
+$webUiDirectory = Join-Path $repositoryRoot 'web_ui'
+$webUiPackage = Join-Path $webUiDirectory 'package.json'
+if (Test-Path -LiteralPath $webUiPackage -PathType Leaf) {
+    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if (-not $npm) { $npm = Get-Command npm -ErrorAction SilentlyContinue }
+    if (-not $npm) { throw 'npm is required to build the Pealayer Web UI.' }
+    Push-Location -LiteralPath $webUiDirectory
+    try {
+        & $npm.Source run build
+        if ($LASTEXITCODE -ne 0) { throw "Web UI build failed with exit code $LASTEXITCODE" }
+    } finally {
+        Pop-Location
+    }
+}
+
 & (Join-Path $PSScriptRoot 'run-windows.ps1') -BuildOnly
 
 New-Item -ItemType Directory -Force -Path $stagingDirectory,$outputDirectory | Out-Null
@@ -173,6 +188,17 @@ $webDistribution = Join-Path $repositoryRoot 'web_ui\dist'
 $webUiPackaged = $false
 if (Test-Path -LiteralPath (Join-Path $webDistribution 'index.html')) {
     $packagedWebDistribution = Join-Path $outputDirectory 'web_ui\dist'
+    $resolvedOutputDirectory = [System.IO.Path]::GetFullPath($outputDirectory).TrimEnd('\', '/')
+    $resolvedPackagedWebDistribution = [System.IO.Path]::GetFullPath($packagedWebDistribution)
+    if (-not $resolvedPackagedWebDistribution.StartsWith(
+        $resolvedOutputDirectory + [System.IO.Path]::DirectorySeparatorChar,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw 'Refusing to replace a Web UI package outside the canonical output directory.'
+    }
+    if (Test-Path -LiteralPath $resolvedPackagedWebDistribution) {
+        Remove-Item -LiteralPath $resolvedPackagedWebDistribution -Recurse -Force
+    }
     New-Item -ItemType Directory -Force -Path $packagedWebDistribution | Out-Null
     Copy-Item -Path (Join-Path $webDistribution '*') -Destination $packagedWebDistribution -Recurse -Force
     $webUiPackaged = $true

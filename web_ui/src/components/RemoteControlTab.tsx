@@ -21,6 +21,38 @@ export interface PlayerState {
   playback_time?: number;
   duration?: number;
   current_video?: string | null;
+  seekable?: boolean;
+  live?: boolean;
+  muted?: boolean;
+  playback_rate?: number;
+  fullscreen?: boolean;
+  workspace?: string;
+  controller_connected?: boolean;
+  hardware_connected?: boolean;
+  hardware?: {
+    board_name?: string;
+    relay_count?: number;
+    pwm_count?: number;
+    supports_rf_transmit?: boolean;
+    supports_addressable_led?: boolean;
+    supports_segment_display?: boolean;
+    supports_lcd_display?: boolean;
+  } | null;
+  recording?: boolean;
+  effects?: Array<{
+    id: string;
+    name: string;
+    duration_ms: number;
+    action_count: number;
+    target: string;
+  }>;
+  cues?: Array<{
+    id: string;
+    effect_id: string;
+    name: string;
+    start_time_ms: number;
+    duration_ms: number;
+  }>;
 }
 
 interface RemoteControlTabProps {
@@ -138,7 +170,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
               <img
                 src={`/api/player/frame?t=${frameTimestamp}`}
                 alt={tr(locale, 'Video Preview')}
-                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                 onError={(e) => {
                   (e.target as HTMLElement).style.display = 'none';
                 }}
