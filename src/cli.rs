@@ -36,38 +36,46 @@ pub fn resolved_instance_identity() -> String {
 
 pub fn format_help_message() -> String {
     format!(
-        "Pealayer {} - Modern Media & 4D Cinema Player\n\n\
-        USAGE:\n  \
-          pealayer [OPTIONS] [FILE_OR_URL]\n  \
-          pealayer --remote <COMMAND>\n\n\
-        ARGUMENTS:\n  \
-          [FILE_OR_URL]             Path to media file or network URL to play\n\n\
-        PLAYER OPTIONS:\n  \
-          --open <FILE_OR_URL>      Open media (positional FILE_OR_URL is equivalent)\n  \
-          --play | --pause | --toggle-pause | --stop\n  \
-                                    Change playback state\n  \
-          --next | --previous       Navigate the playlist\n  \
-          --seek <SECONDS>          Seek relative to the current position\n  \
-          --seek-to <SECONDS>       Seek to an absolute playback time\n  \
-          --seek-percent <0-100>    Seek to a percentage of the media\n  \
-          -v, --volume <0-130>      Set playback volume\n  \
-          --mute | --unmute | --toggle-mute\n  \
-                                    Change mute state\n  \
-          --rate <0.05-16>          Set playback speed\n  \
-          -f, --fullscreen          Enter fullscreen\n  \
-          --windowed                Leave fullscreen\n  \
-          --toggle-fullscreen       Toggle fullscreen\n  \
-          --workspace <simple|nle>  Select the player workspace\n  \
-          --activate | --minimize | --maximize | --restore\n  \
-                                    Manage the application window\n  \
-          --quit                    Close the running application\n  \
-          --command <COMMAND>       Queue a unified text or JSON command; repeatable\n  \
-          --remote <COMMAND>        Send one unified command and exit\n  \
-        APPLICATION OPTIONS:\n  \
-          --register-associations    Register Pealayer as the default handler for media files\n  \
-          --unregister-associations  Unregister Pealayer file associations\n  \
-          -h, --help                Print help information\n  \
-          -V, --version             Print version information\n",
+        r#"Pealayer {} - Modern Media & 4D Cinema Player
+
+USAGE:
+  pealayer [OPTIONS] [FILE_OR_URL]
+  pealayer --remote <COMMAND>
+
+ARGUMENTS:
+  [FILE_OR_URL]             Path to a media file or network URL
+
+PLAYER OPTIONS:
+  --open <FILE_OR_URL>      Open media (equivalent to the positional argument)
+  --play                    Start or resume playback
+  --pause                   Pause playback
+  --toggle-pause            Toggle play/pause
+  --stop                    Stop and close the current media
+  --next | --previous       Navigate the playlist
+  --seek <SECONDS>          Seek relative to the current position
+  --seek-to <SECONDS>       Seek to an absolute playback time
+  --seek-percent <0-100>    Seek to a percentage of the media
+  -v, --volume <0-130>      Set playback volume
+  --mute | --unmute         Set mute state
+  --toggle-mute             Toggle mute state
+  --rate <0.05-16>          Set playback speed
+  -f, --fullscreen          Enter fullscreen
+  --windowed                Leave fullscreen
+  --toggle-fullscreen       Toggle fullscreen
+  --workspace <simple|nle>  Select the player workspace
+  --activate                Activate and focus the window
+  --minimize | --maximize   Change the window state
+  --restore                 Restore and focus the window
+  --quit                    Close the running application
+  --command <COMMAND>       Queue a unified text or JSON command; repeatable
+  --remote <COMMAND>        Send one unified command and exit
+
+APPLICATION OPTIONS:
+  --register-associations    Register Pealayer as the default media handler
+  --unregister-associations  Unregister Pealayer file associations
+  -h, --help                 Print help information
+  -V, --version              Print version information
+"#,
         env!("CARGO_PKG_VERSION")
     )
 }
