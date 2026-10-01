@@ -190,7 +190,8 @@ fn decoration_colors(dark: bool) -> (u32, u32) {
 
 #[cfg(target_os = "windows")]
 pub fn apply_windows_window_decorations(hwnd_raw: isize) {
-    use windows::Win32::Foundation::{BOOL, HWND};
+    use windows::Win32::Foundation::HWND;
+    use windows::core::BOOL;
     use windows::Win32::Graphics::Dwm::{
         DwmSetWindowAttribute,
         DWMWA_CAPTION_COLOR,
@@ -548,7 +549,8 @@ pub fn compute_thumbnail_clip_ratio(
 
 #[cfg(target_os = "windows")]
 pub fn configure_video_taskbar_thumbnail(hwnd_raw: isize) -> Result<(), String> {
-    use windows::Win32::Foundation::{BOOL, HWND};
+    use windows::Win32::Foundation::HWND;
+    use windows::core::BOOL;
     use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_FORCE_ICONIC_REPRESENTATION};
 
     if hwnd_raw == 0 {
@@ -720,7 +722,7 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
         let module = GetModuleHandleW(None)
             .map_err(|error| format!("GetModuleHandleW failed: {error}"))?;
         let instance: windows::Win32::Foundation::HINSTANCE = module.into();
-        let hicon = LoadIconW(Some(&instance), PCWSTR(1usize as *const u16))
+        let hicon = LoadIconW(Some(instance), PCWSTR(1usize as *const u16))
             .unwrap_or_else(|_| HICON(GetClassLongPtrW(hwnd, GCLP_HICON) as *mut _));
         if hicon.0.is_null() {
             return Err("packaged application icon is unavailable".to_string());
@@ -904,11 +906,11 @@ pub fn show_tray_popup_menu(hwnd_raw: isize, is_paused: bool, is_muted: bool) ->
             TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
             cursor.x,
             cursor.y,
-            0,
+            Some(0),
             hwnd,
             None,
         );
-        let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
+        let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
         let _ = DestroyMenu(hmenu);
 
         if cmd.0 != 0 {
