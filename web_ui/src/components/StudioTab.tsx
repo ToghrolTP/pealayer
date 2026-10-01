@@ -57,6 +57,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
     : tr(locale, 'No Media Playing');
   const seekPercent = durationSeconds > 0 ? (currentSeconds / durationSeconds) * 100 : 0;
   const activeSeek = seekDraft ?? seekPercent;
+  const canRecord = (state.recordable_track_count ?? 0) > 0;
 
   const addCue = (effectId: string) => {
     sendCmd('add_effect_cue', {
@@ -78,17 +79,20 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
 
         <div className="mode-switch" role="group" aria-label={tr(locale, 'Studio mode')}>
           <button
-            className={!state.recording ? 'is-active' : ''}
+            className={!state.recording_armed ? 'is-active' : ''}
             onClick={() => sendCmd('set_recording', { enabled: false })}
           >
             <CaretRightFilled /> {tr(locale, 'Play Mode')}
           </button>
-          <button
-            className={state.recording ? 'is-active is-recording' : ''}
-            onClick={() => sendCmd('set_recording', { enabled: true })}
-          >
-            <span className="record-dot" /> {tr(locale, 'Record Mode')}
-          </button>
+          <Tooltip title={canRecord ? tr(locale, 'Arm hardware tracks for recording') : tr(locale, 'No recordable hardware tracks are available')}>
+            <button
+              className={state.recording_armed ? 'is-active is-recording' : ''}
+              onClick={() => sendCmd('set_recording', { enabled: true })}
+              disabled={!canRecord}
+            >
+              <span className="record-dot" /> {state.recording ? tr(locale, 'Recording') : tr(locale, 'Record Mode')}
+            </button>
+          </Tooltip>
         </div>
 
         <div className="effect-list">

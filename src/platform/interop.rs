@@ -378,6 +378,10 @@ pub struct PlayerStatusResponse {
     #[serde(default)]
     pub recording: bool,
     #[serde(default)]
+    pub recording_armed: bool,
+    #[serde(default)]
+    pub recordable_track_count: usize,
+    #[serde(default)]
     pub effects: Vec<WebEffectProfile>,
     #[serde(default)]
     pub cues: Vec<WebEffectCue>,
@@ -426,6 +430,8 @@ impl Default for PlayerStatusResponse {
             hardware_connected: false,
             hardware: None,
             recording: false,
+            recording_armed: false,
+            recordable_track_count: 0,
             effects: Vec::new(),
             cues: Vec::new(),
         }

@@ -449,6 +449,8 @@ impl eframe::App for PealayerApp {
                     }
                 }),
                 recording: self.is_recording,
+                recording_armed: self.timeline.analog_tracks.iter().any(|track| track.armed),
+                recordable_track_count: self.timeline.analog_tracks.len(),
                 effects: self
                     .timeline
                     .templates
@@ -1574,7 +1576,14 @@ impl PealayerApp {
                 if self.is_recording && !enabled {
                     self.commit_recorded_samples();
                 }
-                self.is_recording = enabled;
+                for track in &mut self.timeline.analog_tracks {
+                    track.armed = enabled;
+                }
+                if !enabled {
+                    self.is_recording = false;
+                } else if self.timeline.analog_tracks.is_empty() {
+                    self.set_osd(self.tr("No recordable hardware tracks are available"));
+                }
             }
             InteropCommand::UpdateConfig { values } => {
                 match self.apply_config_patch(ctx, &values) {

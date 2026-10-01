@@ -39,6 +39,8 @@ export interface PlayerState {
     supports_lcd_display?: boolean;
   } | null;
   recording?: boolean;
+  recording_armed?: boolean;
+  recordable_track_count?: number;
   effects?: Array<{
     id: string;
     name: string;
