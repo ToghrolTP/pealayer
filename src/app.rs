@@ -2226,6 +2226,11 @@ impl PealayerApp {
 
         let _ = self.mpv.set_property("volume", self.volume);
         let _ = self.mpv.set_property("mute", self.is_muted);
+        crate::mpv::proxy::apply_runtime(
+            self.mpv,
+            self.open_url_use_proxy,
+            &self.open_url_proxy_url,
+        )?;
         crate::platform::windows::sync_windows_jump_list(&self.recent_media);
         crate::ui::i18n::configure_ui_fonts(
             ctx,

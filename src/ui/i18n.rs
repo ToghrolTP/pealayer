@@ -96,7 +96,6 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Open Timeline Project..." => "باز کردن پروژهٔ خط زمانی…",
         "Save Timeline (Sidecar)" => "ذخیرهٔ خط زمانی کنار رسانه",
         "Save Timeline As..." => "ذخیرهٔ خط زمانی با نام…",
-        "Register as Default Media Player..." => "تنظیم به‌عنوان پخش‌کنندهٔ پیش‌فرض…",
         "Quit" => "خروج",
         "Undo" => "واگرد",
         "Redo" => "ازنو",
@@ -336,6 +335,9 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Remove from history" => "حذف از تاریخچه",
         "Expand recent URL history by default" => "تاریخچهٔ نشانی‌های اخیر به‌طور پیش‌فرض باز باشد",
         "Use a proxy for URL inspection" => "استفاده از پراکسی برای بررسی نشانی",
+        "Use a proxy for remote inspection and playback" => {
+            "استفاده از پراکسی برای بررسی و پخش رسانهٔ راه‌دور"
+        }
         "Inherited proxy" => "پراکسی به‌ارث‌رسیده",
         "Custom proxy URL" => "نشانی پراکسی سفارشی",
         "Enter a complete HTTP or HTTPS proxy URL." => {
@@ -344,6 +346,21 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Leave the custom proxy blank to inherit the operating-system environment." => {
             "برای استفاده از تنظیمات محیط سیستم‌عامل، نشانی پراکسی سفارشی را خالی بگذارید."
         }
+        "MPV playback proxy" => "پراکسی پخش MPV",
+        "MPV requires an http:// proxy URL; URL inspection can still use HTTPS proxy URLs." => {
+            "MPV به نشانی پراکسی http:// نیاز دارد؛ بررسی نشانی همچنان می‌تواند از پراکسی HTTPS استفاده کند."
+        }
+        "MPV applies this proxy to supported HTTP media requests. HTTPS and extractor proxy support depends on the bundled MPV and FFmpeg backends." => {
+            "MPV این پراکسی را برای درخواست‌های HTTP پشتیبانی‌شده به‌کار می‌برد. پشتیبانی پراکسی HTTPS و استخراج‌کننده به نسخه‌های همراه MPV و FFmpeg بستگی دارد."
+        }
+        "File associations" => "وابستگی‌های پرونده",
+        "Registered media types" => "گونه‌های رسانهٔ ثبت‌شده",
+        "Register Pealayer with the operating system, then choose it as the default app for the media types you want." => {
+            "Pealayer را در سیستم‌عامل ثبت کنید، سپس آن را برای گونه‌های رسانهٔ دلخواه به‌عنوان برنامهٔ پیش‌فرض برگزینید."
+        }
+        "Register as a media player" => "ثبت به‌عنوان پخش‌کنندهٔ رسانه",
+        "Remove file associations" => "حذف وابستگی‌های پرونده",
+        "Removed media types" => "گونه‌های رسانهٔ حذف‌شده",
         "Clear remote history" => "پاک‌کردن تاریخچهٔ راه‌دور",
         "Clear from history" => "پاک‌کردن از تاریخچه",
         "Play when a recent location is clicked" => "با کلیک روی نشانی اخیر، آن را پخش کن",

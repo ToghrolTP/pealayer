@@ -55,6 +55,38 @@ fn estop_button(
     response.on_hover_text(help)
 }
 
+/// Switch sibling menus on hover while the menubar is active, matching the
+/// interaction of native Windows menu bars. egui's root menu buttons otherwise
+/// only toggle on click.
+fn top_menu_button<R>(
+    ui: &mut egui::Ui,
+    title: String,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    let state_id = egui::Id::new("pealayer_top_menu_hover_state");
+    let active_popup = ui.ctx().data(|data| data.get_temp::<egui::Id>(state_id));
+    let another_heading_is_open =
+        active_popup.is_some_and(|popup_id| egui::Popup::is_id_open(ui.ctx(), popup_id));
+
+    let result = ui.menu_button(title, add_contents);
+    let popup_id = egui::Popup::default_response_id(&result.response);
+
+    if result.response.hovered() && another_heading_is_open && active_popup != Some(popup_id) {
+        // Opening one popup closes the previously open root popup.
+        egui::Popup::open_id(ui.ctx(), popup_id);
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(state_id, popup_id));
+        ui.ctx().request_repaint();
+    } else if egui::Popup::is_id_open(ui.ctx(), popup_id) {
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(state_id, popup_id));
+    } else if active_popup == Some(popup_id) {
+        ui.ctx().data_mut(|data| data.remove::<egui::Id>(state_id));
+    }
+
+    result
+}
+
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let language = app.language;
@@ -63,7 +95,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     egui::Panel::top("menu_bar").show_inside(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.with_layout(crate::ui::i18n::layout(rtl, egui::Align::Center), |ui| {
-                ui.menu_button(app.tr("File"), |ui| {
+                top_menu_button(ui, app.tr("File"), |ui| {
                     if ui.button(app.tr("Open Video File...")).clicked() {
                         ui.close();
                         if let Some(path) = rfd::FileDialog::new()
@@ -168,27 +200,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
 
                     ui.separator();
-                    if ui
-                        .button(format!(
-                            "{} {}", crate::ui::icons::GEAR,
-                            app.tr("Register as Default Media Player...")
-                        ))
-                        .clicked()
-                    {
-                        ui.close();
-                        match crate::platform::association::register_as_default_player() {
-                            Ok(msg) => app.set_osd(msg),
-                            Err(err) => app.show_error = Some(err),
-                        }
-                    }
-
-                    ui.separator();
                     if ui.button(app.tr("Quit")).clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
 
-                ui.menu_button(app.tr("Edit"), |ui| {
+                top_menu_button(ui, app.tr("Edit"), |ui| {
                     if ui
                         .button(format!("{} {}", crate::ui::icons::GEAR, app.tr("Preferences...")))
                         .clicked()
@@ -210,7 +227,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
                 });
 
-                ui.menu_button(app.tr("Audio"), |ui| {
+                top_menu_button(ui, app.tr("Audio"), |ui| {
                     crate::ui::icons::submenu(ui, app.tr("Audio Track"), |ui| {
                         if ui
                             .selectable_label(app.current_aid == "no", app.tr("None"))
@@ -246,7 +263,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 });
 
                 // Subtitles menu
-                ui.menu_button(app.tr("Subtitles"), |ui| {
+                top_menu_button(ui, app.tr("Subtitles"), |ui| {
                     crate::ui::icons::submenu(ui, app.tr("Subtitle Track"), |ui| {
                         if ui
                             .selectable_label(app.current_sid == "no", app.tr("None"))
@@ -290,7 +307,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 });
 
                 // Workspace switcher
-                ui.menu_button(app.tr("Workspace"), |ui| {
+                top_menu_button(ui, app.tr("Workspace"), |ui| {
                     if ui
                         .selectable_label(app.show_four_d_editor, app.tr("NLE Layout (Docked)"))
                         .clicked()
@@ -313,7 +330,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     );
                 });
 
-                ui.menu_button(app.tr("Window"), |ui| {
+                top_menu_button(ui, app.tr("Window"), |ui| {
                     ui.label(egui::RichText::new(app.tr("Panels")).strong());
                     ui.separator();
 
@@ -346,7 +363,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 });
 
                 // Add right-aligned E-STOP and Serial controls
-                ui.menu_button(app.tr("Help"), |ui| {
+                top_menu_button(ui, app.tr("Help"), |ui| {
                     crate::ui::icons::submenu(ui, app.tr("Language"), |ui| {
                         for (preference, label) in [
                             (

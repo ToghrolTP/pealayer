@@ -240,6 +240,14 @@ fn main() -> eframe::Result {
             let mpv = Mpv::with_initializer(|init| {
                 init.set_property("vo", "libmpv")?;
                 init.set_property("keep-open", "always")?;
+                crate::mpv::proxy::apply_before_initialize(
+                    &init,
+                    loaded_config.open_url_use_proxy,
+                    loaded_config
+                        .open_url_proxy_url
+                        .as_deref()
+                        .unwrap_or_default(),
+                )?;
 
                 // Set up Arabic/Farsi Vazirmatn font for subtitles
                 if let Some(font_dir_str) = subtitle_font_directory

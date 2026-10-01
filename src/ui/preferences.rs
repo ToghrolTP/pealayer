@@ -305,8 +305,8 @@ fn playback_preferences(app: &mut PealayerApp, ui: &mut egui::Ui, changed: &mut 
                 app.open_url_recent_click_edits = !play_recent_on_click;
                 *changed = true;
             }
-            let proxy_label = app.tr("Use a proxy for URL inspection");
-            *changed |= ui
+            let proxy_label = app.tr("Use a proxy for remote inspection and playback");
+            let mut proxy_settings_changed = ui
                 .checkbox(&mut app.open_url_use_proxy, proxy_label)
                 .changed();
 
@@ -338,6 +338,7 @@ fn playback_preferences(app: &mut PealayerApp, ui: &mut egui::Ui, changed: &mut 
                 });
             if proxy_changed && proxy_valid {
                 *changed = true;
+                proxy_settings_changed = true;
             }
             if !proxy_valid {
                 ui.colored_label(
@@ -352,6 +353,43 @@ fn playback_preferences(app: &mut PealayerApp, ui: &mut egui::Ui, changed: &mut 
                 .small()
                 .weak(),
             );
+            let playback_proxy =
+                crate::mpv::proxy::playback_proxy(app.open_url_use_proxy, &app.open_url_proxy_url);
+            if let Some(proxy) = playback_proxy.as_deref() {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{}: {}",
+                        app.tr("MPV playback proxy"),
+                        crate::ui::open_url::proxy_display_value(proxy)
+                    ))
+                    .small()
+                    .weak(),
+                );
+            } else if app.open_url_use_proxy
+                && crate::ui::open_url::effective_proxy_url(&app.open_url_proxy_url).is_some()
+            {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    app.tr("MPV requires an http:// proxy URL; URL inspection can still use HTTPS proxy URLs."),
+                );
+            }
+            ui.label(
+                egui::RichText::new(app.tr(
+                    "MPV applies this proxy to supported HTTP media requests. HTTPS and extractor proxy support depends on the bundled MPV and FFmpeg backends.",
+                ))
+                .small()
+                .weak(),
+            );
+            if proxy_settings_changed {
+                *changed = true;
+                if let Err(error) = crate::mpv::proxy::apply_runtime(
+                    app.mpv,
+                    app.open_url_use_proxy,
+                    &app.open_url_proxy_url,
+                ) {
+                    app.show_error = Some(error);
+                }
+            }
 
             let remote_count = app
                 .recent_media
@@ -480,6 +518,66 @@ fn advanced_preferences(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 .small()
                 .weak(),
             );
+        },
+    );
+    preference_section(
+        ui,
+        crate::ui::icons::FILE_VIDEO,
+        &app.tr("File associations"),
+        |ui| {
+            let registered = crate::platform::associations::SUPPORTED_EXTENSIONS
+                .iter()
+                .filter(|extension| {
+                    crate::platform::associations::is_file_association_registered(extension)
+                })
+                .count();
+            ui.label(format!(
+                "{}: {registered}/{}",
+                app.tr("Registered media types"),
+                crate::platform::associations::SUPPORTED_EXTENSIONS.len()
+            ));
+            ui.label(
+                egui::RichText::new(app.tr(
+                    "Register Pealayer with the operating system, then choose it as the default app for the media types you want.",
+                ))
+                .small()
+                .weak(),
+            );
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .button(format!(
+                        "{}  {}",
+                        crate::ui::icons::CHECK_SQUARE,
+                        app.tr("Register as a media player")
+                    ))
+                    .clicked()
+                {
+                    match crate::platform::associations::register_file_associations(None) {
+                        Ok(count) => {
+                            app.set_osd(format!("{}: {count}", app.tr("Registered media types")))
+                        }
+                        Err(error) => app.show_error = Some(error),
+                    }
+                }
+                if ui
+                    .add_enabled(
+                        registered > 0,
+                        egui::Button::new(format!(
+                            "{}  {}",
+                            crate::ui::icons::X,
+                            app.tr("Remove file associations")
+                        )),
+                    )
+                    .clicked()
+                {
+                    match crate::platform::associations::unregister_file_associations() {
+                        Ok(count) => {
+                            app.set_osd(format!("{}: {count}", app.tr("Removed media types")))
+                        }
+                        Err(error) => app.show_error = Some(error),
+                    }
+                }
+            });
         },
     );
     preference_section(
