@@ -611,13 +611,14 @@ impl eframe::App for PealayerApp {
         }
 
         // Handle Keyboard Shortcuts
-        if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+        let transport_shortcuts_enabled = !ctx.egui_wants_keyboard_input();
+        if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::Space)) {
             self.toggle_playback();
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::F)) {
+        if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::F)) {
             self.toggle_fullscreen(&ctx);
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::M)) {
+        if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::M)) {
             let _ = self.mpv.command("cycle", &["mute"]);
             self.is_muted = !self.is_muted;
             self.set_osd(if self.is_muted {
@@ -626,31 +627,31 @@ impl eframe::App for PealayerApp {
                 "Unmute".to_string()
             });
         }
-        if !ctx.egui_wants_keyboard_input() && ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
+        if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
             self.seek_relative(-self.quick_seek_seconds);
         }
-        if !ctx.egui_wants_keyboard_input() && ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
+        if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
             self.seek_relative(self.quick_seek_seconds);
         }
-        if !ctx.egui_wants_keyboard_input()
+        if transport_shortcuts_enabled
             && ctx.input(|i| {
                 i.key_pressed(egui::Key::Period) || i.key_pressed(egui::Key::CloseBracket)
             })
         {
             self.step_frames(1);
         }
-        if !ctx.egui_wants_keyboard_input()
+        if transport_shortcuts_enabled
             && ctx
                 .input(|i| i.key_pressed(egui::Key::Comma) || i.key_pressed(egui::Key::OpenBracket))
         {
             self.step_frames(-1);
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+        if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
             let _ = self.mpv.command("add", &["volume", "5"]);
             self.volume = (self.volume + 5.0).clamp(0.0, 130.0);
             self.set_osd(format!("Volume: {:.0}%", self.volume));
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+        if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
             let _ = self.mpv.command("add", &["volume", "-5"]);
             self.volume = (self.volume - 5.0).clamp(0.0, 130.0);
             self.set_osd(format!("Volume: {:.0}%", self.volume));
