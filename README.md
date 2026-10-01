@@ -38,6 +38,31 @@ Whether designing an immersive theme park ride, an experiential 4D theater, or h
 
 ## Key Features
 
+### PCController-owned effects
+
+Pealayer discovers one live effect library from PCController. Recorded seat or
+multi-peripheral sequences and host-rendered addressable-light streams use the
+same stable references and the same play/stop engine. Pealayer deliberately
+does not seed or persist an independent effect catalog.
+
+1. Connect Pealayer to a PCController endpoint and open **Effects Library**.
+2. Drag a live card onto the **Controller effects** timeline track. The card
+   stays under the pointer at the exact grab offset and drops at the selected
+   time.
+3. Right-click a card for **Properties and edit** or **Run now**. The editor can
+   create, rename, regroup, inspect, run, duplicate, or delete definitions in
+   PCController.
+4. In **Hardware Monitor**, expand **Record effect**, choose
+   **PCController host** to capture all coordinator peripheral actions or
+   **Board RAM** for bounded live relay capture, operate the advertised
+   controls, then choose **Save and place**.
+5. Timeline playback calls `effect play sequence:ID` or
+   `effect play strip:ID`; lighting cues receive a matching `effect stop` at
+   their authored end. The stored definition remains solely in PCController.
+
+The PCController Web UI, TUI, CLI/IPC, and other Pealayer instances see edits
+from the same catalog on their next authoritative snapshot.
+
 ### 🎬 Cinema-Grade Video Core & OpenGL RTT
 * **Hardware-Accelerated Render-To-Texture (RTT)**: Decodes video frames via NVDEC, VA-API, or D3D11VA and renders directly into an offscreen OpenGL framebuffer texture inside egui's rendering context.
 * **Aspect-Ratio-Locked Viewport**: Automatically maintains pixel-perfect 16:9 letterboxing/pillarboxing with high-DPI scaling and zero frame stretching.

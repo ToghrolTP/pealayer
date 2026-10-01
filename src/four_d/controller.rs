@@ -189,8 +189,14 @@ pub struct HardwareMacro {
 pub struct HardwareStripEffect {
     pub id: String,
     pub name: String,
+    pub category: String,
     pub description: String,
+    pub pattern: String,
+    pub engine: String,
+    pub editable: bool,
     pub default_fps: Option<u8>,
+    pub default_duration_ms: Option<u64>,
+    pub default_pixels: Option<u16>,
     pub minimum_fps: Option<u8>,
     pub maximum_fps: Option<u8>,
     pub minimum_pixels: Option<u16>,
@@ -744,6 +750,13 @@ fn parse_strip_effects(value: &Value) -> Vec<HardwareStripEffect> {
     entries
         .iter()
         .filter_map(|entry| {
+            if entry
+                .get("kind")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind != "strip-stream")
+            {
+                return None;
+            }
             let id = entry.get("id")?.as_str()?.trim();
             if !valid_strip_effect_id(id) {
                 return None;
@@ -756,12 +769,33 @@ fn parse_strip_effects(value: &Value) -> Vec<HardwareStripEffect> {
                     .filter(|name| !name.trim().is_empty())
                     .unwrap_or(id)
                     .to_string(),
+                category: entry
+                    .get("category")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Lighting")
+                    .to_string(),
                 description: entry
                     .get("description")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
+                pattern: entry
+                    .get("pattern")
+                    .and_then(Value::as_str)
+                    .unwrap_or(id)
+                    .to_string(),
+                engine: entry
+                    .get("engine")
+                    .and_then(Value::as_str)
+                    .unwrap_or("host-stream")
+                    .to_string(),
+                editable: entry
+                    .get("editable")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
                 default_fps: byte(entry, "default_fps"),
+                default_duration_ms: entry.get("default_duration_ms").and_then(Value::as_u64),
+                default_pixels: word(entry, "default_pixels"),
                 minimum_fps: byte(entry, "minimum_fps").or_else(|| byte(entry, "min_fps")),
                 maximum_fps: byte(entry, "maximum_fps").or_else(|| byte(entry, "max_fps")),
                 minimum_pixels: word(entry, "minimum_pixels").or_else(|| word(entry, "min_pixels")),
@@ -1229,7 +1263,12 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
                 .to_string(),
         })
         .collect();
-    let strip_effects = if board_connected && capability_bits & CAPABILITY_ADDRESSABLE_LED != 0 {
+    let strip_effects = if snapshot.get("effects").is_some() {
+        snapshot
+            .get("effects")
+            .map(parse_strip_effects)
+            .unwrap_or_default()
+    } else if board_connected && capability_bits & CAPABILITY_ADDRESSABLE_LED != 0 {
         let parsed = parse_strip_effects(catalog);
         if parsed.is_empty() {
             parse_strip_effects(snapshot)
@@ -1239,13 +1278,28 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
     } else {
         Vec::new()
     };
-    let macros = snapshot
-        .pointer("/macros/library")
+    let sequence_entries = snapshot
+        .get("effects")
         .and_then(Value::as_array)
+        .filter(|entries| !entries.is_empty())
+        .or_else(|| {
+            snapshot
+                .pointer("/macros/library")
+                .and_then(Value::as_array)
+        });
+    let macros = sequence_entries
         .into_iter()
         .flatten()
+        .filter(|entry| {
+            entry
+                .get("kind")
+                .and_then(Value::as_str)
+                .is_none_or(|kind| kind == "sequence")
+        })
         .filter_map(|entry| {
-            let id = entry.get("id").and_then(Value::as_u64)?;
+            let id = entry
+                .get("id")
+                .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))?;
             let name = entry.get("name")?.as_str()?.to_string();
             let category = entry
                 .get("category")
@@ -1273,14 +1327,20 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
                 })
                 .collect();
             let mode = entry
-                .get("mode")
+                .get("engine")
+                .or_else(|| entry.get("mode"))
                 .and_then(Value::as_str)
                 .unwrap_or("mcu")
                 .to_string();
             let duration_ms = entry
-                .get("duration_us")
+                .get("duration_ms")
                 .and_then(Value::as_u64)
-                .map(|duration| duration.div_ceil(1_000))
+                .or_else(|| {
+                    entry
+                        .get("duration_us")
+                        .and_then(Value::as_u64)
+                        .map(|duration| duration.div_ceil(1_000))
+                })
                 .unwrap_or_else(|| {
                     steps
                         .iter()

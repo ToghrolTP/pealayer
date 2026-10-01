@@ -1,7 +1,6 @@
 pub mod app;
 pub mod cli;
 pub mod config;
-pub mod effects_library;
 pub mod four_d;
 pub mod media;
 pub mod mpv;

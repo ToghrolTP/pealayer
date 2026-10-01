@@ -203,12 +203,12 @@ fn decoration_colors(dark: bool) -> (u32, u32) {
 #[cfg(target_os = "windows")]
 pub fn apply_windows_window_decorations(hwnd_raw: isize) {
     use windows::Win32::Foundation::HWND;
-    use windows::core::BOOL;
     use windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE;
     use windows::Win32::Graphics::Dwm::{
         DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMWA_CAPTION_COLOR, DWMWA_SYSTEMBACKDROP_TYPE,
         DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
     };
+    use windows::core::BOOL;
 
     if hwnd_raw == 0 {
         return;
@@ -575,8 +575,8 @@ pub fn compute_thumbnail_clip_ratio(
 #[cfg(target_os = "windows")]
 pub fn configure_video_taskbar_thumbnail(hwnd_raw: isize) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
-    use windows::core::BOOL;
     use windows::Win32::Graphics::Dwm::{DWMWA_FORCE_ICONIC_REPRESENTATION, DwmSetWindowAttribute};
+    use windows::core::BOOL;
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());

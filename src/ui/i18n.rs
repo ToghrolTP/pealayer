@@ -193,6 +193,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Seven-segment display" => "نمایشگر هفت‌بخشی",
         "LCD display" => "نمایشگر LCD",
         "Board macros" => "ماکروهای برد",
+        "Timed effects" => "جلوه‌های زمان‌بندی‌شده",
         "Capability bits" => "بیت‌های قابلیت",
         "Controls" => "کنترل‌ها",
         "Relays" => "رله‌ها",
@@ -287,8 +288,19 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Live board control" => "کنترل زندهٔ برد",
         "PCController macro catalog" => "فهرست ماکروهای PCController",
         "Record hardware effect" => "ضبط جلوهٔ سخت‌افزاری",
+        "Record effect" => "ضبط جلوه",
         "Seat motion take" => "برداشت حرکت صندلی",
         "Start board recording" => "آغاز ضبط از برد",
+        "Start recording" => "آغاز ضبط",
+        "Capture engine" => "موتور ضبط",
+        "PCController host" => "میزبان PCController",
+        "Board RAM" => "حافظهٔ برد",
+        "Captures relay, motion, MOSFET, display, buzzer, RF, and other coordinator actions." => {
+            "فرمان‌های رله، حرکت، ماسفت، نمایشگر، بوق، رادیو و دیگر عملیات هماهنگ‌کننده را ضبط می‌کند."
+        }
+        "Captures the board's bounded live relay snapshots, then imports them into PCController when saved." => {
+            "نمونه‌های زنده و محدود رله را در حافظهٔ برد ضبط می‌کند و هنگام ذخیره به PCController وارد می‌کند."
+        }
         "Anchor at the current video time and capture board-applied actions from every PCController surface." => {
             "ضبط را به زمان کنونی ویدئو متصل کنید و فرمان‌های اعمال‌شدهٔ برد را از همهٔ رابط‌های PCController بگیرید."
         }

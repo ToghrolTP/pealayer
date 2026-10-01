@@ -227,7 +227,7 @@ fn capability_list(
                 "Seven-segment display",
             ),
             (capabilities.supports_lcd_display, "LCD display"),
-            (!capabilities.macros.is_empty(), "Board macros"),
+            (!capabilities.macros.is_empty(), "Timed effects"),
         ] {
             if available {
                 pill(ui, &app.tr(label));
@@ -266,7 +266,7 @@ fn capability_list(
             );
             row(
                 ui,
-                &app.tr("Macros"),
+                &app.tr("Timed effects"),
                 &capabilities.macros.len().to_string(),
             );
             row(

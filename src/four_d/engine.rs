@@ -125,6 +125,26 @@ impl HardwareTransport {
     }
 }
 
+fn play_controller_effect(
+    transport: &mut HardwareTransport,
+    reference: &str,
+) -> Result<serde_json::Value, String> {
+    transport.call_controller(
+        "controller.command.execute",
+        serde_json::json!({"command": format!("effect play {reference}")}),
+    )
+}
+
+fn stop_controller_effect(
+    transport: &mut HardwareTransport,
+    reference: &str,
+) -> Result<serde_json::Value, String> {
+    transport.call_controller(
+        "controller.command.execute",
+        serde_json::json!({"command": format!("effect stop {reference}")}),
+    )
+}
+
 #[derive(Debug, Clone)]
 pub struct CompiledAction {
     pub time_ms: u64,
@@ -464,7 +484,7 @@ pub fn spawn_engine() -> EngineHandle {
                             // strip state; playback will issue the next cue.
                             let _ = transport.call_controller(
                                 "controller.command.execute",
-                                serde_json::json!({"command": "strip stop"}),
+                                serde_json::json!({"command": "effect stop strip:*"}),
                             );
                             active_strip_effect = None;
                         }
@@ -511,11 +531,11 @@ pub fn spawn_engine() -> EngineHandle {
                 if let Some(ref mut transport) = active_transport {
                     let _ = transport.call_controller(
                         "controller.command.execute",
-                        serde_json::json!({"command": "macro cancel"}),
+                        serde_json::json!({"command": "effect cancel"}),
                     );
                     let _ = transport.call_controller(
                         "controller.command.execute",
-                        serde_json::json!({"command": "strip stop"}),
+                        serde_json::json!({"command": "effect stop strip:*"}),
                     );
                     let _ = transport.send(Command::AllOff);
                 }
@@ -564,19 +584,13 @@ pub fn spawn_engine() -> EngineHandle {
                             .map(str::to_owned);
                         if active_strip_effect != desired {
                             if let Some(ref mut transport) = active_transport {
-                                if active_strip_effect.is_some() {
-                                    let _ = transport.call_controller(
-                                        "controller.command.execute",
-                                        serde_json::json!({"command": "strip stop"}),
-                                    );
+                                if let Some(id) = active_strip_effect.as_deref() {
+                                    let _ =
+                                        stop_controller_effect(transport, &format!("strip:{id}"));
                                 }
                                 active_strip_effect = None;
                                 if let Some(id) = desired.as_deref() {
-                                    if transport
-                                        .call_controller(
-                                            "controller.command.execute",
-                                            serde_json::json!({"command": format!("strip effect play {id}")}),
-                                        )
+                                    if play_controller_effect(transport, &format!("strip:{id}"))
                                         .is_ok()
                                     {
                                         active_strip_effect = Some(id.to_string());
@@ -627,12 +641,12 @@ pub fn spawn_engine() -> EngineHandle {
                             if let Some(ref mut transport) = active_transport {
                                 let _ = transport.call_controller(
                                     "controller.command.execute",
-                                    serde_json::json!({"command": "macro cancel"}),
+                                    serde_json::json!({"command": "effect cancel"}),
                                 );
-                                let _ = transport.call_controller(
-                                    "controller.command.execute",
-                                    serde_json::json!({"command": "strip stop"}),
-                                );
+                                if let Some(id) = active_strip_effect.as_deref() {
+                                    let _ =
+                                        stop_controller_effect(transport, &format!("strip:{id}"));
+                                }
                                 active_strip_effect = None;
                                 if let Err(e) = transport.send(Command::AllOff) {
                                     if let Ok(mut guard) = engine_conn_error.lock() {
@@ -644,11 +658,7 @@ pub fn spawn_engine() -> EngineHandle {
                                         &controller_strip_effects,
                                         time,
                                     ) {
-                                        if transport
-                                            .call_controller(
-                                                "controller.command.execute",
-                                                serde_json::json!({"command": format!("strip effect play {id}")}),
-                                            )
+                                        if play_controller_effect(transport, &format!("strip:{id}"))
                                             .is_ok()
                                         {
                                             active_strip_effect = Some(id.to_string());
@@ -688,12 +698,11 @@ pub fn spawn_engine() -> EngineHandle {
                         if let Some(ref mut transport) = active_transport {
                             let _ = transport.call_controller(
                                 "controller.command.execute",
-                                serde_json::json!({"command": "macro cancel"}),
+                                serde_json::json!({"command": "effect cancel"}),
                             );
-                            let _ = transport.call_controller(
-                                "controller.command.execute",
-                                serde_json::json!({"command": "strip stop"}),
-                            );
+                            if let Some(id) = active_strip_effect.as_deref() {
+                                let _ = stop_controller_effect(transport, &format!("strip:{id}"));
+                            }
                             let _ = transport.send(Command::AllOff);
                         }
                         active_transport = None;
@@ -954,11 +963,11 @@ pub fn spawn_engine() -> EngineHandle {
                     if let Some(ref mut transport) = active_transport {
                         let _ = transport.call_controller(
                             "controller.command.execute",
-                            serde_json::json!({"command": "macro cancel"}),
+                            serde_json::json!({"command": "effect cancel"}),
                         );
                         let _ = transport.call_controller(
                             "controller.command.execute",
-                            serde_json::json!({"command": "strip stop"}),
+                            serde_json::json!({"command": "effect stop strip:*"}),
                         );
                         active_strip_effect = None;
                         let _ = transport.send(Command::AllOff);
@@ -977,21 +986,12 @@ pub fn spawn_engine() -> EngineHandle {
                         .map(str::to_owned);
                 if active_strip_effect != desired {
                     if let Some(ref mut transport) = active_transport {
-                        if active_strip_effect.is_some() {
-                            let _ = transport.call_controller(
-                                "controller.command.execute",
-                                serde_json::json!({"command": "strip stop"}),
-                            );
+                        if let Some(id) = active_strip_effect.as_deref() {
+                            let _ = stop_controller_effect(transport, &format!("strip:{id}"));
                         }
                         active_strip_effect = None;
                         if let Some(id) = desired.as_deref() {
-                            if transport
-                                .call_controller(
-                                    "controller.command.execute",
-                                    serde_json::json!({"command": format!("strip effect play {id}")}),
-                                )
-                                .is_ok()
-                            {
+                            if play_controller_effect(transport, &format!("strip:{id}")).is_ok() {
                                 active_strip_effect = Some(id.to_string());
                             }
                         }
@@ -1012,14 +1012,16 @@ pub fn spawn_engine() -> EngineHandle {
                     }
                     if connected {
                         if let Some(ref mut transport) = active_transport {
-                            let command = format!("macro play {} {}", cue.id, cue.mode);
+                            let command = format!("effect play sequence:{} {}", cue.id, cue.mode);
                             if let Err(error) = transport.call_controller(
                                 "controller.command.execute",
                                 serde_json::json!({"command": command}),
                             ) {
                                 if let Ok(mut guard) = engine_conn_error.lock() {
-                                    *guard =
-                                        Some(format!("start controller macro {}: {error}", cue.id));
+                                    *guard = Some(format!(
+                                        "start controller effect sequence:{}: {error}",
+                                        cue.id
+                                    ));
                                 }
                                 engine_connected.store(false, Ordering::Relaxed);
                             }
@@ -1040,15 +1042,13 @@ pub fn spawn_engine() -> EngineHandle {
                                 current_controller_strip_effect_index += 1;
                                 continue;
                             }
-                            let command = if cue.start {
-                                format!("strip effect play {}", cue.id)
+                            let reference = format!("strip:{}", cue.id);
+                            let result = if cue.start {
+                                play_controller_effect(transport, &reference)
                             } else {
-                                "strip stop".to_string()
+                                stop_controller_effect(transport, &reference)
                             };
-                            if let Err(error) = transport.call_controller(
-                                "controller.command.execute",
-                                serde_json::json!({"command": command}),
-                            ) {
+                            if let Err(error) = result {
                                 if let Ok(mut guard) = engine_conn_error.lock() {
                                     *guard = Some(format!(
                                         "{} strip effect {}: {error}",

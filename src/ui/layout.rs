@@ -53,6 +53,10 @@ fn pwm_raw(percent: f64) -> u16 {
     (percent.clamp(0.0, 100.0) * 4095.0 / 100.0).round() as u16
 }
 
+fn begin_effect_drag(ctx: &egui::Context, payload: EffectDragPayload) {
+    egui::DragAndDrop::set_payload(ctx, payload);
+}
+
 fn effect_drag_source<R>(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -80,10 +84,18 @@ fn effect_drag_source<R>(
         let drag = ui
             .interact(response.response.rect, id, egui::Sense::drag())
             .on_hover_cursor(egui::CursorIcon::Grab);
-        if drag.drag_started()
-            && let Some(pointer) = ui.ctx().pointer_interact_pos()
-        {
-            ui.data_mut(|data| data.insert_temp(offset_id, pointer - response.response.rect.min));
+        if drag.drag_started() {
+            // Establish the payload in the same input frame in which egui
+            // claims the drag. Waiting until the next paint left a race where
+            // the pointer could enter (and even be released over) the timeline
+            // before any drop payload existed, so the cards looked draggable
+            // but every drop was ignored.
+            begin_effect_drag(ui.ctx(), payload);
+            if let Some(pointer) = ui.ctx().pointer_interact_pos() {
+                ui.data_mut(|data| {
+                    data.insert_temp(offset_id, pointer - response.response.rect.min)
+                });
+            }
         }
         egui::InnerResponse::new(response.inner, drag | response.response)
     }
@@ -1085,6 +1097,108 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn effect_drag_start_publishes_the_payload_in_the_same_frame() {
+        let context = egui::Context::default();
+        let payload = EffectDragPayload {
+            name: "Seat rise".to_string(),
+            icon: String::new(),
+            duration_ms: 750,
+            target: crate::four_d::models::HardwareTarget::ControllerMacro,
+            actions: Vec::new(),
+            controller_macro: Some(crate::four_d::models::ControllerMacroCue {
+                id: 7,
+                mode: "mcu".to_string(),
+            }),
+            controller_strip_effect: None,
+        };
+        begin_effect_drag(&context, payload.clone());
+        assert_eq!(
+            egui::DragAndDrop::payload::<EffectDragPayload>(&context).as_deref(),
+            Some(&payload)
+        );
+    }
+
+    #[test]
+    fn effect_card_completes_a_real_pointer_drag_and_drop_cycle() {
+        let context = egui::Context::default();
+        let payload = EffectDragPayload {
+            name: "Seat rise".to_string(),
+            icon: String::new(),
+            duration_ms: 750,
+            target: crate::four_d::models::HardwareTarget::ControllerMacro,
+            actions: Vec::new(),
+            controller_macro: Some(crate::four_d::models::ControllerMacroCue {
+                id: 7,
+                mode: "mcu".to_string(),
+            }),
+            controller_strip_effect: None,
+        };
+        let source = std::cell::Cell::new(egui::Rect::NOTHING);
+        let target = std::cell::Cell::new(egui::Rect::NOTHING);
+        let dropped = std::cell::Cell::new(false);
+        let render = |events: Vec<egui::Event>| {
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(480.0, 320.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    source.set(
+                        effect_drag_source(
+                            ui,
+                            egui::Id::new("verified-effect-card"),
+                            payload.clone(),
+                            |ui| ui.add_sized([180.0, 40.0], egui::Label::new("Seat rise")),
+                        )
+                        .response
+                        .rect,
+                    );
+                    ui.add_space(90.0);
+                    let (zone, released) = ui
+                        .dnd_drop_zone::<EffectDragPayload, _>(egui::Frame::NONE, |ui| {
+                            ui.allocate_exact_size(egui::vec2(300.0, 70.0), egui::Sense::hover())
+                        });
+                    target.set(zone.response.rect);
+                    dropped.set(dropped.get() || released.as_deref() == Some(&payload));
+                },
+            );
+            drop(output);
+        };
+
+        render(Vec::new());
+        let source_point = source.get().center();
+        render(vec![
+            egui::Event::PointerMoved(source_point),
+            egui::Event::PointerButton {
+                pos: source_point,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        render(vec![egui::Event::PointerMoved(
+            source_point + egui::vec2(18.0, 4.0),
+        )]);
+        let target_point = target.get().center();
+        render(vec![egui::Event::PointerMoved(target_point)]);
+        render(vec![egui::Event::PointerButton {
+            pos: target_point,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+
+        assert!(
+            dropped.get(),
+            "effect card payload was not released by the drop zone"
+        );
+    }
+
+    #[test]
     fn indicators_use_authoritative_output_state() {
         let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
         capabilities.active_relays.insert(2);
@@ -2043,17 +2157,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 ))
                                                 .clicked()
                                             {
-                                                let mut draft = crate::effects_library::UserStripEffectPreset::default();
-                                                draft.category = category.clone();
-                                                if let Some(effect) = self
-                                                    .app
-                                                    .advertised_hardware()
-                                                    .and_then(|capabilities| capabilities.strip_effects.into_iter().next())
-                                                {
-                                                    draft.hardware_effect_id = effect.id;
-                                                }
-                                                self.app.effect_library_selection = Some(draft.id);
-                                                self.app.effect_library_draft = draft;
+                                                self.app.effect_library_selection = None;
+                                                self.app.effect_library_draft = crate::app::ControllerEffectDraft {
+                                                    category: category.clone(),
+                                                    ..Default::default()
+                                                };
                                                 self.app.show_effect_library_editor = true;
                                                 ui.close();
                                             }
@@ -2102,9 +2210,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     .controller_strip_effect
                                                     .is_some()
                                                 {
-                                                    self.app.tr("Strip")
+                                                    self.app.tr("Host stream")
                                                 } else if preset.effect.controller_macro.is_some() {
-                                                    self.app.tr("Macro")
+                                                    self.app.tr("Timed sequence")
                                                 } else if let crate::four_d::models::HardwareTarget::Relay(id) =
                                                     preset.effect.target
                                                 {
@@ -2183,83 +2291,35 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 response.response.context_menu(|ui| {
                                                     ui.strong(&displayed_effect_name);
                                                     ui.separator();
-                                                    match source {
-                                                        crate::app::EffectPresetSource::UserStrip(id) => {
-                                                            if ui
-                                                                .button(format!(
-                                                                    "{} {}",
-                                                                    crate::ui::icons::PENCIL_SIMPLE,
-                                                                    self.app.tr("Edit effect")
-                                                                ))
-                                                                .clicked()
-                                                            {
-                                                                if let Some(effect) = self
-                                                                    .app
-                                                                    .user_strip_effects
-                                                                    .iter()
-                                                                    .find(|effect| effect.id == id)
-                                                                    .cloned()
-                                                                {
-                                                                    self.app.effect_library_selection = Some(id);
-                                                                    self.app.effect_library_draft = effect;
-                                                                    self.app.show_effect_library_editor = true;
+                                                    if ui.button(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, self.app.tr("Properties and edit"))).clicked() {
+                                                        if let Some(capabilities) = self.app.advertised_hardware() {
+                                                            match source {
+                                                                crate::app::EffectPresetSource::ControllerMacro(id) => {
+                                                                    if let Some(effect) = capabilities.macros.iter().find(|effect| effect.id == id) {
+                                                                        crate::ui::effects_library::select_sequence(self.app, effect);
+                                                                    }
                                                                 }
-                                                                ui.close();
-                                                            }
-                                                            if ui
-                                                                .button(format!(
-                                                                    "{} {}",
-                                                                    crate::ui::icons::COPY,
-                                                                    self.app.tr("Duplicate")
-                                                                ))
-                                                                .clicked()
-                                                            {
-                                                                if let Some(effect) = self
-                                                                    .app
-                                                                    .user_strip_effects
-                                                                    .iter()
-                                                                    .find(|effect| effect.id == id)
-                                                                    .cloned()
-                                                                {
-                                                                    let duplicate = effect.duplicate();
-                                                                    self.app.effect_library_selection = Some(duplicate.id);
-                                                                    self.app.effect_library_draft = duplicate;
-                                                                    self.app.show_effect_library_editor = true;
+                                                                crate::app::EffectPresetSource::ControllerStrip => {
+                                                                    if let Some(id) = preset.effect.controller_strip_effect.as_ref().map(|value| value.id.as_str())
+                                                                        && let Some(effect) = capabilities.strip_effects.iter().find(|effect| effect.id == id)
+                                                                    {
+                                                                        crate::ui::effects_library::select_strip(self.app, effect);
+                                                                    }
                                                                 }
-                                                                ui.close();
                                                             }
-                                                            ui.separator();
-                                                            if ui
-                                                                .button(format!(
-                                                                    "{} {}",
-                                                                    crate::ui::icons::TRASH,
-                                                                    self.app.tr("Delete")
-                                                                ))
-                                                                .clicked()
-                                                            {
-                                                                self.app.user_strip_effects.retain(|effect| effect.id != id);
-                                                                if let Err(error) = crate::effects_library::save(
-                                                                    &self.app.user_strip_effects,
-                                                                ) {
-                                                                    self.app.set_osd(error);
-                                                                }
-                                                                ui.close();
-                                                            }
+                                                            self.app.show_effect_library_editor = true;
                                                         }
-                                                        crate::app::EffectPresetSource::ControllerMacro(_) => {
-                                                            if ui
-                                                                .button(format!(
-                                                                    "{} {}",
-                                                                    crate::ui::icons::GAUGE,
-                                                                    self.app.tr("Hardware preferences")
-                                                                ))
-                                                                .clicked()
-                                                            {
-                                                                self.app.preferences_tab = 2;
-                                                                self.app.show_preferences_dialog = true;
-                                                                ui.close();
-                                                            }
+                                                        ui.close();
+                                                    }
+                                                    let reference = match source {
+                                                        crate::app::EffectPresetSource::ControllerMacro(id) => format!("sequence:{id}"),
+                                                        crate::app::EffectPresetSource::ControllerStrip => format!("strip:{}", preset.effect.controller_strip_effect.as_ref().map(|value| value.id.as_str()).unwrap_or_default()),
+                                                    };
+                                                    if ui.button(format!("{} {}", crate::ui::icons::PLAY, self.app.tr("Run now"))).clicked() {
+                                                        if let Err(error) = self.app.play_controller_effect(&reference) {
+                                                            self.app.set_osd(error);
                                                         }
+                                                        ui.close();
                                                     }
                                                 });
                                                 ui.add_space(5.0);
@@ -2443,10 +2503,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 profile.attached && profile.configured
                             }) && !capabilities.controls.is_empty();
                             if can_record {
-                                let record_title = self.app.tr("Record hardware effect");
+                                let record_title = self.app.tr("Record effect");
                                 let name_label = self.app.tr("Name");
                                 let name_hint = self.app.tr("Seat motion take");
-                                let start_label = self.app.tr("Start board recording");
+                                let start_label = self.app.tr("Start recording");
                                 let start_help = self.app.tr(
                                     "Anchor at the current video time and capture board-applied actions from every PCController surface.",
                                 );
@@ -2454,6 +2514,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let save_label = self.app.tr("Save and place");
                                 let discard_label = self.app.tr("Discard");
                                 let anchor_label = self.app.tr("Timeline anchor:");
+                                let capture_engine_label = self.app.tr("Capture engine");
+                                let host_engine_label = self.app.tr("PCController host");
+                                let board_engine_label = self.app.tr("Board RAM");
+                                let host_engine_help = self.app.tr("Captures relay, motion, MOSFET, display, buzzer, RF, and other coordinator actions.");
+                                let board_engine_help = self.app.tr("Captures the board's bounded live relay snapshots, then imports them into PCController when saved.");
                                 let record_open = self.app.hardware_effect_authoring.active
                                     || self.app.hardware_effect_authoring.pending_operation.is_some();
                                 ui.add_space(8.0);
@@ -2476,6 +2541,20 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         .desired_width(ui.available_width().min(280.0))
                                                         .hint_text(&name_hint),
                                                 );
+                                                ui.end_row();
+                                                ui.label(&capture_engine_label);
+                                                ui.horizontal(|ui| {
+                                                    ui.selectable_value(
+                                                        &mut self.app.hardware_effect_authoring.record_on_board,
+                                                        false,
+                                                        &host_engine_label,
+                                                    ).on_hover_text(&host_engine_help);
+                                                    ui.selectable_value(
+                                                        &mut self.app.hardware_effect_authoring.record_on_board,
+                                                        true,
+                                                        &board_engine_label,
+                                                    ).on_hover_text(&board_engine_help);
+                                                });
                                                 ui.end_row();
                                             });
                                         let pending = self.app.hardware_effect_authoring.pending_operation.is_some();
@@ -2535,16 +2614,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                             if !capabilities.strip_effects.is_empty() {
-                                let strip_title = self.app.tr("Addressable strip effects");
+                                let strip_title = self.app.tr("Host-rendered lighting effects");
                                 let stop_label = self.app.tr("Stop preview");
                                 let preview_label = self.app.tr("Preview");
-                                let user_effects = self
-                                    .app
-                                    .user_strip_effects
-                                    .iter()
-                                    .filter(|preset| capabilities.strip_effects.iter().any(|effect| effect.id == preset.hardware_effect_id))
-                                    .cloned()
-                                    .collect::<Vec<_>>();
                                 ui.add_space(8.0);
                                 ui.horizontal(|ui| {
                                     ui.label(
@@ -2572,7 +2644,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
                                     }
                                 });
-                                for strip_effect in &user_effects {
+                                for strip_effect in &capabilities.strip_effects {
                                     ui.horizontal_wrapped(|ui| {
                                         ui.label(
                                             egui::RichText::new(crate::ui::i18n::visual_text(
@@ -2584,7 +2656,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         ui.label(
                                             egui::RichText::new(format!(
                                                 "{:.1} s",
-                                                strip_effect.duration_ms as f64 / 1_000.0
+                                                strip_effect.default_duration_ms.unwrap_or_default() as f64 / 1_000.0
                                             ))
                                             .weak(),
                                         );
@@ -2593,11 +2665,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 self.app.hardware_effect_authoring.pending_operation.is_none(),
                                                 egui::Button::new(&preview_label),
                                             )
-                                            .on_hover_text(format!("{} ms", strip_effect.duration_ms))
+                                            .on_hover_text(format!("{} ms", strip_effect.default_duration_ms.unwrap_or_default()))
                                             .clicked()
                                         {
                                             if let Err(error) =
-                                                self.app.preview_strip_effect(&strip_effect.hardware_effect_id)
+                                                self.app.preview_strip_effect(&strip_effect.id)
                                             {
                                                 self.app.set_osd(error);
                                             }
@@ -2759,7 +2831,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 ui.label(
                                     egui::RichText::new(format!(
                                         "{board_name} {}",
-                                        self.app.tr("macro catalog")
+                                        self.app.tr("effect catalog")
                                     ))
                                     .strong(),
                                 );
@@ -2767,7 +2839,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     ui.horizontal(|ui| {
                                         ui.label(crate::ui::i18n::visual_text(display_language, &hardware_macro.name));
                                         if ui.button(self.app.tr("Play")).clicked() {
-                                            let command = format!("macro play {} {}", hardware_macro.id, hardware_macro.mode);
+                                            let command = format!("effect play sequence:{} {}", hardware_macro.id, hardware_macro.mode);
                                             let _ = self.app.engine_handle.sender.send(
                                                 crate::four_d::engine::EngineMessage::ControllerCall {
                                                     method: "controller.command.execute".to_string(),

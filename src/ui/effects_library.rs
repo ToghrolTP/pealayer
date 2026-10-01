@@ -1,276 +1,226 @@
-use crate::app::PealayerApp;
+use crate::app::{ControllerEffectDraft, PealayerApp};
 use eframe::egui;
+
+pub(crate) fn select_sequence(
+    app: &mut PealayerApp,
+    effect: &crate::four_d::controller::HardwareMacro,
+) {
+    let reference = format!("sequence:{}", effect.id);
+    app.effect_library_selection = Some(reference.clone());
+    app.effect_library_draft = ControllerEffectDraft {
+        reference,
+        id: effect.id.to_string(),
+        name: effect.name.clone(),
+        category: effect.category.clone(),
+        description: String::new(),
+        kind: "sequence".to_string(),
+        pattern: String::new(),
+        color: "green".to_string(),
+        default_fps: 0,
+        duration_ms: effect.duration_ms,
+        default_pixels: 0,
+        is_new: false,
+    };
+}
+
+pub(crate) fn select_strip(
+    app: &mut PealayerApp,
+    effect: &crate::four_d::controller::HardwareStripEffect,
+) {
+    let reference = format!("strip:{}", effect.id);
+    app.effect_library_selection = Some(reference.clone());
+    app.effect_library_draft = ControllerEffectDraft {
+        reference,
+        id: effect.id.clone(),
+        name: effect.name.clone(),
+        category: effect.category.clone(),
+        description: effect.description.clone(),
+        kind: "strip-stream".to_string(),
+        pattern: effect.pattern.clone(),
+        color: String::new(),
+        default_fps: effect.default_fps.unwrap_or(20),
+        duration_ms: effect.default_duration_ms.unwrap_or(1),
+        default_pixels: effect.default_pixels.unwrap_or(1),
+        is_new: false,
+    };
+}
+
+fn start_new_sequence(
+    app: &mut PealayerApp,
+    sequences: &[crate::four_d::controller::HardwareMacro],
+) {
+    let next_id = (0_u16..=255)
+        .find(|candidate| {
+            !sequences
+                .iter()
+                .any(|effect| effect.id == u64::from(*candidate))
+        })
+        .unwrap_or(0);
+    app.effect_library_selection = None;
+    app.effect_library_draft = ControllerEffectDraft {
+        id: next_id.to_string(),
+        kind: "sequence".to_string(),
+        category: "Effects".to_string(),
+        color: "green".to_string(),
+        is_new: true,
+        ..Default::default()
+    };
+}
 
 pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if !app.show_effect_library_editor {
         return;
     }
     let mut open = app.show_effect_library_editor;
-    let available = app
-        .advertised_hardware()
-        .map(|capabilities| capabilities.strip_effects)
+    let capabilities = app.advertised_hardware();
+    let sequences = capabilities
+        .as_ref()
+        .map(|value| value.macros.clone())
+        .unwrap_or_default();
+    let strips = capabilities
+        .as_ref()
+        .map(|value| value.strip_effects.clone())
         .unwrap_or_default();
     let bounds = ui.ctx().content_rect().shrink(20.0);
-    let max_size = egui::vec2(bounds.width().min(820.0), bounds.height().min(680.0));
-    let default_size = egui::vec2(max_size.x.min(620.0), max_size.y.min(470.0));
+    let max_size = egui::vec2(bounds.width().min(900.0), bounds.height().min(720.0));
 
-    egui::Window::new(format!(
-        "{} {}",
-        crate::ui::icons::SPARKLE,
-        app.tr("Effect library")
-    ))
-    .id(egui::Id::new("effect_library_dialog_bounded_v2"))
-    .open(&mut open)
-    .default_size(default_size)
-    .min_size([max_size.x.min(500.0), max_size.y.min(360.0)])
-    .max_size(max_size)
-    .constrain_to(bounds)
-    .resizable(true)
-    .collapsible(false)
-    .show(ui.ctx(), |ui| {
-        let height = ui.available_height();
-        ui.horizontal_top(|ui| {
-            ui.allocate_ui_with_layout(
-                egui::vec2(190.0, height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    if ui
-                        .add_sized(
-                            [ui.available_width(), 32.0],
-                            egui::Button::new(format!(
-                                "{} {}",
-                                crate::ui::icons::SPARKLE,
-                                app.tr("New effect")
-                            )),
-                        )
-                        .clicked()
-                    {
-                        let mut draft = crate::effects_library::UserStripEffectPreset::default();
-                        if let Some(effect) = available.first() {
-                            draft.hardware_effect_id = effect.id.clone();
-                        }
-                        app.effect_library_selection = Some(draft.id);
-                        app.effect_library_draft = draft;
-                    }
-                    ui.add_space(6.0);
-                    ui.label(
-                        egui::RichText::new(app.tr("My effects"))
-                            .small()
-                            .strong()
-                            .color(ui.visuals().weak_text_color()),
-                    );
-                    egui::ScrollArea::vertical()
-                        .id_salt("effect_editor_list")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            for preset in app.user_strip_effects.clone() {
-                                let selected = app.effect_library_selection == Some(preset.id);
-                                let response = ui.add_sized(
-                                    [ui.available_width(), 42.0],
-                                    egui::Button::new(
-                                        egui::RichText::new(format!(
-                                            "{}  {}\n   {}",
-                                            crate::ui::icons::SPARKLE,
-                                            preset.name,
-                                            preset.category
-                                        ))
-                                        .size(12.0),
-                                    )
-                                    .selected(selected),
-                                );
-                                if response.clicked() {
-                                    app.effect_library_selection = Some(preset.id);
-                                    app.effect_library_draft = preset;
+    egui::Window::new(format!("{} {}", crate::ui::icons::SPARKLE, app.tr("Effect properties")))
+        .id(egui::Id::new("controller_effect_library_dialog"))
+        .open(&mut open)
+        .default_size([max_size.x.min(720.0), max_size.y.min(520.0)])
+        .min_size([max_size.x.min(540.0), max_size.y.min(380.0)])
+        .max_size(max_size)
+        .constrain_to(bounds)
+        .resizable(true)
+        .collapsible(false)
+        .show(ui.ctx(), |ui| {
+            ui.label(egui::RichText::new(app.tr(
+                "PCController owns this library. Changes appear in its Web UI, TUI, and every connected client.",
+            )).weak().small());
+            ui.add_space(8.0);
+            let height = ui.available_height();
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(220.0_f32.min(ui.available_width() * 0.36), height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button(format!("{} {}", crate::ui::icons::PLUS, app.tr("Sequence"))).clicked() {
+                                start_new_sequence(app, &sequences);
+                            }
+                            if ui.button(format!("{} {}", crate::ui::icons::PLUS, app.tr("Strip"))).clicked() {
+                                app.effect_library_selection = None;
+                                app.effect_library_draft = ControllerEffectDraft::default();
+                            }
+                        });
+                        ui.add_space(8.0);
+                        egui::ScrollArea::vertical().id_salt("controller_effect_editor_list").auto_shrink([false, false]).show(ui, |ui| {
+                            for effect in &sequences {
+                                let reference = format!("sequence:{}", effect.id);
+                                let selected = app.effect_library_selection.as_deref() == Some(reference.as_str());
+                                if ui.add_sized([ui.available_width(), 44.0], egui::Button::new(format!(
+                                    "{}  {}\n   {} · {}", crate::ui::icons::WAVEFORM, effect.name, effect.category, effect.mode
+                                )).selected(selected)).clicked() {
+                                    select_sequence(app, effect);
+                                }
+                            }
+                            for effect in &strips {
+                                let reference = format!("strip:{}", effect.id);
+                                let selected = app.effect_library_selection.as_deref() == Some(reference.as_str());
+                                if ui.add_sized([ui.available_width(), 44.0], egui::Button::new(format!(
+                                    "{}  {}\n   {} · {}", crate::ui::icons::SPARKLE, effect.name, effect.category, effect.engine
+                                )).selected(selected)).clicked() {
+                                    select_strip(app, effect);
                                 }
                             }
                         });
-                },
-            );
-
-            ui.separator();
-            let detail_width = ui.available_width().max(285.0);
-            ui.allocate_ui_with_layout(
-                egui::vec2(detail_width, height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("effect_editor_details")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            ui.set_width(detail_width - 10.0);
-                            ui.heading(app.tr("Effect definition"));
-                            ui.label(
-                                egui::RichText::new(app.tr(
-                                    "Saved here; rendered only by capabilities advertised from PCController.",
-                                ))
-                                .weak()
-                                .small(),
-                            );
-                            ui.add_space(8.0);
-
-                            egui::Grid::new("effect_definition_grid")
-                                .num_columns(2)
-                                .spacing([14.0, 9.0])
-                                .show(ui, |ui| {
-                                    ui.label(app.tr("Name"));
-                                    ui.add(
-                                        egui::TextEdit::singleline(
-                                            &mut app.effect_library_draft.name,
-                                        )
-                                        .desired_width(ui.available_width().clamp(160.0, 420.0)),
-                                    );
-                                    ui.end_row();
-
-                                    ui.label(app.tr("Category"));
-                                    ui.add(
-                                        egui::TextEdit::singleline(
-                                            &mut app.effect_library_draft.category,
-                                        )
-                                        .desired_width(ui.available_width().clamp(160.0, 420.0)),
-                                    );
-                                    ui.end_row();
-
-                                    ui.label(app.tr("Live renderer"));
-                                    let renderer_name = available
-                                        .iter()
-                                        .find(|item| {
-                                            item.id == app.effect_library_draft.hardware_effect_id
-                                        })
-                                        .map(|item| app.display_text(&item.name))
-                                        .unwrap_or_else(|| app.tr("Not available on this board"));
-                                    let renderer_options = available
-                                        .iter()
-                                        .map(|renderer| {
-                                            (renderer.id.clone(), app.display_text(&renderer.name))
-                                        })
-                                        .collect::<Vec<_>>();
-                                    egui::ComboBox::from_id_salt("effect_renderer")
-                                        .selected_text(renderer_name)
-                                        .width(ui.available_width().clamp(160.0, 420.0))
-                                        .show_ui(ui, |ui| {
-                                            for (renderer_id, renderer_name) in renderer_options {
-                                                ui.selectable_value(
-                                                    &mut app.effect_library_draft.hardware_effect_id,
-                                                    renderer_id,
-                                                    renderer_name,
-                                                );
-                                            }
-                                        });
-                                    ui.end_row();
-
-                                    ui.label(app.tr("Duration"));
-                                    ui.horizontal(|ui| {
-                                        ui.add(
-                                            egui::DragValue::new(
-                                                &mut app.effect_library_draft.duration_ms,
-                                            )
-                                            .range(1..=3_600_000)
-                                            .speed(100.0),
-                                        );
-                                        ui.label(app.tr("milliseconds"));
-                                    });
-                                    ui.end_row();
+                    },
+                );
+                ui.separator();
+                ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), height), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    egui::ScrollArea::vertical().id_salt("controller_effect_editor_details").auto_shrink([false, false]).show(ui, |ui| {
+                        ui.heading(if app.effect_library_draft.is_new { app.tr("New effect") } else { app.tr("Effect properties") });
+                        let labels = (
+                            app.tr("Type"), app.tr("Timed multi-peripheral sequence"),
+                            app.tr("Host-rendered addressable lighting"), app.tr("Stable ID"),
+                            app.tr("Name"), app.tr("Category"), app.tr("Execution clock"),
+                            app.tr("Host or board, selected when played"), app.tr("Renderer"),
+                            app.tr("Frame rate"), app.tr("LED count"), app.tr("Duration"),
+                            app.tr("milliseconds"),
+                        );
+                        let draft = &mut app.effect_library_draft;
+                        egui::Grid::new("controller_effect_definition_grid").num_columns(2).spacing([14.0, 9.0]).show(ui, |ui| {
+                            ui.label(&labels.0);
+                            ui.label(if draft.kind == "sequence" { &labels.1 } else { &labels.2 });
+                            ui.end_row();
+                            ui.label(&labels.3);
+                            ui.add_enabled(draft.is_new, egui::TextEdit::singleline(&mut draft.id).desired_width(260.0));
+                            ui.end_row();
+                            ui.label(&labels.4);
+                            ui.add(egui::TextEdit::singleline(&mut draft.name).desired_width(320.0));
+                            ui.end_row();
+                            ui.label(&labels.5);
+                            ui.add(egui::TextEdit::singleline(&mut draft.category).desired_width(320.0));
+                            ui.end_row();
+                            if draft.kind == "sequence" {
+                                ui.label(&labels.6);
+                                ui.label(&labels.7);
+                                ui.end_row();
+                            } else {
+                                ui.label(&labels.8);
+                                egui::ComboBox::from_id_salt("effect_pattern").selected_text(&draft.pattern).show_ui(ui, |ui| {
+                                    for pattern in ["police", "white-thunder", "converging-red"] {
+                                        ui.selectable_value(&mut draft.pattern, pattern.to_string(), pattern);
+                                    }
                                 });
-
+                                ui.end_row();
+                                ui.label(&labels.9);
+                                ui.add(egui::DragValue::new(&mut draft.default_fps).range(1..=30));
+                                ui.end_row();
+                                ui.label(&labels.10);
+                                ui.add(egui::DragValue::new(&mut draft.default_pixels).range(1..=100));
+                                ui.end_row();
+                            }
+                            ui.label(&labels.11);
+                            ui.horizontal(|ui| {
+                                ui.add(egui::DragValue::new(&mut draft.duration_ms).range(1..=3_600_000).speed(100.0));
+                                ui.label(&labels.12);
+                            });
+                            ui.end_row();
+                        });
+                        if app.effect_library_draft.kind != "sequence" {
                             ui.add_space(8.0);
                             ui.label(app.tr("Description"));
-                            ui.add_sized(
-                                [ui.available_width(), 72.0],
-                                egui::TextEdit::multiline(
-                                    &mut app.effect_library_draft.description,
-                                )
-                                .desired_rows(3),
-                            );
-                            ui.add_space(12.0);
-
-                            let valid = !app.effect_library_draft.name.trim().is_empty()
-                                && !app.effect_library_draft.category.trim().is_empty()
-                                && available.iter().any(|effect| {
-                                    effect.id == app.effect_library_draft.hardware_effect_id
-                                });
-                            let exists = app
-                                .user_strip_effects
-                                .iter()
-                                .any(|preset| preset.id == app.effect_library_draft.id);
-                            ui.horizontal_wrapped(|ui| {
-                                if ui
-                                    .add_enabled(
-                                        valid,
-                                        egui::Button::new(format!(
-                                            "{} {}",
-                                            crate::ui::icons::FLOPPY_DISK,
-                                            app.tr("Save")
-                                        )),
-                                    )
-                                    .clicked()
-                                {
-                                    if let Some(existing) = app
-                                        .user_strip_effects
-                                        .iter_mut()
-                                        .find(|preset| {
-                                            preset.id == app.effect_library_draft.id
-                                        })
-                                    {
-                                        *existing = app.effect_library_draft.clone();
-                                    } else {
-                                        app.user_strip_effects
-                                            .push(app.effect_library_draft.clone());
-                                    }
-                                    match crate::effects_library::save(&app.user_strip_effects) {
-                                        Ok(()) => app.set_osd(app.tr("Effect library saved")),
-                                        Err(error) => app.set_osd(error),
-                                    }
-                                }
-                                if ui
-                                    .add_enabled(
-                                        exists,
-                                        egui::Button::new(format!(
-                                            "{} {}",
-                                            crate::ui::icons::COPY,
-                                            app.tr("Duplicate")
-                                        )),
-                                    )
-                                    .clicked()
-                                {
-                                    let duplicate = app.effect_library_draft.duplicate();
-                                    app.effect_library_selection = Some(duplicate.id);
-                                    app.effect_library_draft = duplicate;
-                                }
-                                if ui
-                                    .add_enabled(
-                                        exists,
-                                        egui::Button::new(format!(
-                                            "{} {}",
-                                            crate::ui::icons::TRASH,
-                                            app.tr("Delete")
-                                        )),
-                                    )
-                                    .clicked()
-                                {
-                                    app.user_strip_effects.retain(|preset| {
-                                        preset.id != app.effect_library_draft.id
-                                    });
-                                    app.effect_library_selection = None;
-                                    app.effect_library_draft =
-                                        crate::effects_library::UserStripEffectPreset::default();
-                                    if let Err(error) =
-                                        crate::effects_library::save(&app.user_strip_effects)
-                                    {
-                                        app.set_osd(error);
-                                    }
-                                }
-                            });
-                            if available.is_empty() {
-                                ui.add_space(8.0);
-                                ui.colored_label(
-                                    ui.visuals().warn_fg_color,
-                                    app.tr("Connect a board with an advertised strip renderer to create or edit effects."),
-                                );
+                            ui.add_sized([ui.available_width(), 72.0], egui::TextEdit::multiline(&mut app.effect_library_draft.description).desired_rows(3));
+                        }
+                        ui.add_space(12.0);
+                        let saved = !app.effect_library_draft.is_new;
+                        let reference = app.effect_library_draft.reference.clone();
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button(format!("{} {}", crate::ui::icons::FLOPPY_DISK, app.tr("Save to PCController"))).clicked() {
+                                if let Err(error) = app.save_controller_effect() { app.set_osd(error); }
+                            }
+                            if ui.add_enabled(saved, egui::Button::new(format!("{} {}", crate::ui::icons::PLAY, app.tr("Run")))).clicked() {
+                                if let Err(error) = app.play_controller_effect(&reference) { app.set_osd(error); }
+                            }
+                            if ui.add_enabled(saved, egui::Button::new(format!("{} {}", crate::ui::icons::COPY, app.tr("Duplicate")))).clicked() {
+                                app.effect_library_selection = None;
+                                app.effect_library_draft.reference.clear();
+                                app.effect_library_draft.id = format!("{}-copy", app.effect_library_draft.id);
+                                app.effect_library_draft.name = format!("{} copy", app.effect_library_draft.name);
+                                app.effect_library_draft.is_new = true;
+                            }
+                            if ui.add_enabled(saved, egui::Button::new(format!("{} {}", crate::ui::icons::TRASH, app.tr("Delete")))).clicked() {
+                                if let Err(error) = app.delete_controller_effect() { app.set_osd(error); }
                             }
                         });
-                },
-            );
+                        if !app.hardware_effect_authoring.status.is_empty() {
+                            ui.add_space(8.0);
+                            ui.label(egui::RichText::new(&app.hardware_effect_authoring.status).weak().small());
+                        }
+                    });
+                });
+            });
         });
-    });
     app.show_effect_library_editor = open;
 }
