@@ -1,6 +1,218 @@
 use crate::app::PealayerApp;
 use eframe::egui;
 
+const CONTROL_FADE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+pub fn timecode_text(value: impl Into<String>) -> egui::RichText {
+    egui::RichText::new(value).monospace()
+}
+
+fn compact_number(value: f64) -> String {
+    let mut rendered = format!("{value:.3}");
+    while rendered.contains('.') && rendered.ends_with('0') {
+        rendered.pop();
+    }
+    if rendered.ends_with('.') {
+        rendered.pop();
+    }
+    rendered
+}
+
+pub fn begin_elapsed_edit(app: &mut PealayerApp) {
+    let elapsed = resolve_display_time(app.seek_pos, app.playback_time);
+    app.elapsed_time_input = format_player_time(elapsed, app.duration >= 3600.0, true);
+    app.editing_elapsed_time = true;
+    app.elapsed_edit_focus_requested = true;
+}
+
+/// Draw the elapsed timestamp as an in-place editor. Clicking the timestamp
+/// swaps only that label for a fixed-width field, so transport geometry does
+/// not jump while an exact value is entered.
+pub fn draw_elapsed_editor(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    id_source: impl std::hash::Hash,
+    enabled: bool,
+) -> egui::Response {
+    let elapsed = resolve_display_time(app.seek_pos, app.playback_time);
+    let rendered = format_player_time(elapsed, app.duration >= 3600.0, app.show_subseconds);
+    let desired_width = if app.duration >= 3600.0 { 104.0 } else { 82.0 };
+
+    if app.editing_elapsed_time && enabled {
+        let response = ui
+            .add_sized(
+                [desired_width, 22.0],
+                egui::TextEdit::singleline(&mut app.elapsed_time_input)
+                    .id(ui.make_persistent_id(id_source))
+                    .font(egui::TextStyle::Monospace)
+                    .horizontal_align(egui::Align::Center)
+                    .hint_text("00:00.000"),
+            )
+            .on_hover_text(app.tr(
+                "Enter seconds, MM:SS.mmm, or HH:MM:SS.mmm. Press Enter to seek; Escape cancels.",
+            ));
+        if app.elapsed_edit_focus_requested {
+            response.request_focus();
+            app.elapsed_edit_focus_requested = false;
+        }
+
+        let escape = response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Escape));
+        let enter = response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+        if escape {
+            app.editing_elapsed_time = false;
+        } else if enter {
+            match parse_timecode(&app.elapsed_time_input) {
+                Some(seconds) => {
+                    app.seek_absolute(seconds);
+                    app.editing_elapsed_time = false;
+                }
+                None => app.set_osd(app.tr("Enter a valid playback time")),
+            }
+        } else if response.lost_focus() {
+            if let Some(seconds) = parse_timecode(&app.elapsed_time_input) {
+                app.seek_absolute(seconds);
+            }
+            app.editing_elapsed_time = false;
+        }
+        response
+    } else {
+        let response = ui
+            .add_enabled(
+                enabled,
+                egui::Label::new(timecode_text(rendered)).sense(egui::Sense::click()),
+            )
+            .on_hover_text(app.tr("Click to enter an exact playback time."));
+        if response.clicked() {
+            begin_elapsed_edit(app);
+        }
+        response
+    }
+}
+
+/// Shared seek/action menu for the NLE and Simple transports.
+pub fn transport_context_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    let has_video = app.current_video_path.is_some();
+    let can_seek = has_video && app.is_seekable;
+    let quick = app.quick_seek_seconds;
+    let quick_text = compact_number(quick);
+    let frames = app.frame_step_count;
+
+    ui.add_enabled_ui(has_video, |ui| {
+        if ui
+            .button(format!(
+                "{} {}",
+                if app.is_paused {
+                    crate::ui::icons::PLAY
+                } else {
+                    crate::ui::icons::PAUSE
+                },
+                if app.is_paused {
+                    app.tr("Play")
+                } else {
+                    app.tr("Pause")
+                }
+            ))
+            .clicked()
+        {
+            app.toggle_playback();
+            ui.close();
+        }
+    });
+    ui.separator();
+    ui.add_enabled_ui(can_seek, |ui| {
+        if ui
+            .button(format!(
+                "{} {} {} {}",
+                crate::ui::icons::REWIND,
+                app.tr("Back"),
+                quick_text,
+                app.tr("seconds")
+            ))
+            .clicked()
+        {
+            app.seek_relative(-quick);
+            ui.close();
+        }
+        if ui
+            .button(format!(
+                "{} {} {} {}",
+                crate::ui::icons::FAST_FORWARD,
+                app.tr("Forward"),
+                quick_text,
+                app.tr("seconds")
+            ))
+            .clicked()
+        {
+            app.seek_relative(quick);
+            ui.close();
+        }
+        if ui
+            .button(format!(
+                "{} {}",
+                crate::ui::icons::CLOCK,
+                app.tr("Enter exact time…")
+            ))
+            .clicked()
+        {
+            begin_elapsed_edit(app);
+            ui.close();
+        }
+        if ui
+            .button(format!(
+                "{} {}",
+                crate::ui::icons::SKIP_BACK,
+                app.tr("Go to beginning")
+            ))
+            .clicked()
+        {
+            app.seek_absolute(0.0);
+            ui.close();
+        }
+    });
+    ui.separator();
+    ui.add_enabled_ui(has_video, |ui| {
+        if ui
+            .button(format!(
+                "{} {} {} {}",
+                crate::ui::icons::SKIP_BACK,
+                app.tr("Back"),
+                frames,
+                app.tr("frames")
+            ))
+            .clicked()
+        {
+            app.step_frames(-1);
+            ui.close();
+        }
+        if ui
+            .button(format!(
+                "{} {} {} {}",
+                crate::ui::icons::SKIP_FORWARD,
+                app.tr("Forward"),
+                frames,
+                app.tr("frames")
+            ))
+            .clicked()
+        {
+            app.step_frames(1);
+            ui.close();
+        }
+    });
+    ui.separator();
+    let mut config_changed = false;
+    let milliseconds_label = app.tr("Show milliseconds");
+    let remaining_label = app.tr("Show time remaining");
+    config_changed |= ui
+        .checkbox(&mut app.show_subseconds, milliseconds_label)
+        .changed();
+    config_changed |= ui
+        .checkbox(&mut app.show_remaining_time, remaining_label)
+        .changed();
+    if config_changed {
+        app.save_config();
+    }
+}
+
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let controls_label = app.tr("Controls");
@@ -40,8 +252,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 let elapsed_time = resolve_display_time(app.seek_pos, app.playback_time);
                 let is_long_video = app.duration >= 3600.0;
                 let show_subseconds = app.show_subseconds;
-                let elapsed_str =
-                    format_player_time(elapsed_time, is_long_video, show_subseconds);
                 let display_total = if app.show_remaining_time {
                     -(app.duration - elapsed_time)
                 } else {
@@ -134,6 +344,25 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     ui,
                     |ui| {
                         ui.add_enabled_ui(has_video, |ui| {
+                            let quick_text = compact_number(app.quick_seek_seconds);
+                            let back_response = ui
+                                .button(format!(
+                                    "{} {} {}",
+                                    crate::ui::icons::REWIND,
+                                    quick_text,
+                                    app.tr("sec")
+                                ))
+                                .on_hover_text(format!(
+                                    "{} {} {} (←)",
+                                    app.tr("Seek backward"),
+                                    quick_text,
+                                    app.tr("seconds")
+                                ));
+                            back_response.context_menu(|ui| transport_context_menu(app, ui));
+                            if back_response.clicked() {
+                                app.seek_relative(-app.quick_seek_seconds);
+                            }
+
                             let play_icon = if app.is_playback_finished() {
                                 crate::ui::icons::ARROW_COUNTER_CLOCKWISE
                             } else if app.is_paused {
@@ -148,27 +377,68 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             } else {
                                 app.tr("Pause")
                             };
-                            if ui
+                            let play_response = ui
                                 .add_sized([30.0, 22.0], egui::Button::new(play_icon))
-                                .on_hover_text(play_tooltip)
-                                .clicked()
-                            {
+                                .on_hover_text(play_tooltip);
+                            play_response.context_menu(|ui| transport_context_menu(app, ui));
+                            if play_response.clicked() {
                                 app.toggle_playback();
+                            }
+
+                            let forward_response = ui
+                                .button(format!(
+                                    "{} {} {}",
+                                    quick_text,
+                                    app.tr("sec"),
+                                    crate::ui::icons::FAST_FORWARD
+                                ))
+                                .on_hover_text(format!(
+                                    "{} {} {} (→)",
+                                    app.tr("Seek forward"),
+                                    quick_text,
+                                    app.tr("seconds")
+                                ));
+                            forward_response.context_menu(|ui| transport_context_menu(app, ui));
+                            if forward_response.clicked() {
+                                app.seek_relative(app.quick_seek_seconds);
+                            }
+
+                            let frame_back = ui
+                                .add_sized(
+                                    [30.0, 22.0],
+                                    egui::Button::new(crate::ui::icons::SKIP_BACK),
+                                )
+                                .on_hover_text(format!(
+                                    "{} {} {} ([)",
+                                    app.tr("Back"),
+                                    app.frame_step_count,
+                                    app.tr("frames")
+                                ));
+                            frame_back.context_menu(|ui| transport_context_menu(app, ui));
+                            if frame_back.clicked() {
+                                app.step_frames(-1);
+                            }
+
+                            let frame_forward = ui
+                                .add_sized(
+                                    [30.0, 22.0],
+                                    egui::Button::new(crate::ui::icons::SKIP_FORWARD),
+                                )
+                                .on_hover_text(format!(
+                                    "{} {} {} (])",
+                                    app.tr("Forward"),
+                                    app.frame_step_count,
+                                    app.tr("frames")
+                                ));
+                            frame_forward.context_menu(|ui| transport_context_menu(app, ui));
+                            if frame_forward.clicked() {
+                                app.step_frames(1);
                             }
                         });
 
-                        let elapsed_resp = ui.add_enabled(
-                            has_video,
-                            egui::Label::new(&elapsed_str).sense(if total_is_toggle {
-                                egui::Sense::click()
-                            } else {
-                                egui::Sense::hover()
-                            }),
-                        );
-                        if total_is_toggle && elapsed_resp.clicked() {
-                            app.show_remaining_time = !app.show_remaining_time;
-                            app.save_config();
-                        }
+                        let elapsed_resp =
+                            draw_elapsed_editor(app, ui, "simple-elapsed-editor", has_video && can_seek);
+                        elapsed_resp.context_menu(|ui| transport_context_menu(app, ui));
 
                         let mut current_pos = if has_video {
                             app.seek_pos.unwrap_or(app.playback_time)
@@ -190,6 +460,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         } else {
                             response.on_disabled_hover_text(&seek_tooltip)
                         };
+                        response.context_menu(|ui| transport_context_menu(app, ui));
 
                         if let Some(buffered_until) = app.buffered_until() {
                             let fraction = (buffered_until / app.duration).clamp(0.0, 1.0) as f32;
@@ -268,8 +539,13 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 .clicked();
                         });
 
+                        let total_label = if total_is_toggle {
+                            timecode_text(total_text)
+                        } else {
+                            egui::RichText::new(total_text)
+                        };
                         let total_response = ui
-                            .add(egui::Label::new(total_text).sense(if total_is_toggle {
+                            .add(egui::Label::new(total_label).sense(if total_is_toggle {
                                 egui::Sense::click()
                             } else {
                                 egui::Sense::hover()
@@ -323,7 +599,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             });
 
         if time_since_activity < 3.0 && !app.pin_controls {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            // The old 16 ms loop repainted the entire application at 60 Hz
+            // whenever controls were visible, even while media was paused.
+            // Ten fade samples per second remain visually smooth while keeping
+            // the idle renderer reactive rather than continuously busy.
+            ctx.request_repaint_after(CONTROL_FADE_REPAINT_INTERVAL);
         }
     }
 }
@@ -408,6 +688,33 @@ pub fn format_player_time(time: f64, include_hours: bool, show_subseconds: bool)
     } else {
         formatted
     }
+}
+
+pub fn parse_timecode(value: &str) -> Option<f64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.starts_with('-') {
+        return None;
+    }
+    let fields = trimmed.split(':').collect::<Vec<_>>();
+    if fields.len() > 3 {
+        return None;
+    }
+    let seconds = match fields.as_slice() {
+        [seconds] => seconds.parse::<f64>().ok()?,
+        [minutes, seconds] => {
+            let seconds = seconds.parse::<f64>().ok()?;
+            (seconds < 60.0).then_some(())?;
+            minutes.parse::<u64>().ok()? as f64 * 60.0 + seconds
+        }
+        [hours, minutes, seconds] => {
+            let minutes = minutes.parse::<u64>().ok()?;
+            let seconds = seconds.parse::<f64>().ok()?;
+            (minutes < 60 && seconds < 60.0).then_some(())?;
+            hours.parse::<u64>().ok()? as f64 * 3600.0 + minutes as f64 * 60.0 + seconds
+        }
+        _ => return None,
+    };
+    seconds.is_finite().then_some(seconds)
 }
 
 #[cfg(test)]
@@ -516,6 +823,16 @@ mod tests {
     fn subsecond_timecode_uses_a_decimal_separator() {
         assert_eq!(format_player_time(65.125, false, true), "01:05.125");
         assert_eq!(format_player_time(-3661.5, true, true), "-01:01:01.500");
+    }
+
+    #[test]
+    fn exact_timecode_parser_accepts_player_formats() {
+        assert_eq!(parse_timecode("90.5"), Some(90.5));
+        assert_eq!(parse_timecode("01:30.500"), Some(90.5));
+        assert_eq!(parse_timecode("01:02:03.250"), Some(3723.25));
+        assert_eq!(parse_timecode("01:75"), None);
+        assert_eq!(parse_timecode("-00:01"), None);
+        assert_eq!(parse_timecode("not a time"), None);
     }
 
     #[test]

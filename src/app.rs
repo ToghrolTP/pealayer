@@ -215,6 +215,9 @@ pub struct PealayerApp {
     pub(crate) rtt_state: Arc<Mutex<RttState>>,
     pub(crate) current_video_path: Option<std::path::PathBuf>,
     pub(crate) show_remaining_time: bool,
+    pub(crate) editing_elapsed_time: bool,
+    pub(crate) elapsed_time_input: String,
+    pub(crate) elapsed_edit_focus_requested: bool,
     pub(crate) osd_message: Option<(String, std::time::Instant)>,
     pub(crate) recent_media: Vec<std::path::PathBuf>,
     pub(crate) show_open_url_dialog: bool,
@@ -242,6 +245,8 @@ pub struct PealayerApp {
     pub(crate) auto_connect_hardware: bool,
     pub(crate) click_player_to_toggle: bool,
     pub(crate) show_subseconds: bool,
+    pub(crate) quick_seek_seconds: f64,
+    pub(crate) frame_step_count: u32,
     pub(crate) wheel_seek_seconds: f64,
     pub(crate) osd_position: crate::config::OsdPosition,
     pub(crate) osd_timeout_seconds: f32,
@@ -621,24 +626,24 @@ impl eframe::App for PealayerApp {
                 "Unmute".to_string()
             });
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
-            self.seek_relative(-5.0);
+        if !ctx.egui_wants_keyboard_input() && ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
+            self.seek_relative(-self.quick_seek_seconds);
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
-            self.seek_relative(5.0);
+        if !ctx.egui_wants_keyboard_input() && ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
+            self.seek_relative(self.quick_seek_seconds);
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Period) || i.key_pressed(egui::Key::CloseBracket))
+        if !ctx.egui_wants_keyboard_input()
+            && ctx.input(|i| {
+                i.key_pressed(egui::Key::Period) || i.key_pressed(egui::Key::CloseBracket)
+            })
         {
-            let _ = self.mpv.command("frame-step", &[]);
-            if self.current_video_path.is_some() {
-                self.set_osd("Frame Step: +1".to_string());
-            }
+            self.step_frames(1);
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Comma) || i.key_pressed(egui::Key::OpenBracket)) {
-            let _ = self.mpv.command("frame-back-step", &[]);
-            if self.current_video_path.is_some() {
-                self.set_osd("Frame Step: -1".to_string());
-            }
+        if !ctx.egui_wants_keyboard_input()
+            && ctx
+                .input(|i| i.key_pressed(egui::Key::Comma) || i.key_pressed(egui::Key::OpenBracket))
+        {
+            self.step_frames(-1);
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
             let _ = self.mpv.command("add", &["volume", "5"]);
@@ -1828,6 +1833,42 @@ impl PealayerApp {
         self.set_osd(format!("Seek: {}{:.0}s", sign, seconds));
     }
 
+    /// Seeks to an exact absolute timestamp while preserving the normal
+    /// non-blocking seek path used by the timeline scrubber.
+    pub fn seek_absolute(&mut self, seconds: f64) {
+        if self.current_video_path.is_none() || !self.is_seekable || !seconds.is_finite() {
+            return;
+        }
+        let target = seconds.clamp(0.0, self.duration.max(0.0));
+        self.finish_scrub(target);
+        self.set_osd(format!(
+            "{}: {}",
+            self.tr("Seek"),
+            crate::ui::controls::format_player_time(target, self.duration >= 3600.0, true)
+        ));
+    }
+
+    /// Advances or reverses playback by the configured number of frames.
+    pub fn step_frames(&mut self, direction: i32) {
+        if self.current_video_path.is_none() || direction == 0 {
+            return;
+        }
+        let command = if direction > 0 {
+            "frame-step"
+        } else {
+            "frame-back-step"
+        };
+        let count = self.frame_step_count.clamp(1, 120);
+        for _ in 0..count {
+            let _ = self.mpv.command(command, &[]);
+        }
+        self.set_osd(format!(
+            "{}: {:+}",
+            self.tr("Frame step"),
+            direction.signum() * count as i32
+        ));
+    }
+
     /// Begins or updates an active scrub session.
     /// Sets seek_pos, pauses playback smoothly during drag, and dispatches a non-blocking
     /// preview seek to the background worker thread with latest-target coalescing.
@@ -2150,6 +2191,8 @@ impl PealayerApp {
         cfg.pause_on_hardware_disconnect = self.pause_on_hardware_disconnect;
         cfg.click_player_to_toggle = self.click_player_to_toggle;
         cfg.show_subseconds = self.show_subseconds;
+        cfg.quick_seek_seconds = self.quick_seek_seconds;
+        cfg.frame_step_count = self.frame_step_count;
         cfg.wheel_seek_seconds = self.wheel_seek_seconds;
         cfg.osd_position = self.osd_position;
         cfg.osd_timeout_seconds = self.osd_timeout_seconds;
@@ -2228,6 +2271,8 @@ impl PealayerApp {
         self.pause_on_hardware_disconnect = config.pause_on_hardware_disconnect;
         self.click_player_to_toggle = config.click_player_to_toggle;
         self.show_subseconds = config.show_subseconds;
+        self.quick_seek_seconds = config.quick_seek_seconds;
+        self.frame_step_count = config.frame_step_count;
         self.wheel_seek_seconds = config.wheel_seek_seconds;
         self.osd_position = config.osd_position;
         self.osd_timeout_seconds = config.osd_timeout_seconds;
@@ -2697,6 +2742,9 @@ impl Default for PealayerApp {
             })),
             current_video_path: None,
             show_remaining_time: false,
+            editing_elapsed_time: false,
+            elapsed_time_input: String::new(),
+            elapsed_edit_focus_requested: false,
             osd_message: None,
             recent_media: Vec::new(),
             show_open_url_dialog: false,
@@ -2724,6 +2772,8 @@ impl Default for PealayerApp {
             auto_connect_hardware: true,
             click_player_to_toggle: true,
             show_subseconds: true,
+            quick_seek_seconds: 10.0,
+            frame_step_count: 1,
             wheel_seek_seconds: 5.0,
             osd_position: crate::config::OsdPosition::TopLeft,
             osd_timeout_seconds: 3.5,

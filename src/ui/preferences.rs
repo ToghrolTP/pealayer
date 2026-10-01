@@ -267,6 +267,18 @@ fn playback_preferences(app: &mut PealayerApp, ui: &mut egui::Ui, changed: &mut 
             *changed |= ui
                 .checkbox(&mut app.show_subseconds, subseconds_label)
                 .changed();
+            let quick_seek_label = app.tr("Skip button and arrow-key step (seconds)");
+            *changed |= ui
+                .add(
+                    egui::Slider::new(&mut app.quick_seek_seconds, 0.1..=600.0)
+                        .logarithmic(true)
+                        .text(quick_seek_label),
+                )
+                .changed();
+            let frame_step_label = app.tr("Frames per frame-step action");
+            *changed |= ui
+                .add(egui::Slider::new(&mut app.frame_step_count, 1..=120).text(frame_step_label))
+                .changed();
             let wheel_label = app.tr("Mouse-wheel seek step (seconds)");
             *changed |= ui
                 .add(

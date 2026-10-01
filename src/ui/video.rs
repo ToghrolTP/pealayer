@@ -318,9 +318,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 crate::config::OsdPosition::Center => dest_rect.center(),
             };
             let font_id = egui::FontId::proportional(22.0);
-            let galley = ui
-                .painter()
-                .layout_no_wrap(msg.clone(), font_id, text_color);
+            let osd_text = format!("{}  {}", osd_icon(msg), msg);
+            let galley = ui.painter().layout_no_wrap(osd_text, font_id, text_color);
             let rect = match app.osd_position {
                 crate::config::OsdPosition::TopLeft => {
                     egui::Rect::from_min_size(center, galley.size() + egui::vec2(24.0, 16.0))
@@ -336,9 +335,16 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 egui::Color32::PLACEHOLDER,
             );
 
-            // Request a repaint to animate the fade-out
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(16));
+            // Keep a precise expiry without forcing the entire application to
+            // render at 60 Hz while the message is static. During the short
+            // fade, 10 Hz is smooth enough for an overlay and dramatically
+            // reduces idle GPU/CPU work on Windows.
+            let repaint_after = if elapsed < fade_start {
+                std::time::Duration::from_secs_f32((fade_start - elapsed).max(0.01))
+            } else {
+                std::time::Duration::from_millis(100)
+            };
+            ui.ctx().request_repaint_after(repaint_after);
         }
     }
 
@@ -448,6 +454,35 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             galley,
             egui::Color32::PLACEHOLDER,
         );
+    }
+}
+
+fn osd_icon(message: &str) -> &'static str {
+    let message = message.to_ascii_lowercase();
+    if message.contains("pause") {
+        crate::ui::icons::PAUSE
+    } else if message.contains("play") || message.contains("replay") {
+        crate::ui::icons::PLAY
+    } else if message.contains("unmute") {
+        crate::ui::icons::SPEAKER_HIGH
+    } else if message.contains("mute") {
+        crate::ui::icons::SPEAKER_SLASH
+    } else if message.contains("volume") || message.contains("audio") {
+        crate::ui::icons::SPEAKER_HIGH
+    } else if message.contains("frame") {
+        crate::ui::icons::FRAME_CORNERS
+    } else if message.contains("seek") {
+        crate::ui::icons::FAST_FORWARD
+    } else if message.contains("fullscreen") {
+        crate::ui::icons::ARROWS_OUT
+    } else if message.contains("subtitle") {
+        crate::ui::icons::SUBTITLES
+    } else if message.contains("open") || message.contains("load") || message.contains("video") {
+        crate::ui::icons::FILE_VIDEO
+    } else if message.contains("error") || message.contains("failed") {
+        crate::ui::icons::WARNING
+    } else {
+        crate::ui::icons::INFO
     }
 }
 

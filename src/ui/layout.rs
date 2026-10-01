@@ -1384,14 +1384,25 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     } else {
                                         &pause_label
                                     };
-                                    if ui
+                                    let play_response = ui
                                         .add_sized([30.0, 22.0], egui::Button::new(play_icon))
-                                        .on_hover_text(play_tooltip)
-                                        .clicked()
-                                    {
+                                        .on_hover_text(play_tooltip);
+                                    play_response.context_menu(|ui| {
+                                        crate::ui::controls::transport_context_menu(self.app, ui)
+                                    });
+                                    if play_response.clicked() {
                                         self.app.toggle_playback();
                                     }
-                                    if ui.add_sized([30.0, 22.0], egui::Button::new(crate::ui::icons::STOP_CIRCLE)).on_hover_text(&stop_label).clicked() {
+                                    let stop_response = ui
+                                        .add_sized(
+                                            [30.0, 22.0],
+                                            egui::Button::new(crate::ui::icons::STOP_CIRCLE),
+                                        )
+                                        .on_hover_text(&stop_label);
+                                    stop_response.context_menu(|ui| {
+                                        crate::ui::controls::transport_context_menu(self.app, ui)
+                                    });
+                                    if stop_response.clicked() {
                                         // Punch out on stop
                                         self.app.commit_recorded_samples();
 
@@ -1402,15 +1413,53 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         self.app.playback_time = 0.0;
                                         self.app.seek_pos = None;
                                     }
+                                    let frame_back = ui
+                                        .add_sized(
+                                            [30.0, 22.0],
+                                            egui::Button::new(crate::ui::icons::SKIP_BACK),
+                                        )
+                                        .on_hover_text(format!(
+                                            "{} {} {} ([)",
+                                            self.app.tr("Back"),
+                                            self.app.frame_step_count,
+                                            self.app.tr("frames")
+                                        ));
+                                    frame_back.context_menu(|ui| {
+                                        crate::ui::controls::transport_context_menu(self.app, ui)
+                                    });
+                                    if frame_back.clicked() {
+                                        self.app.step_frames(-1);
+                                    }
+                                    let frame_forward = ui
+                                        .add_sized(
+                                            [30.0, 22.0],
+                                            egui::Button::new(crate::ui::icons::SKIP_FORWARD),
+                                        )
+                                        .on_hover_text(format!(
+                                            "{} {} {} (])",
+                                            self.app.tr("Forward"),
+                                            self.app.frame_step_count,
+                                            self.app.tr("frames")
+                                        ));
+                                    frame_forward.context_menu(|ui| {
+                                        crate::ui::controls::transport_context_menu(self.app, ui)
+                                    });
+                                    if frame_forward.clicked() {
+                                        self.app.step_frames(1);
+                                    }
                                     ui.separator();
 
                                     let elapsed = self.app.seek_pos.unwrap_or(self.app.playback_time);
                                     let include_hours = self.app.duration >= 3600.0;
-                                    ui.monospace(crate::ui::controls::format_player_time(
-                                        if has_video { elapsed } else { 0.0 },
-                                        include_hours,
-                                        self.app.show_subseconds,
-                                    ));
+                                    let elapsed_response = crate::ui::controls::draw_elapsed_editor(
+                                        self.app,
+                                        ui,
+                                        "nle-elapsed-editor",
+                                        can_seek,
+                                    );
+                                    elapsed_response.context_menu(|ui| {
+                                        crate::ui::controls::transport_context_menu(self.app, ui)
+                                    });
 
                                     // seekbar
                                     let mut current_pos = if has_video {
@@ -1432,6 +1481,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     ui.spacing_mut().slider_width = seekbar_w;
                                     let response = ui.add_enabled(can_seek, slider);
                                     ui.spacing_mut().slider_width = old_w;
+                                    response.context_menu(|ui| {
+                                        crate::ui::controls::transport_context_menu(self.app, ui)
+                                    });
 
                                     if let Some(buffered_until) = self.app.buffered_until() {
                                         let fraction = (buffered_until / self.app.duration)
@@ -1470,34 +1522,69 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     } else {
                                         self.app.duration
                                     };
-                                    let total_label = if has_video
-                                        && !can_seek
-                                        && self.app.is_live_media()
-                                    {
-                                        "LIVE".to_string()
-                                    } else {
-                                        crate::ui::controls::format_player_time(
-                                            displayed_total,
-                                            include_hours,
-                                            self.app.show_subseconds,
-                                        )
+                                    let timeline_state = self.app.media_timeline_state();
+                                    let (total_label, total_tooltip, finite_timeline) = match timeline_state {
+                                        crate::media::MediaTimelineState::Determining => (
+                                            format!(
+                                                "{} {}",
+                                                crate::ui::icons::HOURGLASS_MEDIUM,
+                                                self.app.tr("Determining…")
+                                            ),
+                                            self.app.tr("MPV is still reading media metadata; duration and seeking will update when available."),
+                                            false,
+                                        ),
+                                        crate::media::MediaTimelineState::Live => (
+                                            format!(
+                                                "{} {}",
+                                                crate::ui::icons::BROADCAST,
+                                                self.app.tr("LIVE")
+                                            ),
+                                            self.app.tr("This live or duration-less source has no fixed endpoint."),
+                                            false,
+                                        ),
+                                        crate::media::MediaTimelineState::Finite { .. } => (
+                                            crate::ui::controls::format_player_time(
+                                                displayed_total,
+                                                include_hours,
+                                                self.app.show_subseconds,
+                                            ),
+                                            self.app.tr("Toggle duration / remaining time"),
+                                            true,
+                                        ),
+                                        crate::media::MediaTimelineState::NoMedia => (
+                                            format!("{} --:--", crate::ui::icons::CLOCK),
+                                            self.app.tr("Open media to see its duration."),
+                                            false,
+                                        ),
                                     };
-                                    if ui
+                                    let total_text = if finite_timeline {
+                                        crate::ui::controls::timecode_text(total_label)
+                                    } else {
+                                        egui::RichText::new(total_label)
+                                    };
+                                    let total_response = ui
                                         .add(
-                                            egui::Label::new(total_label)
-                                            .sense(egui::Sense::click()),
+                                            egui::Label::new(total_text).sense(if finite_timeline {
+                                                egui::Sense::click()
+                                            } else {
+                                                egui::Sense::hover()
+                                            }),
                                         )
-                                        .on_hover_text(self.app.tr("Toggle duration / remaining time"))
-                                        .clicked()
-                                    {
+                                        .on_hover_text(total_tooltip);
+                                    total_response.context_menu(|ui| {
+                                        crate::ui::controls::transport_context_menu(self.app, ui)
+                                    });
+                                    if finite_timeline && total_response.clicked() {
                                         self.app.show_remaining_time = !self.app.show_remaining_time;
                                         self.app.save_config();
                                     }
-                                    if ui
+                                    let fullscreen_response = ui
                                         .button(crate::ui::icons::ARROWS_OUT)
-                                        .on_hover_text(format!("{} (F)", self.app.tr("Fullscreen")))
-                                        .clicked()
-                                    {
+                                        .on_hover_text(format!("{} (F)", self.app.tr("Fullscreen")));
+                                    fullscreen_response.context_menu(|ui| {
+                                        crate::ui::controls::transport_context_menu(self.app, ui)
+                                    });
+                                    if fullscreen_response.clicked() {
                                         self.app.set_fullscreen(ui.ctx(), true);
                                     }
                                 });

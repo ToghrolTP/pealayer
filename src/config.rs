@@ -140,6 +140,8 @@ pub struct AppConfig {
     pub pause_on_hardware_disconnect: bool,
     pub click_player_to_toggle: bool,
     pub show_subseconds: bool,
+    pub quick_seek_seconds: f64,
+    pub frame_step_count: u32,
     pub wheel_seek_seconds: f64,
     pub osd_position: OsdPosition,
     pub osd_timeout_seconds: f32,
@@ -184,6 +186,8 @@ impl Default for AppConfig {
             pause_on_hardware_disconnect: true,
             click_player_to_toggle: true,
             show_subseconds: true,
+            quick_seek_seconds: 10.0,
+            frame_step_count: 1,
             wheel_seek_seconds: 5.0,
             osd_position: OsdPosition::TopLeft,
             osd_timeout_seconds: 3.5,
@@ -674,6 +678,13 @@ impl AppConfig {
         if !self.wheel_seek_seconds.is_finite() || !(0.1..=60.0).contains(&self.wheel_seek_seconds)
         {
             return Err("wheel_seek_seconds must be between 0.1 and 60".to_string());
+        }
+        if !self.quick_seek_seconds.is_finite() || !(0.1..=600.0).contains(&self.quick_seek_seconds)
+        {
+            return Err("quick_seek_seconds must be between 0.1 and 600".to_string());
+        }
+        if !(1..=120).contains(&self.frame_step_count) {
+            return Err("frame_step_count must be between 1 and 120".to_string());
         }
         if !self.osd_timeout_seconds.is_finite()
             || !(1.0..=60.0).contains(&self.osd_timeout_seconds)
