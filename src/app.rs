@@ -150,6 +150,7 @@ pub struct PealayerApp {
     pub is_eof: bool,
     pub(crate) volume: f64,
     pub(crate) is_muted: bool,
+    pub(crate) playback_rate: f64,
 
     pub seek_pos: Option<f64>,
     pub(crate) seek_controller: crate::mpv::seek::SeekController,
@@ -244,6 +245,7 @@ pub struct PealayerApp {
     pub(crate) fullscreen_video_background: crate::config::VideoBackground,
     pub(crate) motion_control_mode: crate::config::MotionControlMode,
     pub(crate) compact_hardware_controls: bool,
+    pub(crate) single_instance: bool,
     pub(crate) windows_mica_backdrop: bool,
     pub(crate) windows_dwm_theming: bool,
     pub(crate) opengl_vsync: bool,
@@ -404,6 +406,8 @@ impl eframe::App for PealayerApp {
                 .to_string(),
                 playing: !self.is_paused && self.current_video_path.is_some(),
                 volume: self.volume,
+                muted: self.is_muted,
+                playback_rate: self.playback_rate,
                 playback_time: self.playback_time,
                 duration: self.duration,
                 current_video: self
@@ -1357,7 +1361,7 @@ impl PealayerApp {
         self.sync_timeline_engine();
     }
 
-    fn apply_interop_command(
+    pub(crate) fn apply_interop_command(
         &mut self,
         ctx: &egui::Context,
         command: crate::platform::interop::InteropCommand,
@@ -1367,19 +1371,27 @@ impl PealayerApp {
 
         match command {
             InteropCommand::Launch { request } => {
-                if let Some(value) = request.volume {
+                let crate::platform::interop::LaunchRequest {
+                    sender_working_directory,
+                    target,
+                    fullscreen,
+                    volume,
+                    activate,
+                    commands,
+                    ..
+                } = request;
+                if let Some(value) = volume {
                     let _ = self.mpv.set_property("volume", value);
                     self.volume = value;
                     self.save_config();
                 }
-                if let Some(target) = request.target {
+                if let Some(target) = target {
                     if crate::media::is_remote_media_target(&target) {
                         self.load_media_target(&target);
                     } else {
                         let path = std::path::PathBuf::from(target);
                         let resolved = if path.is_relative() {
-                            request
-                                .sender_working_directory
+                            sender_working_directory
                                 .as_deref()
                                 .map(std::path::Path::new)
                                 .map(|directory| directory.join(&path))
@@ -1390,18 +1402,35 @@ impl PealayerApp {
                         self.load_video_file(resolved);
                     }
                 }
-                if request.fullscreen {
+                if fullscreen {
                     self.set_fullscreen(ctx, true);
                 }
-                if request.activate {
+                if activate {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+                for command in commands {
+                    self.apply_interop_command(ctx, command, source);
                 }
             }
             InteropCommand::Play => self.play(),
             InteropCommand::Pause => self.pause(),
             InteropCommand::TogglePause => self.toggle_playback(),
+            InteropCommand::Stop => self.close_video(),
+            InteropCommand::Next => {
+                let _ = self.mpv.command("playlist-next", &["force"]);
+            }
+            InteropCommand::Previous => {
+                let _ = self.mpv.command("playlist-prev", &["force"]);
+            }
             InteropCommand::Seek { seconds } => self.seek_relative(seconds),
+            InteropCommand::SeekTo { seconds } => {
+                if self.is_seekable {
+                    let target = seconds.max(0.0).min(self.duration);
+                    self.scrub_to(target);
+                    self.finish_scrub(target);
+                }
+            }
             InteropCommand::SeekAbs { percentage } => {
                 if self.is_seekable {
                     let clamped = percentage.clamp(0.0, 100.0);
@@ -1416,9 +1445,40 @@ impl PealayerApp {
                 self.volume = clamped;
                 self.save_config();
             }
+            InteropCommand::SetMute { muted } => {
+                let _ = self.mpv.set_property("mute", muted);
+                self.is_muted = muted;
+                self.save_config();
+            }
+            InteropCommand::ToggleMute => {
+                let muted = !self.is_muted;
+                let _ = self.mpv.set_property("mute", muted);
+                self.is_muted = muted;
+                self.save_config();
+            }
+            InteropCommand::SetRate { rate } => {
+                let _ = self.mpv.set_property("speed", rate);
+                self.playback_rate = rate;
+            }
             InteropCommand::Open { target } => self.load_media_target(&target),
             InteropCommand::SetFullscreen { enabled } => self.set_fullscreen(ctx, enabled),
             InteropCommand::ToggleFullscreen => self.toggle_fullscreen(ctx),
+            InteropCommand::Activate => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            InteropCommand::Minimize => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            }
+            InteropCommand::Maximize => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+            }
+            InteropCommand::Restore => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            InteropCommand::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             InteropCommand::SetWorkspace { nle } => {
                 let observed = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
                 self.apply_workspace_request(nle, observed);
@@ -1520,6 +1580,7 @@ impl PealayerApp {
                     (16, PropertyData::Int64(v)) => {
                         self.cache_buffering_percent = Some((v as f64).clamp(0.0, 100.0));
                     }
+                    (17, PropertyData::Double(v)) => self.playback_rate = v,
                     _ => {}
                 },
                 Some(Ok(Event::EndFile(reason))) => {
@@ -2058,6 +2119,7 @@ impl PealayerApp {
         cfg.fullscreen_video_background = self.fullscreen_video_background;
         cfg.motion_control_mode = self.motion_control_mode;
         cfg.compact_hardware_controls = self.compact_hardware_controls;
+        cfg.single_instance = self.single_instance;
         cfg.windows_mica_backdrop = self.windows_mica_backdrop;
         cfg.windows_dwm_theming = self.windows_dwm_theming;
         cfg.opengl_vsync = self.opengl_vsync;
@@ -2131,6 +2193,7 @@ impl PealayerApp {
         self.fullscreen_video_background = config.fullscreen_video_background;
         self.motion_control_mode = config.motion_control_mode;
         self.compact_hardware_controls = config.compact_hardware_controls;
+        self.single_instance = config.single_instance;
         self.windows_mica_backdrop = config.windows_mica_backdrop;
         self.windows_dwm_theming = config.windows_dwm_theming;
         self.opengl_vsync = config.opengl_vsync;
@@ -2513,6 +2576,7 @@ impl Default for PealayerApp {
             is_eof: false,
             volume: 100.0,
             is_muted: false,
+            playback_rate: 1.0,
             seek_pos: None,
             seek_controller: crate::mpv::seek::SeekController::new(
                 crate::mpv::seek::MpvSeekBackend::new(mpv),
@@ -2601,6 +2665,7 @@ impl Default for PealayerApp {
             fullscreen_video_background: crate::config::VideoBackground::Black,
             motion_control_mode: crate::config::MotionControlMode::Toggle,
             compact_hardware_controls: false,
+            single_instance: true,
             windows_mica_backdrop: false,
             windows_dwm_theming: true,
             opengl_vsync: false,

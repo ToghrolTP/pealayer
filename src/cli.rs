@@ -9,6 +9,7 @@ pub struct CliOptions {
     pub target: Option<String>,
     pub fullscreen: bool,
     pub volume: Option<f64>,
+    pub commands: Vec<InteropCommand>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -21,6 +22,18 @@ pub enum CliAction {
     PrintVersion(String),
 }
 
+pub fn resolved_instance_identity() -> String {
+    let mut identity = crate::config::resolved_app_name(&crate::config::AppConfig::load());
+    if let Ok(instance_id) = std::env::var("PEALAYER_INSTANCE_ID") {
+        let instance_id = instance_id.trim();
+        if !instance_id.is_empty() {
+            identity.push(':');
+            identity.push_str(instance_id);
+        }
+    }
+    identity
+}
+
 pub fn format_help_message() -> String {
     format!(
         "Pealayer {} - Modern Media & 4D Cinema Player\n\n\
@@ -29,10 +42,28 @@ pub fn format_help_message() -> String {
           pealayer --remote <COMMAND>\n\n\
         ARGUMENTS:\n  \
           [FILE_OR_URL]             Path to media file or network URL to play\n\n\
-        OPTIONS:\n  \
-          -f, --fullscreen          Start player in fullscreen mode\n  \
-          -v, --volume <0-130>      Set initial playback volume level\n  \
-          --remote <COMMAND>        Send IPC command to running instance and exit\n  \
+        PLAYER OPTIONS:\n  \
+          --open <FILE_OR_URL>      Open media (positional FILE_OR_URL is equivalent)\n  \
+          --play | --pause | --toggle-pause | --stop\n  \
+                                    Change playback state\n  \
+          --next | --previous       Navigate the playlist\n  \
+          --seek <SECONDS>          Seek relative to the current position\n  \
+          --seek-to <SECONDS>       Seek to an absolute playback time\n  \
+          --seek-percent <0-100>    Seek to a percentage of the media\n  \
+          -v, --volume <0-130>      Set playback volume\n  \
+          --mute | --unmute | --toggle-mute\n  \
+                                    Change mute state\n  \
+          --rate <0.05-16>          Set playback speed\n  \
+          -f, --fullscreen          Enter fullscreen\n  \
+          --windowed                Leave fullscreen\n  \
+          --toggle-fullscreen       Toggle fullscreen\n  \
+          --workspace <simple|nle>  Select the player workspace\n  \
+          --activate | --minimize | --maximize | --restore\n  \
+                                    Manage the application window\n  \
+          --quit                    Close the running application\n  \
+          --command <COMMAND>       Queue a unified text or JSON command; repeatable\n  \
+          --remote <COMMAND>        Send one unified command and exit\n  \
+        APPLICATION OPTIONS:\n  \
           --register-associations    Register Pealayer as the default handler for media files\n  \
           --unregister-associations  Unregister Pealayer file associations\n  \
           -h, --help                Print help information\n  \
@@ -46,6 +77,13 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
     let mut target = None;
     let mut fullscreen = false;
     let mut volume = None;
+    let mut commands = Vec::new();
+
+    let parse_number = |option: &str, value: String| {
+        value
+            .parse::<f64>()
+            .map_err(|_| format!("Option '{option}' requires a numeric value"))
+    };
 
     while let Some(arg) = args_iter.next() {
         match arg.as_str() {
@@ -66,15 +104,71 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
             }
             "-f" | "--fullscreen" => {
                 fullscreen = true;
+                commands.push(InteropCommand::SetFullscreen { enabled: true });
             }
+            "--windowed" => commands.push(InteropCommand::SetFullscreen { enabled: false }),
+            "--toggle-fullscreen" => commands.push(InteropCommand::ToggleFullscreen),
             "-v" | "--volume" => {
                 let val_str = args_iter
                     .next()
                     .ok_or("Option '--volume' requires a value between 0 and 130")?;
-                let val = val_str
-                    .parse::<f64>()
-                    .map_err(|_| "Invalid volume value: must be a number")?;
-                volume = Some(val.clamp(0.0, 130.0));
+                let val = parse_number("--volume", val_str)?;
+                let command = InteropCommand::SetVolume { value: val };
+                command.validate()?;
+                volume = Some(val);
+                commands.push(command);
+            }
+            "--open" => {
+                let value = args_iter
+                    .next()
+                    .ok_or("Option '--open' requires a file path or URL")?;
+                if target.is_none() {
+                    target = Some(value);
+                } else {
+                    commands.push(InteropCommand::Open { target: value });
+                }
+            }
+            "--play" => commands.push(InteropCommand::Play),
+            "--pause" => commands.push(InteropCommand::Pause),
+            "--toggle-pause" => commands.push(InteropCommand::TogglePause),
+            "--stop" => commands.push(InteropCommand::Stop),
+            "--next" => commands.push(InteropCommand::Next),
+            "--previous" => commands.push(InteropCommand::Previous),
+            "--mute" => commands.push(InteropCommand::SetMute { muted: true }),
+            "--unmute" => commands.push(InteropCommand::SetMute { muted: false }),
+            "--toggle-mute" => commands.push(InteropCommand::ToggleMute),
+            "--activate" => commands.push(InteropCommand::Activate),
+            "--minimize" => commands.push(InteropCommand::Minimize),
+            "--maximize" => commands.push(InteropCommand::Maximize),
+            "--restore" => commands.push(InteropCommand::Restore),
+            "--quit" => commands.push(InteropCommand::Quit),
+            "--seek" | "--seek-to" | "--seek-percent" | "--rate" => {
+                let val_str = args_iter
+                    .next()
+                    .ok_or_else(|| format!("Option '{arg}' requires a value"))?;
+                let value = parse_number(&arg, val_str)?;
+                let command = match arg.as_str() {
+                    "--seek" => InteropCommand::Seek { seconds: value },
+                    "--seek-to" => InteropCommand::SeekTo { seconds: value },
+                    "--seek-percent" => InteropCommand::SeekAbs { percentage: value },
+                    _ => InteropCommand::SetRate { rate: value },
+                };
+                command.validate()?;
+                commands.push(command);
+            }
+            "--workspace" => {
+                let value = args_iter
+                    .next()
+                    .ok_or("Option '--workspace' requires 'simple' or 'nle'")?;
+                commands.push(crate::platform::interop::parse_text_command(&format!(
+                    "workspace {value}"
+                ))?);
+            }
+            "--command" => {
+                let value = args_iter
+                    .next()
+                    .ok_or("Option '--command' requires a text or JSON command")?;
+                commands.push(crate::platform::interop::parse_text_command(&value)?);
             }
             "--remote" => {
                 let cmd = args_iter.next().ok_or(
@@ -82,12 +176,24 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
                 )?;
                 return Ok(CliAction::SendRemote(cmd));
             }
+            "--" => {
+                let positional = args_iter
+                    .next()
+                    .ok_or("'--' must be followed by a media file or URL")?;
+                if target.replace(positional).is_some() {
+                    return Err("Only one media target may be opened per launch".to_string());
+                }
+                if args_iter.next().is_some() {
+                    return Err("Only one media target may be opened per launch".to_string());
+                }
+                break;
+            }
             other if other.starts_with('-') => {
                 return Err(format!("Unrecognized option: {}", other));
             }
             pos => {
-                if target.is_none() {
-                    target = Some(pos.to_string());
+                if target.replace(pos.to_string()).is_some() {
+                    return Err("Only one media target may be opened per launch".to_string());
                 }
             }
         }
@@ -97,54 +203,20 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
         target,
         fullscreen,
         volume,
+        commands,
     }))
 }
 
 pub fn send_remote_command(cmd_str: &str) -> Result<String, String> {
     let trimmed = cmd_str.trim();
     let payload = if trimmed.starts_with('{') {
+        crate::platform::interop::parse_interop_request(trimmed)?;
         trimmed.to_string()
     } else {
-        let lower = trimmed.to_lowercase();
-        match lower.as_str() {
-            "play" => "{\"command\":\"play\"}\n".to_string(),
-            "pause" => "{\"command\":\"pause\"}\n".to_string(),
-            "toggle" | "toggle_pause" => "{\"command\":\"toggle_pause\"}\n".to_string(),
-            "status" | "get_status" => "{\"command\":\"get_status\"}\n".to_string(),
-            s if s.starts_with("seek ") => {
-                let sec: f64 = trimmed[5..].trim().parse().unwrap_or(0.0);
-                serde_json::json!({
-                    "command": "seek",
-                    "seconds": sec
-                })
-                .to_string()
-                    + "\n"
-            }
-            s if s.starts_with("volume ") => {
-                let v: f64 = trimmed[7..].trim().parse().unwrap_or(100.0);
-                serde_json::json!({
-                    "command": "set_volume",
-                    "value": v
-                })
-                .to_string()
-                    + "\n"
-            }
-            s if s.starts_with("open ") => {
-                let target = trimmed[5..].trim();
-                serde_json::json!({
-                    "command": "open",
-                    "target": target
-                })
-                .to_string()
-                    + "\n"
-            }
-            _ => serde_json::json!({
-                "command": trimmed
-            })
-            .to_string(),
-        }
+        serde_json::to_string(&crate::platform::interop::parse_text_command(trimmed)?)
+            .map_err(|error| error.to_string())?
     };
-    send_control_request(&payload, Duration::from_secs(2))
+    send_unified_request(&payload, Duration::from_secs(2))
 }
 
 pub fn launch_request(options: &CliOptions) -> LaunchRequest {
@@ -162,7 +234,7 @@ pub fn launch_request(options: &CliOptions) -> LaunchRequest {
             std::process::id(),
             REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ),
-        application_identity: crate::config::resolved_app_name(&crate::config::AppConfig::load()),
+        application_identity: resolved_instance_identity(),
         #[cfg(target_os = "windows")]
         sender_session_id: crate::platform::windows::current_session_id().ok(),
         #[cfg(not(target_os = "windows"))]
@@ -174,6 +246,7 @@ pub fn launch_request(options: &CliOptions) -> LaunchRequest {
         fullscreen: options.fullscreen,
         volume: options.volume,
         activate: true,
+        commands: options.commands.clone(),
     }
 }
 
@@ -185,8 +258,19 @@ pub fn try_forward_launch_request(request: &LaunchRequest) -> bool {
         Ok(payload) => payload,
         Err(_) => return false,
     };
-    send_control_request(&payload, Duration::from_millis(500))
+    send_unified_request(&payload, Duration::from_millis(500))
         .is_ok_and(|response| response.contains("\"status\":\"accepted\""))
+}
+
+fn send_unified_request(payload: &str, timeout: Duration) -> Result<String, String> {
+    let identity = resolved_instance_identity();
+    crate::platform::interop::send_native_request(payload, &identity, timeout).or_else(
+        |native_error| {
+            send_control_request(payload, timeout).map_err(|http_error| {
+                format!("{native_error}; HTTP fallback also failed: {http_error}")
+            })
+        },
+    )
 }
 
 fn send_control_request(payload: &str, timeout: Duration) -> Result<String, String> {
@@ -241,6 +325,7 @@ mod tests {
                 target: Some("sample.mp4".to_string()),
                 fullscreen: false,
                 volume: None,
+                commands: vec![],
             })
         );
 
@@ -259,6 +344,10 @@ mod tests {
                 target: Some("https://test.com/stream.m3u8".to_string()),
                 fullscreen: true,
                 volume: Some(80.0),
+                commands: vec![
+                    InteropCommand::SetFullscreen { enabled: true },
+                    InteropCommand::SetVolume { value: 80.0 },
+                ],
             })
         );
 
@@ -295,6 +384,7 @@ mod tests {
                 target: None,
                 fullscreen: false,
                 volume: None,
+                commands: vec![],
             })
         );
 
@@ -305,27 +395,11 @@ mod tests {
             "--volume".to_string(),
             "140".to_string(),
         ];
-        let action = parse_cli_args(args).unwrap();
-        assert_eq!(
-            action,
-            CliAction::RunGui(CliOptions {
-                target: None,
-                fullscreen: true,
-                volume: Some(130.0), // clamped to 130
-            })
-        );
+        assert!(parse_cli_args(args).is_err());
 
         // Volume clamping to 0
         let args = vec!["pealayer".to_string(), "-v".to_string(), "-20".to_string()];
-        let action = parse_cli_args(args).unwrap();
-        assert_eq!(
-            action,
-            CliAction::RunGui(CliOptions {
-                target: None,
-                fullscreen: false,
-                volume: Some(0.0),
-            })
-        );
+        assert!(parse_cli_args(args).is_err());
 
         // Short help and long version
         let action_h = parse_cli_args(vec!["pealayer".to_string(), "-h".to_string()]).unwrap();
@@ -369,6 +443,42 @@ mod tests {
         assert_eq!(
             parse_cli_args(args_unreg).unwrap(),
             CliAction::UnregisterAssociations
+        );
+    }
+
+    #[test]
+    fn player_switches_use_the_unified_command_model() {
+        let args = [
+            "pealayer",
+            "--open",
+            "movie.mkv",
+            "--play",
+            "--seek-to",
+            "12.5",
+            "--mute",
+            "--rate",
+            "1.25",
+            "--workspace",
+            "simple",
+            "--maximize",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        let CliAction::RunGui(options) = parse_cli_args(args).unwrap() else {
+            panic!("expected GUI options");
+        };
+        assert_eq!(options.target.as_deref(), Some("movie.mkv"));
+        assert_eq!(
+            options.commands,
+            vec![
+                InteropCommand::Play,
+                InteropCommand::SeekTo { seconds: 12.5 },
+                InteropCommand::SetMute { muted: true },
+                InteropCommand::SetRate { rate: 1.25 },
+                InteropCommand::SetWorkspace { nle: false },
+                InteropCommand::Maximize,
+            ]
         );
     }
 }

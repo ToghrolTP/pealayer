@@ -53,7 +53,7 @@ fn main() -> eframe::Result {
     env_logger::init();
 
     #[cfg(target_os = "windows")]
-    let gui_ownership;
+    let mut gui_ownership = None;
 
     let args: Vec<String> = std::env::args().collect();
     let cli_options = match crate::cli::parse_cli_args(args) {
@@ -106,27 +106,20 @@ fn main() -> eframe::Result {
             }
         }
         Ok(crate::cli::CliAction::RunGui(opts)) => {
+            let config = crate::config::AppConfig::load();
             let launch_request = crate::cli::launch_request(&opts);
-            if crate::cli::try_forward_launch_request(&launch_request) {
+            if config.single_instance && crate::cli::try_forward_launch_request(&launch_request) {
                 println!("Forwarded launch request to active Pealayer instance.");
                 return Ok(());
             }
             #[cfg(target_os = "windows")]
-            {
-                let config = crate::config::AppConfig::load();
-                let mut app_identity = crate::config::resolved_app_name(&config);
-                if let Ok(instance_id) = std::env::var("PEALAYER_INSTANCE_ID") {
-                    let instance_id = instance_id.trim();
-                    if !instance_id.is_empty() {
-                        app_identity.push(':');
-                        app_identity.push_str(instance_id);
-                    }
-                }
+            if config.single_instance {
+                let app_identity = crate::cli::resolved_instance_identity();
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
                 loop {
                     match crate::platform::windows::acquire_gui_ownership(&app_identity) {
                         Ok(crate::platform::windows::GuiOwnership::Primary(owner)) => {
-                            gui_ownership = owner;
+                            gui_ownership = Some(owner);
                             break;
                         }
                         Ok(crate::platform::windows::GuiOwnership::Existing) => {
@@ -332,6 +325,9 @@ fn main() -> eframe::Result {
             mpv_client
                 .observe_property("cache-buffering-state", libmpv2::Format::Int64, 16)
                 .unwrap();
+            mpv_client
+                .observe_property("speed", libmpv2::Format::Double, 17)
+                .unwrap();
 
             let egui_ctx2 = cc.egui_ctx.clone();
             mpv_client.set_wakeup_callback(move || {
@@ -347,7 +343,7 @@ fn main() -> eframe::Result {
             crate::platform::interop::spawn_interop_listener(
                 interop_tx.clone(),
                 cc.egui_ctx.clone(),
-                app_name.clone(),
+                crate::cli::resolved_instance_identity(),
             );
 
             let control_port = crate::config::control_port();
@@ -371,7 +367,7 @@ fn main() -> eframe::Result {
                 cc.egui_ctx.clone(),
                 web_runtime,
                 interop_tx.clone(),
-                app_name.clone(),
+                crate::cli::resolved_instance_identity(),
             );
             let (_web_cmd_tx, web_cmd_rx) = std::sync::mpsc::channel();
             let engine_handle = crate::four_d::engine::spawn_engine();
@@ -417,6 +413,7 @@ fn main() -> eframe::Result {
                 is_eof: false,
                 volume: initial_volume,
                 is_muted: loaded_config.is_muted,
+                playback_rate: 1.0,
                 show_sub_settings: false,
                 sub_visibility: true,
                 sub_font_size: 55.0,
@@ -509,6 +506,7 @@ fn main() -> eframe::Result {
                 fullscreen_video_background: loaded_config.fullscreen_video_background,
                 motion_control_mode: loaded_config.motion_control_mode,
                 compact_hardware_controls: loaded_config.compact_hardware_controls,
+                single_instance: loaded_config.single_instance,
                 windows_mica_backdrop: loaded_config.windows_mica_backdrop,
                 windows_dwm_theming: loaded_config.windows_dwm_theming,
                 opengl_vsync: loaded_config.opengl_vsync,
@@ -559,6 +557,9 @@ fn main() -> eframe::Result {
 
             if let Some(target) = cli_options.target {
                 app.load_media_target(&target);
+            }
+            for command in cli_options.commands {
+                app.apply_interop_command(&cc.egui_ctx, command, "Command line");
             }
 
             Ok(Box::new(app))

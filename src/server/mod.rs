@@ -486,6 +486,11 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
                 }
             }
         }
+        ("GET", "/api/player/commands") => HttpResponse::json(
+            200,
+            "OK",
+            crate::platform::interop::command_catalog().to_string(),
+        ),
         ("POST", "/api/rpc") => json_rpc_response(&request.body, state),
         ("POST", "/api/player/command") => player_command_response(&request.body, state),
         ("POST", "/api/ipc") => HttpResponse::json(
@@ -581,14 +586,25 @@ fn config_update_response(body: &[u8], state: &ControlState) -> HttpResponse {
 
 fn player_command_response(body: &[u8], state: &ControlState) -> HttpResponse {
     match serde_json::from_slice::<crate::platform::interop::InteropCommand>(body) {
-        Ok(command) => match state.command_tx.send(command) {
-            Ok(()) => {
-                state.egui_ctx.request_repaint();
-                HttpResponse::json(200, "OK", r#"{"status":"ok"}"#)
-            }
-            Err(_) => HttpResponse::text(503, "Service Unavailable", "Dispatcher unavailable"),
+        Ok(command) => match command.validate() {
+            Err(error) => HttpResponse::json(
+                400,
+                "Bad Request",
+                serde_json::json!({"error": error}).to_string(),
+            ),
+            Ok(()) => match state.command_tx.send(command) {
+                Ok(()) => {
+                    state.egui_ctx.request_repaint();
+                    HttpResponse::json(200, "OK", r#"{"status":"ok"}"#)
+                }
+                Err(_) => HttpResponse::text(503, "Service Unavailable", "Dispatcher unavailable"),
+            },
         },
-        _ => HttpResponse::text(400, "Bad Request", "Bad Command"),
+        Err(error) => HttpResponse::json(
+            400,
+            "Bad Request",
+            serde_json::json!({"error": format!("invalid command: {error}")}).to_string(),
+        ),
     }
 }
 

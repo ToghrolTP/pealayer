@@ -144,6 +144,7 @@ pub struct AppConfig {
     pub fullscreen_video_background: VideoBackground,
     pub motion_control_mode: MotionControlMode,
     pub compact_hardware_controls: bool,
+    pub single_instance: bool,
     pub windows_mica_backdrop: bool,
     pub windows_dwm_theming: bool,
     pub opengl_vsync: bool,
@@ -183,6 +184,7 @@ impl Default for AppConfig {
             fullscreen_video_background: VideoBackground::Black,
             motion_control_mode: MotionControlMode::Toggle,
             compact_hardware_controls: false,
+            single_instance: true,
             windows_mica_backdrop: false,
             windows_dwm_theming: true,
             // Reactive egui rendering does not require a continuously synced

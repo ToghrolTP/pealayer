@@ -73,12 +73,13 @@ Whether designing an immersive theme park ride, an experiential 4D theater, or h
 * **Live Actuator Telemetry**: Real-time status LEDs and manual "Force ON" overrides in the Hardware Monitor panel.
 
 ### 🌐 Built-In Web Remote Control & REST/WebSocket APIs
-* **Unified Control Server**: HTTP, REST, WebSocket, JSON-RPC, and CLI/single-instance IPC share one loopback-only listener at `127.0.0.1:8080`. Set `PEALAYER_PORT` to override the port, or `PEALAYER_WEB_BIND` to a specific interface address only when remote access is intended.
+* **Unified Control Contract**: HTTP, REST, WebSocket, JSON-RPC, CLI, and single-instance IPC dispatch the same typed player commands. Network automation uses the loopback-only listener at `127.0.0.1:8080`; local process launches prefer OS-native IPC and fall back to HTTP. Set `PEALAYER_PORT` to override the port, or `PEALAYER_WEB_BIND` to a specific interface address only when remote access is intended.
 * **Mobile-Responsive Remote Web App**: Standalone SPA built with **React 19**, **TypeScript**, **Vite**, and **Ant Design 6** (`web_ui/dist`). Control playback, seek, adjust volume, and trigger E-STOP from any phone, tablet, or secondary monitor.
 * **Remote Media Library & Thumbnail Caching**: Browse server directories, inspect media durations, and view dynamically cached video thumbnails over HTTP.
 
 ### 🖥 Operating System Integration & IPC
 * **Unix Domain Socket IPC**: Direct headless automation on Linux via `/tmp/pealayer.sock` or `$XDG_RUNTIME_DIR/pealayer.sock`.
+* **Windows Named-Pipe IPC**: Second-process launches and local commands use a per-application, per-session named pipe before trying the loopback HTTP fallback. Single-instance mode is enabled by default and can be changed in **Preferences → Advanced → Application instance**.
 * **Pealayer Automation Endpoint**: Pealayer's newline-compatible command transport is available at `POST http://127.0.0.1:8080/api/ipc`, while JSON-RPC 2.0 remains at `/api/rpc`. These are distinct from the PCController coordinator endpoint on `:8787`; `:8787` remains the controller fallback.
 * **Desktop File Associations**: 1-click registration as default system player for 9+ media formats (`.mp4`, `.mkv`, `.avi`, `.webm`, `.mov`, `.flv`, `.mp3`, `.flac`, `.wav`) via Windows Registry (`winreg`) and Linux FreeDesktop XDG desktop entries (`xdg-mime`).
 * **Automatic Sidecar Mounting**: Automatically discovers and loads `<video>.4d.json` timeline projects saved alongside movie files.
@@ -230,6 +231,7 @@ consume a TCP port.
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `GET` | `/api/player/status` | Returns playback state, including `duration`, `seekable`, `live`, `buffered_until`, and `buffering_percent` |
+| `GET` | `/api/player/commands` | Discovers the shared typed command contract and supported transports |
 | `POST` | `/api/player/command` | Dispatches player commands (JSON payload), including local files and remote media URLs |
 | `POST` | `/api/rpc` | JSON-RPC 2.0 methods such as `pealayer.play`, `pealayer.seek`, `pealayer.open`, and `pealayer.status` |
 | `POST` | `/api/ipc` | CLI and single-instance command transport; accepts legacy command JSON or newline-compatible JSON-RPC payloads |
@@ -259,6 +261,20 @@ Send and receive JSON command packets in real time:
 // Open an HTTP file, HLS manifest, or live feed (RTSP/RTMP/SRT/UDP/TCP)
 { "command": "open", "target": "rtsp://camera.example.invalid/live" }
 ```
+
+The same operations are available from the executable. Examples:
+
+```text
+pealayer movie.mkv --fullscreen --play
+pealayer --seek-to 90 --rate 1.25 --unmute
+pealayer --workspace nle --maximize
+pealayer --remote "seek -10"
+pealayer --command "{\"command\":\"set_volume\",\"value\":65}"
+```
+
+When single-instance mode is enabled, these switches are delivered in order to
+the active window rather than creating a second player. Run `pealayer --help`
+for the full switch list.
 
 Remote targets also appear in **Open Recent** and reopen through their original
 network protocol. Seek controls are enabled only when mpv reports the source as

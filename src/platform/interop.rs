@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, channel};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -20,6 +20,8 @@ pub struct LaunchRequest {
     pub fullscreen: bool,
     pub volume: Option<f64>,
     pub activate: bool,
+    #[serde(default)]
+    pub commands: Vec<InteropCommand>,
 }
 
 impl LaunchRequest {
@@ -47,16 +49,25 @@ impl LaunchRequest {
         {
             return Err("launch volume must be a finite value from 0 to 130".to_string());
         }
+        if self.commands.len() > 64 {
+            return Err("launch request must not contain more than 64 commands".to_string());
+        }
+        for command in &self.commands {
+            if matches!(command, InteropCommand::Launch { .. }) {
+                return Err("launch request must not contain a nested launch command".to_string());
+            }
+            command.validate()?;
+        }
         Ok(())
     }
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 fn normalized_application_identity(identity: &str) -> String {
     identity.trim().to_lowercase()
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 fn validate_launch_destination(
     request: &LaunchRequest,
     expected_identity: &str,
@@ -76,13 +87,13 @@ fn validate_launch_destination(
     Ok(())
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 #[derive(Default)]
 struct LaunchReceiptCache {
     operation_ids: std::collections::VecDeque<String>,
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 impl LaunchReceiptCache {
     const CAPACITY: usize = 1024;
 
@@ -102,7 +113,7 @@ impl LaunchReceiptCache {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum InteropCommand {
     Launch {
@@ -111,7 +122,13 @@ pub enum InteropCommand {
     Play,
     Pause,
     TogglePause,
+    Stop,
+    Next,
+    Previous,
     Seek {
+        seconds: f64,
+    },
+    SeekTo {
         seconds: f64,
     },
     SeekAbs {
@@ -122,6 +139,13 @@ pub enum InteropCommand {
         #[serde(alias = "level")]
         value: f64,
     },
+    SetMute {
+        muted: bool,
+    },
+    ToggleMute,
+    SetRate {
+        rate: f64,
+    },
     #[serde(alias = "open_video")]
     Open {
         #[serde(alias = "path")]
@@ -131,6 +155,11 @@ pub enum InteropCommand {
         enabled: bool,
     },
     ToggleFullscreen,
+    Activate,
+    Minimize,
+    Maximize,
+    Restore,
+    Quit,
     SetWorkspace {
         nle: bool,
     },
@@ -141,11 +170,132 @@ pub enum InteropCommand {
     GetStatus,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+impl InteropCommand {
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Launch { request } => request.validate(),
+            Self::Seek { seconds } | Self::SeekTo { seconds } if !seconds.is_finite() => {
+                Err("seek value must be finite".to_string())
+            }
+            Self::SeekAbs { percentage }
+                if !percentage.is_finite() || !(0.0..=100.0).contains(percentage) =>
+            {
+                Err("seek percentage must be a finite value from 0 to 100".to_string())
+            }
+            Self::SetVolume { value } if !value.is_finite() || !(0.0..=130.0).contains(value) => {
+                Err("volume must be a finite value from 0 to 130".to_string())
+            }
+            Self::SetRate { rate } if !rate.is_finite() || !(0.05..=16.0).contains(rate) => {
+                Err("playback rate must be a finite value from 0.05 to 16".to_string())
+            }
+            Self::Open { target } if target.trim().is_empty() || target.len() > 32_768 => {
+                Err("media target must contain 1 to 32768 bytes".to_string())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+pub fn command_catalog() -> Value {
+    serde_json::json!({
+        "contract": "pealayer.control",
+        "transports": ["native", "http", "json-rpc"],
+        "commands": [
+            "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
+            "seek", "seek_to", "seek_abs", "set_volume", "set_mute", "toggle_mute",
+            "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
+            "maximize", "restore", "set_workspace", "update_config", "reload_config",
+            "get_status", "quit"
+        ],
+        "json_rpc_prefix": "pealayer",
+        "discovery": "/api/player/commands"
+    })
+}
+
+pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("command must not be empty".to_string());
+    }
+    if trimmed.starts_with('{') {
+        return parse_interop_request(trimmed).map(|(_, command)| command);
+    }
+    let (name, argument) = trimmed
+        .split_once(char::is_whitespace)
+        .map(|(name, argument)| (name, argument.trim()))
+        .unwrap_or((trimmed, ""));
+    let number = |label: &str| {
+        argument
+            .parse::<f64>()
+            .map_err(|_| format!("{label} requires a numeric value"))
+    };
+    let boolean = || match argument.to_ascii_lowercase().as_str() {
+        "1" | "true" | "on" | "yes" => Ok(true),
+        "0" | "false" | "off" | "no" => Ok(false),
+        _ => Err("expected on/off, true/false, or 1/0".to_string()),
+    };
+    let command = match name.to_ascii_lowercase().as_str() {
+        "play" => InteropCommand::Play,
+        "pause" => InteropCommand::Pause,
+        "toggle" | "toggle_pause" | "toggle-pause" => InteropCommand::TogglePause,
+        "stop" => InteropCommand::Stop,
+        "next" => InteropCommand::Next,
+        "previous" | "prev" => InteropCommand::Previous,
+        "seek" => InteropCommand::Seek {
+            seconds: number("seek")?,
+        },
+        "seek_to" | "seek-to" => InteropCommand::SeekTo {
+            seconds: number("seek-to")?,
+        },
+        "seek_abs" | "seek-abs" => InteropCommand::SeekAbs {
+            percentage: number("seek-abs")?,
+        },
+        "volume" | "set_volume" | "set-volume" => InteropCommand::SetVolume {
+            value: number("volume")?,
+        },
+        "mute" if argument.is_empty() => InteropCommand::SetMute { muted: true },
+        "unmute" => InteropCommand::SetMute { muted: false },
+        "mute" | "set_mute" | "set-mute" => InteropCommand::SetMute { muted: boolean()? },
+        "toggle_mute" | "toggle-mute" => InteropCommand::ToggleMute,
+        "rate" | "set_rate" | "set-rate" => InteropCommand::SetRate {
+            rate: number("rate")?,
+        },
+        "open" => InteropCommand::Open {
+            target: argument.to_string(),
+        },
+        "fullscreen" | "set_fullscreen" | "set-fullscreen" => InteropCommand::SetFullscreen {
+            enabled: boolean()?,
+        },
+        "toggle_fullscreen" | "toggle-fullscreen" => InteropCommand::ToggleFullscreen,
+        "activate" | "focus" => InteropCommand::Activate,
+        "minimize" => InteropCommand::Minimize,
+        "maximize" => InteropCommand::Maximize,
+        "restore" => InteropCommand::Restore,
+        "workspace" | "set_workspace" | "set-workspace" => {
+            match argument.to_ascii_lowercase().as_str() {
+                "nle" | "editor" => InteropCommand::SetWorkspace { nle: true },
+                "simple" | "player" => InteropCommand::SetWorkspace { nle: false },
+                _ => return Err("workspace must be nle or simple".to_string()),
+            }
+        }
+        "status" | "get_status" | "get-status" => InteropCommand::GetStatus,
+        "reload_config" | "reload-config" => InteropCommand::ReloadConfig,
+        "quit" | "exit" => InteropCommand::Quit,
+        _ => return Err(format!("unknown Pealayer command: {name}")),
+    };
+    command.validate()?;
+    Ok(command)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerStatusResponse {
     pub status: String,
     pub playing: bool,
     pub volume: f64,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default = "default_playback_rate")]
+    pub playback_rate: f64,
     pub playback_time: f64,
     pub duration: f64,
     pub current_video: Option<String>,
@@ -167,6 +317,34 @@ pub struct PlayerStatusResponse {
     pub hardware_connected: bool,
     #[serde(default)]
     pub hardware: Option<HardwareStatusSummary>,
+}
+
+fn default_playback_rate() -> f64 {
+    1.0
+}
+
+impl Default for PlayerStatusResponse {
+    fn default() -> Self {
+        Self {
+            status: String::new(),
+            playing: false,
+            volume: 0.0,
+            muted: false,
+            playback_rate: default_playback_rate(),
+            playback_time: 0.0,
+            duration: 0.0,
+            current_video: None,
+            seekable: false,
+            live: false,
+            buffered_until: None,
+            buffering_percent: None,
+            fullscreen: false,
+            workspace: String::new(),
+            controller_connected: false,
+            hardware_connected: false,
+            hardware: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -212,59 +390,98 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
             .map(str::to_string)
             .ok_or_else(|| format!("missing string parameter: {}", names.join(" or ")))
     };
-    match request.method.as_str() {
-        "play" | "pealayer.play" | "pealayer.player.play" => Ok(Some(InteropCommand::Play)),
-        "pause" | "pealayer.pause" | "pealayer.player.pause" => Ok(Some(InteropCommand::Pause)),
+    let command = match request.method.as_str() {
+        "play" | "pealayer.play" | "pealayer.player.play" => Some(InteropCommand::Play),
+        "pause" | "pealayer.pause" | "pealayer.player.pause" => Some(InteropCommand::Pause),
         "toggle" | "toggle_pause" | "pealayer.toggle" | "pealayer.player.toggle" => {
-            Ok(Some(InteropCommand::TogglePause))
+            Some(InteropCommand::TogglePause)
         }
-        "seek" | "pealayer.seek" | "pealayer.player.seek" => Ok(Some(InteropCommand::Seek {
+        "stop" | "pealayer.stop" | "pealayer.player.stop" => Some(InteropCommand::Stop),
+        "next" | "pealayer.next" | "pealayer.player.next" => Some(InteropCommand::Next),
+        "previous" | "prev" | "pealayer.previous" | "pealayer.player.previous" => {
+            Some(InteropCommand::Previous)
+        }
+        "seek" | "pealayer.seek" | "pealayer.player.seek" => Some(InteropCommand::Seek {
             seconds: number(&["seconds"])?,
-        })),
+        }),
+        "seek_to" | "pealayer.seek_to" | "pealayer.player.seek_to" => {
+            Some(InteropCommand::SeekTo {
+                seconds: number(&["seconds", "position"])?,
+            })
+        }
         "seek_abs" | "pealayer.seek_absolute" | "pealayer.player.seek_absolute" => {
-            Ok(Some(InteropCommand::SeekAbs {
+            Some(InteropCommand::SeekAbs {
                 percentage: number(&["percentage"])?,
-            }))
+            })
         }
         "volume" | "set_volume" | "pealayer.volume.set" | "pealayer.player.volume.set" => {
-            Ok(Some(InteropCommand::SetVolume {
+            Some(InteropCommand::SetVolume {
                 value: number(&["value", "level"])?,
-            }))
+            })
+        }
+        "mute" | "set_mute" | "pealayer.mute.set" | "pealayer.player.mute.set" => {
+            let muted = request
+                .params
+                .get("muted")
+                .or_else(|| request.params.get("enabled"))
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "missing boolean parameter: muted".to_string())?;
+            Some(InteropCommand::SetMute { muted })
+        }
+        "toggle_mute" | "pealayer.mute.toggle" | "pealayer.player.mute.toggle" => {
+            Some(InteropCommand::ToggleMute)
+        }
+        "rate" | "set_rate" | "pealayer.rate.set" | "pealayer.player.rate.set" => {
+            Some(InteropCommand::SetRate {
+                rate: number(&["rate", "value"])?,
+            })
         }
         "open" | "open_video" | "pealayer.open" | "pealayer.player.open" => {
-            Ok(Some(InteropCommand::Open {
+            Some(InteropCommand::Open {
                 target: string(&["target", "path"])?,
-            }))
+            })
         }
-        "fullscreen" | "pealayer.fullscreen.set" | "pealayer.player.fullscreen.set" => {
+        "fullscreen"
+        | "set_fullscreen"
+        | "pealayer.fullscreen.set"
+        | "pealayer.player.fullscreen.set" => {
             let enabled = request
                 .params
                 .get("enabled")
                 .and_then(Value::as_bool)
                 .ok_or_else(|| "missing boolean parameter: enabled".to_string())?;
-            Ok(Some(InteropCommand::SetFullscreen { enabled }))
+            Some(InteropCommand::SetFullscreen { enabled })
         }
         "toggle_fullscreen" | "pealayer.fullscreen.toggle" => {
-            Ok(Some(InteropCommand::ToggleFullscreen))
+            Some(InteropCommand::ToggleFullscreen)
         }
-        "workspace" | "pealayer.workspace.set" => {
+        "activate" | "focus" | "pealayer.window.activate" => Some(InteropCommand::Activate),
+        "minimize" | "pealayer.window.minimize" => Some(InteropCommand::Minimize),
+        "maximize" | "pealayer.window.maximize" => Some(InteropCommand::Maximize),
+        "restore" | "pealayer.window.restore" => Some(InteropCommand::Restore),
+        "quit" | "exit" | "pealayer.quit" => Some(InteropCommand::Quit),
+        "workspace" | "set_workspace" | "pealayer.workspace.set" => {
             let workspace = string(&["workspace", "value"])?;
             match workspace.trim().to_ascii_lowercase().as_str() {
-                "nle" | "editor" => Ok(Some(InteropCommand::SetWorkspace { nle: true })),
-                "simple" | "player" => Ok(Some(InteropCommand::SetWorkspace { nle: false })),
-                _ => Err("workspace must be nle or simple".to_string()),
+                "nle" | "editor" => Some(InteropCommand::SetWorkspace { nle: true }),
+                "simple" | "player" => Some(InteropCommand::SetWorkspace { nle: false }),
+                _ => return Err("workspace must be nle or simple".to_string()),
             }
         }
         "config.update" | "pealayer.config.update" => {
             crate::config::AppConfig::validate_patch_shape(&request.params)?;
-            Ok(Some(InteropCommand::UpdateConfig {
+            Some(InteropCommand::UpdateConfig {
                 values: request.params.clone(),
-            }))
+            })
         }
-        "config.reload" | "pealayer.config.reload" => Ok(Some(InteropCommand::ReloadConfig)),
-        "get_status" | "player.status" | "pealayer.status" | "pealayer.player.status" => Ok(None),
-        method => Err(format!("unknown Pealayer JSON-RPC method: {method}")),
+        "config.reload" | "pealayer.config.reload" => Some(InteropCommand::ReloadConfig),
+        "get_status" | "player.status" | "pealayer.status" | "pealayer.player.status" => None,
+        method => return Err(format!("unknown Pealayer JSON-RPC method: {method}")),
+    };
+    if let Some(command) = &command {
+        command.validate()?;
     }
+    Ok(command)
 }
 
 pub fn json_rpc_result(id: &Value, result: Value) -> String {
@@ -322,6 +539,194 @@ pub fn get_socket_path() -> PathBuf {
     }
 }
 
+fn local_endpoint_hash(identity: &str) -> u64 {
+    identity
+        .trim()
+        .to_lowercase()
+        .as_bytes()
+        .iter()
+        .fold(0xcbf29ce484222325_u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+        })
+}
+
+#[cfg(windows)]
+pub fn windows_pipe_name(application_identity: &str) -> String {
+    let session = crate::platform::windows::current_session_id().unwrap_or_default();
+    format!(
+        r"\\.\pipe\Pealayer.Control.{:016x}.{session}",
+        local_endpoint_hash(application_identity)
+    )
+}
+
+#[cfg(windows)]
+fn wide_null(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(windows)]
+fn send_windows_native_request(
+    payload: &str,
+    application_identity: &str,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
+    use windows::Win32::Foundation::GetLastError;
+    use windows::Win32::System::Pipes::CallNamedPipeW;
+    use windows::core::PCWSTR;
+
+    let pipe_name = windows_pipe_name(application_identity);
+    let pipe_name_wide = wide_null(&pipe_name);
+    let request = format!("{}\n", payload.trim());
+    let mut response = vec![0u8; 65_536];
+    let mut bytes_read = 0u32;
+    let timeout_ms = timeout.as_millis().clamp(1, u128::from(u32::MAX)) as u32;
+    let ok = unsafe {
+        CallNamedPipeW(
+            PCWSTR(pipe_name_wide.as_ptr()),
+            Some(request.as_ptr().cast()),
+            request.len() as u32,
+            Some(response.as_mut_ptr().cast()),
+            response.len() as u32,
+            &mut bytes_read,
+            timeout_ms,
+        )
+    };
+    if !ok.as_bool() {
+        return Err(format!(
+            "native Pealayer pipe {pipe_name} is unavailable: {:?}",
+            unsafe { GetLastError() }
+        ));
+    }
+    response.truncate(bytes_read as usize);
+    String::from_utf8(response)
+        .map(|value| value.trim().to_string())
+        .map_err(|error| format!("native Pealayer pipe returned invalid UTF-8: {error}"))
+}
+
+#[cfg(windows)]
+pub fn send_native_request(
+    payload: &str,
+    application_identity: &str,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
+    send_windows_native_request(payload, application_identity, timeout)
+}
+
+#[cfg(unix)]
+pub fn send_native_request(
+    payload: &str,
+    _application_identity: &str,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::net::UnixStream;
+
+    let mut stream = UnixStream::connect(get_socket_path())
+        .map_err(|error| format!("native Pealayer socket is unavailable: {error}"))?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|error| error.to_string())?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(|error| error.to_string())?;
+    stream
+        .write_all(format!("{}\n", payload.trim()).as_bytes())
+        .and_then(|_| stream.flush())
+        .map_err(|error| error.to_string())?;
+    let mut response = String::new();
+    BufReader::new(stream)
+        .read_line(&mut response)
+        .map_err(|error| error.to_string())?;
+    Ok(response.trim().to_string())
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn send_native_request(
+    _payload: &str,
+    _application_identity: &str,
+    _timeout: std::time::Duration,
+) -> Result<String, String> {
+    Err("native Pealayer IPC is not supported on this operating system".to_string())
+}
+
+#[cfg(windows)]
+fn spawn_windows_pipe_listener(
+    tx: std::sync::mpsc::Sender<InteropCommand>,
+    egui_ctx: eframe::egui::Context,
+    application_identity: String,
+) {
+    use windows::Win32::Foundation::{CloseHandle, ERROR_PIPE_CONNECTED, GetLastError};
+    use windows::Win32::Storage::FileSystem::{
+        FlushFileBuffers, PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
+    };
+    use windows::Win32::System::Pipes::{
+        ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_MESSAGE,
+        PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    };
+    use windows::core::PCWSTR;
+
+    let pipe_name = windows_pipe_name(&application_identity);
+    let pipe_name_wide = wide_null(&pipe_name);
+    let expected_session_id = crate::platform::windows::current_session_id().ok();
+    let receipts = Arc::new(Mutex::new(LaunchReceiptCache::default()));
+    thread::spawn(move || {
+        loop {
+            let handle = unsafe {
+                CreateNamedPipeW(
+                    PCWSTR(pipe_name_wide.as_ptr()),
+                    PIPE_ACCESS_DUPLEX,
+                    PIPE_TYPE_MESSAGE
+                        | PIPE_READMODE_MESSAGE
+                        | PIPE_WAIT
+                        | PIPE_REJECT_REMOTE_CLIENTS,
+                    PIPE_UNLIMITED_INSTANCES,
+                    65_536,
+                    65_536,
+                    1_000,
+                    None,
+                )
+            };
+            if handle.is_invalid() {
+                log::error!("Could not create native Pealayer pipe {pipe_name}");
+                thread::sleep(std::time::Duration::from_millis(250));
+                continue;
+            }
+            let connected = unsafe { ConnectNamedPipe(handle, None) }.is_ok()
+                || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
+            if connected {
+                let mut request = vec![0u8; 65_536];
+                let mut bytes_read = 0u32;
+                if unsafe { ReadFile(handle, Some(&mut request), Some(&mut bytes_read), None) }
+                    .is_ok()
+                {
+                    request.truncate(bytes_read as usize);
+                    let payload = String::from_utf8_lossy(&request);
+                    let response = dispatch_local_payload(
+                        payload.trim(),
+                        &tx,
+                        &egui_ctx,
+                        &receipts,
+                        &application_identity,
+                        expected_session_id,
+                    );
+                    let mut bytes_written = 0u32;
+                    let _ = unsafe {
+                        WriteFile(
+                            handle,
+                            Some(response.as_bytes()),
+                            Some(&mut bytes_written),
+                            None,
+                        )
+                    };
+                    let _ = unsafe { FlushFileBuffers(handle) };
+                }
+                let _ = unsafe { DisconnectNamedPipe(handle) };
+            }
+            let _ = unsafe { CloseHandle(handle) };
+        }
+    });
+}
+
 pub fn parse_interop_request(
     line: &str,
 ) -> Result<(Option<serde_json::Value>, InteropCommand), String> {
@@ -329,83 +734,15 @@ pub fn parse_interop_request(
 
     // Check if JSON-RPC 2.0 format
     if val.get("jsonrpc").and_then(|v| v.as_str()) == Some("2.0") || val.get("method").is_some() {
-        let id = val.get("id").cloned();
-        let method = val
-            .get("method")
-            .and_then(|m| m.as_str())
-            .ok_or("Missing method field")?;
-        let params = val.get("params");
-
-        let cmd = match method {
-            "play" => InteropCommand::Play,
-            "pause" => InteropCommand::Pause,
-            "toggle_pause" | "toggle" => InteropCommand::TogglePause,
-            "seek" => {
-                let seconds = params
-                    .and_then(|p| p.get("seconds"))
-                    .and_then(|s| s.as_f64())
-                    .unwrap_or(0.0);
-                InteropCommand::Seek { seconds }
-            }
-            "seek_abs" => {
-                let percentage = params
-                    .and_then(|p| p.get("percentage"))
-                    .and_then(|p| p.as_f64())
-                    .unwrap_or(0.0);
-                InteropCommand::SeekAbs { percentage }
-            }
-            "set_volume" | "volume" => {
-                let value = params
-                    .and_then(|p| p.get("value").or_else(|| p.get("level")))
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(100.0);
-                InteropCommand::SetVolume { value }
-            }
-            "open" | "open_video" => {
-                let target = params
-                    .and_then(|p| p.get("target").or_else(|| p.get("path")))
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                InteropCommand::Open { target }
-            }
-            "fullscreen" | "set_fullscreen" => {
-                let enabled = params
-                    .and_then(|p| p.get("enabled"))
-                    .and_then(|value| value.as_bool())
-                    .ok_or("Missing enabled boolean")?;
-                InteropCommand::SetFullscreen { enabled }
-            }
-            "toggle_fullscreen" => InteropCommand::ToggleFullscreen,
-            "workspace" | "set_workspace" => {
-                let workspace = params
-                    .and_then(|p| p.get("workspace").or_else(|| p.get("value")))
-                    .and_then(|value| value.as_str())
-                    .ok_or("Missing workspace")?;
-                match workspace.trim().to_ascii_lowercase().as_str() {
-                    "nle" | "editor" => InteropCommand::SetWorkspace { nle: true },
-                    "simple" | "player" => InteropCommand::SetWorkspace { nle: false },
-                    _ => return Err("workspace must be nle or simple".to_string()),
-                }
-            }
-            "config.update" | "pealayer.config.update" => {
-                let values = params.cloned().unwrap_or_else(|| serde_json::json!({}));
-                crate::config::AppConfig::validate_patch_shape(&values)?;
-                InteropCommand::UpdateConfig { values }
-            }
-            "config.reload" | "pealayer.config.reload" => InteropCommand::ReloadConfig,
-            "get_status" | "player.status" => InteropCommand::GetStatus,
-            other => return Err(format!("Unknown RPC method: {}", other)),
-        };
-
-        return Ok((id, cmd));
+        let request: JsonRpcRequest = serde_json::from_value(val).map_err(|e| e.to_string())?;
+        let id = Some(request.id.clone());
+        let command = command_from_json_rpc(&request)?.unwrap_or(InteropCommand::GetStatus);
+        return Ok((id, command));
     }
 
     // Fall back to standard InteropCommand deserialization
     let cmd: InteropCommand = serde_json::from_value(val).map_err(|e| e.to_string())?;
-    if let InteropCommand::Launch { request } = &cmd {
-        request.validate()?;
-    }
+    cmd.validate()?;
     Ok((None, cmd))
 }
 
@@ -448,6 +785,59 @@ pub fn format_interop_error(id: Option<serde_json::Value>, code: i32, message: &
     }
 }
 
+#[cfg(any(unix, windows, test))]
+fn dispatch_local_payload(
+    payload: &str,
+    tx: &std::sync::mpsc::Sender<InteropCommand>,
+    egui_ctx: &eframe::egui::Context,
+    launch_receipts: &Arc<Mutex<LaunchReceiptCache>>,
+    expected_identity: &str,
+    expected_session_id: Option<u32>,
+) -> String {
+    let (id, command) = match parse_interop_request(payload) {
+        Ok(parsed) => parsed,
+        Err(error) => return format_interop_error(None, -32600, &error),
+    };
+    if matches!(command, InteropCommand::GetStatus) {
+        let value = serde_json::to_value(get_live_status())
+            .unwrap_or_else(|_| serde_json::json!({"status":"initializing"}));
+        return format_interop_response(id, &value);
+    }
+    let operation_id = match &command {
+        InteropCommand::Launch { request } => {
+            if let Err(error) =
+                validate_launch_destination(request, expected_identity, expected_session_id)
+            {
+                return format_interop_error(id, -32600, &error);
+            }
+            Some(request.operation_id.clone())
+        }
+        _ => None,
+    };
+    if let Some(operation_id) = operation_id {
+        let mut receipts = match launch_receipts.lock() {
+            Ok(receipts) => receipts,
+            Err(_) => {
+                return format_interop_error(id, -32000, "launch receipt cache is unavailable");
+            }
+        };
+        if !receipts.claim(&operation_id) {
+            return format_interop_response(
+                id,
+                &serde_json::json!({"status":"accepted","duplicate":true}),
+            );
+        }
+        if tx.send(command).is_err() {
+            receipts.release(&operation_id);
+            return format_interop_error(id, -32000, "application dispatcher is unavailable");
+        }
+    } else if tx.send(command).is_err() {
+        return format_interop_error(id, -32000, "application dispatcher is unavailable");
+    }
+    egui_ctx.request_repaint();
+    format_interop_response(id, &serde_json::json!({"status":"accepted"}))
+}
+
 #[cfg(unix)]
 fn handle_client_connection<R: std::io::Read, W: Write>(
     mut reader: BufReader<R>,
@@ -465,77 +855,16 @@ fn handle_client_connection<R: std::io::Read, W: Write>(
         }
         let trimmed = line.trim();
         if !trimmed.is_empty() {
-            match parse_interop_request(trimmed) {
-                Ok((id, InteropCommand::GetStatus)) => {
-                    let status = get_live_status();
-                    let resp_val = serde_json::to_value(&status)
-                        .unwrap_or(serde_json::json!({"status": "ok"}));
-                    let resp = format_interop_response(id, &resp_val);
-                    let _ = writer.write_all(resp.as_bytes());
-                    let _ = writer.flush();
-                }
-                Ok((id, cmd)) => {
-                    let operation_id = match &cmd {
-                        InteropCommand::Launch { request } => {
-                            if let Err(error) = validate_launch_destination(
-                                request,
-                                &expected_identity,
-                                expected_session_id,
-                            ) {
-                                let response = format_interop_error(id, -32600, &error);
-                                let _ = writer.write_all(response.as_bytes());
-                                let _ = writer.flush();
-                                line.clear();
-                                continue;
-                            }
-                            Some(request.operation_id.clone())
-                        }
-                        _ => None,
-                    };
-                    let response = if let Some(operation_id) = operation_id {
-                        match launch_receipts.lock() {
-                            Ok(mut receipts) => {
-                                if !receipts.claim(&operation_id) {
-                                    format_interop_response(
-                                        id,
-                                        &serde_json::json!({"status": "accepted", "duplicate": true}),
-                                    )
-                                } else if tx.send(cmd).is_ok() {
-                                    egui_ctx.request_repaint();
-                                    format_interop_response(
-                                        id,
-                                        &serde_json::json!({"status": "accepted"}),
-                                    )
-                                } else {
-                                    receipts.release(&operation_id);
-                                    format_interop_error(
-                                        id,
-                                        -32000,
-                                        "application dispatcher is unavailable",
-                                    )
-                                }
-                            }
-                            Err(_) => format_interop_error(
-                                id,
-                                -32000,
-                                "launch receipt cache is unavailable",
-                            ),
-                        }
-                    } else if tx.send(cmd).is_ok() {
-                        egui_ctx.request_repaint();
-                        format_interop_response(id, &serde_json::json!({"status": "accepted"}))
-                    } else {
-                        format_interop_error(id, -32000, "application dispatcher is unavailable")
-                    };
-                    let _ = writer.write_all(response.as_bytes());
-                    let _ = writer.flush();
-                }
-                Err(err) => {
-                    let err_resp = format_interop_error(None, -32600, &err);
-                    let _ = writer.write_all(err_resp.as_bytes());
-                    let _ = writer.flush();
-                }
-            }
+            let response = dispatch_local_payload(
+                trimmed,
+                &tx,
+                &egui_ctx,
+                &launch_receipts,
+                &expected_identity,
+                expected_session_id,
+            );
+            let _ = writer.write_all(response.as_bytes());
+            let _ = writer.flush();
         }
         line.clear();
     }
@@ -588,13 +917,15 @@ pub fn spawn_interop_listener(
             }
         });
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    spawn_windows_pipe_listener(tx, egui_ctx, application_identity);
+    #[cfg(not(any(unix, windows)))]
     let _ = (tx, egui_ctx, application_identity);
 }
 
 pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<InteropCommand> {
     let (tx, rx) = channel::<InteropCommand>();
-    let application_identity = crate::config::resolved_app_name(&crate::config::AppConfig::load());
+    let application_identity = crate::cli::resolved_instance_identity();
     spawn_interop_listener(tx.clone(), egui_ctx.clone(), application_identity.clone());
     let state_tx = crate::server::spawn_control_server_configured(
         crate::config::control_port(),
@@ -614,7 +945,7 @@ pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<Interop
     rx
 }
 
-const PCCONTROLLER_ACTIONS: &str = "pealayer.play,pealayer.pause,pealayer.toggle,pealayer.seek,pealayer.seek_absolute,pealayer.volume.set,pealayer.open,pealayer.fullscreen.set,pealayer.fullscreen.toggle,pealayer.workspace.set";
+const PCCONTROLLER_ACTIONS: &str = "pealayer.play,pealayer.pause,pealayer.toggle,pealayer.stop,pealayer.next,pealayer.previous,pealayer.seek,pealayer.seek_to,pealayer.seek_absolute,pealayer.volume.set,pealayer.mute.set,pealayer.mute.toggle,pealayer.rate.set,pealayer.open,pealayer.fullscreen.set,pealayer.fullscreen.toggle,pealayer.workspace.set,pealayer.window.activate,pealayer.window.minimize,pealayer.window.maximize,pealayer.window.restore,pealayer.quit";
 
 struct ControllerAction {
     command: Option<InteropCommand>,
@@ -665,6 +996,9 @@ fn controller_action_from_event(event: &Value, instance_id: &str) -> Option<Cont
             "pealayer.play" => Some(InteropCommand::Play),
             "pealayer.pause" => Some(InteropCommand::Pause),
             "pealayer.toggle" => Some(InteropCommand::TogglePause),
+            "pealayer.stop" => Some(InteropCommand::Stop),
+            "pealayer.next" => Some(InteropCommand::Next),
+            "pealayer.previous" => Some(InteropCommand::Previous),
             "pealayer.seek" => value
                 .parse::<f64>()
                 .ok()
@@ -675,11 +1009,27 @@ fn controller_action_from_event(event: &Value, instance_id: &str) -> Option<Cont
                 .ok()
                 .filter(|percentage| percentage.is_finite() && (0.0..=100.0).contains(percentage))
                 .map(|percentage| InteropCommand::SeekAbs { percentage }),
+            "pealayer.seek_to" => value
+                .parse::<f64>()
+                .ok()
+                .filter(|seconds| seconds.is_finite())
+                .map(|seconds| InteropCommand::SeekTo { seconds }),
             "pealayer.volume.set" => value
                 .parse::<f64>()
                 .ok()
                 .filter(|value| value.is_finite() && (0.0..=130.0).contains(value))
                 .map(|value| InteropCommand::SetVolume { value }),
+            "pealayer.mute.set" => match value.to_ascii_lowercase().as_str() {
+                "true" | "1" | "on" | "yes" => Some(InteropCommand::SetMute { muted: true }),
+                "false" | "0" | "off" | "no" => Some(InteropCommand::SetMute { muted: false }),
+                _ => None,
+            },
+            "pealayer.mute.toggle" if value.is_empty() => Some(InteropCommand::ToggleMute),
+            "pealayer.rate.set" => value
+                .parse::<f64>()
+                .ok()
+                .filter(|rate| rate.is_finite() && (0.05..=16.0).contains(rate))
+                .map(|rate| InteropCommand::SetRate { rate }),
             "pealayer.open" if !value.is_empty() => Some(InteropCommand::Open {
                 target: value.to_string(),
             }),
@@ -700,6 +1050,11 @@ fn controller_action_from_event(event: &Value, instance_id: &str) -> Option<Cont
                 "simple" | "player" => Some(InteropCommand::SetWorkspace { nle: false }),
                 _ => None,
             },
+            "pealayer.window.activate" if value.is_empty() => Some(InteropCommand::Activate),
+            "pealayer.window.minimize" if value.is_empty() => Some(InteropCommand::Minimize),
+            "pealayer.window.maximize" if value.is_empty() => Some(InteropCommand::Maximize),
+            "pealayer.window.restore" if value.is_empty() => Some(InteropCommand::Restore),
+            "pealayer.quit" if value.is_empty() => Some(InteropCommand::Quit),
             _ => None,
         }
     };
@@ -1093,11 +1448,51 @@ mod tests {
     }
 
     #[test]
+    fn text_and_json_rpc_commands_share_the_same_model() {
+        let text = parse_text_command("seek-to 12.5").unwrap();
+        let request = JsonRpcRequest {
+            jsonrpc: Some("2.0".to_string()),
+            id: serde_json::json!(1),
+            method: "pealayer.seek_to".to_string(),
+            params: serde_json::json!({"seconds": 12.5}),
+        };
+        assert_eq!(command_from_json_rpc(&request).unwrap(), Some(text));
+        assert!(parse_text_command("volume 131").is_err());
+        assert!(parse_text_command("rate 0").is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_named_pipe_delivers_typed_commands() {
+        let identity = format!("Pealayer native IPC test {}", std::process::id());
+        let (tx, rx) = std::sync::mpsc::channel();
+        spawn_interop_listener(tx, eframe::egui::Context::default(), identity.clone());
+        let payload = serde_json::to_string(&InteropCommand::SetRate { rate: 1.25 }).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let response = loop {
+            match send_native_request(&payload, &identity, std::time::Duration::from_millis(250)) {
+                Ok(response) => break response,
+                Err(error) if std::time::Instant::now() < deadline => {
+                    let _ = error;
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(error) => panic!("native pipe did not become ready: {error}"),
+            }
+        };
+        assert!(response.contains("\"status\":\"accepted\""));
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap(),
+            InteropCommand::SetRate { rate: 1.25 }
+        );
+    }
+
+    #[test]
     fn launch_destination_rejects_other_identity_and_session() {
         let options = crate::cli::CliOptions {
             target: None,
             fullscreen: false,
             volume: None,
+            commands: vec![],
         };
         let request = crate::cli::launch_request(&options);
         let identity = request.application_identity.clone();
@@ -1292,13 +1687,25 @@ mod tests {
                 "pealayer.play",
                 "pealayer.pause",
                 "pealayer.toggle",
+                "pealayer.stop",
+                "pealayer.next",
+                "pealayer.previous",
                 "pealayer.seek",
+                "pealayer.seek_to",
                 "pealayer.seek_absolute",
                 "pealayer.volume.set",
+                "pealayer.mute.set",
+                "pealayer.mute.toggle",
+                "pealayer.rate.set",
                 "pealayer.open",
                 "pealayer.fullscreen.set",
                 "pealayer.fullscreen.toggle",
                 "pealayer.workspace.set",
+                "pealayer.window.activate",
+                "pealayer.window.minimize",
+                "pealayer.window.maximize",
+                "pealayer.window.restore",
+                "pealayer.quit",
             ]
         );
 

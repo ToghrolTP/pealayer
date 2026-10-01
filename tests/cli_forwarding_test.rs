@@ -8,10 +8,13 @@ fn test_cli_remote_and_single_instance_forwarding() {
     unsafe {
         std::env::set_var("PEALAYER_PORT", "18084");
         std::env::set_var("PEALAYER_SOCKET_PATH", &sock);
+        std::env::set_var(
+            "PEALAYER_INSTANCE_ID",
+            format!("cli-forwarding-test-{}", std::process::id()),
+        );
     }
     let ctx = eframe::egui::Context::default();
-    let application_identity =
-        pealayer::config::resolved_app_name(&pealayer::config::AppConfig::load());
+    let application_identity = pealayer::cli::resolved_instance_identity();
     let (_state_tx, rx) = pealayer::server::spawn_web_server_configured(
         18084,
         ctx,
@@ -30,6 +33,7 @@ fn test_cli_remote_and_single_instance_forwarding() {
         target: Some("test_video.mkv".to_string()),
         fullscreen: true,
         volume: Some(65.0),
+        commands: vec![InteropCommand::Play],
     });
     let forwarded = try_forward_launch_request(&request);
     assert!(forwarded);

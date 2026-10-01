@@ -380,6 +380,24 @@ fn advanced_preferences(app: &mut PealayerApp, ui: &mut egui::Ui) {
     preference_section(
         ui,
         crate::ui::icons::APP_WINDOW,
+        &app.tr("Application instance"),
+        |ui| {
+            let label = app.tr("Use a single application instance");
+            if ui.checkbox(&mut app.single_instance, label).changed() {
+                app.save_config();
+            }
+            ui.label(
+                egui::RichText::new(app.tr(
+                    "When enabled, files and player commands from a new Pealayer process are delivered to the active window through native local IPC.",
+                ))
+                .small()
+                .weak(),
+            );
+        },
+    );
+    preference_section(
+        ui,
+        crate::ui::icons::APP_WINDOW,
         &app.tr("Windows graphics and composition"),
         |ui| {
             let mut changed = false;
