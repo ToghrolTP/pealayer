@@ -482,6 +482,8 @@ fn main() -> eframe::Result {
                 recent_media: loaded_config.recent_media.clone(),
                 show_open_url_dialog: false,
                 url_input_buffer: String::new(),
+                open_url_multiline: loaded_config.open_url_multiline,
+                url_inspector: crate::ui::open_url::UrlInspector::default(),
                 is_window_operating: false,
                 show_shortcuts_dialog: false,
                 show_about_dialog: false,

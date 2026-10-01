@@ -217,6 +217,8 @@ pub struct PealayerApp {
     pub(crate) recent_media: Vec<std::path::PathBuf>,
     pub(crate) show_open_url_dialog: bool,
     pub(crate) url_input_buffer: String,
+    pub(crate) open_url_multiline: bool,
+    pub(crate) url_inspector: crate::ui::open_url::UrlInspector,
     pub(crate) is_window_operating: bool,
     pub(crate) show_shortcuts_dialog: bool,
     pub(crate) show_about_dialog: bool,
@@ -850,96 +852,7 @@ impl eframe::App for PealayerApp {
                 crate::ui::effects_library::draw_editor(self, ui);
                 crate::ui::board_info::draw(self, ui);
 
-                if self.show_open_url_dialog {
-                    let mut open_url = false;
-                    let mut close_dialog = false;
-                    let bounds = ui.ctx().content_rect().shrink(20.0);
-                    let max_size = egui::vec2(bounds.width().min(520.0), bounds.height().min(260.0));
-                    let default_size = egui::vec2(max_size.x.min(480.0), max_size.y.min(210.0));
-                    let default_rect = crate::ui::dialog::centered_default_rect(bounds, default_size);
-
-                    if crate::ui::dialog::escape_pressed(ui.ctx()) {
-                        close_dialog = true;
-                    }
-
-                    egui::Window::new(format!(
-                        "{} {}",
-                        crate::ui::icons::ARROW_SQUARE_OUT,
-                        self.tr("Open Location / URL")
-                    ))
-                    .id(egui::Id::new("open_location_dialog_bounded_v2"))
-                    .collapsible(false)
-                    .resizable(true)
-                    .default_rect(default_rect)
-                    .min_size([max_size.x.min(340.0), max_size.y.min(170.0)])
-                    .max_size(max_size)
-                    .constrain_to(bounds)
-                    .movable(true)
-                    .show(ui.ctx(), |ui| {
-                        ui.with_layout(crate::ui::i18n::vertical_layout(self.rtl), |ui| {
-                            ui.add(egui::Label::new(
-                                self.tr(
-                                    "Enter a media URL (HTTP/HTTPS, HLS, RTSP, RTMP, SRT, UDP, or TCP):",
-                                )).wrap());
-                            ui.add_space(6.0);
-
-                            let text_edit = ui.add_sized(
-                                [ui.available_width(), 32.0],
-                                egui::TextEdit::singleline(&mut self.url_input_buffer)
-                                    .hint_text("https://..."),
-                            );
-
-                            ui.add_space(10.0);
-                            ui.separator();
-                            crate::ui::dialog::action_bar(ui, self.rtl, |ui| {
-                                if crate::ui::dialog::action_button(
-                                    ui,
-                                    crate::ui::icons::CLIPBOARD,
-                                    &self.tr("Paste"),
-                                )
-                                .on_hover_text("Ctrl+V")
-                                .clicked()
-                                {
-                                    text_edit.request_focus();
-                                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-                                }
-                            }, |ui| {
-                                    let can_open = !self.url_input_buffer.trim().is_empty();
-                                    if ui.add_enabled_ui(can_open, |ui| {
-                                        crate::ui::dialog::action_button(
-                                            ui,
-                                            crate::ui::icons::ARROW_SQUARE_OUT,
-                                            &self.tr("Open"),
-                                        ).on_hover_text("Enter")
-                                    }).inner.clicked() {
-                                        open_url = true;
-                                    }
-                                    if crate::ui::dialog::action_button(
-                                        ui,
-                                        crate::ui::icons::X,
-                                        &self.tr("Cancel"),
-                                    ).on_hover_text("Esc").clicked() {
-                                        close_dialog = true;
-                                    }
-                                });
-                        });
-                    });
-
-                    if !self.url_input_buffer.trim().is_empty()
-                        && ui.ctx().input(|i| i.key_pressed(egui::Key::Enter))
-                    {
-                        open_url = true;
-                    }
-
-                    if open_url {
-                        let url = self.url_input_buffer.clone();
-                        self.load_url(&url);
-                        self.url_input_buffer.clear();
-                        self.show_open_url_dialog = false;
-                    } else if close_dialog {
-                        self.show_open_url_dialog = false;
-                    }
-                }
+                crate::ui::open_url::draw(self, ui);
 
                 if self.show_shortcuts_dialog {
                     let language = self.language;
@@ -2126,6 +2039,7 @@ impl PealayerApp {
         cfg.is_muted = self.is_muted;
         cfg.pin_controls = self.pin_controls;
         cfg.show_remaining_time = self.show_remaining_time;
+        cfg.open_url_multiline = self.open_url_multiline;
         cfg.recent_media = self.recent_media.clone();
         cfg.language = self.language_preference;
         cfg.direction = self.direction_preference;
@@ -2197,6 +2111,7 @@ impl PealayerApp {
         self.is_muted = config.is_muted;
         self.pin_controls = config.pin_controls;
         self.show_remaining_time = config.show_remaining_time;
+        self.open_url_multiline = config.open_url_multiline;
         self.recent_media = config.recent_media.clone();
         self.language_preference = crate::config::resolved_language_preference(&config);
         self.language = crate::config::resolve_language(self.language_preference);
@@ -2659,6 +2574,8 @@ impl Default for PealayerApp {
             recent_media: Vec::new(),
             show_open_url_dialog: false,
             url_input_buffer: String::new(),
+            open_url_multiline: false,
+            url_inspector: crate::ui::open_url::UrlInspector::default(),
             is_window_operating: false,
             show_shortcuts_dialog: false,
             show_about_dialog: false,

@@ -10,6 +10,7 @@ pub mod i18n;
 pub mod icons;
 pub mod layout;
 pub mod menu;
+pub mod open_url;
 pub mod preferences;
 pub mod status_bar;
 pub mod subtitles;

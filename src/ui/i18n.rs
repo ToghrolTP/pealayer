@@ -316,9 +316,33 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Copy details" => "رونوشت جزئیات",
         "Close" => "بستن",
         "Open Location / URL" => "باز کردن نشانی یا پیوند",
+        "Enter a media URL (HTTP/HTTPS, HLS, RTSP, RTMP, SRT, UDP, or TCP):" => {
+            "نشانی رسانه (HTTP/HTTPS،‏ HLS،‏ RTSP،‏ RTMP،‏ SRT،‏ UDP یا TCP) را وارد کنید:"
+        }
         "Enter direct video URL, HTTP/HTTPS stream, or HLS link:" => {
             "نشانی مستقیم ویدئو، جریان HTTP/HTTPS یا پیوند HLS را وارد کنید:"
         }
+        "Wrap long URLs in a text area" => "پیوندهای بلند در کادر متنی چندخطی شکسته شوند",
+        "Inspect now" => "بررسی اکنون",
+        "Cut" => "برش",
+        "Copy" => "رونوشت",
+        "Select All" => "انتخاب همه",
+        "Valid media location" => "نشانی معتبر رسانه",
+        "Remote media information" => "اطلاعات رسانهٔ راه‌دور",
+        "Enter a location to validate and inspect it." => {
+            "برای اعتبارسنجی و بررسی، یک نشانی وارد کنید."
+        }
+        "Waiting for a valid HTTP or HTTPS URL…" => "در انتظار یک نشانی معتبر HTTP یا HTTPS…",
+        "Checking" => "در حال بررسی",
+        "Status" => "وضعیت",
+        "Final URL" => "نشانی نهایی",
+        "File name" => "نام پرونده",
+        "Content type" => "نوع محتوا",
+        "Remote size" => "اندازهٔ راه‌دور",
+        "Byte ranges" => "بازه‌های بایتی",
+        "Last modified" => "آخرین تغییر",
+        "Server" => "سرور",
+        "Response time" => "زمان پاسخ",
         "Paste" => "چسباندن",
         "Open" => "باز کردن",
         "Cancel" => "انصراف",
