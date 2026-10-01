@@ -414,6 +414,7 @@ fn main() -> eframe::Result {
                 playback_time: 0.0,
                 duration: 0.0,
                 is_seekable: false,
+                media_metadata_loaded: false,
                 cache_duration: None,
                 cache_buffering_percent: None,
                 media_fps: 0.0,

@@ -143,6 +143,7 @@ pub struct PealayerApp {
     pub playback_time: f64,
     pub duration: f64,
     pub is_seekable: bool,
+    pub(crate) media_metadata_loaded: bool,
     pub(crate) cache_duration: Option<f64>,
     pub(crate) cache_buffering_percent: Option<f64>,
     pub(crate) media_fps: f64,
@@ -1608,9 +1609,27 @@ impl PealayerApp {
                 Some(Ok(Event::StartFile)) => {
                     self.show_error = None;
                     self.is_eof = false;
+                    self.playback_time = 0.0;
+                    self.duration = 0.0;
                     self.is_seekable = false;
+                    self.media_metadata_loaded = false;
                     self.cache_duration = None;
                     self.cache_buffering_percent = None;
+                    self.seek_pos = None;
+                    self.refresh_sub_tracks();
+                    self.refresh_audio_tracks();
+                }
+                Some(Ok(Event::FileLoaded)) => {
+                    self.media_metadata_loaded = true;
+                    if let Ok(duration) = self.mpv.get_property::<f64>("duration")
+                        && duration.is_finite()
+                        && duration > 0.0
+                    {
+                        self.duration = duration;
+                    }
+                    if let Ok(seekable) = self.mpv.get_property::<bool>("seekable") {
+                        self.is_seekable = seekable;
+                    }
                     self.refresh_sub_tracks();
                     self.refresh_audio_tracks();
                 }
@@ -1925,6 +1944,7 @@ impl PealayerApp {
             self.playback_time = 0.0;
             self.duration = 0.0;
             self.is_seekable = false;
+            self.media_metadata_loaded = false;
             self.cache_duration = None;
             self.cache_buffering_percent = None;
             self.seek_pos = None;
@@ -2045,6 +2065,7 @@ impl PealayerApp {
             self.playback_time = 0.0;
             self.duration = 0.0;
             self.is_seekable = false;
+            self.media_metadata_loaded = false;
             self.cache_duration = None;
             self.cache_buffering_percent = None;
             self.seek_pos = None;
@@ -2065,13 +2086,21 @@ impl PealayerApp {
         }
     }
 
+    pub fn media_timeline_state(&self) -> crate::media::MediaTimelineState {
+        let target = self
+            .current_video_path
+            .as_ref()
+            .map(|path| path.to_string_lossy());
+        crate::media::timeline_state(
+            target.as_deref(),
+            self.media_metadata_loaded,
+            self.duration,
+            self.is_seekable,
+        )
+    }
+
     pub fn is_live_media(&self) -> bool {
-        self.current_video_path.as_ref().is_some_and(|path| {
-            let target = path.to_string_lossy();
-            !self.is_seekable
-                && (crate::media::is_live_media_target(&target)
-                    || (crate::media::is_remote_media_target(&target) && self.duration <= 0.0))
-        })
+        self.media_timeline_state() == crate::media::MediaTimelineState::Live
     }
 
     pub fn buffered_until(&self) -> Option<f64> {
@@ -2084,6 +2113,7 @@ impl PealayerApp {
         self.playback_time = 0.0;
         self.duration = 0.0;
         self.is_seekable = false;
+        self.media_metadata_loaded = false;
         self.cache_duration = None;
         self.cache_buffering_percent = None;
         self.is_eof = false;
@@ -2601,6 +2631,7 @@ impl Default for PealayerApp {
             playback_time: 0.0,
             duration: 0.0,
             is_seekable: false,
+            media_metadata_loaded: false,
             cache_duration: None,
             cache_buffering_percent: None,
             media_fps: 0.0,

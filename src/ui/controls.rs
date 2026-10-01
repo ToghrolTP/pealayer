@@ -13,6 +13,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
     if alpha > 0.0 {
         let window_width = ui.available_width() - 20.0;
+        let mut controls_frame = egui::Frame::window(ui.style()).multiply_with_opacity(alpha);
+        controls_frame.inner_margin.right = 0;
 
         egui::Window::new(controls_label)
             .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -20.0))
@@ -22,87 +24,172 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .resizable(false)
             .collapsible(false)
             .interactable(is_controls_interactable(alpha))
-            .frame(egui::Frame::window(ui.style()).multiply_with_opacity(alpha))
+            .frame(controls_frame)
             .show(&ctx, |ui| {
                 ui.set_opacity(alpha);
                 multiply_style_opacity(ui.style_mut(), alpha);
-                ui.horizontal(|ui| {
-                    let total_available = ui.available_width();
-                    let spacing = ui.spacing().item_spacing.x;
-                    let (seekbar_width, _gap) = compute_controls_layout(
-                        total_available,
-                        LEFT_CONTROLS_WIDTH,
-                        RIGHT_CONTROLS_WIDTH,
-                        spacing,
-                    );
-
-                    let has_video = app.current_video_path.is_some();
-                    let can_seek = has_video && app.is_seekable && app.duration > 0.0;
-
-                    ui.add_enabled_ui(has_video, |ui| {
-                        let play_icon = if app.is_playback_finished() {
-                            crate::ui::icons::ARROW_COUNTER_CLOCKWISE
-                        } else if app.is_paused {
-                            crate::ui::icons::PLAY
-                        } else {
-                            crate::ui::icons::PAUSE
-                        };
-                        let play_tooltip = if app.is_playback_finished() {
-                            app.tr("Replay")
-                        } else if app.is_paused {
-                            app.tr("Play")
-                        } else {
-                            app.tr("Pause")
-                        };
-                        if ui
-                            .add_sized([30.0, 22.0], egui::Button::new(play_icon))
-                            .on_hover_text(play_tooltip)
-                            .clicked()
-                        {
-                            app.toggle_playback();
-                        }
-                    });
-
-                    let elapsed_time = resolve_display_time(app.seek_pos, app.playback_time);
-                    let display_total = if app.show_remaining_time {
-                        -(app.duration - elapsed_time)
-                    } else {
-                        app.duration
-                    };
-
-                    let is_long_video = app.duration >= 3600.0;
-                    let show_subseconds = app.show_subseconds;
-                    let format_time =
-                        |time| format_player_time(time, is_long_video, show_subseconds);
-
-                    let elapsed_str = format_time(elapsed_time);
-                    let elapsed_resp = ui.add_enabled(
-                        has_video,
-                        egui::Label::new(elapsed_str).sense(egui::Sense::click()),
-                    );
-                    if has_video && elapsed_resp.clicked() {
-                        app.show_remaining_time = !app.show_remaining_time;
+                let has_video = app.current_video_path.is_some();
+                let timeline_state = app.media_timeline_state();
+                let can_seek = matches!(
+                    timeline_state,
+                    crate::media::MediaTimelineState::Finite {
+                        seekable: true,
+                        ..
                     }
+                );
+                let elapsed_time = resolve_display_time(app.seek_pos, app.playback_time);
+                let is_long_video = app.duration >= 3600.0;
+                let show_subseconds = app.show_subseconds;
+                let elapsed_str =
+                    format_player_time(elapsed_time, is_long_video, show_subseconds);
+                let display_total = if app.show_remaining_time {
+                    -(app.duration - elapsed_time)
+                } else {
+                    app.duration
+                };
+                let (total_text, total_tooltip, total_is_toggle) = match timeline_state {
+                    crate::media::MediaTimelineState::NoMedia => (
+                        format!("{} --:--", crate::ui::icons::CLOCK),
+                        app.tr("Open media to see its duration."),
+                        false,
+                    ),
+                    crate::media::MediaTimelineState::Determining => (
+                        format!(
+                            "{} {}",
+                            crate::ui::icons::HOURGLASS_MEDIUM,
+                            app.tr("Determining duration…")
+                        ),
+                        app.tr("MPV is still reading media metadata. Duration and seeking will update when available."),
+                        false,
+                    ),
+                    crate::media::MediaTimelineState::Live => (
+                        format!("{} {}", crate::ui::icons::BROADCAST, app.tr("LIVE")),
+                        app.tr("This live or duration-less source has no fixed endpoint or seek range."),
+                        false,
+                    ),
+                    crate::media::MediaTimelineState::Finite { .. } => (
+                        format_player_time(display_total, is_long_video, show_subseconds),
+                        if app.show_remaining_time {
+                            app.tr("Showing time remaining. Click to show total duration.")
+                        } else {
+                            app.tr("Showing total duration. Click to show time remaining.")
+                        },
+                        true,
+                    ),
+                };
+                let seek_tooltip = match timeline_state {
+                    crate::media::MediaTimelineState::NoMedia => app.tr("Open media to seek."),
+                    crate::media::MediaTimelineState::Determining => app.tr(
+                        "Duration is still being determined; seeking will become available when MPV reports a timeline.",
+                    ),
+                    crate::media::MediaTimelineState::Live => app.tr(
+                        "This live or duration-less source has no fixed seek range.",
+                    ),
+                    crate::media::MediaTimelineState::Finite {
+                        seekable: false, ..
+                    } => app.tr("This media reports a duration but does not support seeking."),
+                    crate::media::MediaTimelineState::Finite { .. } => {
+                        app.tr("Seek through the media timeline.")
+                    }
+                };
 
-                    ui.add_enabled_ui(can_seek, |ui| {
+                let fullscreen_tooltip = format!("{} (F)", app.tr("Fullscreen"));
+                let pin_tooltip = if app.pin_controls {
+                    app.tr("Unpin Controls")
+                } else {
+                    app.tr("Pin Controls")
+                };
+                let audio_tooltip = app.tr("Audio Settings...");
+                let workspace_tooltip = app.tr("Switch NLE / Simple Player");
+                let subtitles_tooltip = app.tr("Subtitle Settings...");
+                let mute_tooltip = format!(
+                    "{} (M)",
+                    if app.is_muted {
+                        app.tr("Unmute")
+                    } else {
+                        app.tr("Mute")
+                    }
+                );
+                let pin_icon = if app.pin_controls {
+                    crate::ui::icons::PUSH_PIN_SLASH
+                } else {
+                    crate::ui::icons::PUSH_PIN
+                };
+                let mute_icon = if app.is_muted {
+                    crate::ui::icons::SPEAKER_SLASH
+                } else {
+                    crate::ui::icons::SPEAKER_HIGH
+                };
+                let mut volume = app.volume;
+                let mut toggle_fullscreen = false;
+                let mut toggle_pin = false;
+                let mut toggle_audio = false;
+                let mut toggle_workspace = false;
+                let mut toggle_subtitles = false;
+                let mut toggle_mute = false;
+                let mut toggle_total_mode = false;
+                let mut volume_update = None;
+
+                egui::containers::Sides::new().shrink_left().show(
+                    ui,
+                    |ui| {
+                        ui.add_enabled_ui(has_video, |ui| {
+                            let play_icon = if app.is_playback_finished() {
+                                crate::ui::icons::ARROW_COUNTER_CLOCKWISE
+                            } else if app.is_paused {
+                                crate::ui::icons::PLAY
+                            } else {
+                                crate::ui::icons::PAUSE
+                            };
+                            let play_tooltip = if app.is_playback_finished() {
+                                app.tr("Replay")
+                            } else if app.is_paused {
+                                app.tr("Play")
+                            } else {
+                                app.tr("Pause")
+                            };
+                            if ui
+                                .add_sized([30.0, 22.0], egui::Button::new(play_icon))
+                                .on_hover_text(play_tooltip)
+                                .clicked()
+                            {
+                                app.toggle_playback();
+                            }
+                        });
+
+                        let elapsed_resp = ui.add_enabled(
+                            has_video,
+                            egui::Label::new(&elapsed_str).sense(if total_is_toggle {
+                                egui::Sense::click()
+                            } else {
+                                egui::Sense::hover()
+                            }),
+                        );
+                        if total_is_toggle && elapsed_resp.clicked() {
+                            app.show_remaining_time = !app.show_remaining_time;
+                            app.save_config();
+                        }
+
                         let mut current_pos = if has_video {
                             app.seek_pos.unwrap_or(app.playback_time)
                         } else {
                             0.0
                         };
-                        let max_dur = if has_video && app.duration > 0.0 {
-                            app.duration
-                        } else {
-                            1.0
-                        };
-                        let slider = egui::Slider::new(&mut current_pos, 0.0..=max_dur)
+                        let max_duration = app.duration.max(1.0);
+                        let slider = egui::Slider::new(&mut current_pos, 0.0..=max_duration)
                             .show_value(false)
                             .trailing_fill(true);
-
-                        let old_width = ui.spacing().slider_width;
-                        ui.spacing_mut().slider_width = seekbar_width;
-                        let response = ui.add(slider);
-                        ui.spacing_mut().slider_width = old_width;
+                        let seekbar_width = ui.available_width().max(1.0);
+                        let response = ui
+                            .add_enabled_ui(can_seek, |ui| {
+                                ui.add_sized([seekbar_width, 22.0], slider)
+                            })
+                            .inner;
+                        let response = if can_seek {
+                            response.on_hover_text(&seek_tooltip)
+                        } else {
+                            response.on_disabled_hover_text(&seek_tooltip)
+                        };
 
                         if let Some(buffered_until) = app.buffered_until() {
                             let fraction = (buffered_until / app.duration).clamp(0.0, 1.0) as f32;
@@ -119,147 +206,120 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 ui.visuals().selection.bg_fill.linear_multiply(0.55),
                             );
                         }
-
                         if can_seek && response.dragged() {
                             app.scrub_to(current_pos);
                         }
                         if can_seek && response.drag_stopped() {
                             app.finish_scrub(current_pos);
                         }
-                    });
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.set_clip_rect(ui.max_rect());
-                        if ui
+                    },
+                    |ui| {
+                        toggle_fullscreen = ui
                             .button(crate::ui::icons::ARROWS_OUT)
-                            .on_hover_text(format!("{} (F)", app.tr("Fullscreen")))
-                            .clicked()
-                        {
-                            app.toggle_fullscreen(&ctx);
-                        }
-
-                        let pin_icon = if app.pin_controls {
-                            crate::ui::icons::PUSH_PIN_SLASH
-                        } else {
-                            crate::ui::icons::PUSH_PIN
-                        };
-                        if ui
-                            .button(pin_icon)
-                            .on_hover_text(if app.pin_controls {
-                                app.tr("Unpin Controls")
-                            } else {
-                                app.tr("Pin Controls")
-                            })
-                            .clicked()
-                        {
-                            app.pin_controls = !app.pin_controls;
-                            app.set_osd(if app.pin_controls {
-                                app.tr("Controls Pinned")
-                            } else {
-                                app.tr("Controls Unpinned")
-                            });
-                            app.save_config();
-                        }
-
-                        if ui
+                            .on_hover_text(fullscreen_tooltip)
+                            .clicked();
+                        toggle_pin = ui.button(pin_icon).on_hover_text(pin_tooltip).clicked();
+                        toggle_audio = ui
                             .button(crate::ui::icons::MUSIC_NOTE)
-                            .on_hover_text(app.tr("Audio Settings..."))
-                            .clicked()
-                        {
-                            app.show_audio_settings = !app.show_audio_settings;
-                        }
-
-                        if ui
+                            .on_hover_text(audio_tooltip)
+                            .clicked();
+                        toggle_workspace = ui
                             .button(crate::ui::icons::TABS)
-                            .on_hover_text(app.tr("Switch NLE / Simple Player"))
-                            .clicked()
-                        {
-                            app.show_four_d_editor = !app.show_four_d_editor;
-                        }
-
-                        if ui
+                            .on_hover_text(workspace_tooltip)
+                            .clicked();
+                        toggle_subtitles = ui
                             .button(crate::ui::icons::SUBTITLES)
-                            .on_hover_text(app.tr("Subtitle Settings..."))
-                            .clicked()
-                        {
-                            app.show_sub_settings = !app.show_sub_settings;
-                        }
+                            .on_hover_text(subtitles_tooltip)
+                            .clicked();
 
-                        let has_video = app.current_video_path.is_some();
                         ui.add_enabled_ui(has_video, |ui| {
-                            let mut vol = app.volume;
-                            let vol_slider =
-                                egui::Slider::new(&mut vol, 0.0..=130.0).show_value(false);
-                            let vol_resp = ui.add_sized([80.0, 15.0], vol_slider);
-                            if vol_resp.changed() {
-                                let _ = app.mpv.set_property("volume", vol);
-                                app.volume = vol;
-                                app.save_config();
+                            let volume_slider =
+                                egui::Slider::new(&mut volume, 0.0..=130.0).show_value(false);
+                            let volume_response = ui.add_sized([80.0, 15.0], volume_slider);
+                            if volume_response.changed() {
+                                volume_update = Some(volume);
                             }
-                            if vol_resp.hovered() {
-                                let scroll = ui.input(|i| {
-                                    let mut d = i.smooth_scroll_delta;
-                                    if d.x == 0.0 && d.y == 0.0 {
-                                        for ev in &i.events {
-                                            if let egui::Event::MouseWheel { delta, .. } = ev {
-                                                d += *delta;
+                            if volume_response.hovered() {
+                                let scroll = ui.input(|input| {
+                                    let mut delta = input.smooth_scroll_delta;
+                                    if delta.x == 0.0 && delta.y == 0.0 {
+                                        for event in &input.events {
+                                            if let egui::Event::MouseWheel {
+                                                delta: wheel_delta,
+                                                ..
+                                            } = event
+                                            {
+                                                delta += *wheel_delta;
                                             }
                                         }
                                     }
-                                    d
+                                    delta
                                 });
                                 if scroll.y != 0.0 {
-                                    let vol_change = if scroll.y > 0.0 { 2.0 } else { -2.0 };
-                                    let new_vol = (app.volume + vol_change).clamp(0.0, 130.0);
-                                    let _ = app.mpv.set_property("volume", new_vol);
-                                    app.volume = new_vol;
-                                    app.set_osd(format!("{}: {:.0}%", app.tr("Volume"), new_vol));
-                                    app.save_config();
+                                    volume_update = Some(
+                                        (volume + if scroll.y > 0.0 { 2.0 } else { -2.0 })
+                                            .clamp(0.0, 130.0),
+                                    );
                                 }
                             }
-                            let mute_icon = if app.is_muted {
-                                crate::ui::icons::SPEAKER_SLASH
-                            } else {
-                                crate::ui::icons::SPEAKER_HIGH
-                            };
-                            if ui
+                            toggle_mute = ui
                                 .add(egui::Button::new(mute_icon).frame(false))
-                                .on_hover_text(format!(
-                                    "{} (M)",
-                                    if app.is_muted {
-                                        app.tr("Unmute")
-                                    } else {
-                                        app.tr("Mute")
-                                    }
-                                ))
-                                .clicked()
-                            {
-                                let _ = app.mpv.command("cycle", &["mute"]);
-                                app.is_muted = !app.is_muted;
-                                app.set_osd(if app.is_muted {
-                                    app.tr("Mute")
-                                } else {
-                                    app.tr("Unmute")
-                                });
-                                app.save_config();
-                            }
+                                .on_hover_text(mute_tooltip)
+                                .clicked();
                         });
 
-                        let total_str = if has_video && !can_seek && app.is_live_media() {
-                            "LIVE".to_string()
-                        } else {
-                            format_time(display_total)
-                        };
-                        let total_resp = ui.add_enabled(
-                            has_video,
-                            egui::Label::new(total_str).sense(egui::Sense::click()),
-                        );
-                        if has_video && total_resp.clicked() {
-                            app.show_remaining_time = !app.show_remaining_time;
-                            app.save_config();
-                        }
+                        let total_response = ui
+                            .add(egui::Label::new(total_text).sense(if total_is_toggle {
+                                egui::Sense::click()
+                            } else {
+                                egui::Sense::hover()
+                            }))
+                            .on_hover_text(total_tooltip);
+                        toggle_total_mode = total_is_toggle && total_response.clicked();
+                    },
+                );
+
+                if toggle_fullscreen {
+                    app.toggle_fullscreen(&ctx);
+                }
+                if toggle_pin {
+                    app.pin_controls = !app.pin_controls;
+                    app.set_osd(if app.pin_controls {
+                        app.tr("Controls Pinned")
+                    } else {
+                        app.tr("Controls Unpinned")
                     });
-                });
+                    app.save_config();
+                }
+                if toggle_audio {
+                    app.show_audio_settings = !app.show_audio_settings;
+                }
+                if toggle_workspace {
+                    app.show_four_d_editor = !app.show_four_d_editor;
+                }
+                if toggle_subtitles {
+                    app.show_sub_settings = !app.show_sub_settings;
+                }
+                if let Some(new_volume) = volume_update {
+                    let _ = app.mpv.set_property("volume", new_volume);
+                    app.volume = new_volume;
+                    app.set_osd(format!("{}: {:.0}%", app.tr("Volume"), new_volume));
+                    app.save_config();
+                }
+                if toggle_mute {
+                    let _ = app.mpv.command("cycle", &["mute"]);
+                    app.is_muted = !app.is_muted;
+                    app.set_osd(if app.is_muted {
+                        app.tr("Mute")
+                    } else {
+                        app.tr("Unmute")
+                    });
+                    app.save_config();
+                }
+                if toggle_total_mode {
+                    app.show_remaining_time = !app.show_remaining_time;
+                    app.save_config();
+                }
             });
 
         if time_since_activity < 3.0 && !app.pin_controls {
@@ -347,27 +407,6 @@ pub fn format_player_time(time: f64, include_hours: bool, show_subseconds: bool)
         format!("-{formatted}")
     } else {
         formatted
-    }
-}
-
-pub const LEFT_CONTROLS_WIDTH: f32 = 93.0;
-pub const RIGHT_CONTROLS_WIDTH: f32 = 345.0;
-
-pub fn compute_controls_layout(
-    available_width: f32,
-    left_width: f32,
-    right_width: f32,
-    spacing: f32,
-) -> (f32, f32) {
-    let min_seekbar_width = 40.0;
-    let fixed_widths = left_width + right_width + (spacing * 2.0);
-    if available_width > fixed_widths {
-        let seekbar_width = (available_width - fixed_widths).max(min_seekbar_width);
-        let remaining_gap =
-            (available_width - (left_width + spacing + seekbar_width + right_width)).max(spacing);
-        (seekbar_width, remaining_gap)
-    } else {
-        (min_seekbar_width, spacing)
     }
 }
 
@@ -494,26 +533,5 @@ mod tests {
 
         assert_eq!(current_pos, 0.0);
         assert_eq!(max_dur, 1.0);
-    }
-
-    #[test]
-    fn test_compute_controls_layout_prevents_overlap() {
-        // Standard 800px window
-        let available_w = 780.0;
-        let left_w = 120.0;
-        let right_w = 380.0;
-        let spacing = 8.0;
-
-        let (seekbar_w, gap) = compute_controls_layout(available_w, left_w, right_w, spacing);
-        assert!(seekbar_w >= 40.0);
-        assert_eq!(left_w + spacing + seekbar_w + gap + right_w, available_w);
-        assert!(gap >= spacing);
-
-        // Narrow 500px window
-        let available_w_narrow = 520.0;
-        let (seekbar_w_narrow, _gap_narrow) =
-            compute_controls_layout(available_w_narrow, left_w, right_w, spacing);
-        assert_eq!(seekbar_w_narrow, 40.0); // clamped to min width
-        assert!(left_w + seekbar_w_narrow <= available_w_narrow);
     }
 }

@@ -13,6 +13,33 @@ const LIVE_SCHEMES: &[&str] = &[
     "rtsp", "rtsps", "rtmp", "rtmps", "rtp", "srt", "rist", "udp",
 ];
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MediaTimelineState {
+    NoMedia,
+    Determining,
+    Live,
+    Finite { duration: f64, seekable: bool },
+}
+
+pub fn timeline_state(
+    target: Option<&str>,
+    metadata_loaded: bool,
+    duration: f64,
+    seekable: bool,
+) -> MediaTimelineState {
+    let Some(target) = target else {
+        return MediaTimelineState::NoMedia;
+    };
+    if duration.is_finite() && duration > 0.0 {
+        return MediaTimelineState::Finite { duration, seekable };
+    }
+    if is_live_media_target(target) || metadata_loaded {
+        MediaTimelineState::Live
+    } else {
+        MediaTimelineState::Determining
+    }
+}
+
 pub fn media_scheme(target: &str) -> Option<&str> {
     let (scheme, _) = target.trim().split_once("://")?;
     if scheme.is_empty()
@@ -120,5 +147,28 @@ mod tests {
         assert_eq!(buffered_until(100.0, 20.0, Some(15.0)), Some(35.0));
         assert_eq!(buffered_until(100.0, 95.0, Some(15.0)), Some(100.0));
         assert_eq!(buffered_until(0.0, 20.0, Some(15.0)), None);
+    }
+
+    #[test]
+    fn timeline_distinguishes_pending_metadata_from_durationless_media() {
+        assert_eq!(
+            timeline_state(Some("https://cdn.invalid/movie.mp4"), false, 0.0, false),
+            MediaTimelineState::Determining
+        );
+        assert_eq!(
+            timeline_state(Some("https://cdn.invalid/endless"), true, 0.0, false),
+            MediaTimelineState::Live
+        );
+        assert_eq!(
+            timeline_state(Some("rtsp://camera.invalid/live"), false, 0.0, false),
+            MediaTimelineState::Live
+        );
+        assert_eq!(
+            timeline_state(Some("movie.mp4"), true, 125.0, true),
+            MediaTimelineState::Finite {
+                duration: 125.0,
+                seekable: true,
+            }
+        );
     }
 }

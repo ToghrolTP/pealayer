@@ -470,6 +470,32 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Pause" => "مکث",
         "Stop" => "توقف",
         "Fullscreen" => "تمام‌صفحه",
+        "LIVE" => "زنده",
+        "Determining duration…" => "در حال تعیین مدت…",
+        "Open media to see its duration." => "برای دیدن مدت، رسانه‌ای باز کنید.",
+        "MPV is still reading media metadata. Duration and seeking will update when available." => {
+            "MPV هنوز در حال خواندن فرادادهٔ رسانه است. مدت و امکان جابه‌جایی پس از آماده‌شدن به‌روز می‌شوند."
+        }
+        "This live or duration-less source has no fixed endpoint or seek range." => {
+            "این منبع زنده یا بدون مدت، نقطهٔ پایان یا بازهٔ جابه‌جایی ثابتی ندارد."
+        }
+        "Showing time remaining. Click to show total duration." => {
+            "زمان باقی‌مانده نمایش داده می‌شود. برای نمایش مدت کل کلیک کنید."
+        }
+        "Showing total duration. Click to show time remaining." => {
+            "مدت کل نمایش داده می‌شود. برای نمایش زمان باقی‌مانده کلیک کنید."
+        }
+        "Open media to seek." => "برای جابه‌جایی، رسانه‌ای باز کنید.",
+        "Duration is still being determined; seeking will become available when MPV reports a timeline." => {
+            "مدت هنوز در حال تعیین است؛ وقتی MPV خط زمانی را گزارش کند جابه‌جایی فعال می‌شود."
+        }
+        "This live or duration-less source has no fixed seek range." => {
+            "این منبع زنده یا بدون مدت، بازهٔ جابه‌جایی ثابتی ندارد."
+        }
+        "This media reports a duration but does not support seeking." => {
+            "این رسانه مدت را گزارش می‌کند اما از جابه‌جایی پشتیبانی نمی‌کند."
+        }
+        "Seek through the media timeline." => "در خط زمانی رسانه جابه‌جا شوید.",
         "Exit Fullscreen" => "خروج از تمام‌صفحه",
         "Controls Pinned" => "کنترل‌ها ثابت شدند",
         "Controls Unpinned" => "کنترل‌ها از حالت ثابت خارج شدند",
