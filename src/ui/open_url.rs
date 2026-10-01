@@ -222,6 +222,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let mut inspect_requested = false;
     let mut configure_proxy_requested = false;
     let mut history_remove_requested = None;
+    let mut history_play_requested = None;
     let mut clear_history_requested = false;
     let bounds = ui.ctx().content_rect().shrink(20.0);
     let max_size = egui::vec2(bounds.width().min(700.0), bounds.height().min(620.0));
@@ -275,67 +276,116 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 "open_location_inspector_body",
                 Some(body_height),
                 |ui| {
-                    if let Some(proxy) = effective_proxy.as_deref() {
-                        let proxy_label = format!(
-                            "{}  {} ({})",
-                            crate::ui::icons::GLOBE,
-                            app.tr("Use proxy"),
-                            proxy_display_value(proxy)
-                        );
-                        let configure_label = app.tr("Configure proxy");
-                        ui.horizontal_wrapped(|ui| {
-                            if ui
-                                .checkbox(&mut app.open_url_use_proxy, proxy_label)
-                                .changed()
-                            {
-                                app.url_inspector = UrlInspector::default();
+                    ui.label(
+                        egui::RichText::new(app.tr("Enter a remote media location"))
+                            .strong()
+                            .size(16.0),
+                    );
+                    ui.add_space(5.0);
+
+                    egui::Frame::group(ui.style())
+                        .corner_radius(8.0)
+                        .inner_margin(egui::Margin::same(10))
+                        .show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{}  {}",
+                                        crate::ui::icons::LINK_SIMPLE,
+                                        app.tr("Remote file information and preview")
+                                    ))
+                                    .strong(),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        inspect_requested |= draw_contextual_probe_action(
+                                            ui,
+                                            app,
+                                            validation.as_ref(),
+                                            &app.url_inspector.status,
+                                        );
+                                    },
+                                );
+                            });
+                            ui.add_space(7.0);
+
+                            if let Some(proxy) = effective_proxy.as_deref() {
+                                let proxy_label = format!(
+                                    "{}  {} ({})",
+                                    crate::ui::icons::GLOBE,
+                                    app.tr("Use proxy"),
+                                    proxy_display_value(proxy)
+                                );
+                                let configure_label = app.tr("Configure proxy");
+                                ui.horizontal_wrapped(|ui| {
+                                    if ui
+                                        .checkbox(&mut app.open_url_use_proxy, proxy_label)
+                                        .changed()
+                                    {
+                                        app.url_inspector = UrlInspector::default();
+                                        app.save_config();
+                                    }
+                                    if ui
+                                        .button(format!(
+                                            "{}  {configure_label}",
+                                            crate::ui::icons::GEAR
+                                        ))
+                                        .clicked()
+                                    {
+                                        configure_proxy_requested = true;
+                                    }
+                                });
+                                ui.add_space(5.0);
+                            }
+
+                            let edit = if app.open_url_multiline {
+                                egui::TextEdit::multiline(&mut app.url_input_buffer)
+                                    .id(edit_id)
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(3)
+                                    .hint_text("https://...")
+                            } else {
+                                egui::TextEdit::singleline(&mut app.url_input_buffer)
+                                    .id(edit_id)
+                                    .desired_width(f32::INFINITY)
+                                    .hint_text("https://...")
+                            };
+                            let mut edit_output = edit.show(ui);
+                            if text_edit_context_menu(
+                                ui,
+                                &mut edit_output,
+                                &mut app.url_input_buffer,
+                                &mut app.open_url_multiline,
+                                app.language,
+                            ) {
                                 app.save_config();
                             }
-                            if ui
-                                .button(format!("{}  {configure_label}", crate::ui::icons::GEAR))
-                                .clicked()
-                            {
-                                configure_proxy_requested = true;
-                            }
+
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(app.tr(
+                                        "Supported: HTTP/HTTPS, HLS, RTSP, RTMP, SRT, UDP, TCP, and RIST.",
+                                    ))
+                                    .small()
+                                    .weak(),
+                                )
+                                .wrap(),
+                            );
+                            ui.add_space(8.0);
+                            ui.separator();
+                            ui.add_space(7.0);
+                            draw_location_and_remote_details(
+                                ui,
+                                app,
+                                validation.as_ref(),
+                                &app.url_inspector.status,
+                                effective_proxy.as_deref(),
+                            );
                         });
-                        ui.add_space(5.0);
-                    }
 
-                    let edit = if app.open_url_multiline {
-                        egui::TextEdit::multiline(&mut app.url_input_buffer)
-                            .id(edit_id)
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(3)
-                            .hint_text("https://...")
-                    } else {
-                        egui::TextEdit::singleline(&mut app.url_input_buffer)
-                            .id(edit_id)
-                            .desired_width(f32::INFINITY)
-                            .hint_text("https://...")
-                    };
-                    let mut edit_output = edit.show(ui);
-                    if text_edit_context_menu(
-                        ui,
-                        &mut edit_output,
-                        &mut app.url_input_buffer,
-                        &mut app.open_url_multiline,
-                        app.language,
-                    ) {
-                        app.save_config();
-                    }
-
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(app.tr(
-                                "Supported: HTTP/HTTPS, HLS, RTSP, RTMP, SRT, UDP, TCP, and RIST.",
-                            ))
-                            .small()
-                            .weak(),
-                        )
-                        .wrap(),
-                    );
-
-                    ui.add_space(8.0);
+                    ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         let icon = if app.open_url_history_expanded {
                             crate::ui::icons::CARET_DOWN
@@ -390,52 +440,25 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         .auto_shrink([false, true])
                                         .show(ui, |ui| {
                                             for target in &remote_history {
-                                                ui.horizontal(|ui| {
-                                                    let remove_width = 30.0;
-                                                    let target_width = (ui.available_width()
-                                                        - remove_width)
-                                                        .max(120.0);
-                                                    let response = ui.add_sized(
-                                                        [target_width, 26.0],
-                                                        egui::Label::new(target)
-                                                            .truncate()
-                                                            .sense(egui::Sense::click()),
-                                                    );
-                                                    if response.on_hover_text(target).clicked() {
+                                                match draw_recent_location(ui, app, target) {
+                                                    Some(RecentLocationAction::Play) => {
+                                                        history_play_requested =
+                                                            Some(target.clone());
+                                                    }
+                                                    Some(RecentLocationAction::Edit) => {
                                                         app.url_input_buffer = target.clone();
                                                         app.url_inspector = UrlInspector::default();
                                                     }
-                                                    if ui
-                                                        .add_sized(
-                                                            [remove_width, 26.0],
-                                                            egui::Button::new(crate::ui::icons::X)
-                                                                .frame(false),
-                                                        )
-                                                        .on_hover_text(
-                                                            app.tr("Remove from history"),
-                                                        )
-                                                        .clicked()
-                                                    {
+                                                    Some(RecentLocationAction::Remove) => {
                                                         history_remove_requested =
                                                             Some(target.clone());
                                                     }
-                                                });
+                                                    None => {}
+                                                }
                                             }
                                         });
                                 }
                             });
-                    }
-
-                    ui.add_space(8.0);
-                    draw_validation(ui, app, validation.as_ref());
-                    if let Ok(validated) = validation.as_ref() {
-                        ui.add_space(6.0);
-                        inspect_requested |= draw_remote_info(
-                            ui,
-                            app,
-                            &app.url_inspector.status,
-                            validated.supports_http_probe,
-                        );
                     }
                 },
             );
@@ -492,6 +515,13 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
     if clear_history_requested {
         app.clear_recent_remote_media();
+    }
+    if let Some(target) = history_play_requested {
+        app.load_url(&target);
+        app.url_input_buffer.clear();
+        app.url_inspector = UrlInspector::default();
+        app.show_open_url_dialog = false;
+        return;
     }
     if inspect_requested {
         app.url_inspector
@@ -717,175 +747,274 @@ fn char_to_byte(text: &str, char_index: usize) -> usize {
         .map_or(text.len(), |(byte, _)| byte)
 }
 
-fn draw_validation(
+fn draw_contextual_probe_action(
     ui: &mut egui::Ui,
     app: &PealayerApp,
     validation: Result<&ValidatedMediaUrl, &String>,
+    status: &ProbeStatus,
+) -> bool {
+    let Ok(validated) = validation else {
+        return false;
+    };
+    if !validated.supports_http_probe {
+        return false;
+    }
+
+    let (label, enabled) = match status {
+        ProbeStatus::Checking(_) => (app.tr("Fetching details…"), false),
+        ProbeStatus::Ready(_) => (app.tr("Refresh details"), true),
+        ProbeStatus::Failed { .. } => (app.tr("Retry details"), true),
+        ProbeStatus::Idle | ProbeStatus::NotApplicable { .. } => (app.tr("Fetch details"), true),
+    };
+    ui.add_enabled(
+        enabled,
+        egui::Button::new(format!("{}  {label}", crate::ui::icons::MAGNIFYING_GLASS)),
+    )
+    .clicked()
+}
+
+fn draw_location_and_remote_details(
+    ui: &mut egui::Ui,
+    app: &PealayerApp,
+    validation: Result<&ValidatedMediaUrl, &String>,
+    status: &ProbeStatus,
+    effective_proxy: Option<&str>,
 ) {
-    match validation {
-        Ok(validated) => {
-            egui::Frame::group(ui.style())
-                .corner_radius(8.0)
-                .inner_margin(egui::Margin::same(10))
-                .show(ui, |ui| {
-                    ui.set_min_width(ui.available_width());
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{}  {}",
-                                crate::ui::icons::CHECK,
-                                app.tr("Valid media location")
-                            ))
-                            .strong()
-                            .color(egui::Color32::from_rgb(34, 197, 94)),
-                        );
-                        ui.separator();
-                        ui.label(format!("{}  {}", crate::ui::icons::GLOBE, validated.scheme));
-                        if !validated.host.is_empty() {
-                            ui.label(&validated.host);
-                        }
-                        if let Some(port) = validated.port {
-                            ui.label(format!("port {port}"));
-                        }
-                        if validated.query_parameters > 0 {
-                            ui.label(format!("{} query parameter(s)", validated.query_parameters));
-                        }
-                    });
-                    if let Some(file_name) = &validated.file_name {
-                        ui.label(format!("{}  {file_name}", crate::ui::icons::FILE_VIDEO));
-                    }
-                    if let Some(warning) = &validated.warning {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{}  {warning}",
-                                crate::ui::icons::WARNING
-                            ))
-                            .color(ui.visuals().warn_fg_color),
-                        );
-                    }
-                });
-        }
+    let validated = match validation {
+        Ok(validated) => validated,
         Err(message) if !app.url_input_buffer.trim().is_empty() => {
             ui.label(
-                egui::RichText::new(format!("{}  {message}", crate::ui::icons::WARNING))
-                    .color(ui.visuals().error_fg_color),
+                egui::RichText::new(format!(
+                    "{}  {}",
+                    crate::ui::icons::WARNING,
+                    app.tr("Invalid media location")
+                ))
+                .strong()
+                .color(ui.visuals().error_fg_color),
             );
+            ui.add_space(4.0);
+            egui::Grid::new("open_url_validation_error_details")
+                .num_columns(2)
+                .max_col_width((ui.available_width() * 0.7).max(180.0))
+                .spacing([18.0, 6.0])
+                .show(ui, |ui| {
+                    metadata_row(ui, &app.tr("Problem"), message);
+                    metadata_row(
+                        ui,
+                        &app.tr("Entered value"),
+                        &crate::media::redact_media_target(app.url_input_buffer.trim()),
+                    );
+                    metadata_row(
+                        ui,
+                        &app.tr("How to fix"),
+                        &app.tr("Enter a complete supported URL including its protocol."),
+                    );
+                });
+            return;
         }
         Err(_) => {
             ui.label(
-                egui::RichText::new(app.tr("Enter a location to validate and inspect it.")).weak(),
+                egui::RichText::new(app.tr("Enter a location to validate and preview it.")).weak(),
             );
+            return;
+        }
+    };
+
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            egui::RichText::new(format!(
+                "{}  {}",
+                crate::ui::icons::CHECK,
+                app.tr("Valid media location")
+            ))
+            .strong()
+            .color(egui::Color32::from_rgb(34, 197, 94)),
+        );
+        ui.separator();
+        ui.label(format!("{}  {}", crate::ui::icons::GLOBE, validated.scheme));
+        if !validated.host.is_empty() {
+            ui.label(&validated.host);
+        }
+        if let Some(port) = validated.port {
+            ui.label(format!("port {port}"));
+        }
+        if validated.query_parameters > 0 {
+            ui.label(format!("{} query parameter(s)", validated.query_parameters));
+        }
+    });
+    if let Some(file_name) = &validated.file_name {
+        ui.label(format!("{}  {file_name}", crate::ui::icons::FILE_VIDEO));
+    }
+    if let Some(warning) = &validated.warning {
+        ui.label(
+            egui::RichText::new(format!("{}  {warning}", crate::ui::icons::WARNING))
+                .color(ui.visuals().warn_fg_color),
+        );
+    }
+    ui.add_space(5.0);
+
+    match status {
+        ProbeStatus::Idle => {
+            ui.label(egui::RichText::new(app.tr("Preparing remote media details…")).weak());
+        }
+        ProbeStatus::Checking(url) => {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.add(
+                    egui::Label::new(format!("{}  {url}", app.tr("Fetching details"))).truncate(),
+                );
+            });
+        }
+        ProbeStatus::Ready(info) => {
+            let status_color = if (200..400).contains(&info.status) {
+                egui::Color32::from_rgb(34, 197, 94)
+            } else {
+                ui.visuals().error_fg_color
+            };
+            egui::Grid::new("open_url_remote_metadata")
+                .num_columns(2)
+                .max_col_width((ui.available_width() * 0.68).max(180.0))
+                .spacing([18.0, 6.0])
+                .show(ui, |ui| {
+                    metadata_row_colored(
+                        ui,
+                        &app.tr("Status"),
+                        &format!("{} {}", info.status, info.status_text),
+                        status_color,
+                    );
+                    metadata_row(ui, &app.tr("Final URL"), &info.final_url);
+                    optional_metadata_row(ui, &app.tr("File name"), info.file_name.as_deref());
+                    optional_metadata_row(
+                        ui,
+                        &app.tr("Content type"),
+                        info.content_type.as_deref(),
+                    );
+                    if let Some(length) = info.content_length {
+                        metadata_row(ui, &app.tr("Remote size"), &human_bytes(length));
+                    }
+                    optional_metadata_row(
+                        ui,
+                        &app.tr("Byte ranges"),
+                        info.accept_ranges.as_deref(),
+                    );
+                    optional_metadata_row(
+                        ui,
+                        &app.tr("Last modified"),
+                        info.last_modified.as_deref(),
+                    );
+                    optional_metadata_row(ui, "ETag", info.etag.as_deref());
+                    optional_metadata_row(ui, &app.tr("Server"), info.server.as_deref());
+                    metadata_row(
+                        ui,
+                        &app.tr("Response time"),
+                        &format!("{} ms", info.elapsed_ms),
+                    );
+                });
+        }
+        ProbeStatus::Failed { url, message } => {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{}  {}",
+                    crate::ui::icons::WARNING,
+                    app.tr("Could not fetch remote media details")
+                ))
+                .strong()
+                .color(ui.visuals().error_fg_color),
+            );
+            ui.add_space(3.0);
+            egui::Grid::new("open_url_probe_error_details")
+                .num_columns(2)
+                .max_col_width((ui.available_width() * 0.7).max(180.0))
+                .spacing([18.0, 6.0])
+                .show(ui, |ui| {
+                    metadata_row(
+                        ui,
+                        &app.tr("Target"),
+                        &crate::media::redact_media_target(url),
+                    );
+                    metadata_row(ui, &app.tr("Reason"), message);
+                    let proxy = if app.open_url_use_proxy {
+                        effective_proxy
+                            .map(proxy_display_value)
+                            .unwrap_or_else(|| app.tr("System default"))
+                    } else {
+                        app.tr("Disabled")
+                    };
+                    metadata_row(ui, &app.tr("Proxy"), &proxy);
+                    metadata_row(
+                        ui,
+                        &app.tr("Next step"),
+                        &app.tr("Check the address or connection, then retry the details request."),
+                    );
+                });
+        }
+        ProbeStatus::NotApplicable { message, .. } => {
+            ui.label(format!("{}  {message}", crate::ui::icons::INFO));
         }
     }
 }
 
-fn draw_remote_info(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecentLocationAction {
+    Play,
+    Edit,
+    Remove,
+}
+
+fn draw_recent_location(
     ui: &mut egui::Ui,
     app: &PealayerApp,
-    status: &ProbeStatus,
-    supports_http_probe: bool,
-) -> bool {
-    let mut inspect_requested = false;
-    let frame = egui::Frame::group(ui.style())
-        .corner_radius(8.0)
-        .inner_margin(egui::Margin::same(10));
-    frame.show(ui, |ui| {
-        ui.set_min_width(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(format!(
-                    "{}  {}",
-                    crate::ui::icons::LINK_SIMPLE,
-                    app.tr("Remote media information")
-                ))
-                .strong(),
-            );
-            if supports_http_probe {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .button(format!(
-                            "{}  {}",
-                            crate::ui::icons::MAGNIFYING_GLASS,
-                            app.tr("Inspect now")
-                        ))
-                        .clicked()
-                    {
-                        inspect_requested = true;
-                    }
-                });
+    target: &str,
+) -> Option<RecentLocationAction> {
+    let row_height = 30.0;
+    let row_rect = egui::Rect::from_min_size(
+        ui.next_widget_position(),
+        egui::vec2(ui.available_width(), row_height),
+    );
+    let hovered = ui.rect_contains_pointer(row_rect);
+    if hovered {
+        ui.painter()
+            .rect_filled(row_rect, 5.0, ui.visuals().widgets.hovered.weak_bg_fill);
+    }
+
+    let mut action = None;
+    ui.allocate_ui_with_layout(
+        row_rect.size(),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            let actions_width = if hovered { 184.0 } else { 0.0 };
+            let label_width = (ui.available_width() - actions_width).max(80.0);
+            // `truncate()` already supplies the full text on hover. Adding an
+            // explicit hover tooltip here would render the same tooltip twice.
+            ui.add_sized([label_width, 26.0], egui::Label::new(target).truncate());
+            if hovered {
+                if ui
+                    .button(format!("{}  {}", crate::ui::icons::PLAY, app.tr("Play")))
+                    .clicked()
+                {
+                    action = Some(RecentLocationAction::Play);
+                }
+                if ui
+                    .button(format!(
+                        "{}  {}",
+                        crate::ui::icons::PENCIL_SIMPLE,
+                        app.tr("Edit")
+                    ))
+                    .clicked()
+                {
+                    action = Some(RecentLocationAction::Edit);
+                }
+                if ui
+                    .button(crate::ui::icons::X)
+                    .on_hover_text(app.tr("Remove from history"))
+                    .clicked()
+                {
+                    action = Some(RecentLocationAction::Remove);
+                }
             }
-        });
-        ui.add_space(4.0);
-        match status {
-            ProbeStatus::Idle => {
-                ui.label(
-                    egui::RichText::new(app.tr("Waiting for a valid HTTP or HTTPS URL…")).weak(),
-                );
-            }
-            ProbeStatus::Checking(url) => {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.add(egui::Label::new(format!("{}  {url}", app.tr("Checking"))).truncate());
-                });
-            }
-            ProbeStatus::Ready(info) => {
-                let status_color = if (200..400).contains(&info.status) {
-                    egui::Color32::from_rgb(34, 197, 94)
-                } else {
-                    ui.visuals().error_fg_color
-                };
-                egui::Grid::new("open_url_remote_metadata")
-                    .num_columns(2)
-                    .max_col_width((ui.available_width() * 0.68).max(180.0))
-                    .spacing([18.0, 6.0])
-                    .show(ui, |ui| {
-                        metadata_row_colored(
-                            ui,
-                            &app.tr("Status"),
-                            &format!("{} {}", info.status, info.status_text),
-                            status_color,
-                        );
-                        metadata_row(ui, &app.tr("Final URL"), &info.final_url);
-                        optional_metadata_row(ui, &app.tr("File name"), info.file_name.as_deref());
-                        optional_metadata_row(
-                            ui,
-                            &app.tr("Content type"),
-                            info.content_type.as_deref(),
-                        );
-                        if let Some(length) = info.content_length {
-                            metadata_row(ui, &app.tr("Remote size"), &human_bytes(length));
-                        }
-                        optional_metadata_row(
-                            ui,
-                            &app.tr("Byte ranges"),
-                            info.accept_ranges.as_deref(),
-                        );
-                        optional_metadata_row(
-                            ui,
-                            &app.tr("Last modified"),
-                            info.last_modified.as_deref(),
-                        );
-                        optional_metadata_row(ui, "ETag", info.etag.as_deref());
-                        optional_metadata_row(ui, &app.tr("Server"), info.server.as_deref());
-                        metadata_row(
-                            ui,
-                            &app.tr("Response time"),
-                            &format!("{} ms", info.elapsed_ms),
-                        );
-                    });
-            }
-            ProbeStatus::Failed { message, .. } => {
-                ui.label(
-                    egui::RichText::new(format!("{}  {message}", crate::ui::icons::WARNING))
-                        .color(ui.visuals().error_fg_color),
-                );
-            }
-            ProbeStatus::NotApplicable { message, .. } => {
-                ui.label(format!("{}  {message}", crate::ui::icons::INFO));
-            }
-        }
-    });
-    inspect_requested
+        },
+    );
+    action
 }
 
 fn metadata_row(ui: &mut egui::Ui, label: &str, value: &str) {

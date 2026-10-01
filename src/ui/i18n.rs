@@ -316,6 +316,8 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Copy details" => "رونوشت جزئیات",
         "Close" => "بستن",
         "Open Location / URL" => "باز کردن نشانی یا پیوند",
+        "Enter a remote media location" => "نشانی رسانهٔ راه‌دور را وارد کنید",
+        "Remote file information and preview" => "اطلاعات و پیش‌نمایش پروندهٔ راه‌دور",
         "Enter a media URL (HTTP/HTTPS, HLS, RTSP, RTMP, SRT, UDP, or TCP):" => {
             "نشانی رسانه (HTTP/HTTPS،‏ HLS،‏ RTSP،‏ RTMP،‏ SRT،‏ UDP یا TCP) را وارد کنید:"
         }
@@ -344,6 +346,32 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         }
         "Clear remote history" => "پاک‌کردن تاریخچهٔ راه‌دور",
         "Inspect now" => "بررسی اکنون",
+        "Fetching details…" => "در حال دریافت جزئیات…",
+        "Refresh details" => "تازه‌سازی جزئیات",
+        "Retry details" => "تلاش دوباره برای جزئیات",
+        "Fetch details" => "دریافت جزئیات",
+        "Fetching details" => "در حال دریافت جزئیات",
+        "Preparing remote media details…" => "در حال آماده‌سازی جزئیات رسانهٔ راه‌دور…",
+        "Invalid media location" => "نشانی رسانه نامعتبر است",
+        "Problem" => "مشکل",
+        "Entered value" => "مقدار واردشده",
+        "How to fix" => "راه‌حل",
+        "Enter a complete supported URL including its protocol." => {
+            "یک نشانی کامل و پشتیبانی‌شده همراه با پروتکل آن وارد کنید."
+        }
+        "Enter a location to validate and preview it." => {
+            "برای اعتبارسنجی و پیش‌نمایش، یک نشانی وارد کنید."
+        }
+        "Could not fetch remote media details" => "جزئیات رسانهٔ راه‌دور دریافت نشد",
+        "Target" => "مقصد",
+        "Reason" => "دلیل",
+        "System default" => "پیش‌فرض سیستم",
+        "Disabled" => "غیرفعال",
+        "Proxy" => "پراکسی",
+        "Next step" => "گام بعدی",
+        "Check the address or connection, then retry the details request." => {
+            "نشانی یا اتصال را بررسی کنید و سپس دریافت جزئیات را دوباره امتحان کنید."
+        }
         "Cut" => "برش",
         "Copy" => "رونوشت",
         "Select All" => "انتخاب همه",
