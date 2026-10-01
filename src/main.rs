@@ -3,7 +3,6 @@
 pub mod app;
 pub mod cli;
 pub mod config;
-pub mod effects_library;
 pub mod four_d;
 pub mod media;
 pub mod mpv;
@@ -466,10 +465,9 @@ fn main() -> eframe::Result {
                 undo_stack: crate::four_d::history::UndoStack::default(),
                 relay_overrides: std::collections::BTreeSet::new(),
                 effects_search_query: String::new(),
-                user_strip_effects: crate::effects_library::load_or_seed(),
                 show_effect_library_editor: false,
                 effect_library_selection: None,
-                effect_library_draft: crate::effects_library::UserStripEffectPreset::default(),
+                effect_library_draft: crate::app::ControllerEffectDraft::default(),
                 track_muted: std::collections::BTreeSet::new(),
                 track_soloed: std::collections::BTreeSet::new(),
                 track_locked: std::collections::BTreeSet::new(),

@@ -61,10 +61,45 @@ pub struct EffectPreset {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffectPresetSource {
     ControllerMacro(u64),
-    UserStrip(uuid::Uuid),
+    ControllerStrip,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControllerEffectDraft {
+    pub reference: String,
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub description: String,
+    pub kind: String,
+    pub pattern: String,
+    pub color: String,
+    pub default_fps: u8,
+    pub duration_ms: u64,
+    pub default_pixels: u16,
+    pub is_new: bool,
+}
+
+impl Default for ControllerEffectDraft {
+    fn default() -> Self {
+        Self {
+            reference: String::new(),
+            id: String::new(),
+            name: String::new(),
+            category: "Lighting".to_string(),
+            description: String::new(),
+            kind: "strip-stream".to_string(),
+            pattern: "police".to_string(),
+            color: "green".to_string(),
+            default_fps: 20,
+            duration_ms: 5_000,
+            default_pixels: 100,
+            is_new: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectDragPayload {
     pub name: String,
     pub icon: String,
@@ -83,6 +118,10 @@ pub struct HardwareEffectAuthoringState {
     pub pending_operation: Option<String>,
     pub pending_saved_macro_id: Option<u64>,
     pub status: String,
+    /// False records every PCController-dispatched peripheral action on the
+    /// host. True uses the board's bounded RAM capture and transfers it back
+    /// into the same PCController effect library when saved.
+    pub record_on_board: bool,
 }
 
 pub struct RttState {
@@ -199,10 +238,9 @@ pub struct PealayerApp {
 
     // Phase 6 Preset Library state
     pub(crate) effects_search_query: String,
-    pub(crate) user_strip_effects: Vec<crate::effects_library::UserStripEffectPreset>,
     pub(crate) show_effect_library_editor: bool,
-    pub(crate) effect_library_selection: Option<uuid::Uuid>,
-    pub(crate) effect_library_draft: crate::effects_library::UserStripEffectPreset,
+    pub(crate) effect_library_selection: Option<String>,
+    pub(crate) effect_library_draft: ControllerEffectDraft,
     pub(crate) track_muted: std::collections::BTreeSet<u8>,
     pub(crate) track_soloed: std::collections::BTreeSet<u8>,
     pub(crate) track_locked: std::collections::BTreeSet<u8>,
@@ -1163,10 +1201,7 @@ impl PealayerApp {
     }
 
     pub fn advertised_effect_presets(&self) -> Vec<EffectPreset> {
-        let Some(capabilities) = self
-            .advertised_hardware()
-            .filter(|capabilities| capabilities.board_connected)
-        else {
+        let Some(capabilities) = self.advertised_hardware() else {
             return Vec::new();
         };
 
@@ -1175,14 +1210,9 @@ impl PealayerApp {
             .iter()
             .map(controller_macro_effect_preset)
             .chain(
-                self.user_strip_effects
+                capabilities
+                    .strip_effects
                     .iter()
-                    .filter(|preset| {
-                        capabilities
-                            .strip_effects
-                            .iter()
-                            .any(|effect| effect.id == preset.hardware_effect_id)
-                    })
                     .map(controller_strip_effect_preset),
             )
             .collect()
@@ -1224,22 +1254,24 @@ impl PealayerApp {
             })?;
         self.hardware_effect_authoring.anchor_ms =
             (self.seek_pos.unwrap_or(self.playback_time).max(0.0) * 1_000.0) as u64;
-        self.request_hardware_effect_command(
-            "macro-start",
-            format!("macro record start-board {name} Pealayer violet"),
-        )
+        let command = if self.hardware_effect_authoring.record_on_board {
+            format!("effect record start-board {name} Pealayer violet")
+        } else {
+            format!("effect record start {name} Pealayer violet")
+        };
+        self.request_hardware_effect_command("macro-start", command)
     }
 
     pub(crate) fn refresh_hardware_effect_recording(&mut self) -> Result<(), String> {
-        self.request_hardware_effect_command("macro-status", "macro record status".to_string())
+        self.request_hardware_effect_command("macro-status", "effect record status".to_string())
     }
 
     pub(crate) fn save_hardware_effect_recording(&mut self) -> Result<(), String> {
-        self.request_hardware_effect_command("macro-save", "macro record save".to_string())
+        self.request_hardware_effect_command("macro-save", "effect record save".to_string())
     }
 
     pub(crate) fn discard_hardware_effect_recording(&mut self) -> Result<(), String> {
-        self.request_hardware_effect_command("macro-discard", "macro record discard".to_string())
+        self.request_hardware_effect_command("macro-discard", "effect record discard".to_string())
     }
 
     pub(crate) fn preview_strip_effect(&mut self, id: &str) -> Result<(), String> {
@@ -1253,11 +1285,80 @@ impl PealayerApp {
         if !advertised {
             return Err("the selected strip effect is no longer advertised".to_string());
         }
-        self.request_hardware_effect_command("strip-preview", format!("strip effect play {id}"))
+        self.request_hardware_effect_command("strip-preview", format!("effect play strip:{id}"))
     }
 
     pub(crate) fn stop_strip_preview(&mut self) -> Result<(), String> {
-        self.request_hardware_effect_command("strip-stop", "strip stop".to_string())
+        self.request_hardware_effect_command("strip-stop", "effect stop strip:*".to_string())
+    }
+
+    pub(crate) fn save_controller_effect(&mut self) -> Result<(), String> {
+        let draft = self.effect_library_draft.clone();
+        let name = Self::controller_command_argument(&draft.name).ok_or_else(|| {
+            "Effect name must use 1–64 letters, numbers, spaces, dashes, or underscores".to_string()
+        })?;
+        let category = Self::controller_command_argument(&draft.category).ok_or_else(|| {
+            "Effect category must use 1–64 letters, numbers, spaces, dashes, or underscores"
+                .to_string()
+        })?;
+        let command = if draft.kind == "sequence" {
+            if draft.is_new {
+                let id = draft
+                    .id
+                    .parse::<u8>()
+                    .map_err(|_| "Sequence ID must be 0–255".to_string())?;
+                format!(
+                    "effect create sequence {id} {name} {category} {}",
+                    draft.color
+                )
+            } else {
+                format!(
+                    "effect update sequence:{} {name} {category} {}",
+                    draft.id, draft.color
+                )
+            }
+        } else {
+            let id = draft.id.trim();
+            if !crate::four_d::controller::valid_strip_effect_id(id) {
+                return Err("Strip effect ID must use 1–64 lowercase letters, digits, dots, dashes, or underscores".to_string());
+            }
+            if draft.is_new {
+                format!(
+                    "effect create strip {id} {name} {} {category} {} {} {}",
+                    draft.pattern, draft.default_fps, draft.duration_ms, draft.default_pixels
+                )
+            } else {
+                let description = if draft.description.trim().is_empty() {
+                    "-".to_string()
+                } else {
+                    Self::controller_command_argument(&draft.description)
+                        .ok_or_else(|| "Description must use no more than 64 letters, numbers, spaces, dashes, or underscores".to_string())?
+                };
+                format!(
+                    "effect update strip:{id} {name} {category} {description} {} {} {} {}",
+                    draft.pattern, draft.default_fps, draft.duration_ms, draft.default_pixels
+                )
+            }
+        };
+        self.request_hardware_effect_command("effect-save", command)
+    }
+
+    pub(crate) fn delete_controller_effect(&mut self) -> Result<(), String> {
+        let reference = self.effect_library_draft.reference.trim();
+        if reference.is_empty() || self.effect_library_draft.is_new {
+            return Err("Select a saved PCController effect first".to_string());
+        }
+        self.request_hardware_effect_command("effect-delete", format!("effect delete {reference}"))
+    }
+
+    pub(crate) fn play_controller_effect(&mut self, reference: &str) -> Result<(), String> {
+        if reference.trim().is_empty() {
+            return Err("Select a PCController effect first".to_string());
+        }
+        self.request_hardware_effect_command(
+            "effect-play",
+            format!("effect play {}", reference.trim()),
+        )
     }
 
     fn request_board_operation(
@@ -1359,6 +1460,9 @@ impl PealayerApp {
                             self.hardware_effect_authoring.pending_saved_macro_id = None;
                         }
                         "board-name" | "board-silent" | "board-reboot" => {
+                            self.engine_handle.request_catalog_refresh();
+                        }
+                        "effect-save" | "effect-delete" => {
                             self.engine_handle.request_catalog_refresh();
                         }
                         _ => {}
@@ -2680,15 +2784,15 @@ fn controller_macro_effect_preset(
 }
 
 fn controller_strip_effect_preset(
-    strip_effect: &crate::effects_library::UserStripEffectPreset,
+    strip_effect: &crate::four_d::controller::HardwareStripEffect,
 ) -> EffectPreset {
     EffectPreset {
         category: strip_effect.category.clone(),
-        source: EffectPresetSource::UserStrip(strip_effect.id),
+        source: EffectPresetSource::ControllerStrip,
         effect: crate::four_d::models::Effect::controller_strip_effect(
             strip_effect.name.clone(),
-            strip_effect.duration_ms,
-            strip_effect.hardware_effect_id.clone(),
+            strip_effect.default_duration_ms.unwrap_or(5_000),
+            strip_effect.id.clone(),
         ),
     }
 }
@@ -2812,10 +2916,9 @@ impl Default for PealayerApp {
             recording_keys: std::collections::HashMap::new(),
             relay_overrides: std::collections::BTreeSet::new(),
             effects_search_query: String::new(),
-            user_strip_effects: crate::effects_library::load_or_seed(),
             show_effect_library_editor: false,
             effect_library_selection: None,
-            effect_library_draft: crate::effects_library::UserStripEffectPreset::default(),
+            effect_library_draft: ControllerEffectDraft::default(),
             track_muted: std::collections::BTreeSet::new(),
             track_soloed: std::collections::BTreeSet::new(),
             track_locked: std::collections::BTreeSet::new(),
