@@ -296,11 +296,15 @@ fn playback_preferences(app: &mut PealayerApp, ui: &mut egui::Ui, changed: &mut 
             *changed |= ui
                 .checkbox(&mut app.open_url_history_expanded, history_label)
                 .changed();
-            let default_click_label =
-                app.tr("Clicking a recent location edits it (otherwise plays it)");
-            *changed |= ui
-                .checkbox(&mut app.open_url_recent_click_edits, default_click_label)
-                .changed();
+            let mut play_recent_on_click = !app.open_url_recent_click_edits;
+            let default_click_label = app.tr("Play when a recent location is clicked");
+            if ui
+                .checkbox(&mut play_recent_on_click, default_click_label)
+                .changed()
+            {
+                app.open_url_recent_click_edits = !play_recent_on_click;
+                *changed = true;
+            }
             let proxy_label = app.tr("Use a proxy for URL inspection");
             *changed |= ui
                 .checkbox(&mut app.open_url_use_proxy, proxy_label)

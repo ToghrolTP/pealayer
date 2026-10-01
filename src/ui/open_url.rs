@@ -1101,18 +1101,15 @@ fn draw_recent_location(
             ui.close();
         }
         ui.separator();
-        let mut edit_is_default = default_click_edits;
+        let mut play_on_click = !default_click_edits;
         if ui
             .checkbox(
-                &mut edit_is_default,
-                tr(
-                    language,
-                    "Edit is the default click action (otherwise Play)",
-                ),
+                &mut play_on_click,
+                tr(language, "Play when a recent location is clicked"),
             )
             .changed()
         {
-            action = Some(RecentLocationAction::DefaultClickEdits(edit_is_default));
+            action = Some(RecentLocationAction::DefaultClickEdits(!play_on_click));
         }
     });
     action

@@ -346,12 +346,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         }
         "Clear remote history" => "پاک‌کردن تاریخچهٔ راه‌دور",
         "Clear from history" => "پاک‌کردن از تاریخچه",
-        "Edit is the default click action (otherwise Play)" => {
-            "عمل پیش‌فرض کلیک ویرایش باشد (در غیر این صورت پخش)"
-        }
-        "Clicking a recent location edits it (otherwise plays it)" => {
-            "کلیک روی نشانی اخیر آن را ویرایش کند (در غیر این صورت پخش کند)"
-        }
+        "Play when a recent location is clicked" => "با کلیک روی نشانی اخیر، آن را پخش کن",
         "Inspect now" => "بررسی اکنون",
         "Fetching details…" => "در حال دریافت جزئیات…",
         "Refresh details" => "تازه‌سازی جزئیات",
