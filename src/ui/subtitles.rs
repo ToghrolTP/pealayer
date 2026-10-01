@@ -21,6 +21,11 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
         bounds.height().min(SUBTITLE_DIALOG_MAX_HEIGHT),
     );
     let default_size = egui::vec2(max_size.x.min(SUBTITLE_DIALOG_WIDTH), max_size.y.min(420.0));
+    let default_rect = crate::ui::dialog::centered_default_rect(bounds, default_size);
+
+    if crate::ui::dialog::escape_pressed(ui.ctx()) {
+        close_requested = true;
+    }
 
     egui::Window::new(format!(
         "{} {}",
@@ -32,11 +37,11 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
     .open(&mut open)
     .collapsible(false)
     .resizable(true)
-    .default_size(default_size)
+    .default_rect(default_rect)
     .min_size([340.0_f32.min(max_size.x), 280.0_f32.min(max_size.y)])
     .max_size(max_size)
     .constrain_to(bounds)
-    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+    .movable(true)
     .show(ui.ctx(), |ui| {
         ui.set_max_width(max_size.x);
         crate::ui::dialog::scroll_column(
@@ -215,9 +220,9 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
             },
         );
         ui.separator();
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .button(format!("{} {}", crate::ui::icons::X, app.tr("Close")))
+        crate::ui::dialog::action_row(ui, app.rtl, |ui| {
+            if crate::ui::dialog::action_button(ui, crate::ui::icons::X, &app.tr("Close"))
+                .on_hover_text("Esc")
                 .clicked()
             {
                 close_requested = true;

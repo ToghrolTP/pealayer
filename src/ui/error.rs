@@ -10,16 +10,19 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         }
         let bounds = ui.ctx().content_rect().shrink(20.0);
         let max_width = bounds.width().min(520.0);
+        let default_size = egui::vec2(max_width.min(480.0), bounds.height().min(300.0));
         egui::Window::new(format!("{} {heading}", crate::ui::icons::WARNING))
             .id(egui::Id::new("error_dialog_bounded_v2"))
             .collapsible(false)
             .resizable(true)
             .movable(true)
-            .default_size([max_width.min(480.0), bounds.height().min(300.0)])
+            .default_rect(crate::ui::dialog::centered_default_rect(
+                bounds,
+                default_size,
+            ))
             .min_size([max_width.min(340.0), bounds.height().min(220.0)])
             .max_size([max_width, bounds.height().min(420.0)])
             .constrain_to(bounds)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ui.ctx(), |ui| {
                 ui.with_layout(crate::ui::i18n::vertical_layout(app.rtl), |ui| {
                     ui.with_layout(crate::ui::i18n::layout(app.rtl, egui::Align::Min), |ui| {
@@ -55,23 +58,27 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             .font(egui::TextStyle::Monospace),
                     );
                     ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        if ui
-                            .button(format!(
-                                "{} {}",
-                                crate::ui::icons::COPY,
-                                app.tr("Copy details")
-                            ))
-                            .clicked()
-                        {
-                            ui.ctx().copy_text(err.clone());
-                        }
-                        if ui
-                            .button(format!("{} {}", crate::ui::icons::X, app.tr("Close")))
-                            .clicked()
+                    crate::ui::dialog::action_row(ui, app.rtl, |ui| {
+                        if crate::ui::dialog::action_button(
+                            ui,
+                            crate::ui::icons::X,
+                            &app.tr("Close"),
+                        )
+                        .on_hover_text("Enter / Esc")
+                        .clicked()
                             || ui.input(|input| input.key_pressed(egui::Key::Enter))
                         {
                             clear_error = true;
+                        }
+                        if crate::ui::dialog::action_button(
+                            ui,
+                            crate::ui::icons::COPY,
+                            &app.tr("Copy details"),
+                        )
+                        .on_hover_text("Ctrl+C")
+                        .clicked()
+                        {
+                            ui.ctx().copy_text(err.clone());
                         }
                     });
                 });

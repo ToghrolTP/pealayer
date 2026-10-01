@@ -10,6 +10,8 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let bounds = ui.ctx().content_rect().shrink(20.0);
     let max_size = egui::vec2(bounds.width().min(460.0), bounds.height().min(430.0));
     let default_size = egui::vec2(max_size.x.min(420.0), max_size.y.min(380.0));
+    let default_rect = crate::ui::dialog::centered_default_rect(bounds, default_size);
+    let mut close_requested = crate::ui::dialog::escape_pressed(ui.ctx());
 
     egui::Window::new(format!(
         "{} {}",
@@ -20,11 +22,11 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
     .open(&mut open)
     .collapsible(false)
     .resizable(true)
-    .default_size(default_size)
+    .default_rect(default_rect)
     .min_size([340.0_f32.min(max_size.x), 260.0_f32.min(max_size.y)])
     .max_size(max_size)
     .constrain_to(bounds)
-    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+    .movable(true)
     .show(ui.ctx(), |ui| {
         crate::ui::dialog::scroll_column(ui, "audio_settings_body_v2", None, |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
@@ -146,9 +148,18 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 }
             }
         });
+        ui.separator();
+        crate::ui::dialog::action_row(ui, app.rtl, |ui| {
+            if crate::ui::dialog::action_button(ui, crate::ui::icons::X, &app.tr("Close"))
+                .on_hover_text("Esc")
+                .clicked()
+            {
+                close_requested = true;
+            }
+        });
     });
 
-    app.show_audio_settings = open;
+    app.show_audio_settings = open && !close_requested;
 }
 
 pub const MIN_AUDIO_DELAY: f64 = -600.0;

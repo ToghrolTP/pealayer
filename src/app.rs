@@ -855,6 +855,12 @@ impl eframe::App for PealayerApp {
                     let mut close_dialog = false;
                     let bounds = ui.ctx().content_rect().shrink(20.0);
                     let max_size = egui::vec2(bounds.width().min(520.0), bounds.height().min(260.0));
+                    let default_size = egui::vec2(max_size.x.min(480.0), max_size.y.min(210.0));
+                    let default_rect = crate::ui::dialog::centered_default_rect(bounds, default_size);
+
+                    if crate::ui::dialog::escape_pressed(ui.ctx()) {
+                        close_dialog = true;
+                    }
 
                     egui::Window::new(format!(
                         "{} {}",
@@ -864,11 +870,11 @@ impl eframe::App for PealayerApp {
                     .id(egui::Id::new("open_location_dialog_bounded_v2"))
                     .collapsible(false)
                     .resizable(true)
-                    .default_size([max_size.x.min(480.0), max_size.y.min(210.0)])
+                    .default_rect(default_rect)
                     .min_size([max_size.x.min(340.0), max_size.y.min(170.0)])
                     .max_size(max_size)
                     .constrain_to(bounds)
-                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .movable(true)
                     .show(ui.ctx(), |ui| {
                         ui.with_layout(crate::ui::i18n::vertical_layout(self.rtl), |ui| {
                             ui.add(egui::Label::new(
@@ -877,48 +883,53 @@ impl eframe::App for PealayerApp {
                                 )).wrap());
                             ui.add_space(6.0);
 
-                            crate::ui::dialog::compact_row(ui, self.rtl, |ui| {
-                                    let text_edit = ui.add(
-                                        egui::TextEdit::singleline(&mut self.url_input_buffer)
-                                            .desired_width((ui.available_width() - 90.0).max(180.0))
-                                            .hint_text("https://..."),
-                                    );
-                                    if text_edit.lost_focus()
-                                        && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                    {
-                                        open_url = true;
-                                    }
-
-                                    if ui
-                                        .button(format!(
-                                            "{} {}",
-                                            crate::ui::icons::CLIPBOARD,
-                                            self.tr("Paste")
-                                        ))
-                                        .clicked()
-                                    {
-                                        if let Some(text) = ui.input(|i| {
-                                            i.raw.events.iter().find_map(|e| match e {
-                                                egui::Event::Paste(t) => Some(t.clone()),
-                                                _ => None,
-                                            })
-                                        }) {
-                                            self.url_input_buffer = text;
-                                        }
-                                    }
-                                });
+                            let text_edit = ui.add_sized(
+                                [ui.available_width(), 32.0],
+                                egui::TextEdit::singleline(&mut self.url_input_buffer)
+                                    .hint_text("https://..."),
+                            );
 
                             ui.add_space(10.0);
-                            crate::ui::dialog::compact_row(ui, self.rtl, |ui| {
-                                    if ui.button(format!("{} {}", crate::ui::icons::ARROW_SQUARE_OUT, self.tr("Open"))).clicked() {
+                            ui.separator();
+                            crate::ui::dialog::action_bar(ui, self.rtl, |ui| {
+                                if crate::ui::dialog::action_button(
+                                    ui,
+                                    crate::ui::icons::CLIPBOARD,
+                                    &self.tr("Paste"),
+                                )
+                                .on_hover_text("Ctrl+V")
+                                .clicked()
+                                {
+                                    text_edit.request_focus();
+                                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                                }
+                            }, |ui| {
+                                    let can_open = !self.url_input_buffer.trim().is_empty();
+                                    if ui.add_enabled_ui(can_open, |ui| {
+                                        crate::ui::dialog::action_button(
+                                            ui,
+                                            crate::ui::icons::ARROW_SQUARE_OUT,
+                                            &self.tr("Open"),
+                                        ).on_hover_text("Enter")
+                                    }).inner.clicked() {
                                         open_url = true;
                                     }
-                                    if ui.button(format!("{} {}", crate::ui::icons::X, self.tr("Cancel"))).clicked() {
+                                    if crate::ui::dialog::action_button(
+                                        ui,
+                                        crate::ui::icons::X,
+                                        &self.tr("Cancel"),
+                                    ).on_hover_text("Esc").clicked() {
                                         close_dialog = true;
                                     }
                                 });
                         });
                     });
+
+                    if !self.url_input_buffer.trim().is_empty()
+                        && ui.ctx().input(|i| i.key_pressed(egui::Key::Enter))
+                    {
+                        open_url = true;
+                    }
 
                     if open_url {
                         let url = self.url_input_buffer.clone();
@@ -934,6 +945,11 @@ impl eframe::App for PealayerApp {
                     let language = self.language;
                     let bounds = ui.ctx().content_rect().shrink(20.0);
                     let max_size = egui::vec2(bounds.width().min(600.0), bounds.height().min(520.0));
+                    let default_size = egui::vec2(max_size.x.min(520.0), max_size.y.min(420.0));
+                    let default_rect = crate::ui::dialog::centered_default_rect(bounds, default_size);
+                    if crate::ui::dialog::escape_pressed(ui.ctx()) {
+                        self.show_shortcuts_dialog = false;
+                    }
                     egui::Window::new(format!(
                         "{} {}",
                         crate::ui::icons::KEYBOARD,
@@ -942,11 +958,11 @@ impl eframe::App for PealayerApp {
                     .id(egui::Id::new("keyboard_shortcuts_dialog_bounded_v2"))
                     .collapsible(false)
                     .resizable(true)
-                    .default_size([max_size.x.min(520.0), max_size.y.min(420.0)])
+                    .default_rect(default_rect)
                     .min_size([max_size.x.min(360.0), max_size.y.min(280.0)])
                     .max_size(max_size)
                     .constrain_to(bounds)
-                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .movable(true)
                     .open(&mut self.show_shortcuts_dialog)
                     .show(ui.ctx(), |ui| {
                       crate::ui::dialog::scroll_column(ui, "shortcuts_content_v2", None, |ui| {

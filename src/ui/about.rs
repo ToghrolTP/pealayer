@@ -22,6 +22,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let default_size = egui::vec2(max_size.x.min(600.0), max_size.y.min(480.0));
     let min_size = egui::vec2(max_size.x.min(360.0), max_size.y.min(300.0));
     let default_rect = egui::Rect::from_center_size(bounds.center(), default_size);
+    if crate::ui::dialog::escape_pressed(ui.ctx()) {
+        open = false;
+    }
     egui::Window::new(format!(
         "{} {} {}",
         crate::ui::icons::INFO,
@@ -36,6 +39,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     .min_size(min_size)
     .max_size(max_size)
     .constrain_to(bounds)
+    .movable(true)
     .resizable(true)
     .collapsible(false)
     .show(ui.ctx(), |ui| {

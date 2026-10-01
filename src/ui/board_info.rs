@@ -24,6 +24,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let bounds = ui.ctx().content_rect().shrink(20.0);
     let max_size = egui::vec2(bounds.width().min(760.0), bounds.height().min(650.0));
     let default_size = egui::vec2(max_size.x.min(640.0), max_size.y.min(470.0));
+    let default_rect = crate::ui::dialog::centered_default_rect(bounds, default_size);
+    if crate::ui::dialog::escape_pressed(ui.ctx()) {
+        open = false;
+    }
     egui::Window::new(format!(
         "{} {}",
         crate::ui::icons::INFO,
@@ -31,11 +35,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     ))
     .id(egui::Id::new("board_information_dialog_bounded_v2"))
     .open(&mut open)
-    .default_size(default_size)
+    .default_rect(default_rect)
     .min_size([max_size.x.min(480.0), max_size.y.min(340.0)])
     .max_size(max_size)
     .constrain_to(bounds)
     .resizable(true)
+    .movable(true)
     .collapsible(false)
     .show(ui.ctx(), |ui| {
         let connected = capabilities.board_connected;

@@ -21,6 +21,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let max_size = egui::vec2(bounds.width().min(700.0), bounds.height().min(620.0));
     let default_size = egui::vec2(max_size.x.min(620.0), max_size.y.min(520.0));
     let min_size = egui::vec2(max_size.x.min(390.0), max_size.y.min(330.0));
+    let default_rect = crate::ui::dialog::centered_default_rect(bounds, default_size);
+    if crate::ui::dialog::escape_pressed(ui.ctx()) {
+        open = false;
+    }
     egui::Window::new(format!(
         "{} {}",
         crate::ui::icons::GEAR,
@@ -28,11 +32,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     ))
     .id(egui::Id::new("preferences_dialog_bounded_v2"))
     .open(&mut open)
-    .default_size(default_size)
+    .default_rect(default_rect)
     .min_size(min_size)
     .max_size(max_size)
     .constrain_to(bounds)
     .resizable(true)
+    .movable(true)
     .collapsible(false)
     .show(ui.ctx(), |ui| {
         let mut changed = false;
