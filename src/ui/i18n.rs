@@ -323,6 +323,26 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
             "نشانی مستقیم ویدئو، جریان HTTP/HTTPS یا پیوند HLS را وارد کنید:"
         }
         "Wrap long URLs in a text area" => "پیوندهای بلند در کادر متنی چندخطی شکسته شوند",
+        "Supported: HTTP/HTTPS, HLS, RTSP, RTMP, SRT, UDP, TCP, and RIST." => {
+            "پشتیبانی‌شده: HTTP/HTTPS،‏ HLS،‏ RTSP،‏ RTMP،‏ SRT،‏ UDP،‏ TCP و RIST."
+        }
+        "Use proxy" => "استفاده از پراکسی",
+        "Configure proxy" => "پیکربندی پراکسی",
+        "Recent locations" => "نشانی‌های اخیر",
+        "Clear all" => "پاک‌کردن همه",
+        "No recent remote locations." => "نشانی راه‌دور اخیری وجود ندارد.",
+        "Remove from history" => "حذف از تاریخچه",
+        "Expand recent URL history by default" => "تاریخچهٔ نشانی‌های اخیر به‌طور پیش‌فرض باز باشد",
+        "Use a proxy for URL inspection" => "استفاده از پراکسی برای بررسی نشانی",
+        "Inherited proxy" => "پراکسی به‌ارث‌رسیده",
+        "Custom proxy URL" => "نشانی پراکسی سفارشی",
+        "Enter a complete HTTP or HTTPS proxy URL." => {
+            "یک نشانی کامل HTTP یا HTTPS برای پراکسی وارد کنید."
+        }
+        "Leave the custom proxy blank to inherit the operating-system environment." => {
+            "برای استفاده از تنظیمات محیط سیستم‌عامل، نشانی پراکسی سفارشی را خالی بگذارید."
+        }
+        "Clear remote history" => "پاک‌کردن تاریخچهٔ راه‌دور",
         "Inspect now" => "بررسی اکنون",
         "Cut" => "برش",
         "Copy" => "رونوشت",

@@ -219,6 +219,9 @@ pub struct PealayerApp {
     pub(crate) show_open_url_dialog: bool,
     pub(crate) url_input_buffer: String,
     pub(crate) open_url_multiline: bool,
+    pub(crate) open_url_history_expanded: bool,
+    pub(crate) open_url_use_proxy: bool,
+    pub(crate) open_url_proxy_url: String,
     pub(crate) url_inspector: crate::ui::open_url::UrlInspector,
     pub(crate) is_window_operating: bool,
     pub(crate) show_shortcuts_dialog: bool,
@@ -2101,6 +2104,10 @@ impl PealayerApp {
         cfg.pin_controls = self.pin_controls;
         cfg.show_remaining_time = self.show_remaining_time;
         cfg.open_url_multiline = self.open_url_multiline;
+        cfg.open_url_history_expanded = self.open_url_history_expanded;
+        cfg.open_url_use_proxy = self.open_url_use_proxy;
+        cfg.open_url_proxy_url = (!self.open_url_proxy_url.trim().is_empty())
+            .then(|| self.open_url_proxy_url.trim().to_string());
         cfg.recent_media = self.recent_media.clone();
         cfg.language = self.language_preference;
         cfg.direction = self.direction_preference;
@@ -2174,6 +2181,9 @@ impl PealayerApp {
         self.pin_controls = config.pin_controls;
         self.show_remaining_time = config.show_remaining_time;
         self.open_url_multiline = config.open_url_multiline;
+        self.open_url_history_expanded = config.open_url_history_expanded;
+        self.open_url_use_proxy = config.open_url_use_proxy;
+        self.open_url_proxy_url = config.open_url_proxy_url.clone().unwrap_or_default();
         self.recent_media = config.recent_media.clone();
         self.language_preference = crate::config::resolved_language_preference(&config);
         self.language = crate::config::resolve_language(self.language_preference);
@@ -2335,6 +2345,20 @@ impl PealayerApp {
     pub fn clear_recent_media(&mut self) {
         self.recent_media.clear();
         crate::platform::windows::sync_windows_jump_list(&[]);
+        self.save_config();
+    }
+
+    pub fn remove_recent_media(&mut self, target: &str) {
+        self.recent_media
+            .retain(|path| path.to_string_lossy() != target);
+        crate::platform::windows::sync_windows_jump_list(&self.recent_media);
+        self.save_config();
+    }
+
+    pub fn clear_recent_remote_media(&mut self) {
+        self.recent_media
+            .retain(|path| !crate::media::is_remote_media_target(&path.to_string_lossy()));
+        crate::platform::windows::sync_windows_jump_list(&self.recent_media);
         self.save_config();
     }
 
@@ -2638,7 +2662,10 @@ impl Default for PealayerApp {
             recent_media: Vec::new(),
             show_open_url_dialog: false,
             url_input_buffer: String::new(),
-            open_url_multiline: false,
+            open_url_multiline: true,
+            open_url_history_expanded: true,
+            open_url_use_proxy: true,
+            open_url_proxy_url: String::new(),
             url_inspector: crate::ui::open_url::UrlInspector::default(),
             is_window_operating: false,
             show_shortcuts_dialog: false,

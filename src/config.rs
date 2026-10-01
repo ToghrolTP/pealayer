@@ -123,6 +123,9 @@ pub struct AppConfig {
     pub pin_controls: bool,
     pub show_remaining_time: bool,
     pub open_url_multiline: bool,
+    pub open_url_history_expanded: bool,
+    pub open_url_use_proxy: bool,
+    pub open_url_proxy_url: Option<String>,
     pub recent_media: Vec<PathBuf>,
     pub app_name: Option<String>,
     pub app_icon: Option<PathBuf>,
@@ -162,7 +165,10 @@ impl Default for AppConfig {
             is_muted: false,
             pin_controls: false,
             show_remaining_time: false,
-            open_url_multiline: false,
+            open_url_multiline: true,
+            open_url_history_expanded: true,
+            open_url_use_proxy: true,
+            open_url_proxy_url: None,
             recent_media: Vec::new(),
             app_name: None,
             app_icon: None,
@@ -679,6 +685,20 @@ impl AppConfig {
         {
             return Err("hardware_endpoint is too long".to_string());
         }
+        if let Some(proxy) = self
+            .open_url_proxy_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let parsed = url::Url::parse(proxy)
+                .map_err(|_| "open_url_proxy_url must be a complete URL".to_string())?;
+            if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+                return Err(
+                    "open_url_proxy_url must use HTTP or HTTPS and include a host".to_string(),
+                );
+            }
+        }
         if self.recent_media.len() > 100 {
             return Err("recent_media contains too many entries".to_string());
         }
@@ -747,6 +767,10 @@ mod tests {
         assert_eq!(cfg.theme, AppTheme::System);
         assert_eq!(cfg.language, AppLanguage::System);
         assert_eq!(cfg.direction, AppDirection::Auto);
+        assert!(cfg.open_url_multiline);
+        assert!(cfg.open_url_history_expanded);
+        assert!(cfg.open_url_use_proxy);
+        assert!(cfg.open_url_proxy_url.is_none());
     }
 
     #[test]
@@ -754,6 +778,10 @@ mod tests {
         let mut cfg = AppConfig::default();
         cfg.volume = 85.0;
         cfg.pin_controls = true;
+        cfg.open_url_multiline = false;
+        cfg.open_url_history_expanded = false;
+        cfg.open_url_use_proxy = false;
+        cfg.open_url_proxy_url = Some("http://127.0.0.1:8080".to_string());
         cfg.recent_media.push(PathBuf::from("/test/file.mp4"));
 
         let json = serde_json::to_string(&cfg).unwrap();
@@ -761,6 +789,13 @@ mod tests {
 
         assert_eq!(loaded.volume, 85.0);
         assert!(loaded.pin_controls);
+        assert!(!loaded.open_url_multiline);
+        assert!(!loaded.open_url_history_expanded);
+        assert!(!loaded.open_url_use_proxy);
+        assert_eq!(
+            loaded.open_url_proxy_url.as_deref(),
+            Some("http://127.0.0.1:8080")
+        );
         assert_eq!(loaded.recent_media.len(), 1);
         assert_eq!(loaded.recent_media[0], PathBuf::from("/test/file.mp4"));
     }

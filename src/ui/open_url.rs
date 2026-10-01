@@ -11,6 +11,47 @@ const PROBE_DEBOUNCE: Duration = Duration::from_millis(700);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 
+pub fn inherited_proxy_url() -> Option<String> {
+    [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ]
+    .into_iter()
+    .find_map(|name| {
+        std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+pub fn effective_proxy_url(custom_proxy: &str) -> Option<String> {
+    let custom_proxy = custom_proxy.trim();
+    if custom_proxy.is_empty() {
+        inherited_proxy_url()
+    } else {
+        Some(custom_proxy.to_string())
+    }
+}
+
+pub fn proxy_display_value(proxy: &str) -> String {
+    url::Url::parse(proxy)
+        .ok()
+        .and_then(|value| {
+            let host = value.host_str()?;
+            let port = value
+                .port()
+                .map(|port| format!(":{port}"))
+                .unwrap_or_default();
+            Some(format!("{}://{host}{port}", value.scheme()))
+        })
+        .unwrap_or_else(|| "configured proxy".to_string())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidatedMediaUrl {
     pub normalized: String,
@@ -55,6 +96,12 @@ struct ProbeResult {
     result: Result<RemoteMediaInfo, String>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ProbeNetworkSettings {
+    use_proxy: bool,
+    proxy_url: Option<String>,
+}
+
 pub struct UrlInspector {
     tx: Sender<ProbeResult>,
     rx: Receiver<ProbeResult>,
@@ -62,6 +109,7 @@ pub struct UrlInspector {
     last_input: String,
     last_changed: Instant,
     requested_input: Option<String>,
+    last_network: Option<ProbeNetworkSettings>,
     pub status: ProbeStatus,
 }
 
@@ -75,13 +123,14 @@ impl Default for UrlInspector {
             last_input: String::new(),
             last_changed: Instant::now(),
             requested_input: None,
+            last_network: None,
             status: ProbeStatus::Idle,
         }
     }
 }
 
 impl UrlInspector {
-    fn update(&mut self, input: &str, ctx: &egui::Context) {
+    fn update(&mut self, input: &str, ctx: &egui::Context, network: ProbeNetworkSettings) {
         while let Ok(probe) = self.rx.try_recv() {
             if probe.generation != self.generation {
                 continue;
@@ -96,9 +145,10 @@ impl UrlInspector {
         }
 
         let trimmed = input.trim();
-        if self.last_input != trimmed {
+        if self.last_input != trimmed || self.last_network.as_ref() != Some(&network) {
             self.generation = self.generation.wrapping_add(1);
             self.last_input = trimmed.to_owned();
+            self.last_network = Some(network.clone());
             self.last_changed = Instant::now();
             self.requested_input = None;
             self.status = ProbeStatus::Idle;
@@ -120,18 +170,19 @@ impl UrlInspector {
         }
         let elapsed = self.last_changed.elapsed();
         if elapsed >= PROBE_DEBOUNCE {
-            self.start_probe(validated.normalized, ctx.clone());
+            self.start_probe(validated.normalized, ctx.clone(), network);
         } else {
             ctx.request_repaint_after(PROBE_DEBOUNCE - elapsed);
         }
     }
 
-    fn inspect_now(&mut self, input: &str, ctx: &egui::Context) {
+    fn inspect_now(&mut self, input: &str, ctx: &egui::Context, network: ProbeNetworkSettings) {
         match validate_media_url(input.trim()) {
             Ok(validated) if validated.supports_http_probe => {
                 self.generation = self.generation.wrapping_add(1);
                 self.last_input = input.trim().to_owned();
-                self.start_probe(validated.normalized, ctx.clone());
+                self.last_network = Some(network.clone());
+                self.start_probe(validated.normalized, ctx.clone(), network);
             }
             Ok(validated) => {
                 self.status = ProbeStatus::NotApplicable {
@@ -148,13 +199,13 @@ impl UrlInspector {
         }
     }
 
-    fn start_probe(&mut self, url: String, ctx: egui::Context) {
+    fn start_probe(&mut self, url: String, ctx: egui::Context, network: ProbeNetworkSettings) {
         let generation = self.generation;
         self.requested_input = Some(self.last_input.clone());
         self.status = ProbeStatus::Checking(url.clone());
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            let result = probe_remote_media(&url);
+            let result = probe_remote_media(&url, &network);
             let _ = tx.send(ProbeResult { generation, result });
             ctx.request_repaint();
         });
@@ -169,14 +220,33 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let mut open_requested = false;
     let mut close_requested = crate::ui::dialog::escape_pressed(ui.ctx());
     let mut inspect_requested = false;
+    let mut configure_proxy_requested = false;
+    let mut history_remove_requested = None;
+    let mut clear_history_requested = false;
     let bounds = ui.ctx().content_rect().shrink(20.0);
     let max_size = egui::vec2(bounds.width().min(700.0), bounds.height().min(620.0));
     let default_size = egui::vec2(max_size.x.min(620.0), max_size.y.min(500.0));
     let default_rect = crate::ui::dialog::centered_default_rect(bounds, default_size);
 
-    app.url_inspector.update(&app.url_input_buffer, ui.ctx());
     let validation = validate_media_url(app.url_input_buffer.trim());
     let can_open = validation.is_ok();
+    let effective_proxy = effective_proxy_url(&app.open_url_proxy_url);
+    let network = ProbeNetworkSettings {
+        use_proxy: app.open_url_use_proxy,
+        // An explicit application proxy overrides the environment. When the
+        // field is blank, leave reqwest's environment proxy handling intact so
+        // standard exclusions such as NO_PROXY continue to work.
+        proxy_url: (!app.open_url_proxy_url.trim().is_empty())
+            .then(|| app.open_url_proxy_url.trim().to_string()),
+    };
+    app.url_inspector
+        .update(&app.url_input_buffer, ui.ctx(), network.clone());
+    let remote_history = app
+        .recent_media
+        .iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .filter(|target| crate::media::is_remote_media_target(target))
+        .collect::<Vec<_>>();
     let open_shortcut = if app.open_url_multiline {
         "Ctrl+Enter"
     } else {
@@ -205,40 +275,31 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 "open_location_inspector_body",
                 Some(body_height),
                 |ui| {
-                    ui.add(
-                        egui::Label::new(app.tr(
-                            "Enter a media URL (HTTP/HTTPS, HLS, RTSP, RTMP, SRT, UDP, or TCP):",
-                        ))
-                        .wrap(),
-                    );
-                    ui.add_space(6.0);
-
-                    ui.horizontal_wrapped(|ui| {
-                        let wrap_label = format!(
-                            "{}  {}",
-                            crate::ui::icons::TEXT_ALIGN_LEFT,
-                            app.tr("Wrap long URLs in a text area")
+                    if let Some(proxy) = effective_proxy.as_deref() {
+                        let proxy_label = format!(
+                            "{}  {} ({})",
+                            crate::ui::icons::GLOBE,
+                            app.tr("Use proxy"),
+                            proxy_display_value(proxy)
                         );
-                        if ui
-                            .checkbox(&mut app.open_url_multiline, wrap_label)
-                            .changed()
-                        {
-                            app.save_config();
-                        }
-                        if ui
-                            .add_enabled(
-                                can_open,
-                                egui::Button::new(format!(
-                                    "{}  {}",
-                                    crate::ui::icons::MAGNIFYING_GLASS,
-                                    app.tr("Inspect now")
-                                )),
-                            )
-                            .clicked()
-                        {
-                            inspect_requested = true;
-                        }
-                    });
+                        let configure_label = app.tr("Configure proxy");
+                        ui.horizontal_wrapped(|ui| {
+                            if ui
+                                .checkbox(&mut app.open_url_use_proxy, proxy_label)
+                                .changed()
+                            {
+                                app.url_inspector = UrlInspector::default();
+                                app.save_config();
+                            }
+                            if ui
+                                .button(format!("{}  {configure_label}", crate::ui::icons::GEAR))
+                                .clicked()
+                            {
+                                configure_proxy_requested = true;
+                            }
+                        });
+                        ui.add_space(5.0);
+                    }
 
                     let edit = if app.open_url_multiline {
                         egui::TextEdit::multiline(&mut app.url_input_buffer)
@@ -253,17 +314,129 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             .hint_text("https://...")
                     };
                     let mut edit_output = edit.show(ui);
-                    text_edit_context_menu(
+                    if text_edit_context_menu(
                         ui,
                         &mut edit_output,
                         &mut app.url_input_buffer,
+                        &mut app.open_url_multiline,
                         app.language,
+                    ) {
+                        app.save_config();
+                    }
+
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(app.tr(
+                                "Supported: HTTP/HTTPS, HLS, RTSP, RTMP, SRT, UDP, TCP, and RIST.",
+                            ))
+                            .small()
+                            .weak(),
+                        )
+                        .wrap(),
                     );
 
                     ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        let icon = if app.open_url_history_expanded {
+                            crate::ui::icons::CARET_DOWN
+                        } else {
+                            crate::ui::icons::CARET_RIGHT
+                        };
+                        let history_label = format!(
+                            "{icon}  {} ({})",
+                            app.tr("Recent locations"),
+                            remote_history.len()
+                        );
+                        if ui
+                            .add(egui::Button::new(history_label).frame(false))
+                            .clicked()
+                        {
+                            app.open_url_history_expanded = !app.open_url_history_expanded;
+                            app.save_config();
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let clear_label = app.tr("Clear all");
+                            if ui
+                                .add_enabled(
+                                    !remote_history.is_empty(),
+                                    egui::Button::new(format!(
+                                        "{}  {clear_label}",
+                                        crate::ui::icons::TRASH
+                                    ))
+                                    .frame(false),
+                                )
+                                .clicked()
+                            {
+                                clear_history_requested = true;
+                            }
+                        });
+                    });
+                    if app.open_url_history_expanded {
+                        egui::Frame::group(ui.style())
+                            .corner_radius(8.0)
+                            .inner_margin(egui::Margin::same(6))
+                            .show(ui, |ui| {
+                                ui.set_min_width(ui.available_width());
+                                if remote_history.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new(app.tr("No recent remote locations."))
+                                            .small()
+                                            .weak(),
+                                    );
+                                } else {
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("open_url_remote_history")
+                                        .max_height(140.0)
+                                        .auto_shrink([false, true])
+                                        .show(ui, |ui| {
+                                            for target in &remote_history {
+                                                ui.horizontal(|ui| {
+                                                    let remove_width = 30.0;
+                                                    let target_width = (ui.available_width()
+                                                        - remove_width)
+                                                        .max(120.0);
+                                                    let response = ui.add_sized(
+                                                        [target_width, 26.0],
+                                                        egui::Label::new(target)
+                                                            .truncate()
+                                                            .sense(egui::Sense::click()),
+                                                    );
+                                                    if response.on_hover_text(target).clicked() {
+                                                        app.url_input_buffer = target.clone();
+                                                        app.url_inspector = UrlInspector::default();
+                                                    }
+                                                    if ui
+                                                        .add_sized(
+                                                            [remove_width, 26.0],
+                                                            egui::Button::new(crate::ui::icons::X)
+                                                                .frame(false),
+                                                        )
+                                                        .on_hover_text(
+                                                            app.tr("Remove from history"),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        history_remove_requested =
+                                                            Some(target.clone());
+                                                    }
+                                                });
+                                            }
+                                        });
+                                }
+                            });
+                    }
+
+                    ui.add_space(8.0);
                     draw_validation(ui, app, validation.as_ref());
-                    ui.add_space(6.0);
-                    draw_remote_info(ui, app, &app.url_inspector.status);
+                    if let Ok(validated) = validation.as_ref() {
+                        ui.add_space(6.0);
+                        inspect_requested |= draw_remote_info(
+                            ui,
+                            app,
+                            &app.url_inspector.status,
+                            validated.supports_http_probe,
+                        );
+                    }
                 },
             );
 
@@ -314,9 +487,21 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         });
     });
 
+    if let Some(target) = history_remove_requested {
+        app.remove_recent_media(&target);
+    }
+    if clear_history_requested {
+        app.clear_recent_remote_media();
+    }
     if inspect_requested {
         app.url_inspector
-            .inspect_now(&app.url_input_buffer, ui.ctx());
+            .inspect_now(&app.url_input_buffer, ui.ctx(), network);
+    }
+    if configure_proxy_requested {
+        app.show_open_url_dialog = false;
+        app.preferences_tab = 1;
+        app.show_preferences_dialog = true;
+        return;
     }
     let keyboard_open = ui.ctx().input(|input| {
         input.key_pressed(egui::Key::Enter)
@@ -347,8 +532,9 @@ fn text_edit_context_menu(
     ui: &mut egui::Ui,
     output: &mut egui::text_edit::TextEditOutput,
     text: &mut String,
+    multiline: &mut bool,
     language: crate::config::AppLanguage,
-) {
+) -> bool {
     let ctx = ui.ctx().clone();
     let id = output.response.id;
     let mut state = output.state.clone();
@@ -361,6 +547,7 @@ fn text_edit_context_menu(
         });
     let selected_text =
         (!initial_range.is_empty()).then(|| initial_range.slice_str(text).to_owned());
+    let mut wrap_changed = false;
 
     output.response.context_menu(|ui| {
         let mut close = false;
@@ -472,12 +659,23 @@ fn text_edit_context_menu(
             ctx.memory_mut(|memory| memory.request_focus(id));
             close = true;
         }
+        ui.separator();
+        let wrap_label = format!(
+            "{}  {}",
+            crate::ui::icons::TEXT_ALIGN_LEFT,
+            tr(language, "Wrap long URLs in a text area")
+        );
+        if ui.checkbox(multiline, wrap_label).changed() {
+            wrap_changed = true;
+            close = true;
+        }
 
         if close {
             ui.close();
             ctx.request_repaint();
         }
     });
+    wrap_changed
 }
 
 fn menu_button(icon: &str, label: String, shortcut: &str) -> egui::Button<'static> {
@@ -581,20 +779,42 @@ fn draw_validation(
     }
 }
 
-fn draw_remote_info(ui: &mut egui::Ui, app: &PealayerApp, status: &ProbeStatus) {
+fn draw_remote_info(
+    ui: &mut egui::Ui,
+    app: &PealayerApp,
+    status: &ProbeStatus,
+    supports_http_probe: bool,
+) -> bool {
+    let mut inspect_requested = false;
     let frame = egui::Frame::group(ui.style())
         .corner_radius(8.0)
         .inner_margin(egui::Margin::same(10));
     frame.show(ui, |ui| {
         ui.set_min_width(ui.available_width());
-        ui.label(
-            egui::RichText::new(format!(
-                "{}  {}",
-                crate::ui::icons::LINK_SIMPLE,
-                app.tr("Remote media information")
-            ))
-            .strong(),
-        );
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{}  {}",
+                    crate::ui::icons::LINK_SIMPLE,
+                    app.tr("Remote media information")
+                ))
+                .strong(),
+            );
+            if supports_http_probe {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .button(format!(
+                            "{}  {}",
+                            crate::ui::icons::MAGNIFYING_GLASS,
+                            app.tr("Inspect now")
+                        ))
+                        .clicked()
+                    {
+                        inspect_requested = true;
+                    }
+                });
+            }
+        });
         ui.add_space(4.0);
         match status {
             ProbeStatus::Idle => {
@@ -665,6 +885,7 @@ fn draw_remote_info(ui: &mut egui::Ui, app: &PealayerApp, status: &ProbeStatus) 
             }
         }
     });
+    inspect_requested
 }
 
 fn metadata_row(ui: &mut egui::Ui, label: &str, value: &str) {
@@ -731,12 +952,23 @@ pub fn validate_media_url(input: &str) -> Result<ValidatedMediaUrl, String> {
     })
 }
 
-fn probe_remote_media(url: &str) -> Result<RemoteMediaInfo, String> {
-    let client = reqwest::blocking::Client::builder()
+fn probe_remote_media(
+    url: &str,
+    network: &ProbeNetworkSettings,
+) -> Result<RemoteMediaInfo, String> {
+    let mut builder = reqwest::blocking::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(PROBE_TIMEOUT)
         .redirect(reqwest::redirect::Policy::limited(8))
-        .user_agent(concat!("Pealayer/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("Pealayer/", env!("CARGO_PKG_VERSION")));
+    if !network.use_proxy {
+        builder = builder.no_proxy();
+    } else if let Some(proxy_url) = network.proxy_url.as_deref() {
+        let proxy = reqwest::Proxy::all(proxy_url)
+            .map_err(|error| format!("The configured proxy is invalid: {error}"))?;
+        builder = builder.proxy(proxy);
+    }
+    let client = builder
         .build()
         .map_err(|error| format!("Could not initialize the URL inspector: {error}"))?;
 
@@ -887,5 +1119,17 @@ mod tests {
         let text = "AسلامZ";
         assert_eq!(char_to_byte(text, 1), 1);
         assert_eq!(char_to_byte(text, 5), text.len() - 1);
+    }
+
+    #[test]
+    fn proxy_display_hides_credentials_and_custom_proxy_wins() {
+        assert_eq!(
+            proxy_display_value("http://user:secret@proxy.example:8080/private"),
+            "http://proxy.example:8080"
+        );
+        assert_eq!(
+            effective_proxy_url(" https://custom.example:8443 ").as_deref(),
+            Some("https://custom.example:8443")
+        );
     }
 }

@@ -283,6 +283,84 @@ fn playback_preferences(app: &mut PealayerApp, ui: &mut egui::Ui, changed: &mut 
             );
         },
     );
+    preference_section(
+        ui,
+        crate::ui::icons::LINK_SIMPLE,
+        &app.tr("Open Location / URL"),
+        |ui| {
+            let wrap_label = app.tr("Wrap long URLs in a text area");
+            *changed |= ui
+                .checkbox(&mut app.open_url_multiline, wrap_label)
+                .changed();
+            let history_label = app.tr("Expand recent URL history by default");
+            *changed |= ui
+                .checkbox(&mut app.open_url_history_expanded, history_label)
+                .changed();
+            let proxy_label = app.tr("Use a proxy for URL inspection");
+            *changed |= ui
+                .checkbox(&mut app.open_url_use_proxy, proxy_label)
+                .changed();
+
+            let inherited_proxy = crate::ui::open_url::inherited_proxy_url();
+            if let Some(proxy) = inherited_proxy.as_deref() {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{}: {}",
+                        app.tr("Inherited proxy"),
+                        crate::ui::open_url::proxy_display_value(proxy)
+                    ))
+                    .small()
+                    .weak(),
+                );
+            }
+
+            ui.label(app.tr("Custom proxy URL"));
+            let proxy_changed = ui
+                .add(
+                    egui::TextEdit::singleline(&mut app.open_url_proxy_url)
+                        .desired_width(ui.available_width())
+                        .hint_text("http://proxy.example:8080"),
+                )
+                .changed();
+            let custom_proxy = app.open_url_proxy_url.trim();
+            let proxy_valid = custom_proxy.is_empty()
+                || url::Url::parse(custom_proxy).is_ok_and(|value| {
+                    matches!(value.scheme(), "http" | "https") && value.host_str().is_some()
+                });
+            if proxy_changed && proxy_valid {
+                *changed = true;
+            }
+            if !proxy_valid {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    app.tr("Enter a complete HTTP or HTTPS proxy URL."),
+                );
+            }
+            ui.label(
+                egui::RichText::new(app.tr(
+                    "Leave the custom proxy blank to inherit the operating-system environment.",
+                ))
+                .small()
+                .weak(),
+            );
+
+            let remote_count = app
+                .recent_media
+                .iter()
+                .filter(|path| crate::media::is_remote_media_target(&path.to_string_lossy()))
+                .count();
+            let clear_label = format!("{} ({remote_count})", app.tr("Clear remote history"));
+            if ui
+                .add_enabled(
+                    remote_count > 0,
+                    egui::Button::new(format!("{}  {clear_label}", crate::ui::icons::TRASH)),
+                )
+                .clicked()
+            {
+                app.clear_recent_remote_media();
+            }
+        },
+    );
 }
 
 fn hardware_preferences(app: &mut PealayerApp, ui: &mut egui::Ui, changed: &mut bool) {
