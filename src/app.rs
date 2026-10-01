@@ -72,7 +72,7 @@ pub struct ControllerEffectDraft {
     pub category: String,
     pub description: String,
     pub kind: String,
-    pub pattern: String,
+    pub program_json: String,
     pub color: String,
     pub default_fps: u8,
     pub duration_ms: u64,
@@ -89,7 +89,7 @@ impl Default for ControllerEffectDraft {
             category: "Lighting".to_string(),
             description: String::new(),
             kind: "strip-stream".to_string(),
-            pattern: "police".to_string(),
+            program_json: String::new(),
             color: "green".to_string(),
             default_fps: 20,
             duration_ms: 5_000,
@@ -234,7 +234,6 @@ pub struct PealayerApp {
     pub undo_stack: crate::four_d::history::UndoStack,
     pub(crate) recording_keys:
         std::collections::HashMap<eframe::egui::Key, (uuid::Uuid, std::time::Instant, u8)>,
-    pub(crate) relay_overrides: std::collections::BTreeSet<u8>,
 
     // Phase 6 Preset Library state
     pub(crate) effects_search_query: String,
@@ -292,6 +291,7 @@ pub struct PealayerApp {
     pub(crate) playing_drag_action: crate::config::PlayerDragAction,
     pub(crate) fullscreen_video_background: crate::config::VideoBackground,
     pub(crate) motion_control_mode: crate::config::MotionControlMode,
+    pub(crate) held_motion_action: Option<(String, String)>,
     pub(crate) compact_hardware_controls: bool,
     pub(crate) single_instance: bool,
     pub(crate) windows_mica_backdrop: bool,
@@ -357,6 +357,19 @@ impl eframe::App for PealayerApp {
         self.process_shell_commands(ui.ctx());
         self.process_controller_call_results();
         self.poll_external_config(ui.ctx());
+
+        // A held seat direction captures the pointer until the physical button
+        // is released. This remains active even if a repaint moves the cursor
+        // outside the original button or the panel is hidden mid-gesture.
+        if !ui.input(|input| input.pointer.primary_down())
+            && let Some((_, stop_action)) = self.held_motion_action.take()
+        {
+            let _ = self.engine_handle.sender.send(
+                crate::four_d::engine::EngineMessage::InvokeControllerAction {
+                    action_id: stop_action,
+                },
+            );
+        }
 
         if self.media_controls.is_none() {
             let hwnd = self
@@ -1228,6 +1241,25 @@ impl PealayerApp {
         .then(|| format!("\"{value}\""))
     }
 
+    fn controller_effect_program_hex(value: &str) -> Result<(String, String), String> {
+        let program: serde_json::Value = serde_json::from_str(value)
+            .map_err(|error| format!("Invalid lighting program JSON: {error}"))?;
+        let primitive = program
+            .get("primitive")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "Lighting program requires a primitive".to_string())?
+            .to_string();
+        let canonical = serde_json::to_vec(&program)
+            .map_err(|error| format!("Encode lighting program: {error}"))?;
+        let encoded = canonical
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<Vec<_>>()
+            .join("");
+        Ok((primitive, encoded))
+    }
+
     fn request_hardware_effect_command(
         &mut self,
         operation: &str,
@@ -1285,11 +1317,11 @@ impl PealayerApp {
         if !advertised {
             return Err("the selected strip effect is no longer advertised".to_string());
         }
-        self.request_hardware_effect_command("strip-preview", format!("effect play strip:{id}"))
+        self.request_hardware_effect_command("effect-preview", format!("effect play {id}"))
     }
 
     pub(crate) fn stop_strip_preview(&mut self) -> Result<(), String> {
-        self.request_hardware_effect_command("strip-stop", "effect stop strip:*".to_string())
+        self.request_hardware_effect_command("effect-stop", "effect stop".to_string())
     }
 
     pub(crate) fn save_controller_effect(&mut self) -> Result<(), String> {
@@ -1313,7 +1345,7 @@ impl PealayerApp {
                 )
             } else {
                 format!(
-                    "effect update sequence:{} {name} {category} {}",
+                    "effect update {} {name} {category} {}",
                     draft.id, draft.color
                 )
             }
@@ -1322,21 +1354,23 @@ impl PealayerApp {
             if !crate::four_d::controller::valid_strip_effect_id(id) {
                 return Err("Strip effect ID must use 1–64 lowercase letters, digits, dots, dashes, or underscores".to_string());
             }
+            let (_primitive, program_hex) =
+                Self::controller_effect_program_hex(&draft.program_json)?;
+            let description = if draft.description.trim().is_empty() {
+                "-".to_string()
+            } else {
+                Self::controller_command_argument(&draft.description)
+                    .ok_or_else(|| "Description must use no more than 64 letters, numbers, spaces, dashes, or underscores".to_string())?
+            };
             if draft.is_new {
                 format!(
-                    "effect create strip {id} {name} {} {category} {} {} {}",
-                    draft.pattern, draft.default_fps, draft.duration_ms, draft.default_pixels
+                    "effect create strip-json {id} {name} {category} {description} {program_hex} {} {} {}",
+                    draft.default_fps, draft.duration_ms, draft.default_pixels
                 )
             } else {
-                let description = if draft.description.trim().is_empty() {
-                    "-".to_string()
-                } else {
-                    Self::controller_command_argument(&draft.description)
-                        .ok_or_else(|| "Description must use no more than 64 letters, numbers, spaces, dashes, or underscores".to_string())?
-                };
                 format!(
-                    "effect update strip:{id} {name} {category} {description} {} {} {} {}",
-                    draft.pattern, draft.default_fps, draft.duration_ms, draft.default_pixels
+                    "effect update-json {id} {name} {category} {description} {program_hex} {} {} {}",
+                    draft.default_fps, draft.duration_ms, draft.default_pixels
                 )
             }
         };
@@ -2914,7 +2948,6 @@ impl Default for PealayerApp {
             timeline_zoom: 100.0,
             undo_stack: crate::four_d::history::UndoStack::default(),
             recording_keys: std::collections::HashMap::new(),
-            relay_overrides: std::collections::BTreeSet::new(),
             effects_search_query: String::new(),
             show_effect_library_editor: false,
             effect_library_selection: None,
@@ -2976,6 +3009,7 @@ impl Default for PealayerApp {
             playing_drag_action: crate::config::PlayerDragAction::TemporaryFastForward,
             fullscreen_video_background: crate::config::VideoBackground::Black,
             motion_control_mode: crate::config::MotionControlMode::Toggle,
+            held_motion_action: None,
             compact_hardware_controls: false,
             single_instance: true,
             windows_mica_backdrop: false,

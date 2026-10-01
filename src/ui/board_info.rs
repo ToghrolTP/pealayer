@@ -271,7 +271,7 @@ fn capability_list(
             );
             row(
                 ui,
-                &app.tr("Strip renderers"),
+                &app.tr("Lighting effects"),
                 &capabilities.strip_effects.len().to_string(),
             );
         });

@@ -191,7 +191,7 @@ pub struct HardwareStripEffect {
     pub name: String,
     pub category: String,
     pub description: String,
-    pub pattern: String,
+    pub program: Value,
     pub engine: String,
     pub editable: bool,
     pub default_fps: Option<u8>,
@@ -637,26 +637,7 @@ impl ControllerClient {
     pub fn hardware_capabilities(&mut self) -> Result<HardwareCapabilities, String> {
         let snapshot = self.call("controller.snapshot", json!({}))?;
         let peripherals = self.call("controller.peripherals.get", json!({}))?;
-        let mut capabilities = parse_hardware_capabilities(&snapshot, &peripherals);
-        if capabilities.supports_addressable_led && capabilities.strip_effects.is_empty() {
-            let catalog = self
-                .call(
-                    "controller.command.execute",
-                    json!({"command": "strip effect list"}),
-                )
-                .ok()
-                .and_then(|result| {
-                    result
-                        .get("output")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                })
-                .and_then(|output| serde_json::from_str::<Value>(&output).ok());
-            if let Some(catalog) = catalog {
-                capabilities.strip_effects = parse_strip_effects(&catalog);
-            }
-        }
-        Ok(capabilities)
+        Ok(parse_hardware_capabilities(&snapshot, &peripherals))
     }
 }
 
@@ -728,10 +709,7 @@ pub(crate) fn valid_strip_effect_id(id: &str) -> bool {
 }
 
 fn parse_strip_effects(value: &Value) -> Vec<HardwareStripEffect> {
-    let entries = value
-        .as_array()
-        .or_else(|| value.get("strip_effects").and_then(Value::as_array))
-        .or_else(|| value.get("effects").and_then(Value::as_array));
+    let entries = value.as_array();
     let Some(entries) = entries else {
         return Vec::new();
     };
@@ -779,11 +757,7 @@ fn parse_strip_effects(value: &Value) -> Vec<HardwareStripEffect> {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
-                pattern: entry
-                    .get("pattern")
-                    .and_then(Value::as_str)
-                    .unwrap_or(id)
-                    .to_string(),
+                program: entry.get("program")?.clone(),
                 engine: entry
                     .get("engine")
                     .and_then(Value::as_str)
@@ -1263,30 +1237,11 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
                 .to_string(),
         })
         .collect();
-    let strip_effects = if snapshot.get("effects").is_some() {
-        snapshot
-            .get("effects")
-            .map(parse_strip_effects)
-            .unwrap_or_default()
-    } else if board_connected && capability_bits & CAPABILITY_ADDRESSABLE_LED != 0 {
-        let parsed = parse_strip_effects(catalog);
-        if parsed.is_empty() {
-            parse_strip_effects(snapshot)
-        } else {
-            parsed
-        }
-    } else {
-        Vec::new()
-    };
-    let sequence_entries = snapshot
+    let strip_effects = snapshot
         .get("effects")
-        .and_then(Value::as_array)
-        .filter(|entries| !entries.is_empty())
-        .or_else(|| {
-            snapshot
-                .pointer("/macros/library")
-                .and_then(Value::as_array)
-        });
+        .map(parse_strip_effects)
+        .unwrap_or_default();
+    let sequence_entries = snapshot.get("effects").and_then(Value::as_array);
     let macros = sequence_entries
         .into_iter()
         .flatten()
@@ -1553,26 +1508,38 @@ mod tests {
 
     #[test]
     fn strip_effect_ids_are_bounded_command_tokens() {
-        for id in ["police", "white-thunder", "converging_red.v2", "effect9"] {
+        for id in [
+            "lighting-primary",
+            "effect-blue",
+            "effect_red.v2",
+            "effect9",
+        ] {
             assert!(valid_strip_effect_id(id), "expected {id:?} to be valid");
         }
-        for id in ["", "Police", "police 100 30", "police/100", "police\nstop"] {
+        for id in [
+            "",
+            "Lighting",
+            "effect 100 30",
+            "effect/100",
+            "effect\nstop",
+        ] {
             assert!(!valid_strip_effect_id(id), "expected {id:?} to be rejected");
         }
         assert!(!valid_strip_effect_id(&"a".repeat(65)));
     }
 
     #[test]
-    fn strip_effects_exist_only_when_the_attached_board_advertises_them() {
+    fn lighting_effects_are_consumed_only_from_the_unified_snapshot_catalog() {
         let snapshot = json!({
             "connected": true,
-            "hello": {"capabilities": CAPABILITY_ADDRESSABLE_LED}
-        });
-        let catalog = json!({"strip_effects": [
+            "hello": {"capabilities": CAPABILITY_ADDRESSABLE_LED},
+            "effects": [
             {
-                "id": "police",
-                "name": "Police",
+                "id": "lighting-primary",
+                "name": "Primary lighting",
+                "kind": "strip-stream",
                 "description": "Red and blue sweep",
+                "program": {"primitive":"alternating-zones","primary":{"red":255,"green":0,"blue":0},"secondary":{"red":0,"green":0,"blue":255},"period_ms":800},
                 "default_fps": 20,
                 "min_fps": 1,
                 "max_fps": 30,
@@ -1580,21 +1547,22 @@ mod tests {
                 "max_pixels": 100
             },
             {
-                "id": "police 100 30",
+                "id": "effect 100 30",
                 "name": "Injected arguments"
             }
         ]});
+        let catalog =
+            json!({"strip_effects": [{"id":"must-not-be-read","name":"Old split catalog"}]});
 
         let parsed = parse_hardware_capabilities(&snapshot, &catalog);
         assert_eq!(parsed.strip_effects.len(), 1);
-        assert_eq!(parsed.strip_effects[0].id, "police");
+        assert_eq!(parsed.strip_effects[0].id, "lighting-primary");
         assert_eq!(parsed.strip_effects[0].maximum_pixels, Some(100));
 
-        let disconnected = parse_hardware_capabilities(
-            &json!({"connected": false, "hello": {"capabilities": CAPABILITY_ADDRESSABLE_LED}}),
-            &catalog,
-        );
-        assert!(disconnected.strip_effects.is_empty());
+        let mut disconnected_snapshot = snapshot;
+        disconnected_snapshot["connected"] = json!(false);
+        let disconnected = parse_hardware_capabilities(&disconnected_snapshot, &catalog);
+        assert_eq!(disconnected.strip_effects.len(), 1);
     }
 
     #[test]
@@ -1620,13 +1588,13 @@ mod tests {
     }
 
     #[test]
-    fn legacy_strip_catalog_fallback_is_gated_by_advertised_capability() {
+    fn split_strip_catalog_is_not_queried_when_unified_effects_are_absent() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
-            for call in 0..4 {
+            for call in 0..3 {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
                 let request: Value = serde_json::from_str(line.trim()).unwrap();
@@ -1637,9 +1605,7 @@ mod tests {
                         "hello": {"capabilities": CAPABILITY_ADDRESSABLE_LED}
                     }}),
                     2 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"peripherals":[]}}),
-                    _ => json!({"jsonrpc":"2.0","id":request["id"],"result":{"output":
-                        "[{\"id\":\"white-thunder\",\"name\":\"White thunder\",\"default_fps\":30}]"
-                    }}),
+                    _ => unreachable!(),
                 };
                 writeln!(stream, "{response}").unwrap();
             }
@@ -1647,8 +1613,7 @@ mod tests {
 
         let mut client = ControllerClient::connect(&format!("pccontroller://{address}")).unwrap();
         let capabilities = client.hardware_capabilities().unwrap();
-        assert_eq!(capabilities.strip_effects.len(), 1);
-        assert_eq!(capabilities.strip_effects[0].id, "white-thunder");
+        assert!(capabilities.strip_effects.is_empty());
         server.join().unwrap();
     }
 
@@ -1658,7 +1623,7 @@ mod tests {
             "connected": true,
             "hello": {"name": "Cinema", "capabilities": CAPABILITY_PWM | CAPABILITY_RELAY_MOTION},
             "status": {"active_relays": 16},
-            "macros": {"library": [{"id": 3, "name": "Thunder", "mode": "mcu", "steps": [{"at_us": 250000, "kind": "relay-mask"}]}]}
+            "effects": [{"id": "3", "name": "Thunder", "kind": "sequence", "engine": "mcu", "steps": [{"at_us": 250000, "kind": "relay-mask"}]}]
         });
         let catalog = json!({
             "peripheral_names": {"relay.5": "Left Air"},
