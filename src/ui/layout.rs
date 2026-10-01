@@ -57,6 +57,16 @@ fn begin_effect_drag(ctx: &egui::Context, payload: EffectDragPayload) {
     egui::DragAndDrop::set_payload(ctx, payload);
 }
 
+fn secondary_click_inside(ctx: &egui::Context, rect: egui::Rect) -> bool {
+    ctx.input(|input| {
+        input.pointer.button_clicked(egui::PointerButton::Secondary)
+            && input
+                .pointer
+                .interact_pos()
+                .is_some_and(|position| rect.contains(position))
+    })
+}
+
 fn effect_drag_source<R>(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -297,7 +307,7 @@ fn humanize_machine_label(value: &str) -> String {
         .join(" ")
 }
 
-fn update_control_name(
+pub(crate) fn update_control_name(
     app: &PealayerApp,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
@@ -333,7 +343,7 @@ fn update_control_name(
     );
 }
 
-fn update_control_group(
+pub(crate) fn update_control_group(
     app: &PealayerApp,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
@@ -373,6 +383,180 @@ fn invoke_control_action(app: &PealayerApp, action_id: &str) {
             action_id: action_id.to_string(),
         },
     );
+}
+
+fn open_control_dialog(
+    app: &mut PealayerApp,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+) {
+    app.hardware_control_dialog_key = Some(control.key.clone());
+    app.hardware_control_name_draft = control.name.clone();
+    app.hardware_control_group_draft = control.group.clone();
+    app.hardware_control_pwm_percent = capabilities
+        .pwm_channels
+        .iter()
+        .find(|channel| channel.key == control.key)
+        .and_then(|channel| {
+            (capabilities.telemetry.pwm_channel == Some(channel.id))
+                .then_some(capabilities.telemetry.pwm_value.unwrap_or(0))
+        })
+        .map(pwm_percent)
+        .unwrap_or(0.0);
+}
+
+fn draw_control_context_menu(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+    edit_id: egui::Id,
+    draft_id: egui::Id,
+    group_edit_id: egui::Id,
+    group_draft_id: egui::Id,
+) {
+    ui.horizontal(|ui| {
+        ui.label(crate::ui::icons::control(&control.kind, &control.icon));
+        ui.strong(crate::ui::i18n::visual_text(app.language, &control.name));
+    });
+    ui.label(egui::RichText::new(&control.key).monospace().weak().small());
+    ui.separator();
+
+    if ui
+        .button(format!(
+            "{} {}",
+            crate::ui::icons::SLIDERS_HORIZONTAL,
+            app.tr("Details and control...")
+        ))
+        .clicked()
+    {
+        open_control_dialog(app, capabilities, control);
+        ui.close();
+    }
+
+    if !control.actions.is_empty() {
+        crate::ui::icons::submenu(
+            ui,
+            format!("{} {}", crate::ui::icons::PLAY, app.tr("Actions")),
+            |ui| {
+                for action in &control.actions {
+                    if ui
+                        .add_enabled(
+                            !app.estop_active,
+                            egui::Button::new(format!(
+                                "{} {}",
+                                crate::ui::icons::action(&action.verb),
+                                crate::ui::i18n::visual_text(app.language, &action.name)
+                            )),
+                        )
+                        .clicked()
+                    {
+                        invoke_control_action(app, &action.id);
+                        ui.close();
+                    }
+                }
+            },
+        );
+    } else if let Some(relay_id) = relay_id_from_control_key(&control.key) {
+        for (state, icon, label) in [
+            (true, crate::ui::icons::LIGHTNING, app.tr("Turn on")),
+            (false, crate::ui::icons::STOP_CIRCLE, app.tr("Turn off")),
+        ] {
+            if ui
+                .add_enabled(
+                    !app.estop_active,
+                    egui::Button::new(format!("{icon} {label}")),
+                )
+                .clicked()
+            {
+                let _ = app.engine_handle.sender.send(
+                    crate::four_d::engine::EngineMessage::ControllerCall {
+                        method: "controller.command.execute".to_string(),
+                        params: serde_json::json!({
+                            "command": format!("relay {relay_id} {}", if state { "on" } else { "off" })
+                        }),
+                    },
+                );
+                ui.close();
+            }
+        }
+    }
+
+    ui.separator();
+    if ui
+        .button(format!(
+            "{} {}",
+            crate::ui::icons::PENCIL_SIMPLE,
+            app.tr("Rename")
+        ))
+        .clicked()
+    {
+        ui.data_mut(|data| {
+            data.insert_temp(draft_id, control.name.clone());
+            data.insert_temp(edit_id, true);
+        });
+        ui.close();
+    }
+    if ui
+        .button(format!(
+            "{} {}",
+            crate::ui::icons::FOLDER_OPEN,
+            app.tr("Change group")
+        ))
+        .clicked()
+    {
+        ui.data_mut(|data| {
+            data.insert_temp(group_draft_id, control.group.clone());
+            data.insert_temp(group_edit_id, true);
+        });
+        ui.close();
+    }
+    if !control.default_name.is_empty()
+        && control.name != control.default_name
+        && ui
+            .button(format!(
+                "{} {}",
+                crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                app.tr("Restore default name")
+            ))
+            .clicked()
+    {
+        update_control_name(app, capabilities, control, String::new());
+        ui.close();
+    }
+}
+
+fn control_context_popup(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    card_response: &egui::Response,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+    edit_id: egui::Id,
+    draft_id: egui::Id,
+    group_edit_id: egui::Id,
+    group_draft_id: egui::Id,
+) {
+    // Read the pointer directly instead of relying on the frame response. Child
+    // buttons and labels own their own responses, so a normal context_menu on
+    // the frame only worked in its empty padding and appeared to be missing.
+    let open = secondary_click_inside(ui.ctx(), card_response.rect);
+    egui::Popup::menu(card_response)
+        .id(ui.make_persistent_id(("hardware-control-context", control.key.as_str())))
+        .at_pointer_fixed()
+        .open_memory(open.then_some(egui::SetOpenCommand::Bool(true)))
+        .show(|ui| {
+            draw_control_context_menu(
+                app,
+                ui,
+                capabilities,
+                control,
+                edit_id,
+                draft_id,
+                group_edit_id,
+                group_draft_id,
+            );
+        });
 }
 
 fn responsive_action_label(
@@ -615,43 +799,17 @@ fn draw_compact_control_card(
             });
         });
 
-    card.response.context_menu(|ui| {
-        if ui
-            .button(format!(
-                "{} {}",
-                crate::ui::icons::PENCIL_SIMPLE,
-                app.tr("Rename")
-            ))
-            .clicked()
-        {
-            ui.data_mut(|data| {
-                data.insert_temp(draft_id, control.name.clone());
-                data.insert_temp(edit_id, true);
-            });
-            ui.close();
-        }
-        if ui
-            .button(format!(
-                "{} {}",
-                crate::ui::icons::FOLDER_OPEN,
-                app.tr("Change group")
-            ))
-            .clicked()
-        {
-            ui.data_mut(|data| {
-                data.insert_temp(group_draft_id, control.group.clone());
-                data.insert_temp(group_edit_id, true);
-            });
-            ui.close();
-        }
-        if !control.default_name.is_empty()
-            && control.name != control.default_name
-            && ui.button(app.tr("Restore default name")).clicked()
-        {
-            update_control_name(app, capabilities, control, String::new());
-            ui.close();
-        }
-    });
+    control_context_popup(
+        app,
+        ui,
+        &card.response,
+        capabilities,
+        control,
+        edit_id,
+        draft_id,
+        group_edit_id,
+        group_draft_id,
+    );
 }
 
 fn draw_control_card(
@@ -964,42 +1122,17 @@ fn draw_control_card(
             }
         });
 
-    // Use the frame's own response for the context menu. A second full-card
-    // interaction layer would sit above and steal clicks from every child.
-    card.response.context_menu(|ui| {
-        if ui
-            .button(format!(
-                "{} {}",
-                crate::ui::icons::PENCIL_SIMPLE,
-                app.tr("Rename")
-            ))
-            .clicked()
-        {
-            ui.data_mut(|data| data.insert_temp(edit_id, true));
-            ui.close();
-        }
-        if ui
-            .button(format!(
-                "{} {}",
-                crate::ui::icons::FOLDER_OPEN,
-                app.tr("Change group")
-            ))
-            .clicked()
-        {
-            ui.data_mut(|data| {
-                data.insert_temp(group_draft_id, control.group.clone());
-                data.insert_temp(group_edit_id, true);
-            });
-            ui.close();
-        }
-        if !control.default_name.is_empty()
-            && control.name != control.default_name
-            && ui.button(app.tr("Restore default name")).clicked()
-        {
-            update_control_name(app, capabilities, control, String::new());
-            ui.close();
-        }
-    });
+    control_context_popup(
+        app,
+        ui,
+        &card.response,
+        capabilities,
+        control,
+        edit_id,
+        draft_id,
+        group_edit_id,
+        group_draft_id,
+    );
 }
 
 fn draw_control_card_grid(
@@ -1196,6 +1329,47 @@ mod timeline_row_tests {
             dropped.get(),
             "effect card payload was not released by the drop zone"
         );
+    }
+
+    #[test]
+    fn nested_card_context_trigger_uses_the_whole_item_rectangle() {
+        let context = egui::Context::default();
+        let card = egui::Rect::from_min_max(egui::pos2(20.0, 20.0), egui::pos2(220.0, 90.0));
+        let point = egui::pos2(120.0, 55.0);
+        let mut clicked_inside = false;
+        for events in [
+            vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Secondary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Secondary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ] {
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(320.0, 160.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |_ui| {
+                    clicked_inside |= secondary_click_inside(&context, card);
+                },
+            );
+            drop(output);
+        }
+        assert!(clicked_inside);
     }
 
     #[test]
@@ -2229,7 +2403,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let response = effect_drag_source(
                                                     ui,
                                                     item_id,
-                                                    payload,
+                                                    payload.clone(),
                                                     |ui| {
                                                         egui::Frame::group(ui.style())
                                                             .inner_margin(egui::Margin::symmetric(9, 7))
@@ -2288,35 +2462,67 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 if response.response.dragged() {
                                                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                                                 }
-                                                response.response.context_menu(|ui| {
+                                                let open_effect_menu = secondary_click_inside(
+                                                    ui.ctx(),
+                                                    response.response.rect,
+                                                );
+                                                egui::Popup::menu(&response.response)
+                                                    .id(item_id.with("context-menu"))
+                                                    .at_pointer_fixed()
+                                                    .open_memory(open_effect_menu.then_some(egui::SetOpenCommand::Bool(true)))
+                                                    .show(|ui| {
                                                     ui.strong(&displayed_effect_name);
-                                                    ui.separator();
-                                                    if ui.button(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, self.app.tr("Properties and edit"))).clicked() {
-                                                        if let Some(capabilities) = self.app.advertised_hardware() {
-                                                            match source {
-                                                                crate::app::EffectPresetSource::ControllerMacro(id) => {
-                                                                    if let Some(effect) = capabilities.macros.iter().find(|effect| effect.id == id) {
-                                                                        crate::ui::effects_library::select_sequence(self.app, effect);
-                                                                    }
-                                                                }
-                                                                crate::app::EffectPresetSource::ControllerStrip => {
-                                                                    if let Some(id) = preset.effect.controller_strip_effect.as_ref().map(|value| value.id.as_str())
-                                                                        && let Some(effect) = capabilities.strip_effects.iter().find(|effect| effect.id == id)
-                                                                    {
-                                                                        crate::ui::effects_library::select_strip(self.app, effect);
-                                                                    }
-                                                                }
-                                                            }
-                                                            self.app.show_effect_library_editor = true;
-                                                        }
-                                                        ui.close();
-                                                    }
                                                     let reference = match source {
                                                         crate::app::EffectPresetSource::ControllerMacro(id) => format!("sequence:{id}"),
                                                         crate::app::EffectPresetSource::ControllerStrip => format!("strip:{}", preset.effect.controller_strip_effect.as_ref().map(|value| value.id.as_str()).unwrap_or_default()),
                                                     };
+                                                    ui.label(egui::RichText::new(&reference).monospace().weak().small());
+                                                    ui.separator();
+                                                    if ui.button(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, self.app.tr("Properties and edit"))).clicked() {
+                                                        if crate::ui::effects_library::select_advertised_effect(
+                                                            self.app,
+                                                            source,
+                                                            preset.effect.controller_strip_effect.as_ref().map(|value| value.id.as_str()),
+                                                        ).is_some() {
+                                                            self.app.show_effect_library_editor = true;
+                                                        }
+                                                        ui.close();
+                                                    }
                                                     if ui.button(format!("{} {}", crate::ui::icons::PLAY, self.app.tr("Run now"))).clicked() {
                                                         if let Err(error) = self.app.play_controller_effect(&reference) {
+                                                            self.app.set_osd(error);
+                                                        }
+                                                        ui.close();
+                                                    }
+                                                    if ui.button(format!("{} {}", crate::ui::icons::STOP_CIRCLE, self.app.tr("Stop"))).clicked() {
+                                                        if let Err(error) = self.app.stop_controller_effect(&reference) {
+                                                            self.app.set_osd(error);
+                                                        }
+                                                        ui.close();
+                                                    }
+                                                    if ui.button(format!("{} {}", crate::ui::icons::PLUS, self.app.tr("Place at playhead"))).clicked() {
+                                                        self.app.place_controller_effect_at_playhead(&payload);
+                                                        ui.close();
+                                                    }
+                                                    ui.separator();
+                                                    if ui.button(format!("{} {}", crate::ui::icons::COPY, self.app.tr("Duplicate"))).clicked() {
+                                                        if crate::ui::effects_library::select_advertised_effect(
+                                                            self.app,
+                                                            source,
+                                                            preset.effect.controller_strip_effect.as_ref().map(|value| value.id.as_str()),
+                                                        ).is_some() {
+                                                            crate::ui::effects_library::duplicate_selected(self.app);
+                                                        }
+                                                        ui.close();
+                                                    }
+                                                    if ui.button(format!("{} {}", crate::ui::icons::TRASH, self.app.tr("Delete"))).clicked() {
+                                                        if crate::ui::effects_library::select_advertised_effect(
+                                                            self.app,
+                                                            source,
+                                                            preset.effect.controller_strip_effect.as_ref().map(|value| value.id.as_str()),
+                                                        ).is_some()
+                                                            && let Err(error) = self.app.delete_controller_effect()
+                                                        {
                                                             self.app.set_osd(error);
                                                         }
                                                         ui.close();
@@ -4794,6 +5000,21 @@ fn format_timecode(t: f64) -> String {
 }
 
 impl PealayerApp {
+    pub(crate) fn place_controller_effect_at_playhead(
+        &mut self,
+        payload: &EffectDragPayload,
+    ) -> bool {
+        let rows = timeline_track_rows(self);
+        let Some(index) = rows
+            .iter()
+            .position(|row| row.kind == TimelineTrackKind::ControllerMacros)
+        else {
+            self.set_osd(self.tr("The Controller effects track is not available."));
+            return false;
+        };
+        self.handle_effect_drop(payload, index as i32, self.playback_time)
+    }
+
     /// Locks or unlocks a capability-advertised output track.
     pub fn lock_track(&mut self, relay_id: u8, locked: bool) {
         if locked {

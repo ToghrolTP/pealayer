@@ -6,6 +6,7 @@ pub mod dialog;
 pub mod effects_library;
 pub mod error;
 pub mod four_d;
+pub mod hardware_control;
 pub mod i18n;
 pub mod icons;
 pub mod layout;

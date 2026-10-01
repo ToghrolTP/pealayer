@@ -276,6 +276,10 @@ pub struct PealayerApp {
     pub(crate) show_board_info_dialog: bool,
     pub(crate) board_info_tab: usize,
     pub(crate) board_name_draft: String,
+    pub(crate) hardware_control_dialog_key: Option<String>,
+    pub(crate) hardware_control_name_draft: String,
+    pub(crate) hardware_control_group_draft: String,
+    pub(crate) hardware_control_pwm_percent: f64,
     pub(crate) board_operation: Option<String>,
     pub(crate) board_operation_status: String,
     pub(crate) board_reboot_armed: bool,
@@ -904,6 +908,7 @@ impl eframe::App for PealayerApp {
                 crate::ui::preferences::draw(self, ui);
                 crate::ui::effects_library::draw_editor(self, ui);
                 crate::ui::board_info::draw(self, ui);
+                crate::ui::hardware_control::draw(self, ui);
 
                 crate::ui::open_url::draw(self, ui);
 
@@ -1317,6 +1322,16 @@ impl PealayerApp {
         self.request_hardware_effect_command(
             "effect-play",
             format!("effect play {}", reference.trim()),
+        )
+    }
+
+    pub(crate) fn stop_controller_effect(&mut self, reference: &str) -> Result<(), String> {
+        if reference.trim().is_empty() {
+            return Err("Select a PCController effect first".to_string());
+        }
+        self.request_hardware_effect_command(
+            "effect-stop",
+            format!("effect stop {}", reference.trim()),
         )
     }
 
@@ -2869,6 +2884,10 @@ impl Default for PealayerApp {
             show_board_info_dialog: false,
             board_info_tab: 0,
             board_name_draft: String::new(),
+            hardware_control_dialog_key: None,
+            hardware_control_name_draft: String::new(),
+            hardware_control_group_draft: String::new(),
+            hardware_control_pwm_percent: 0.0,
             board_operation: None,
             board_operation_status: String::new(),
             board_reboot_armed: false,

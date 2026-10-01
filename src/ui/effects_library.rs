@@ -45,6 +45,136 @@ pub(crate) fn select_strip(
     };
 }
 
+pub(crate) fn select_advertised_effect(
+    app: &mut PealayerApp,
+    source: crate::app::EffectPresetSource,
+    strip_id: Option<&str>,
+) -> Option<String> {
+    let capabilities = app.advertised_hardware()?;
+    match source {
+        crate::app::EffectPresetSource::ControllerMacro(id) => {
+            let effect = capabilities.macros.iter().find(|effect| effect.id == id)?;
+            let reference = format!("sequence:{id}");
+            select_sequence(app, effect);
+            Some(reference)
+        }
+        crate::app::EffectPresetSource::ControllerStrip => {
+            let id = strip_id?;
+            let effect = capabilities
+                .strip_effects
+                .iter()
+                .find(|effect| effect.id == id)?;
+            let reference = format!("strip:{id}");
+            select_strip(app, effect);
+            Some(reference)
+        }
+    }
+}
+
+pub(crate) fn duplicate_selected(app: &mut PealayerApp) {
+    let duplicate_id = if app.effect_library_draft.kind == "sequence" {
+        let used = app
+            .advertised_hardware()
+            .map(|capabilities| {
+                capabilities
+                    .macros
+                    .into_iter()
+                    .map(|effect| effect.id)
+                    .collect::<std::collections::BTreeSet<_>>()
+            })
+            .unwrap_or_default();
+        (0_u16..=255)
+            .find(|candidate| !used.contains(&u64::from(*candidate)))
+            .unwrap_or(0)
+            .to_string()
+    } else {
+        format!("{}-copy", app.effect_library_draft.id)
+    };
+    app.effect_library_selection = None;
+    app.effect_library_draft.reference.clear();
+    app.effect_library_draft.id = duplicate_id;
+    app.effect_library_draft.name = format!("{} copy", app.effect_library_draft.name);
+    app.effect_library_draft.is_new = true;
+    app.show_effect_library_editor = true;
+}
+
+fn draw_saved_effect_context_menu(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    name: &str,
+    reference: &str,
+    payload: &crate::app::EffectDragPayload,
+) {
+    ui.strong(crate::ui::i18n::visual_text(app.language, name));
+    ui.label(egui::RichText::new(reference).monospace().weak().small());
+    ui.separator();
+    if ui
+        .button(format!(
+            "{} {}",
+            crate::ui::icons::PENCIL_SIMPLE,
+            app.tr("Properties and edit")
+        ))
+        .clicked()
+    {
+        app.show_effect_library_editor = true;
+        ui.close();
+    }
+    if ui
+        .button(format!("{} {}", crate::ui::icons::PLAY, app.tr("Run now")))
+        .clicked()
+    {
+        if let Err(error) = app.play_controller_effect(reference) {
+            app.set_osd(error);
+        }
+        ui.close();
+    }
+    if ui
+        .button(format!(
+            "{} {}",
+            crate::ui::icons::STOP_CIRCLE,
+            app.tr("Stop")
+        ))
+        .clicked()
+    {
+        if let Err(error) = app.stop_controller_effect(reference) {
+            app.set_osd(error);
+        }
+        ui.close();
+    }
+    if ui
+        .button(format!(
+            "{} {}",
+            crate::ui::icons::PLUS,
+            app.tr("Place at playhead")
+        ))
+        .clicked()
+    {
+        app.place_controller_effect_at_playhead(payload);
+        ui.close();
+    }
+    ui.separator();
+    if ui
+        .button(format!(
+            "{} {}",
+            crate::ui::icons::COPY,
+            app.tr("Duplicate")
+        ))
+        .clicked()
+    {
+        duplicate_selected(app);
+        ui.close();
+    }
+    if ui
+        .button(format!("{} {}", crate::ui::icons::TRASH, app.tr("Delete")))
+        .clicked()
+    {
+        if let Err(error) = app.delete_controller_effect() {
+            app.set_osd(error);
+        }
+        ui.close();
+    }
+}
+
 fn start_new_sequence(
     app: &mut PealayerApp,
     sequences: &[crate::four_d::controller::HardwareMacro],
@@ -117,21 +247,54 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         egui::ScrollArea::vertical().id_salt("controller_effect_editor_list").auto_shrink([false, false]).show(ui, |ui| {
                             for effect in &sequences {
                                 let reference = format!("sequence:{}", effect.id);
+                                let payload = crate::app::EffectDragPayload {
+                                    name: effect.name.clone(),
+                                    icon: String::new(),
+                                    duration_ms: effect.duration_ms,
+                                    target: crate::four_d::models::HardwareTarget::ControllerMacro,
+                                    actions: Vec::new(),
+                                    controller_macro: Some(crate::four_d::models::ControllerMacroCue {
+                                        id: effect.id,
+                                        mode: effect.mode.clone(),
+                                    }),
+                                    controller_strip_effect: None,
+                                };
                                 let selected = app.effect_library_selection.as_deref() == Some(reference.as_str());
-                                if ui.add_sized([ui.available_width(), 44.0], egui::Button::new(format!(
+                                let response = ui.add_sized([ui.available_width(), 44.0], egui::Button::new(format!(
                                     "{}  {}\n   {} · {}", crate::ui::icons::WAVEFORM, effect.name, effect.category, effect.mode
-                                )).selected(selected)).clicked() {
+                                )).selected(selected));
+                                if response.clicked() {
                                     select_sequence(app, effect);
                                 }
+                                response.context_menu(|ui| {
+                                    select_sequence(app, effect);
+                                    draw_saved_effect_context_menu(app, ui, &effect.name, &reference, &payload);
+                                });
                             }
                             for effect in &strips {
                                 let reference = format!("strip:{}", effect.id);
+                                let payload = crate::app::EffectDragPayload {
+                                    name: effect.name.clone(),
+                                    icon: String::new(),
+                                    duration_ms: effect.default_duration_ms.unwrap_or(5_000),
+                                    target: crate::four_d::models::HardwareTarget::ControllerMacro,
+                                    actions: Vec::new(),
+                                    controller_macro: None,
+                                    controller_strip_effect: Some(crate::four_d::models::ControllerStripEffectCue {
+                                        id: effect.id.clone(),
+                                    }),
+                                };
                                 let selected = app.effect_library_selection.as_deref() == Some(reference.as_str());
-                                if ui.add_sized([ui.available_width(), 44.0], egui::Button::new(format!(
+                                let response = ui.add_sized([ui.available_width(), 44.0], egui::Button::new(format!(
                                     "{}  {}\n   {} · {}", crate::ui::icons::SPARKLE, effect.name, effect.category, effect.engine
-                                )).selected(selected)).clicked() {
+                                )).selected(selected));
+                                if response.clicked() {
                                     select_strip(app, effect);
                                 }
+                                response.context_menu(|ui| {
+                                    select_strip(app, effect);
+                                    draw_saved_effect_context_menu(app, ui, &effect.name, &reference, &payload);
+                                });
                             }
                         });
                     },
@@ -204,11 +367,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 if let Err(error) = app.play_controller_effect(&reference) { app.set_osd(error); }
                             }
                             if ui.add_enabled(saved, egui::Button::new(format!("{} {}", crate::ui::icons::COPY, app.tr("Duplicate")))).clicked() {
-                                app.effect_library_selection = None;
-                                app.effect_library_draft.reference.clear();
-                                app.effect_library_draft.id = format!("{}-copy", app.effect_library_draft.id);
-                                app.effect_library_draft.name = format!("{} copy", app.effect_library_draft.name);
-                                app.effect_library_draft.is_new = true;
+                                duplicate_selected(app);
                             }
                             if ui.add_enabled(saved, egui::Button::new(format!("{} {}", crate::ui::icons::TRASH, app.tr("Delete")))).clicked() {
                                 if let Err(error) = app.delete_controller_effect() { app.set_osd(error); }
