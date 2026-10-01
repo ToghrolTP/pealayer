@@ -4,6 +4,8 @@ import {
   CaretRightFilled,
   ClockCircleOutlined,
   DeleteOutlined,
+  DesktopOutlined,
+  EditOutlined,
   FastBackwardOutlined,
   FastForwardOutlined,
   PauseOutlined,
@@ -12,7 +14,7 @@ import {
   SoundOutlined,
   VideoCameraOutlined,
 } from '@ant-design/icons';
-import { Button, Empty, Slider, Tooltip } from 'antd';
+import { Button, Empty, Input, InputNumber, message, Modal, Popconfirm, Select, Slider, Tooltip } from 'antd';
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
 
@@ -22,6 +24,7 @@ interface StudioTabProps {
   locale: UiLocale;
   appName: string;
   quickSeekSeconds: number;
+  apiBaseUrl: string;
 }
 
 const formatTime = (seconds = 0, showMilliseconds = true) => {
@@ -40,10 +43,13 @@ const effectGlyph = (target: string) => {
   return <ClockCircleOutlined />;
 };
 
-export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds }) => {
+export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl }) => {
   const [selectedEffect, setSelectedEffect] = useState<string | null>(null);
+  const [effectEditorOpen, setEffectEditorOpen] = useState(false);
+  const [effectDraft, setEffectDraft] = useState<Record<string, any> | null>(null);
   const [seekDraft, setSeekDraft] = useState<number | null>(null);
   const effects = state.effects ?? [];
+  const controllerEffects = state.controller_effects ?? [];
   const cues = state.cues ?? [];
   const currentSeconds = state.playback_time ?? 0;
   const durationSeconds = state.duration ?? 0;
@@ -51,7 +57,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
     const cueEnd = cues.reduce((maximum, cue) => Math.max(maximum, cue.start_time_ms + cue.duration_ms), 0);
     return Math.max(durationSeconds * 1000, cueEnd, 1000);
   }, [cues, durationSeconds]);
-  const selected = selectedEffect ? effects.find((effect) => effect.id === selectedEffect) : undefined;
+  const selected = selectedEffect ? controllerEffects.find((effect) => effect.reference === selectedEffect) : undefined;
   const mediaName = state.current_video
     ? state.current_video.split(/[\\/]/).pop()
     : tr(locale, 'No Media Playing');
@@ -59,11 +65,28 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   const activeSeek = seekDraft ?? seekPercent;
   const canRecord = (state.recordable_track_count ?? 0) > 0;
 
-  const addCue = (effectId: string) => {
-    sendCmd('add_effect_cue', {
-      effect_id: effectId,
+  const addCue = (reference: string) => {
+    sendCmd('controller_effect_cue.add', {
+      reference,
       start_time_ms: Math.max(0, Math.round(currentSeconds * 1000)),
     });
+  };
+
+  const editEffect = (effect?: typeof controllerEffects[number]) => {
+    setEffectDraft(effect ? {
+      ...effect,
+      programText: JSON.stringify(effect.program ?? {}, null, 2),
+      color: 'green',
+      default_fps: effect.default_fps ?? 20,
+      default_pixels: effect.default_pixels ?? 100,
+      is_new: false,
+    } : {
+      reference: '', id: '', name: '', category: 'Lighting', description: '',
+      kind: 'strip-stream', programText: '{}',
+      color: 'green', default_fps: 20, duration_ms: 5000, default_pixels: 100,
+      is_new: true,
+    });
+    setEffectEditorOpen(true);
   };
 
   return (
@@ -74,54 +97,60 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             <span className="eyebrow">{tr(locale, 'Live project')}</span>
             <h2>{tr(locale, 'Effects')}</h2>
           </div>
-          <span className="count-badge">{effects.length}</span>
+          <div className="effects-heading-actions">
+            <Button type="text" icon={<PlusOutlined />} onClick={() => editEffect()} aria-label={tr(locale, 'New effect')} />
+            <span className="count-badge">{controllerEffects.length}</span>
+          </div>
         </header>
 
-        <div className="mode-switch" role="group" aria-label={tr(locale, 'Studio mode')}>
-          <button
-            className={!state.recording_armed ? 'is-active' : ''}
-            onClick={() => sendCmd('set_recording', { enabled: false })}
-          >
-            <CaretRightFilled /> {tr(locale, 'Play Mode')}
-          </button>
-          <Tooltip title={canRecord ? tr(locale, 'Arm hardware tracks for recording') : tr(locale, 'No recordable hardware tracks are available')}>
-            <button
-              className={state.recording_armed ? 'is-active is-recording' : ''}
-              onClick={() => sendCmd('set_recording', { enabled: true })}
-              disabled={!canRecord}
+        {canRecord && (
+          <div className="effects-toolbar">
+            <Button
+              danger={state.recording_armed}
+              icon={<span className="record-dot" />}
+              onClick={() => sendCmd('set_recording', { enabled: !state.recording_armed })}
             >
-              <span className="record-dot" /> {state.recording ? tr(locale, 'Recording') : tr(locale, 'Record Mode')}
-            </button>
-          </Tooltip>
-        </div>
+              {state.recording ? tr(locale, 'Recording') : state.recording_armed ? tr(locale, 'Armed') : tr(locale, 'Record hardware')}
+            </Button>
+          </div>
+        )}
 
         <div className="effect-list">
-          {effects.length === 0 ? (
+          {controllerEffects.length === 0 ? (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={tr(locale, 'No effect profiles are available in the current project.')}
+              description={tr(locale, 'No effects')}
             />
-          ) : effects.map((effect, index) => {
-            const selectedCard = selectedEffect === effect.id;
+          ) : controllerEffects.map((effect) => {
+            const selectedCard = selectedEffect === effect.reference;
             return (
               <article
-                key={effect.id}
+                key={effect.reference}
                 className={`effect-profile ${selectedCard ? 'is-selected' : ''}`}
-                onClick={() => setSelectedEffect(effect.id)}
+                onClick={() => setSelectedEffect(effect.reference)}
               >
-                <span className="effect-profile__icon">{effectGlyph(effect.target)}</span>
+                <span className="effect-profile__icon">{effectGlyph(effect.kind === 'sequence' ? 'controller' : 'strip')}</span>
                 <div className="effect-profile__body">
                   <strong>{effect.name}</strong>
-                  <span>{effect.action_count} {tr(locale, 'actions')} · {effect.duration_ms} ms</span>
+                  <span>{effect.category} · {effect.action_count} {tr(locale, 'actions')} · {effect.duration_ms} ms</span>
                 </div>
-                <kbd>F{index + 1}</kbd>
+                <Tooltip title={tr(locale, 'Play effect')}>
+                  <Button
+                    type="text"
+                    icon={<CaretRightFilled />}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      sendCmd('controller_effect.play', { reference: effect.reference });
+                    }}
+                  />
+                </Tooltip>
                 <Tooltip title={tr(locale, 'Add cue at playhead')}>
                   <Button
                     type="text"
                     icon={<PlusOutlined />}
                     onClick={(event) => {
                       event.stopPropagation();
-                      addCue(effect.id);
+                      addCue(effect.reference);
                     }}
                   />
                 </Tooltip>
@@ -133,9 +162,56 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         <footer className="effects-panel__footer">
           <span className={`status-light ${state.hardware_connected ? 'is-online' : ''}`} />
           <span>{state.hardware?.board_name || tr(locale, 'No hardware')}</span>
-          {selected && <strong>{selected.name}</strong>}
+          {selected && (
+            <span className="effect-selection-actions">
+              {selected.editable && <Button type="text" size="small" icon={<EditOutlined />} onClick={() => editEffect(selected)} />}
+              <Popconfirm
+                title={tr(locale, 'Delete effect?')}
+                onConfirm={() => sendCmd('controller_effect.delete', { reference: selected.reference })}
+              >
+                <Button type="text" danger size="small" icon={<DeleteOutlined />} />
+              </Popconfirm>
+              <strong>{selected.name}</strong>
+            </span>
+          )}
         </footer>
       </section>
+
+      <Modal
+        title={effectDraft?.is_new ? tr(locale, 'New effect') : tr(locale, 'Effect properties')}
+        open={effectEditorOpen}
+        onCancel={() => setEffectEditorOpen(false)}
+        okText={tr(locale, 'Save')}
+        width={640}
+        onOk={() => {
+          if (!effectDraft) return;
+          let program = {};
+          try {
+            program = JSON.parse(effectDraft.programText || '{}');
+          } catch {
+            void message.error(tr(locale, 'Program must be valid JSON'));
+            return;
+          }
+          const { programText, ...payload } = effectDraft;
+          sendCmd('controller_effect.save', { ...payload, program });
+          setEffectEditorOpen(false);
+        }}
+      >
+        {effectDraft && (
+          <div className="effect-editor-grid">
+            <label><span>{tr(locale, 'Type')}</span><Select value={effectDraft.kind} options={[{ value: 'strip-stream', label: tr(locale, 'Lighting') }, { value: 'sequence', label: tr(locale, 'Sequence') }]} onChange={(kind) => setEffectDraft({ ...effectDraft, kind })} /></label>
+            <label><span>{tr(locale, 'ID')}</span><Input value={effectDraft.id} onChange={(event) => setEffectDraft({ ...effectDraft, id: event.target.value })} /></label>
+            <label><span>{tr(locale, 'Name')}</span><Input value={effectDraft.name} onChange={(event) => setEffectDraft({ ...effectDraft, name: event.target.value })} /></label>
+            <label><span>{tr(locale, 'Category')}</span><Input value={effectDraft.category} onChange={(event) => setEffectDraft({ ...effectDraft, category: event.target.value })} /></label>
+            <label className="effect-editor-grid__wide"><span>{tr(locale, 'Description')}</span><Input value={effectDraft.description} onChange={(event) => setEffectDraft({ ...effectDraft, description: event.target.value })} /></label>
+            <label><span>{tr(locale, 'Duration (ms)')}</span><InputNumber min={1} value={effectDraft.duration_ms} onChange={(duration_ms) => setEffectDraft({ ...effectDraft, duration_ms: duration_ms ?? 1 })} /></label>
+            {effectDraft.kind === 'strip-stream' && <label><span>{tr(locale, 'Frames per second')}</span><InputNumber min={1} max={120} value={effectDraft.default_fps} onChange={(default_fps) => setEffectDraft({ ...effectDraft, default_fps: default_fps ?? 20 })} /></label>}
+            {effectDraft.kind === 'strip-stream' && <label><span>{tr(locale, 'Pixels')}</span><InputNumber min={1} value={effectDraft.default_pixels} onChange={(default_pixels) => setEffectDraft({ ...effectDraft, default_pixels: default_pixels ?? 100 })} /></label>}
+            {effectDraft.kind === 'sequence' && <label><span>{tr(locale, 'Color')}</span><Input value={effectDraft.color} onChange={(event) => setEffectDraft({ ...effectDraft, color: event.target.value })} /></label>}
+            {effectDraft.kind === 'strip-stream' && <label className="effect-editor-grid__wide"><span>{tr(locale, 'Program')}</span><Input.TextArea autoSize={{ minRows: 7, maxRows: 16 }} value={effectDraft.programText} onChange={(event) => setEffectDraft({ ...effectDraft, programText: event.target.value })} /></label>}
+          </div>
+        )}
+      </Modal>
 
       <section className="studio-panel player-panel-web">
         <header className="studio-panel__header">
@@ -151,7 +227,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         <div className="program-viewer">
           {state.current_video ? (
             <img
-              src={`/api/player/frame?path=${encodeURIComponent(state.current_video)}`}
+              src={`${apiBaseUrl}/api/player/frame`}
               alt={tr(locale, 'Video Preview')}
             />
           ) : (
@@ -162,7 +238,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
           )}
           <div className="program-viewer__chrome">
             <span>{appName}</span>
-            <span>{state.workspace === 'nle' ? tr(locale, 'Edit Mode') : tr(locale, 'Play Mode')}</span>
+            <span>{state.workspace === 'nle' ? tr(locale, 'Timeline') : tr(locale, 'Player')}</span>
           </div>
         </div>
 
@@ -213,15 +289,20 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             <h2>{tr(locale, 'Cues')}</h2>
           </div>
           <div className="timeline-toolbar__actions">
-            <Button
-              type={state.workspace === 'nle' ? 'primary' : 'default'}
-              onClick={() => sendCmd('set_workspace', { nle: true })}
-            >
-              {tr(locale, 'Edit Mode')}
-            </Button>
-            <Button onClick={() => sendCmd('set_workspace', { nle: false })}>
-              {tr(locale, 'Play Mode')}
-            </Button>
+            <Tooltip title={tr(locale, 'Show timeline workspace')}>
+              <Button
+                type={state.workspace === 'nle' ? 'primary' : 'default'}
+                icon={<EditOutlined />}
+                onClick={() => sendCmd('set_workspace', { nle: true })}
+              />
+            </Tooltip>
+            <Tooltip title={tr(locale, 'Show player workspace')}>
+              <Button
+                type={state.workspace === 'simple' ? 'primary' : 'default'}
+                icon={<DesktopOutlined />}
+                onClick={() => sendCmd('set_workspace', { nle: false })}
+              />
+            </Tooltip>
             <span className="timeline-meta">{cues.length} {tr(locale, 'cues')}</span>
           </div>
         </header>
@@ -240,7 +321,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             style={{ left: `${Math.min(100, (currentSeconds * 1000 / timelineDurationMs) * 100)}%` }}
           />
           {effects.length === 0 ? (
-            <div className="timeline-empty">{tr(locale, 'Create or discover an effect profile to begin authoring cues.')}</div>
+            <div className="timeline-empty">{tr(locale, 'No effects')}</div>
           ) : effects.map((effect) => {
             const effectCues = cues.filter((cue) => cue.effect_id === effect.id);
             return (

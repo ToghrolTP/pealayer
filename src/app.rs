@@ -449,6 +449,58 @@ impl eframe::App for PealayerApp {
         if should_broadcast {
             self.last_web_broadcast = Some(now);
             let hardware = self.advertised_hardware();
+            let controller_effects = hardware
+                .as_ref()
+                .map(|capabilities| {
+                    capabilities
+                        .macros
+                        .iter()
+                        .map(|effect| crate::platform::interop::WebControllerEffect {
+                            reference: format!("effect:{}", effect.id),
+                            id: effect.id.to_string(),
+                            name: effect.name.clone(),
+                            category: effect.category.clone(),
+                            description: String::new(),
+                            kind: "sequence".to_string(),
+                            duration_ms: effect.duration_ms,
+                            action_count: effect.steps.len(),
+                            editable: true,
+                            program: serde_json::Value::Array(
+                                effect
+                                    .steps
+                                    .iter()
+                                    .map(|step| {
+                                        serde_json::json!({
+                                            "at_us": step.at_us,
+                                            "kind": step.kind,
+                                            "target": step.target,
+                                            "value": step.value,
+                                        })
+                                    })
+                                    .collect(),
+                            ),
+                            default_fps: None,
+                            default_pixels: None,
+                        })
+                        .chain(capabilities.strip_effects.iter().map(|effect| {
+                            crate::platform::interop::WebControllerEffect {
+                                reference: format!("effect:{}", effect.id),
+                                id: effect.id.clone(),
+                                name: effect.name.clone(),
+                                category: effect.category.clone(),
+                                description: effect.description.clone(),
+                                kind: "strip-stream".to_string(),
+                                duration_ms: effect.default_duration_ms.unwrap_or_default(),
+                                action_count: 1,
+                                editable: effect.editable,
+                                program: effect.program.clone(),
+                                default_fps: effect.default_fps,
+                                default_pixels: effect.default_pixels,
+                            }
+                        }))
+                        .collect()
+                })
+                .unwrap_or_default();
             let controller_connected = self
                 .engine_handle
                 .is_connected
@@ -522,6 +574,7 @@ impl eframe::App for PealayerApp {
                         },
                     })
                     .collect(),
+                controller_effects,
                 cues: self
                     .timeline
                     .instances
@@ -1708,6 +1761,75 @@ impl PealayerApp {
                 self.selected_instance_ids.remove(&instance_id);
                 if previous_len != self.timeline.instances.len() {
                     self.sync_timeline_engine();
+                }
+            }
+            InteropCommand::AddControllerEffectCue {
+                reference,
+                start_time_ms,
+            } => {
+                let preset = self.advertised_effect_presets().into_iter().find(|preset| {
+                    let candidate = match preset.source {
+                        EffectPresetSource::ControllerMacro(id) => format!("effect:{id}"),
+                        EffectPresetSource::ControllerStrip => preset
+                            .effect
+                            .controller_strip_effect
+                            .as_ref()
+                            .map(|effect| format!("effect:{}", effect.id))
+                            .unwrap_or_default(),
+                    };
+                    candidate == reference
+                });
+                let Some(preset) = preset else {
+                    self.set_osd(self.tr("Effect is no longer available"));
+                    return;
+                };
+                let effect_id = preset.effect.id;
+                self.timeline.templates.push(preset.effect);
+                let instance = crate::four_d::models::EffectInstance::new(effect_id, start_time_ms);
+                self.selected_instance_ids.clear();
+                self.selected_instance_ids.insert(instance.id);
+                self.timeline.instances.push(instance);
+                self.sync_timeline_engine();
+            }
+            InteropCommand::PlayControllerEffect { reference } => {
+                if let Err(error) = self.play_controller_effect(&reference) {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::StopControllerEffect => {
+                if let Err(error) = self.stop_strip_preview() {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::DeleteControllerEffect { reference } => {
+                self.effect_library_draft.reference = reference;
+                self.effect_library_draft.is_new = false;
+                if let Err(error) = self.delete_controller_effect() {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::SaveControllerEffect { effect } => {
+                self.effect_library_draft = ControllerEffectDraft {
+                    reference: effect.reference,
+                    id: effect.id,
+                    name: effect.name,
+                    category: effect.category,
+                    description: effect.description,
+                    kind: effect.kind,
+                    program_json: serde_json::to_string_pretty(&effect.program)
+                        .unwrap_or_else(|_| "{}".to_string()),
+                    color: effect.color,
+                    default_fps: effect.default_fps,
+                    duration_ms: effect.duration_ms,
+                    default_pixels: effect.default_pixels,
+                    is_new: effect.is_new,
+                };
+                if let Err(error) = self.save_controller_effect() {
+                    self.set_osd(error);
+                    return;
                 }
             }
             InteropCommand::SetRecording { enabled } => {

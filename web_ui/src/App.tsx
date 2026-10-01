@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { ConfigProvider, theme, Layout, Menu } from 'antd';
 import {
   AppstoreOutlined,
@@ -20,6 +20,7 @@ export interface RuntimeConfig {
   appName: string;
   version: string;
   websocketPath: string;
+  appIconPath: string;
   locale: 'en' | 'fa';
   direction: 'ltr' | 'rtl';
   theme: 'system' | 'light' | 'dark';
@@ -34,6 +35,10 @@ const App: React.FC = () => {
   const [runtime, setRuntime] = useState<RuntimeConfig | null>(null);
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('dark');
   const [quickSeekSeconds, setQuickSeekSeconds] = useState<number>(10);
+  const [connectionTarget, setConnectionTarget] = useState<string>(() => {
+    const query = new URLSearchParams(window.location.search).get('connect');
+    return query ?? window.localStorage.getItem('pealayer.connectionTarget') ?? '';
+  });
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -41,7 +46,7 @@ const App: React.FC = () => {
     if (!runtime) return;
     document.documentElement.lang = runtime.locale;
     document.documentElement.dir = runtime.direction;
-    document.title = `${runtime.appName} — ${tr(runtime.locale, 'Control Center')}`;
+    document.title = `${runtime.appName} — ${tr(runtime.locale, 'Web Studio')}`;
     const media = window.matchMedia('(prefers-color-scheme: light)');
     const applyTheme = () => {
       const nextTheme = runtime.theme === 'system'
@@ -55,18 +60,61 @@ const App: React.FC = () => {
     return () => media.removeEventListener('change', applyTheme);
   }, [runtime]);
 
-  const sendCmd = (command: string, payload: Record<string, any> = {}) => {
-    const body = JSON.stringify({ command, ...payload });
+  const nextRequestId = useRef(1);
+  const sendCmd = useCallback((command: string, payload: Record<string, any> = {}) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(body);
-    } else {
+      const methodAliases: Record<string, string> = {
+        add_effect_cue: 'pealayer.timeline.effect.add',
+        remove_effect_cue: 'pealayer.timeline.effect.remove',
+        set_recording: 'pealayer.recording.set',
+      };
+      const params = command === 'set_workspace'
+        ? { workspace: payload.nle ? 'nle' : 'simple' }
+        : payload;
+      wsRef.current.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: nextRequestId.current++,
+        method: methodAliases[command] || command,
+        params,
+      }));
+    } else if (!connectionTarget) {
+      const body = JSON.stringify({ command, ...payload });
       fetch('/api/player/command', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,
       }).catch(() => {});
     }
-  };
+  }, [connectionTarget]);
+
+  const resolveWebSocketUrl = useCallback(() => {
+    const fallbackProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    if (!connectionTarget) {
+      return `${fallbackProtocol}//${window.location.host}${runtime?.websocketPath || '/ws'}`;
+    }
+    try {
+      const target = new URL(connectionTarget.includes('://') ? connectionTarget : `ws://${connectionTarget}`);
+      if (target.protocol === 'http:') target.protocol = 'ws:';
+      if (target.protocol === 'https:') target.protocol = 'wss:';
+      if (!target.pathname || target.pathname === '/') target.pathname = runtime?.websocketPath || '/ws';
+      return target.toString();
+    } catch {
+      return connectionTarget;
+    }
+  }, [connectionTarget, runtime]);
+
+  const apiBaseUrl = (() => {
+    try {
+      const url = new URL(resolveWebSocketUrl());
+      url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+      url.pathname = '';
+      url.search = '';
+      url.hash = '';
+      return url.toString().replace(/\/$/, '');
+    } catch {
+      return '';
+    }
+  })();
 
   useEffect(() => {
     let disposed = false;
@@ -105,8 +153,7 @@ const App: React.FC = () => {
     let reconnectTimer: number | undefined;
     const connectWS = () => {
       if (disposed) return;
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${proto}//${window.location.host}${runtime.websocketPath}`;
+      const wsUrl = resolveWebSocketUrl();
 
       try {
         const ws = new WebSocket(wsUrl);
@@ -131,8 +178,12 @@ const App: React.FC = () => {
         ws.onmessage = (ev) => {
           try {
             const data = JSON.parse(ev.data);
-            setState((prev) => ({ ...prev, ...data }));
-            setConnected(true);
+            if (data && data.jsonrpc === '2.0') return;
+            const nextState = data?.type === 'state' ? data.state : data;
+            if (nextState && typeof nextState === 'object' && typeof nextState.status === 'string') {
+              setState((prev) => ({ ...prev, ...nextState }));
+              setConnected(true);
+            }
           } catch {}
         };
       } catch {
@@ -146,7 +197,7 @@ const App: React.FC = () => {
     connectWS();
 
     const httpInterval = setInterval(async () => {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      if (connectionTarget || (wsRef.current && wsRef.current.readyState === WebSocket.OPEN)) {
         return; // Skip HTTP polling when WebSocket is connected
       }
       try {
@@ -170,7 +221,13 @@ const App: React.FC = () => {
       if (wsRef.current) wsRef.current.close();
       wsRef.current = null;
     };
-  }, [runtime]);
+  }, [runtime, connectionTarget, resolveWebSocketUrl]);
+
+  const changeConnectionTarget = (target: string) => {
+    setConnectionTarget(target);
+    if (target) window.localStorage.setItem('pealayer.connectionTarget', target);
+    else window.localStorage.removeItem('pealayer.connectionTarget');
+  };
 
   const menuItems = [
     {
@@ -222,7 +279,10 @@ const App: React.FC = () => {
           connected={connected}
           connectionMode={connectionMode}
           appName={runtime?.appName}
+          appIconPath={runtime?.appIconPath}
           locale={runtime?.locale || 'en'}
+          connectionTarget={connectionTarget}
+          onConnectionTargetChange={changeConnectionTarget}
         />
 
         <Layout className="app-body">
@@ -252,6 +312,7 @@ const App: React.FC = () => {
                 locale={runtime?.locale || 'en'}
                 appName={runtime?.appName || 'Pealayer'}
                 quickSeekSeconds={quickSeekSeconds}
+                apiBaseUrl={apiBaseUrl}
               />
             )}
             {activeTab === 'remote' && (
@@ -260,6 +321,8 @@ const App: React.FC = () => {
                 sendCmd={sendCmd}
                 onOpenLibraryTab={() => setActiveTab('library')}
                 locale={runtime?.locale || 'en'}
+                quickSeekSeconds={quickSeekSeconds}
+                apiBaseUrl={apiBaseUrl}
               />
             )}
             {activeTab === 'library' && (
@@ -267,10 +330,11 @@ const App: React.FC = () => {
                 sendCmd={sendCmd}
                 onMediaPlayStarted={() => setActiveTab('remote')}
                 locale={runtime?.locale || 'en'}
+                apiBaseUrl={apiBaseUrl}
               />
             )}
             {activeTab === 'info' && (
-              <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} locale={runtime?.locale || 'en'} />
+              <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} websocketUrl={resolveWebSocketUrl()} />
             )}
           </Content>
         </Layout>

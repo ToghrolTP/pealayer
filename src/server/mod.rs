@@ -63,6 +63,7 @@ pub struct WebRuntimeConfig {
     pub app_name: String,
     pub version: String,
     pub websocket_path: String,
+    pub app_icon_path: String,
     pub locale: String,
     pub direction: String,
     pub theme: String,
@@ -74,6 +75,7 @@ impl WebRuntimeConfig {
             app_name,
             version: env!("CARGO_PKG_VERSION").to_string(),
             websocket_path: "/ws".to_string(),
+            app_icon_path: "/api/runtime/app-icon".to_string(),
             locale,
             direction,
             theme,
@@ -259,8 +261,12 @@ fn handle_connection(mut stream: TcpStream, state: ControlState) {
 }
 
 fn handle_websocket(stream: TcpStream, state: ControlState) {
-    let Ok(mut websocket) = tungstenite::accept(stream) else {
-        return;
+    let mut websocket = match tungstenite::accept(stream) {
+        Ok(websocket) => websocket,
+        Err(error) => {
+            log::warn!("Reject Pealayer WebSocket upgrade: {error}");
+            return;
+        }
     };
     let (client_tx, client_rx) = channel::<String>();
     if let Ok(mut clients) = state.websocket_clients.lock() {
@@ -445,7 +451,7 @@ impl HttpResponse {
 fn write_http_response(stream: &mut TcpStream, response: HttpResponse) -> std::io::Result<()> {
     write!(
         stream,
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\n\r\n",
         response.status,
         response.reason,
         response.content_type,
@@ -458,6 +464,7 @@ fn write_http_response(stream: &mut TcpStream, response: HttpResponse) -> std::i
 fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
     let path = request.target.split('?').next().unwrap_or("/");
     match (request.method.as_str(), path) {
+        ("OPTIONS", _) => HttpResponse::text(204, "No Content", ""),
         ("GET", "/healthz") => HttpResponse::json(
             200,
             "OK",
@@ -466,6 +473,7 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
         ("GET", "/api/runtime/config") => {
             HttpResponse::json(200, "OK", state.runtime_config_json.to_string())
         }
+        ("GET", "/api/runtime/app-icon") => runtime_app_icon_response(),
         ("GET", "/api/config") => HttpResponse::json(
             200,
             "OK",
@@ -506,6 +514,21 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
         ("GET", _) => static_response(path, state),
         _ => HttpResponse::text(404, "Not Found", "Not Found"),
     }
+}
+
+fn runtime_app_icon_response() -> HttpResponse {
+    let config = crate::platform::interop::get_live_config();
+    if let Some(path) = crate::config::resolved_app_icon(&config)
+        && let Ok(bytes) = std::fs::read(&path)
+    {
+        return HttpResponse::bytes(200, "OK", mime_for_path(&path), bytes);
+    }
+    HttpResponse::bytes(
+        200,
+        "OK",
+        "image/png",
+        include_bytes!("../../assets/pealayer-icon.png").to_vec(),
+    )
 }
 
 fn json_rpc_response(body: &[u8], state: &ControlState) -> HttpResponse {
@@ -810,6 +833,7 @@ fn mime_for_path(path: &std::path::Path) -> &'static str {
         Some("css") => "text/css; charset=utf-8",
         Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
+        Some("ico") => "image/x-icon",
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("json") => "application/json",
         Some("woff2") => "font/woff2",
@@ -860,5 +884,12 @@ mod tests {
         assert!(web_asset_path(root, "/../Cargo.toml").is_none());
         #[cfg(windows)]
         assert!(web_asset_path(root, "C:/Windows/win.ini").is_none());
+    }
+
+    #[test]
+    fn runtime_icon_mime_supports_native_windows_icons() {
+        assert_eq!(mime_for_path(std::path::Path::new("brand.ico")), "image/x-icon");
+        assert_eq!(mime_for_path(std::path::Path::new("brand.svg")), "image/svg+xml");
+        assert_eq!(mime_for_path(std::path::Path::new("brand.png")), "image/png");
     }
 }
