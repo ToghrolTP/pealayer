@@ -144,7 +144,7 @@ fn draw_saved_effect_context_menu(
         .button(format!(
             "{} {}",
             crate::ui::icons::PENCIL_SIMPLE,
-            app.tr("Properties and edit")
+            app.tr("Manage")
         ))
         .clicked()
     {

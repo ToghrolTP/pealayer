@@ -49,7 +49,7 @@ does not seed or persist an independent effect catalog.
 2. Drag a live card onto the **Controller effects** timeline track. The card
    stays under the pointer at the exact grab offset and drops at the selected
    time.
-3. Right-click a card for **Properties and edit** or **Run now**. The editor can
+3. Right-click a card for **Manage** or **Run now**. The editor can
    create, rename, regroup, inspect, run, duplicate, or delete definitions in
    PCController.
 4. In **Hardware Monitor**, expand **Record effect**, choose

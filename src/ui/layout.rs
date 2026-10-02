@@ -45,6 +45,34 @@ fn drag_translation(
     pointer - source_min - grab_offset
 }
 
+const EFFECTS_PANEL_RIGHT_GUTTER: f32 = 10.0;
+const EFFECT_CARD_MIN_WIDTH: f32 = 140.0;
+const EFFECT_CARD_HORIZONTAL_MARGIN: i8 = 9;
+
+fn effects_panel_content_width(available_width: f32) -> f32 {
+    (available_width - EFFECTS_PANEL_RIGHT_GUTTER).max(EFFECT_CARD_MIN_WIDTH)
+}
+
+fn effect_card<R>(
+    ui: &mut egui::Ui,
+    outer_width: f32,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    // The Effects panel owns the card width. Deriving the width again from the
+    // Frame child feeds its margins back into egui's sizing pass, which made
+    // cards grow on successive paints and resized the drag preview.
+    ui.set_width(outer_width);
+    egui::Frame::group(ui.style())
+        .inner_margin(egui::Margin::symmetric(EFFECT_CARD_HORIZONTAL_MARGIN, 7))
+        .corner_radius(8.0)
+        .show(ui, |ui| {
+            let content_width =
+                (outer_width - f32::from(EFFECT_CARD_HORIZONTAL_MARGIN) * 2.0).max(1.0);
+            ui.set_width(content_width);
+            add_contents(ui)
+        })
+}
+
 fn pwm_percent(raw: u16) -> f64 {
     f64::from(raw.min(4095)) * 100.0 / 4095.0
 }
@@ -94,6 +122,35 @@ fn secondary_click_inside(ctx: &egui::Context, rect: egui::Rect) -> bool {
                 .latest_pos()
                 .is_some_and(|position| rect.contains(position))
     })
+}
+
+fn primary_click_inside(ctx: &egui::Context, rect: egui::Rect, id: egui::Id) -> bool {
+    let armed_id = id.with("card-action-click");
+    let (pressed_inside, released, released_inside, dragged) = ctx.input(|input| {
+        (
+            input.pointer.button_pressed(egui::PointerButton::Primary)
+                && input
+                    .pointer
+                    .latest_pos()
+                    .is_some_and(|position| rect.contains(position)),
+            input.pointer.button_released(egui::PointerButton::Primary),
+            input
+                .pointer
+                .latest_pos()
+                .is_some_and(|position| rect.contains(position)),
+            input.pointer.is_decidedly_dragging(),
+        )
+    });
+    if pressed_inside {
+        ctx.data_mut(|data| data.insert_temp(armed_id, true));
+    }
+    if !released {
+        return false;
+    }
+    let armed = ctx
+        .data_mut(|data| data.remove_temp::<bool>(armed_id))
+        .unwrap_or(false);
+    armed && released_inside && !dragged
 }
 
 fn remember_effect_drag_offset_on_press(
@@ -148,7 +205,9 @@ fn effect_drag_source<R>(
                 egui::emath::TSTransform::from_translation(translation),
             );
         }
-        ui.data_mut(|data| data.insert_temp(source_rect_id, response.response.rect));
+        // Preserve the original, untransformed source rectangle for the whole
+        // gesture. Replacing it with the preview rectangle makes the stored
+        // grab offset drift toward the pointer and causes the visible jump.
         response
     } else {
         let response = ui.scope(add_contents);
@@ -1425,6 +1484,141 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn effect_cards_keep_identical_geometry_across_rows_and_frames() {
+        let context = egui::Context::default();
+        let payload = EffectDragPayload {
+            name: "Seat rise".to_string(),
+            icon: String::new(),
+            duration_ms: 750,
+            target: crate::four_d::models::HardwareTarget::ControllerMacro,
+            actions: Vec::new(),
+            controller_macro: None,
+            controller_strip_effect: None,
+        };
+        let previous = std::cell::RefCell::new(None::<Vec<egui::Vec2>>);
+
+        for _ in 0..4 {
+            let sizes = std::cell::RefCell::new(Vec::new());
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(360.0, 320.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let width = effects_panel_content_width(ui.available_width());
+                    ui.set_width(width);
+                    for row in 0..3 {
+                        let response = effect_drag_source(
+                            ui,
+                            egui::Id::new(("stable-effect-card", row)),
+                            payload.clone(),
+                            |ui| {
+                                effect_card(ui, width, |ui| {
+                                    ui.add_sized(
+                                        [ui.available_width(), 44.0],
+                                        egui::Label::new("Seat rise"),
+                                    )
+                                })
+                            },
+                        );
+                        sizes.borrow_mut().push(response.response.rect.size());
+                        ui.add_space(5.0);
+                    }
+                },
+            );
+            drop(output);
+
+            let sizes = sizes.into_inner();
+            assert_eq!(sizes.len(), 3);
+            assert!(sizes.windows(2).all(|pair| pair[0] == pair[1]));
+            if let Some(previous) = previous.borrow().as_ref() {
+                assert_eq!(&sizes, previous);
+            }
+            previous.replace(Some(sizes));
+        }
+    }
+
+    #[test]
+    fn effect_card_action_click_survives_the_drag_surface() {
+        let context = egui::Context::default();
+        let payload = EffectDragPayload {
+            name: "Seat rise".to_string(),
+            icon: String::new(),
+            duration_ms: 750,
+            target: crate::four_d::models::HardwareTarget::ControllerMacro,
+            actions: Vec::new(),
+            controller_macro: None,
+            controller_strip_effect: None,
+        };
+        let action_rect = std::cell::Cell::new(egui::Rect::NOTHING);
+        let activated = std::cell::Cell::new(false);
+        let render = |events: Vec<egui::Event>| {
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(360.0, 180.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut button_response = None;
+                    effect_drag_source(
+                        ui,
+                        egui::Id::new("effect-card-with-action"),
+                        payload.clone(),
+                        |ui| {
+                            effect_card(ui, 260.0, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Seat rise");
+                                    let button = ui.button("More");
+                                    action_rect.set(button.rect);
+                                    button_response = Some(button);
+                                });
+                            })
+                        },
+                    );
+                    activated.set(
+                        activated.get()
+                            || button_response.as_ref().is_some_and(|button| {
+                                button.clicked()
+                                    || primary_click_inside(ui.ctx(), button.rect, button.id)
+                            }),
+                    );
+                },
+            );
+            drop(output);
+        };
+
+        render(Vec::new());
+        let point = action_rect.get().center();
+        render(vec![
+            egui::Event::PointerMoved(point),
+            egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        render(vec![egui::Event::PointerButton {
+            pos: point,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+
+        assert!(
+            activated.get(),
+            "the card drag surface swallowed its action click"
+        );
+    }
+
+    #[test]
     fn effect_card_captures_grab_offset_on_press_before_drag_promotion() {
         let context = egui::Context::default();
         let payload = EffectDragPayload {
@@ -1477,6 +1671,72 @@ mod timeline_row_tests {
         let captured =
             context.data_mut(|data| data.get_temp::<egui::Vec2>(id.with("pointer-offset")));
         assert_eq!(captured, Some(grab_offset));
+    }
+
+    #[test]
+    fn effect_card_keeps_the_original_grab_offset_while_dragging() {
+        let context = egui::Context::default();
+        let payload = EffectDragPayload {
+            name: "Seat rise".to_string(),
+            icon: String::new(),
+            duration_ms: 750,
+            target: crate::four_d::models::HardwareTarget::ControllerMacro,
+            actions: Vec::new(),
+            controller_macro: None,
+            controller_strip_effect: None,
+        };
+        let source = std::cell::Cell::new(egui::Rect::NOTHING);
+        let id = egui::Id::new("stable-offset-effect-card");
+        let render = |events: Vec<egui::Event>| {
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(640.0, 320.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    source.set(
+                        effect_drag_source(ui, id, payload.clone(), |ui| {
+                            effect_card(ui, 240.0, |ui| {
+                                ui.add_sized(
+                                    [ui.available_width(), 44.0],
+                                    egui::Label::new("Seat rise"),
+                                )
+                            })
+                        })
+                        .response
+                        .rect,
+                    );
+                },
+            );
+            drop(output);
+        };
+
+        render(Vec::new());
+        let expected = egui::vec2(31.0, 12.0);
+        let press = source.get().min + expected;
+        render(vec![
+            egui::Event::PointerMoved(press),
+            egui::Event::PointerButton {
+                pos: press,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        render(vec![egui::Event::PointerMoved(
+            press + egui::vec2(30.0, 4.0),
+        )]);
+        render(vec![egui::Event::PointerMoved(
+            press + egui::vec2(260.0, 120.0),
+        )]);
+
+        let captured =
+            context.data_mut(|data| data.get_temp::<egui::Vec2>(id.with("pointer-offset")));
+        assert_eq!(captured, Some(expected));
     }
 
     #[test]
@@ -2649,7 +2909,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     // Keep a deliberate gutter between cards and the scrollbar /
                                     // right panel edge. The previous full-width inner frame caused
                                     // its stroke and action row to crowd or clip against that edge.
-                                    ui.set_width((ui.available_width() - 10.0).max(140.0));
+                                    let effects_width =
+                                        effects_panel_content_width(ui.available_width());
+                                    ui.set_width(effects_width);
                                     for (category, presets) in categorized {
                                         let group_id = ui.make_persistent_id(("effect-group", &category));
                                         let mut open = ui.data_mut(|data| {
@@ -2808,19 +3070,16 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let source = preset.source;
                                                 let mut run_now = false;
                                                 let mut place_at_playhead = false;
+                                                let mut run_response = None;
+                                                let mut place_response = None;
                                                 let mut more_response = None;
+                                                let card_width = effects_width;
                                                 let response = effect_drag_source(
                                                     ui,
                                                     item_id,
                                                     payload.clone(),
                                                     |ui| {
-                                                        egui::Frame::group(ui.style())
-                                                            .inner_margin(egui::Margin::symmetric(9, 7))
-                                                            .corner_radius(8.0)
-                                                            .show(ui, |ui| {
-                                                                let card_width = ui.available_width();
-                                                                ui.set_min_width(card_width);
-                                                                ui.set_max_width(card_width);
+                                                        effect_card(ui, card_width, |ui| {
                                                                 ui.horizontal(|ui| {
                                                                     ui.add_sized(
                                                                         [20.0, 24.0],
@@ -2862,7 +3121,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                                     self.app.tr("More actions"),
                                                                                 );
                                                                             more_response = Some(more);
-                                                                            place_at_playhead = ui
+                                                                            let place = ui
                                                                                 .add_sized(
                                                                                     [24.0, 24.0],
                                                                                     egui::Button::new(
@@ -2872,9 +3131,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                                 )
                                                                                 .on_hover_text(
                                                                                     self.app.tr("Place at playhead"),
-                                                                                )
-                                                                                .clicked();
-                                                                            run_now = ui
+                                                                                );
+                                                                            place_at_playhead = place.clicked();
+                                                                            place_response = Some(place);
+                                                                            let run = ui
                                                                                 .add_sized(
                                                                                     [24.0, 24.0],
                                                                                     egui::Button::new(
@@ -2882,8 +3142,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                                     )
                                                                                     .frame(false),
                                                                                 )
-                                                                                .on_hover_text(self.app.tr("Run now"))
-                                                                                .clicked();
+                                                                                .on_hover_text(self.app.tr("Run now"));
+                                                                            run_now = run.clicked();
+                                                                            run_response = Some(run);
                                                                         },
                                                                     );
                                                                 });
@@ -2921,6 +3182,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 if response.response.dragged() {
                                                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                                                 }
+                                                run_now |= run_response.as_ref().is_some_and(|button| {
+                                                    primary_click_inside(
+                                                        ui.ctx(),
+                                                        button.rect,
+                                                        button.id,
+                                                    )
+                                                });
+                                                place_at_playhead |= place_response
+                                                    .as_ref()
+                                                    .is_some_and(|button| {
+                                                        primary_click_inside(
+                                                            ui.ctx(),
+                                                            button.rect,
+                                                            button.id,
+                                                        )
+                                                    });
                                                 if run_now
                                                     && let Err(error) = self
                                                         .app
@@ -2937,7 +3214,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     response.response.rect,
                                                 ) || more_response
                                                     .as_ref()
-                                                    .is_some_and(egui::Response::clicked);
+                                                    .is_some_and(|button| {
+                                                        button.clicked()
+                                                            || primary_click_inside(
+                                                                ui.ctx(),
+                                                                button.rect,
+                                                                button.id,
+                                                            )
+                                                    });
                                                 let menu_anchor = more_response
                                                     .as_ref()
                                                     .unwrap_or(&response.response);
@@ -2949,7 +3233,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     ui.strong(&displayed_effect_name);
                                                     ui.label(egui::RichText::new(&reference).monospace().weak().small());
                                                     ui.separator();
-                                                    if ui.button(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, self.app.tr("Properties and edit"))).clicked() {
+                                                    if ui.button(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, self.app.tr("Manage"))).clicked() {
                                                         if crate::ui::effects_library::select_advertised_effect(
                                                             self.app,
                                                             source,

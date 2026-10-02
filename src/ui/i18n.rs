@@ -169,7 +169,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         }
         "Place at playhead" => "قرار دادن در نشانگر پخش",
         "The Controller effects track is not available." => "ترک جلوه‌های کنترل‌کننده در دسترس نیست.",
-        "Properties and edit" => "ویژگی‌ها و ویرایش",
+        "Manage" => "مدیریت",
         "Run now" => "اجرای فوری",
         "Restore default name" => "بازگردانی نام پیش‌فرض",
         "Type" => "نوع",
