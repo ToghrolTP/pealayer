@@ -506,7 +506,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
                     if ui
                         .add_enabled_ui(can_open, |ui| {
-                            crate::ui::dialog::action_button(
+                            crate::ui::dialog::primary_action_button(
                                 ui,
                                 crate::ui::icons::ARROW_SQUARE_OUT,
                                 &app.tr("Open"),

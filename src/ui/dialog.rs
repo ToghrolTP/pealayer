@@ -1,6 +1,24 @@
 use eframe::egui;
 
-const ACTION_BUTTON_SIZE: egui::Vec2 = egui::vec2(112.0, 32.0);
+const ACTION_BUTTON_SIZE: egui::Vec2 = egui::vec2(112.0, 36.0);
+const PRIMARY_ACTION_BUTTON_SIZE: egui::Vec2 = egui::vec2(124.0, 36.0);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogHost {
+    Embedded,
+    Native,
+}
+
+/// Resolve the presentation host independently from a dialog's contents.
+/// Dialog implementations can therefore keep one body and add a native host
+/// without cloning their controls or behavior.
+pub const fn preferred_host(native_requested: bool, native_supported: bool) -> DialogHost {
+    if native_requested && native_supported {
+        DialogHost::Native
+    } else {
+        DialogHost::Embedded
+    }
+}
 
 /// Center a dialog the first time it opens without pinning it there. Unlike
 /// `Window::anchor`, this leaves the remembered position free to follow title-
@@ -13,7 +31,24 @@ pub fn centered_default_rect(bounds: egui::Rect, desired_size: egui::Vec2) -> eg
 pub fn action_button(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Response {
     ui.add_sized(
         ACTION_BUTTON_SIZE,
-        egui::Button::new(format!("{icon}  {label}")),
+        egui::Button::new(egui::RichText::new(format!("{icon}  {label}")).size(15.0)),
+    )
+}
+
+/// The visually emphasized variant of [`action_button`]. Native and embedded
+/// dialog hosts use this same control, so dialog contents do not fork merely
+/// to obtain platform-appropriate action hierarchy.
+pub fn primary_action_button(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Response {
+    let selection = ui.visuals().selection;
+    ui.add_sized(
+        PRIMARY_ACTION_BUTTON_SIZE,
+        egui::Button::new(
+            egui::RichText::new(format!("{icon}  {label}"))
+                .size(15.0)
+                .color(selection.stroke.color),
+        )
+        .fill(selection.bg_fill)
+        .stroke(selection.stroke),
     )
 }
 
@@ -81,6 +116,20 @@ mod tests {
                 "{name} must use default_rect so title-bar dragging persists"
             );
         }
+    }
+
+    #[test]
+    fn primary_actions_are_more_prominent_than_secondary_actions() {
+        assert!(PRIMARY_ACTION_BUTTON_SIZE.x > ACTION_BUTTON_SIZE.x);
+        assert_eq!(PRIMARY_ACTION_BUTTON_SIZE.y, ACTION_BUTTON_SIZE.y);
+        assert!(ACTION_BUTTON_SIZE.y >= 36.0);
+    }
+
+    #[test]
+    fn unsupported_native_dialogs_fall_back_to_the_embedded_host() {
+        assert_eq!(preferred_host(true, true), DialogHost::Native);
+        assert_eq!(preferred_host(true, false), DialogHost::Embedded);
+        assert_eq!(preferred_host(false, true), DialogHost::Embedded);
     }
 }
 

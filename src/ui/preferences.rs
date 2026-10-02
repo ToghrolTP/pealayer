@@ -15,9 +15,6 @@ const TABS: [(&str, &str); 5] = [
 const PREFERENCES_RAIL_WIDTH: f32 = 118.0;
 const PREFERENCES_TAB_WIDTH: f32 = 112.0;
 const PREFERENCES_TAB_HEIGHT: f32 = 30.0;
-const PREFERENCES_PRIMARY_ACTION_WIDTH: f32 = 124.0;
-const PREFERENCES_SECONDARY_ACTION_WIDTH: f32 = 104.0;
-const PREFERENCES_ACTION_HEIGHT: f32 = 36.0;
 
 pub(crate) struct NativePreferencesController {
     child: std::process::Child,
@@ -274,7 +271,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         return;
     }
 
-    if app.native_dialog_windows {
+    let mut host = crate::ui::dialog::preferred_host(app.native_dialog_windows, cfg!(windows));
+    if host == crate::ui::dialog::DialogHost::Native {
         if app.native_preferences.is_none() {
             let owner = app
                 .window_handle
@@ -286,6 +284,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     // Keep Preferences usable even if process creation is blocked.
                     // This changes only the live fallback, not the persisted choice.
                     app.native_dialog_windows = false;
+                    host = crate::ui::dialog::DialogHost::Embedded;
                 }
             }
         }
@@ -296,7 +295,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         {
             return;
         }
-        if app.native_dialog_windows {
+        if host == crate::ui::dialog::DialogHost::Native {
             app.show_preferences_dialog = false;
             app.native_preferences = None;
             return;
@@ -392,16 +391,15 @@ fn draw_native_preferences_surface(state: &mut NativePreferencesState, ui: &mut 
                     );
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if preferences_action_button(ui, crate::ui::icons::X, &tr("Close"), false)
+                    if crate::ui::dialog::action_button(ui, crate::ui::icons::X, &tr("Close"))
                         .clicked()
                     {
                         close = true;
                     }
-                    if preferences_action_button(
+                    if crate::ui::dialog::primary_action_button(
                         ui,
                         crate::ui::icons::FLOPPY_DISK,
                         &tr("Save now"),
-                        true,
                     )
                     .clicked()
                     {
@@ -996,16 +994,15 @@ fn draw_preferences_surface(app: &mut PealayerApp, ui: &mut egui::Ui) -> bool {
         .show_inside(ui, |ui| {
             ui.add_space(6.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if preferences_action_button(ui, crate::ui::icons::X, &app.tr("Close"), false)
+                if crate::ui::dialog::action_button(ui, crate::ui::icons::X, &app.tr("Close"))
                     .clicked()
                 {
                     close = true;
                 }
-                if preferences_action_button(
+                if crate::ui::dialog::primary_action_button(
                     ui,
                     crate::ui::icons::FLOPPY_DISK,
                     &app.tr("Save now"),
-                    true,
                 )
                 .clicked()
                 {
@@ -1097,28 +1094,6 @@ fn preferences_tab_button(
         );
     }
     response
-}
-
-fn preferences_action_button(
-    ui: &mut egui::Ui,
-    icon: &str,
-    label: &str,
-    primary: bool,
-) -> egui::Response {
-    let width = if primary {
-        PREFERENCES_PRIMARY_ACTION_WIDTH
-    } else {
-        PREFERENCES_SECONDARY_ACTION_WIDTH
-    };
-    let text = egui::RichText::new(format!("{icon}  {label}")).size(15.0);
-    let button = if primary {
-        egui::Button::new(text.color(ui.visuals().selection.stroke.color))
-            .fill(ui.visuals().selection.bg_fill)
-            .stroke(ui.visuals().selection.stroke)
-    } else {
-        egui::Button::new(text)
-    };
-    ui.add_sized([width, PREFERENCES_ACTION_HEIGHT], button)
 }
 
 fn draw_compact_tab_selector(app: &mut PealayerApp, ui: &mut egui::Ui) {
@@ -1868,9 +1843,8 @@ mod tests {
 
     #[test]
     fn preferences_actions_have_more_visual_weight_than_navigation_tabs() {
-        assert!(PREFERENCES_TAB_HEIGHT < PREFERENCES_ACTION_HEIGHT);
-        assert!(PREFERENCES_TAB_WIDTH < PREFERENCES_PRIMARY_ACTION_WIDTH);
-        assert!(PREFERENCES_SECONDARY_ACTION_WIDTH < PREFERENCES_PRIMARY_ACTION_WIDTH);
+        assert!(PREFERENCES_TAB_HEIGHT < 36.0);
+        assert!(PREFERENCES_TAB_WIDTH < 124.0);
         assert!(PREFERENCES_RAIL_WIDTH >= PREFERENCES_TAB_WIDTH);
     }
 }
