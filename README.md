@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/pealayer-icon.png" alt="Pealayer Icon" width="128" height="128" />
+<img src="assets/pealayer-icon.png" alt="Pealayer Icon" width="128" height="128" />
 
 # Pealayer
 
@@ -470,7 +470,7 @@ cd ..
 pealayer/
 ├── Cargo.toml                  # Rust package manifest (2024 edition)
 ├── build.rs                    # Windows resource compiler (embeds app icon)
-├── assets/                     # Application icons (PNG, SVG, and multi-res Windows ICO)
+├── assets/                     # Canonical application icons (PNG, SVG, and multi-res Windows ICO)
 │   ├── pealayer-icon.png
 │   ├── pealayer-icon.svg
 │   └── icon.ico

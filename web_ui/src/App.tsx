@@ -1,6 +1,7 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { ConfigProvider, theme, Layout, Menu } from 'antd';
 import {
+  AppstoreOutlined,
   ControlOutlined,
   FolderOpenOutlined,
   InfoCircleOutlined,
@@ -9,7 +10,9 @@ import { HeaderBar } from './components/HeaderBar';
 import { RemoteControlTab, PlayerState } from './components/RemoteControlTab';
 import { MediaLibraryTab } from './components/MediaLibraryTab';
 import { PlayerInfoTab } from './components/PlayerInfoTab';
+import { StudioTab } from './components/StudioTab';
 import { tr } from './i18n';
+import './styles.css';
 
 const { Sider, Content } = Layout;
 
@@ -17,6 +20,7 @@ export interface RuntimeConfig {
   appName: string;
   version: string;
   websocketPath: string;
+  appIconPath: string;
   locale: 'en' | 'fa';
   direction: 'ltr' | 'rtl';
   theme: 'system' | 'light' | 'dark';
@@ -24,11 +28,17 @@ export interface RuntimeConfig {
 
 const App: React.FC = () => {
   const [collapsed, setCollapsed] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<string>('remote');
+  const [activeTab, setActiveTab] = useState<string>('studio');
   const [connected, setConnected] = useState<boolean>(false);
   const [connectionMode, setConnectionMode] = useState<'ws' | 'http'>('http');
   const [state, setState] = useState<PlayerState>({ status: 'initializing' });
   const [runtime, setRuntime] = useState<RuntimeConfig | null>(null);
+  const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('dark');
+  const [quickSeekSeconds, setQuickSeekSeconds] = useState<number>(10);
+  const [connectionTarget, setConnectionTarget] = useState<string>(() => {
+    const query = new URLSearchParams(window.location.search).get('connect');
+    return query ?? window.localStorage.getItem('pealayer.connectionTarget') ?? '';
+  });
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -36,21 +46,75 @@ const App: React.FC = () => {
     if (!runtime) return;
     document.documentElement.lang = runtime.locale;
     document.documentElement.dir = runtime.direction;
-    document.title = `${runtime.appName} — ${tr(runtime.locale, 'Control Center')}`;
+    document.title = `${runtime.appName} — ${tr(runtime.locale, 'Web Studio')}`;
+    const media = window.matchMedia('(prefers-color-scheme: light)');
+    const applyTheme = () => {
+      const nextTheme = runtime.theme === 'system'
+        ? (media.matches ? 'light' : 'dark')
+        : runtime.theme;
+      document.documentElement.dataset.theme = nextTheme;
+      setResolvedTheme(nextTheme);
+    };
+    applyTheme();
+    media.addEventListener('change', applyTheme);
+    return () => media.removeEventListener('change', applyTheme);
   }, [runtime]);
 
-  const sendCmd = (command: string, payload: Record<string, any> = {}) => {
-    const body = JSON.stringify({ command, ...payload });
+  const nextRequestId = useRef(1);
+  const sendCmd = useCallback((command: string, payload: Record<string, any> = {}) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(body);
-    } else {
+      const methodAliases: Record<string, string> = {
+        add_effect_cue: 'pealayer.timeline.effect.add',
+        remove_effect_cue: 'pealayer.timeline.effect.remove',
+        set_recording: 'pealayer.recording.set',
+      };
+      const params = command === 'set_workspace'
+        ? { workspace: payload.nle ? 'nle' : 'simple' }
+        : payload;
+      wsRef.current.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: nextRequestId.current++,
+        method: methodAliases[command] || command,
+        params,
+      }));
+    } else if (!connectionTarget) {
+      const body = JSON.stringify({ command, ...payload });
       fetch('/api/player/command', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,
       }).catch(() => {});
     }
-  };
+  }, [connectionTarget]);
+
+  const resolveWebSocketUrl = useCallback(() => {
+    const fallbackProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    if (!connectionTarget) {
+      return `${fallbackProtocol}//${window.location.host}${runtime?.websocketPath || '/ws'}`;
+    }
+    try {
+      const target = new URL(connectionTarget.includes('://') ? connectionTarget : `ws://${connectionTarget}`);
+      if (target.protocol === 'http:') target.protocol = 'ws:';
+      if (target.protocol === 'https:') target.protocol = 'wss:';
+      if (!target.pathname || target.pathname === '/') target.pathname = runtime?.websocketPath || '/ws';
+      return target.toString();
+    } catch {
+      return connectionTarget;
+    }
+  }, [connectionTarget, runtime]);
+
+  const apiBaseUrl = (() => {
+    try {
+      const url = new URL(resolveWebSocketUrl());
+      url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+      url.pathname = '';
+      url.search = '';
+      url.hash = '';
+      return url.toString().replace(/\/$/, '');
+    } catch {
+      return '';
+    }
+  })();
 
   useEffect(() => {
     let disposed = false;
@@ -70,40 +134,70 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!runtime) return;
+    let disposed = false;
+    fetch('/api/config')
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then((value) => {
+        const seconds = Number(value?.quick_seek_seconds);
+        if (!disposed && Number.isFinite(seconds) && seconds > 0) {
+          setQuickSeekSeconds(seconds);
+        }
+      })
+      .catch(() => {});
+    return () => { disposed = true; };
+  }, [runtime]);
+
+  useEffect(() => {
+    if (!runtime) return;
+    let disposed = false;
+    let reconnectTimer: number | undefined;
     const connectWS = () => {
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${proto}//${window.location.host}${runtime.websocketPath}`;
+      if (disposed) return;
+      const wsUrl = resolveWebSocketUrl();
 
       try {
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {
+          if (disposed) {
+            ws.close();
+            return;
+          }
           setConnected(true);
           setConnectionMode('ws');
         };
 
         ws.onclose = () => {
+          if (disposed) return;
+          setConnected(false);
           setConnectionMode('http');
-          setTimeout(connectWS, 3000);
+          reconnectTimer = window.setTimeout(connectWS, 3000);
         };
 
         ws.onmessage = (ev) => {
           try {
             const data = JSON.parse(ev.data);
-            setState((prev) => ({ ...prev, ...data }));
-            setConnected(true);
+            if (data && data.jsonrpc === '2.0') return;
+            const nextState = data?.type === 'state' ? data.state : data;
+            if (nextState && typeof nextState === 'object' && typeof nextState.status === 'string') {
+              setState((prev) => ({ ...prev, ...nextState }));
+              setConnected(true);
+            }
           } catch {}
         };
       } catch {
+        if (disposed) return;
+        setConnected(false);
         setConnectionMode('http');
+        reconnectTimer = window.setTimeout(connectWS, 3000);
       }
     };
 
     connectWS();
 
     const httpInterval = setInterval(async () => {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      if (connectionTarget || (wsRef.current && wsRef.current.readyState === WebSocket.OPEN)) {
         return; // Skip HTTP polling when WebSocket is connected
       }
       try {
@@ -114,17 +208,33 @@ const App: React.FC = () => {
           setConnected(true);
         }
       } catch {
-        if (connectionMode === 'http') setConnected(false);
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+          setConnected(false);
+        }
       }
     }, 500);
 
     return () => {
+      disposed = true;
       clearInterval(httpInterval);
+      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       if (wsRef.current) wsRef.current.close();
+      wsRef.current = null;
     };
-  }, [runtime]);
+  }, [runtime, connectionTarget, resolveWebSocketUrl]);
+
+  const changeConnectionTarget = (target: string) => {
+    setConnectionTarget(target);
+    if (target) window.localStorage.setItem('pealayer.connectionTarget', target);
+    else window.localStorage.removeItem('pealayer.connectionTarget');
+  };
 
   const menuItems = [
+    {
+      key: 'studio',
+      icon: <AppstoreOutlined style={{ fontSize: 18 }} />,
+      label: tr(runtime?.locale || 'en', 'Studio'),
+    },
     {
       key: 'remote',
       icon: <ControlOutlined style={{ fontSize: 18 }} />,
@@ -145,38 +255,44 @@ const App: React.FC = () => {
   return (
     <ConfigProvider direction={runtime?.direction}
       theme={{
-        algorithm: runtime?.theme === 'light' ? theme.defaultAlgorithm : theme.darkAlgorithm,
+        algorithm: resolvedTheme === 'light' ? theme.defaultAlgorithm : theme.darkAlgorithm,
         token: {
-          colorPrimary: '#1d84b5',
-          colorBgContainer: '#132e32',
-          colorBgBase: '#0a2239',
-          colorBorder: 'rgba(23, 96, 135, 0.3)',
-          borderRadius: 12,
+          colorPrimary: '#38d27a',
+          colorInfo: '#68a7ff',
+          colorSuccess: '#38d27a',
+          colorWarning: '#f3b954',
+          colorError: '#ff5c68',
+          colorBgContainer: 'var(--surface-1)',
+          colorBgBase: 'var(--canvas)',
+          colorBorder: 'var(--line)',
+          colorText: 'var(--text)',
+          colorTextSecondary: 'var(--muted)',
+          borderRadius: 9,
           fontFamily: `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif`,
         },
       }}
     >
-      <Layout style={{ minHeight: '100vh', background: '#0a2239' }}>
+      <Layout className="app-shell">
         <HeaderBar
           collapsed={collapsed}
           onToggleCollapse={() => setCollapsed(!collapsed)}
           connected={connected}
           connectionMode={connectionMode}
           appName={runtime?.appName}
+          appIconPath={runtime?.appIconPath}
           locale={runtime?.locale || 'en'}
+          connectionTarget={connectionTarget}
+          onConnectionTargetChange={changeConnectionTarget}
         />
 
-        <Layout style={{ background: '#0a2239' }}>
+        <Layout className="app-body">
           <Sider
             trigger={null}
             collapsible
             collapsed={collapsed}
             breakpoint="lg"
             onBreakpoint={(broken) => setCollapsed(broken)}
-            style={{
-              background: '#132e32',
-              borderRight: '1px solid rgba(23, 96, 135, 0.3)',
-            }}
+            className="app-sider"
             width={220}
           >
             <Menu
@@ -184,28 +300,29 @@ const App: React.FC = () => {
               selectedKeys={[activeTab]}
               onClick={({ key }) => setActiveTab(key)}
               items={menuItems}
-              style={{
-                background: 'transparent',
-                borderRight: 'none',
-                marginTop: 16,
-              }}
+              className="app-menu"
             />
           </Sider>
 
-          <Content
-            style={{
-              padding: '24px 16px',
-              maxWidth: 1200,
-              margin: '0 auto',
-              width: '100%',
-            }}
-          >
+          <Content className={`app-content ${activeTab === 'studio' ? 'app-content--studio' : ''}`}>
+            {activeTab === 'studio' && (
+              <StudioTab
+                state={state}
+                sendCmd={sendCmd}
+                locale={runtime?.locale || 'en'}
+                appName={runtime?.appName || 'Pealayer'}
+                quickSeekSeconds={quickSeekSeconds}
+                apiBaseUrl={apiBaseUrl}
+              />
+            )}
             {activeTab === 'remote' && (
               <RemoteControlTab
                 state={state}
                 sendCmd={sendCmd}
                 onOpenLibraryTab={() => setActiveTab('library')}
                 locale={runtime?.locale || 'en'}
+                quickSeekSeconds={quickSeekSeconds}
+                apiBaseUrl={apiBaseUrl}
               />
             )}
             {activeTab === 'library' && (
@@ -213,10 +330,11 @@ const App: React.FC = () => {
                 sendCmd={sendCmd}
                 onMediaPlayStarted={() => setActiveTab('remote')}
                 locale={runtime?.locale || 'en'}
+                apiBaseUrl={apiBaseUrl}
               />
             )}
             {activeTab === 'info' && (
-              <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} locale={runtime?.locale || 'en'} />
+              <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} websocketUrl={resolveWebSocketUrl()} />
             )}
           </Content>
         </Layout>

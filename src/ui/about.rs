@@ -313,7 +313,7 @@ fn connected_board(app: &PealayerApp, ui: &mut egui::Ui) {
                 row(ui, "Timed effects", &board.macros.len().to_string());
                 row(
                     ui,
-                    "Strip renderers",
+                    "Lighting effects",
                     &board.strip_effects.len().to_string(),
                 );
             });

@@ -1,6 +1,7 @@
 export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
+  'Studio': 'استودیو',
   'Remote Control': 'کنترل از راه دور',
   'Media Library': 'کتابخانه رسانه',
   'System Info': 'اطلاعات سامانه',
@@ -67,6 +68,25 @@ const fa: Record<string, string> = {
   'Version': 'نسخه',
   'Hardware Acceleration': 'شتاب‌دهی سخت‌افزاری',
   'Application logo': 'نشان برنامه',
+  'Live': 'زنده',
+  'Polling': 'در حال پایش',
+  'Live project': 'پروژهٔ زنده',
+  'Effects': 'افکت‌ها',
+  'Recording': 'در حال ضبط',
+  'Arm hardware tracks for recording': 'آماده‌سازی مسیرهای سخت‌افزار برای ضبط',
+  'No recordable hardware tracks are available': 'هیچ مسیر سخت‌افزاری برای ضبط وجود ندارد',
+  'actions': 'عملیات',
+  'Add cue at playhead': 'افزودن نشانه در نشانگر پخش',
+  'No effect profiles are available in the current project.': 'در پروژهٔ کنونی نمایهٔ افکتی وجود ندارد.',
+  'No hardware': 'بدون سخت‌افزار',
+  'Program monitor': 'نمایشگر برنامه',
+  'Effect timeline': 'خط زمانی افکت',
+  'Cues': 'نشانه‌ها',
+  'cues': 'نشانه',
+  'Create or discover an effect profile to begin authoring cues.': 'برای ساخت نشانه‌ها، یک نمایهٔ افکت بسازید یا از دستگاه دریافت کنید.',
+  'LIVE': 'زنده',
+  'Seek backward': 'حرکت به عقب',
+  'Seek forward': 'حرکت به جلو',
 };
 
 export function tr(locale: UiLocale, text: string): string {

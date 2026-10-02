@@ -72,7 +72,7 @@ pub struct ControllerEffectDraft {
     pub category: String,
     pub description: String,
     pub kind: String,
-    pub pattern: String,
+    pub program_json: String,
     pub color: String,
     pub default_fps: u8,
     pub duration_ms: u64,
@@ -89,7 +89,7 @@ impl Default for ControllerEffectDraft {
             category: "Lighting".to_string(),
             description: String::new(),
             kind: "strip-stream".to_string(),
-            pattern: "police".to_string(),
+            program_json: String::new(),
             color: "green".to_string(),
             default_fps: 20,
             duration_ms: 5_000,
@@ -234,7 +234,6 @@ pub struct PealayerApp {
     pub undo_stack: crate::four_d::history::UndoStack,
     pub(crate) recording_keys:
         std::collections::HashMap<eframe::egui::Key, (uuid::Uuid, std::time::Instant, u8)>,
-    pub(crate) relay_overrides: std::collections::BTreeSet<u8>,
 
     // Phase 6 Preset Library state
     pub(crate) effects_search_query: String,
@@ -296,6 +295,7 @@ pub struct PealayerApp {
     pub(crate) playing_drag_action: crate::config::PlayerDragAction,
     pub(crate) fullscreen_video_background: crate::config::VideoBackground,
     pub(crate) motion_control_mode: crate::config::MotionControlMode,
+    pub(crate) held_motion_action: Option<(String, String)>,
     pub(crate) compact_hardware_controls: bool,
     pub(crate) single_instance: bool,
     pub(crate) windows_mica_backdrop: bool,
@@ -363,6 +363,19 @@ impl eframe::App for PealayerApp {
         self.process_shell_commands(ui.ctx());
         self.process_controller_call_results();
         self.poll_external_config(ui.ctx());
+
+        // A held seat direction captures the pointer until the physical button
+        // is released. This remains active even if a repaint moves the cursor
+        // outside the original button or the panel is hidden mid-gesture.
+        if !ui.input(|input| input.pointer.primary_down())
+            && let Some((_, stop_action)) = self.held_motion_action.take()
+        {
+            let _ = self.engine_handle.sender.send(
+                crate::four_d::engine::EngineMessage::InvokeControllerAction {
+                    action_id: stop_action,
+                },
+            );
+        }
 
         if self.media_controls.is_none() {
             let hwnd = self
@@ -442,6 +455,58 @@ impl eframe::App for PealayerApp {
         if should_broadcast {
             self.last_web_broadcast = Some(now);
             let hardware = self.advertised_hardware();
+            let controller_effects = hardware
+                .as_ref()
+                .map(|capabilities| {
+                    capabilities
+                        .macros
+                        .iter()
+                        .map(|effect| crate::platform::interop::WebControllerEffect {
+                            reference: format!("effect:{}", effect.id),
+                            id: effect.id.to_string(),
+                            name: effect.name.clone(),
+                            category: effect.category.clone(),
+                            description: String::new(),
+                            kind: "sequence".to_string(),
+                            duration_ms: effect.duration_ms,
+                            action_count: effect.steps.len(),
+                            editable: true,
+                            program: serde_json::Value::Array(
+                                effect
+                                    .steps
+                                    .iter()
+                                    .map(|step| {
+                                        serde_json::json!({
+                                            "at_us": step.at_us,
+                                            "kind": step.kind,
+                                            "target": step.target,
+                                            "value": step.value,
+                                        })
+                                    })
+                                    .collect(),
+                            ),
+                            default_fps: None,
+                            default_pixels: None,
+                        })
+                        .chain(capabilities.strip_effects.iter().map(|effect| {
+                            crate::platform::interop::WebControllerEffect {
+                                reference: format!("effect:{}", effect.id),
+                                id: effect.id.clone(),
+                                name: effect.name.clone(),
+                                category: effect.category.clone(),
+                                description: effect.description.clone(),
+                                kind: "strip-stream".to_string(),
+                                duration_ms: effect.default_duration_ms.unwrap_or_default(),
+                                action_count: 1,
+                                editable: effect.editable,
+                                program: effect.program.clone(),
+                                default_fps: effect.default_fps,
+                                default_pixels: effect.default_pixels,
+                            }
+                        }))
+                        .collect()
+                })
+                .unwrap_or_default();
             let controller_connected = self
                 .engine_handle
                 .is_connected
@@ -492,6 +557,48 @@ impl eframe::App for PealayerApp {
                         supports_lcd_display: capabilities.supports_lcd_display,
                     }
                 }),
+                recording: self.is_recording,
+                recording_armed: self.timeline.analog_tracks.iter().any(|track| track.armed),
+                recordable_track_count: self.timeline.analog_tracks.len(),
+                effects: self
+                    .timeline
+                    .templates
+                    .iter()
+                    .map(|effect| crate::platform::interop::WebEffectProfile {
+                        id: effect.id.to_string(),
+                        name: effect.name.clone(),
+                        duration_ms: effect.duration_ms,
+                        action_count: effect.actions.len(),
+                        target: match effect.target {
+                            crate::four_d::models::HardwareTarget::Any => "any".to_string(),
+                            crate::four_d::models::HardwareTarget::Relay(relay) => {
+                                format!("relay:{relay}")
+                            }
+                            crate::four_d::models::HardwareTarget::ControllerMacro => {
+                                "controller".to_string()
+                            }
+                        },
+                    })
+                    .collect(),
+                controller_effects,
+                cues: self
+                    .timeline
+                    .instances
+                    .iter()
+                    .filter_map(|instance| {
+                        self.timeline
+                            .templates
+                            .iter()
+                            .find(|effect| effect.id == instance.effect_id)
+                            .map(|effect| crate::platform::interop::WebEffectCue {
+                                id: instance.id.to_string(),
+                                effect_id: effect.id.to_string(),
+                                name: effect.name.clone(),
+                                start_time_ms: instance.start_time_ms,
+                                duration_ms: effect.duration_ms,
+                            })
+                    })
+                    .collect(),
             };
             crate::platform::interop::set_live_status(status_resp.clone());
             if let Ok(json) = serde_json::to_string(&status_resp) {
@@ -1194,6 +1301,25 @@ impl PealayerApp {
         .then(|| format!("\"{value}\""))
     }
 
+    fn controller_effect_program_hex(value: &str) -> Result<(String, String), String> {
+        let program: serde_json::Value = serde_json::from_str(value)
+            .map_err(|error| format!("Invalid lighting program JSON: {error}"))?;
+        let primitive = program
+            .get("primitive")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| "Lighting program requires a primitive".to_string())?
+            .to_string();
+        let canonical = serde_json::to_vec(&program)
+            .map_err(|error| format!("Encode lighting program: {error}"))?;
+        let encoded = canonical
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<Vec<_>>()
+            .join("");
+        Ok((primitive, encoded))
+    }
+
     fn request_hardware_effect_command(
         &mut self,
         operation: &str,
@@ -1251,11 +1377,11 @@ impl PealayerApp {
         if !advertised {
             return Err("the selected strip effect is no longer advertised".to_string());
         }
-        self.request_hardware_effect_command("strip-preview", format!("effect play strip:{id}"))
+        self.request_hardware_effect_command("effect-preview", format!("effect play {id}"))
     }
 
     pub(crate) fn stop_strip_preview(&mut self) -> Result<(), String> {
-        self.request_hardware_effect_command("strip-stop", "effect stop strip:*".to_string())
+        self.request_hardware_effect_command("effect-stop", "effect stop".to_string())
     }
 
     pub(crate) fn save_controller_effect(&mut self) -> Result<(), String> {
@@ -1279,7 +1405,7 @@ impl PealayerApp {
                 )
             } else {
                 format!(
-                    "effect update sequence:{} {name} {category} {}",
+                    "effect update {} {name} {category} {}",
                     draft.id, draft.color
                 )
             }
@@ -1288,21 +1414,23 @@ impl PealayerApp {
             if !crate::four_d::controller::valid_strip_effect_id(id) {
                 return Err("Strip effect ID must use 1–64 lowercase letters, digits, dots, dashes, or underscores".to_string());
             }
+            let (_primitive, program_hex) =
+                Self::controller_effect_program_hex(&draft.program_json)?;
+            let description = if draft.description.trim().is_empty() {
+                "-".to_string()
+            } else {
+                Self::controller_command_argument(&draft.description)
+                    .ok_or_else(|| "Description must use no more than 64 letters, numbers, spaces, dashes, or underscores".to_string())?
+            };
             if draft.is_new {
                 format!(
-                    "effect create strip {id} {name} {} {category} {} {} {}",
-                    draft.pattern, draft.default_fps, draft.duration_ms, draft.default_pixels
+                    "effect create strip-json {id} {name} {category} {description} {program_hex} {} {} {}",
+                    draft.default_fps, draft.duration_ms, draft.default_pixels
                 )
             } else {
-                let description = if draft.description.trim().is_empty() {
-                    "-".to_string()
-                } else {
-                    Self::controller_command_argument(&draft.description)
-                        .ok_or_else(|| "Description must use no more than 64 letters, numbers, spaces, dashes, or underscores".to_string())?
-                };
                 format!(
-                    "effect update strip:{id} {name} {category} {description} {} {} {} {}",
-                    draft.pattern, draft.default_fps, draft.duration_ms, draft.default_pixels
+                    "effect update-json {id} {name} {category} {description} {program_hex} {} {} {}",
+                    draft.default_fps, draft.duration_ms, draft.default_pixels
                 )
             }
         };
@@ -1619,6 +1747,125 @@ impl PealayerApp {
             InteropCommand::SetWorkspace { nle } => {
                 let observed = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
                 self.apply_workspace_request(nle, observed);
+            }
+            InteropCommand::AddEffectCue {
+                effect_id,
+                start_time_ms,
+            } => {
+                let Ok(effect_id) = uuid::Uuid::parse_str(&effect_id) else {
+                    self.set_osd(self.tr("Effect is no longer available"));
+                    return;
+                };
+                if !self
+                    .timeline
+                    .templates
+                    .iter()
+                    .any(|effect| effect.id == effect_id)
+                {
+                    self.set_osd(self.tr("Effect is no longer available"));
+                    return;
+                }
+                let instance = crate::four_d::models::EffectInstance::new(effect_id, start_time_ms);
+                self.selected_instance_ids.clear();
+                self.selected_instance_ids.insert(instance.id);
+                self.timeline.instances.push(instance);
+                self.sync_timeline_engine();
+            }
+            InteropCommand::RemoveEffectCue { instance_id } => {
+                let Ok(instance_id) = uuid::Uuid::parse_str(&instance_id) else {
+                    self.set_osd(self.tr("Cue is no longer available"));
+                    return;
+                };
+                let previous_len = self.timeline.instances.len();
+                self.timeline
+                    .instances
+                    .retain(|instance| instance.id != instance_id);
+                self.selected_instance_ids.remove(&instance_id);
+                if previous_len != self.timeline.instances.len() {
+                    self.sync_timeline_engine();
+                }
+            }
+            InteropCommand::AddControllerEffectCue {
+                reference,
+                start_time_ms,
+            } => {
+                let preset = self.advertised_effect_presets().into_iter().find(|preset| {
+                    let candidate = match preset.source {
+                        EffectPresetSource::ControllerMacro(id) => format!("effect:{id}"),
+                        EffectPresetSource::ControllerStrip => preset
+                            .effect
+                            .controller_strip_effect
+                            .as_ref()
+                            .map(|effect| format!("effect:{}", effect.id))
+                            .unwrap_or_default(),
+                    };
+                    candidate == reference
+                });
+                let Some(preset) = preset else {
+                    self.set_osd(self.tr("Effect is no longer available"));
+                    return;
+                };
+                let effect_id = preset.effect.id;
+                self.timeline.templates.push(preset.effect);
+                let instance = crate::four_d::models::EffectInstance::new(effect_id, start_time_ms);
+                self.selected_instance_ids.clear();
+                self.selected_instance_ids.insert(instance.id);
+                self.timeline.instances.push(instance);
+                self.sync_timeline_engine();
+            }
+            InteropCommand::PlayControllerEffect { reference } => {
+                if let Err(error) = self.play_controller_effect(&reference) {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::StopControllerEffect => {
+                if let Err(error) = self.stop_strip_preview() {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::DeleteControllerEffect { reference } => {
+                self.effect_library_draft.reference = reference;
+                self.effect_library_draft.is_new = false;
+                if let Err(error) = self.delete_controller_effect() {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::SaveControllerEffect { effect } => {
+                self.effect_library_draft = ControllerEffectDraft {
+                    reference: effect.reference,
+                    id: effect.id,
+                    name: effect.name,
+                    category: effect.category,
+                    description: effect.description,
+                    kind: effect.kind,
+                    program_json: serde_json::to_string_pretty(&effect.program)
+                        .unwrap_or_else(|_| "{}".to_string()),
+                    color: effect.color,
+                    default_fps: effect.default_fps,
+                    duration_ms: effect.duration_ms,
+                    default_pixels: effect.default_pixels,
+                    is_new: effect.is_new,
+                };
+                if let Err(error) = self.save_controller_effect() {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::SetRecording { enabled } => {
+                if self.is_recording && !enabled {
+                    self.commit_recorded_samples();
+                }
+                for track in &mut self.timeline.analog_tracks {
+                    track.armed = enabled;
+                }
+                if !enabled {
+                    self.is_recording = false;
+                } else if self.timeline.analog_tracks.is_empty() {
+                    self.set_osd(self.tr("No recordable hardware tracks are available"));
+                }
             }
             InteropCommand::UpdateConfig { values } => {
                 match self.apply_config_patch(ctx, &values) {
@@ -2847,7 +3094,6 @@ impl Default for PealayerApp {
             timeline_zoom: 100.0,
             undo_stack: crate::four_d::history::UndoStack::default(),
             recording_keys: std::collections::HashMap::new(),
-            relay_overrides: std::collections::BTreeSet::new(),
             effects_search_query: String::new(),
             show_effect_library_editor: false,
             effect_library_selection: None,
@@ -2913,6 +3159,7 @@ impl Default for PealayerApp {
             playing_drag_action: crate::config::PlayerDragAction::TemporaryFastForward,
             fullscreen_video_background: crate::config::VideoBackground::Black,
             motion_control_mode: crate::config::MotionControlMode::Toggle,
+            held_motion_action: None,
             compact_hardware_controls: false,
             single_instance: true,
             windows_mica_backdrop: false,

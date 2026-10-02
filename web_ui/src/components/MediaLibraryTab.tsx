@@ -32,9 +32,10 @@ interface MediaLibraryTabProps {
   sendCmd: (command: string, payload?: Record<string, any>) => void;
   onMediaPlayStarted?: () => void;
   locale: UiLocale;
+  apiBaseUrl: string;
 }
 
-export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMediaPlayStarted, locale }) => {
+export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMediaPlayStarted, locale, apiBaseUrl }) => {
   const [data, setData] = useState<BrowseResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -44,7 +45,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
     setLoading(true);
     try {
       const query = path ? `?path=${encodeURIComponent(path)}` : '';
-      const res = await fetch(`/api/fs/browse${query}`);
+      const res = await fetch(`${apiBaseUrl}/api/fs/browse${query}`);
       if (res.ok) {
         const json: BrowseResponse = await res.json();
         setData(json);
@@ -73,7 +74,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
 
   const handleDeleteFile = async (filePath: string) => {
     try {
-      const res = await fetch('/api/fs/trash', {
+      const res = await fetch(`${apiBaseUrl}/api/fs/trash`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target_path: filePath }),
@@ -109,28 +110,28 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
       render: (_: any, record: FileEntry) => (
         <Space size="middle">
           {record.is_dir ? (
-            <Avatar shape="square" icon={<FolderOutlined />} style={{ backgroundColor: '#0a2239', color: '#53a2be' }} />
+            <Avatar shape="square" icon={<FolderOutlined />} className="media-library__avatar media-library__avatar--folder" />
           ) : record.has_thumbnail ? (
             <Avatar
               shape="square"
-              src={`/api/fs/thumbnail?path=${encodeURIComponent(record.path)}`}
+              src={`${apiBaseUrl}/api/fs/thumbnail?path=${encodeURIComponent(record.path)}`}
               icon={<VideoCameraOutlined />}
-              style={{ backgroundColor: '#0a2239' }}
+              className="media-library__avatar"
             />
           ) : (
-            <Avatar shape="square" icon={<VideoCameraOutlined />} style={{ backgroundColor: '#0a2239', color: '#1d84b5' }} />
+            <Avatar shape="square" icon={<VideoCameraOutlined />} className="media-library__avatar media-library__avatar--video" />
           )}
 
           {record.is_dir ? (
             <Button
               type="link"
               onClick={() => fetchDirectory(record.path)}
-              style={{ padding: 0, fontWeight: 600, color: '#f8fafc' }}
+              className="media-library__name"
             >
               {record.name}
             </Button>
           ) : (
-            <Text style={{ color: record.is_media ? '#f8fafc' : '#94a3b8', fontWeight: record.is_media ? 500 : 400 }}>
+            <Text className={record.is_media ? 'media-library__name' : 'media-library__name media-library__name--muted'}>
               {record.name}
             </Text>
           )}
@@ -170,7 +171,6 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
               size="small"
               icon={<PlayCircleOutlined />}
               onClick={() => handlePlayMedia(record.path, record.name)}
-              style={{ borderRadius: 6, backgroundColor: '#1d84b5' }}
             >
               {tr(locale, 'Play')}
             </Button>
@@ -197,7 +197,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
   const breadcrumbItems = [
     {
       title: (
-        <a onClick={() => fetchDirectory('/')} style={{ color: '#38bdf8' }}>
+        <a onClick={() => fetchDirectory('/')}>
           {tr(locale, 'Root')}
         </a>
       ),
@@ -206,7 +206,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
       const subPath = '/' + pathParts.slice(0, index + 1).join('/');
       return {
         title: (
-          <a onClick={() => fetchDirectory(subPath)} style={{ color: '#cbd5e1' }}>
+          <a onClick={() => fetchDirectory(subPath)}>
             {part}
           </a>
         ),
@@ -215,16 +215,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
   ];
 
   return (
-    <Card
-      bordered={false}
-      style={{
-        background: '#132e32',
-        borderRadius: 16,
-        border: '1px solid rgba(23, 96, 135, 0.3)',
-        boxShadow: '0 20px 40px rgba(0, 0, 0, 0.4)',
-      }}
-      bodyStyle={{ padding: 20 }}
-    >
+    <Card bordered={false} className="surface-card media-library" bodyStyle={{ padding: 20 }}>
       {/* Header controls: Breadcrumb & Search bar */}
       <Space direction="vertical" style={{ width: '100%' }} size="middle">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
@@ -244,17 +235,17 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
           </Space>
 
           <Input
-            prefix={<SearchOutlined style={{ color: '#53a2be' }} />}
+            prefix={<SearchOutlined />}
             placeholder={tr(locale, 'Search media files...')}
             allowClear
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            style={{ width: 260, borderRadius: 8, background: '#0a2239', borderColor: '#176087' }}
+            className="media-library__search"
           />
         </div>
 
         {/* Current Path Breadcrumbs */}
-        <Breadcrumb items={breadcrumbItems} style={{ background: '#0a2239', padding: '8px 14px', borderRadius: 8, fontSize: 13, border: '1px solid rgba(23, 96, 135, 0.3)' }} />
+        <Breadcrumb items={breadcrumbItems} className="media-library__breadcrumbs" />
 
         {/* File Table */}
         <Spin spinning={loading}>

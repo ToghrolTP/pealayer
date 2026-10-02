@@ -446,6 +446,79 @@ fn invoke_control_action(app: &PealayerApp, action_id: &str) {
     );
 }
 
+fn update_held_motion_action(
+    app: &mut PealayerApp,
+    ui: &egui::Ui,
+    response: &egui::Response,
+    action_id: &str,
+    stop_id: &str,
+) {
+    let primary_down = ui.input(|input| input.pointer.primary_down());
+    match hold_motion_transition(
+        app.held_motion_action
+            .as_ref()
+            .map(|value| value.0.as_str()),
+        action_id,
+        response.is_pointer_button_down_on(),
+        primary_down,
+    ) {
+        HoldMotionTransition::Start => {
+            if let Some((_, previous_stop)) = app.held_motion_action.take() {
+                invoke_control_action(app, &previous_stop);
+            }
+            invoke_control_action(app, action_id);
+            app.held_motion_action = Some((action_id.to_string(), stop_id.to_string()));
+        }
+        HoldMotionTransition::Stop => {
+            if let Some((_, stop)) = app.held_motion_action.take() {
+                invoke_control_action(app, &stop);
+            }
+        }
+        HoldMotionTransition::None => {}
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HoldMotionTransition {
+    None,
+    Start,
+    Stop,
+}
+
+fn hold_motion_transition(
+    active_action: Option<&str>,
+    action_id: &str,
+    pointer_down_on_button: bool,
+    primary_down: bool,
+) -> HoldMotionTransition {
+    if pointer_down_on_button && primary_down && active_action != Some(action_id) {
+        HoldMotionTransition::Start
+    } else if !primary_down && active_action == Some(action_id) {
+        HoldMotionTransition::Stop
+    } else {
+        HoldMotionTransition::None
+    }
+}
+
+fn motion_control_is_active(
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+) -> bool {
+    let key = control.key.to_ascii_lowercase();
+    let side = if key.contains("left") || key.ends_with(".a") {
+        Some(["left", "motion-a", "seat-a"])
+    } else if key.contains("right") || key.ends_with(".b") {
+        Some(["right", "motion-b", "seat-b"])
+    } else {
+        None
+    };
+    capabilities.relays.iter().any(|relay| {
+        let role = relay.role.to_ascii_lowercase();
+        capabilities.active_relays.contains(&relay.id)
+            && side.is_none_or(|aliases| aliases.iter().any(|alias| role.contains(alias)))
+    })
+}
+
 fn open_control_dialog(
     app: &mut PealayerApp,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
@@ -786,15 +859,12 @@ fn draw_compact_control_card(
                         .find(|action| action.verb.eq_ignore_ascii_case("stop"));
                     let show_stop = stop.is_some()
                         && (app.motion_control_mode == crate::config::MotionControlMode::Hold
-                            || !capabilities.active_relays.is_empty());
-                    let mut ordered = control
+                            || motion_control_is_active(capabilities, control));
+                    let ordered = control
                         .actions
                         .iter()
                         .filter(|action| !action.verb.eq_ignore_ascii_case("stop"))
                         .collect::<Vec<_>>();
-                    if show_stop && let Some(stop) = stop {
-                        ordered.insert(ordered.len().min(1), stop);
-                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         for action in ordered.into_iter().rev() {
                             let response = ui
@@ -812,22 +882,30 @@ fn draw_compact_control_card(
                                 && app.motion_control_mode == crate::config::MotionControlMode::Hold
                                 && stop.is_some()
                             {
-                                let held_id = ui.make_persistent_id((
-                                    "compact-held-motion-action",
-                                    action.id.as_str(),
-                                ));
-                                let was_held = ui.data_mut(|data| {
-                                    data.get_temp::<bool>(held_id).unwrap_or(false)
-                                });
-                                let held = response.is_pointer_button_down_on();
-                                if held && !was_held {
-                                    invoke_control_action(app, &action.id);
-                                } else if !held && was_held {
-                                    invoke_control_action(app, &stop.expect("checked above").id);
-                                }
-                                ui.data_mut(|data| data.insert_temp(held_id, held));
+                                update_held_motion_action(
+                                    app,
+                                    ui,
+                                    &response,
+                                    &action.id,
+                                    &stop.expect("checked above").id,
+                                );
                             } else if response.clicked() {
                                 invoke_control_action(app, &action.id);
+                            }
+                        }
+                        if is_motion && let Some(stop) = stop {
+                            let response = ui.allocate_ui_with_layout(
+                                egui::vec2(28.0, 26.0),
+                                egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                                |ui| show_stop.then(|| ui.add_enabled(
+                                    !app.estop_active,
+                                    egui::Button::new(crate::ui::icons::action(&stop.verb))
+                                        .min_size(egui::vec2(28.0, 26.0)),
+                                )
+                                .on_hover_text(crate::ui::i18n::visual_text(app.language, &stop.name))),
+                            );
+                            if response.inner.is_some_and(|response| response.clicked()) {
+                                invoke_control_action(app, &stop.id);
                             }
                         }
                     });
@@ -1077,7 +1155,7 @@ fn draw_control_card(
                     .collect::<Vec<_>>();
                 let show_stop = stop_action.is_some()
                     && (app.motion_control_mode == crate::config::MotionControlMode::Hold
-                        || capabilities.active_relays.iter().next().is_some());
+                        || motion_control_is_active(capabilities, control));
                 let action_rows = if is_motion { vec![directional] } else { vec![control.actions.iter().collect()] };
                 for action_row in action_rows {
                     let columns = action_grid_columns(ui.available_width(), action_row.len());
@@ -1105,34 +1183,34 @@ fn draw_control_card(
                                 && app.motion_control_mode == crate::config::MotionControlMode::Hold
                                 && stop_action.is_some()
                             {
-                                let held_id = ui.make_persistent_id(("held-motion-action", action.id.as_str()));
-                                let was_held = ui.data_mut(|data| data.get_temp::<bool>(held_id).unwrap_or(false));
-                                let held = response.is_pointer_button_down_on();
-                                if held && !was_held {
-                                    invoke_control_action(app, &action.id);
-                                } else if !held && was_held {
-                                    invoke_control_action(app, &stop_action.expect("checked above").id);
-                                }
-                                ui.data_mut(|data| data.insert_temp(held_id, held));
+                                update_held_motion_action(
+                                    app,
+                                    ui,
+                                    &response,
+                                    &action.id,
+                                    &stop_action.expect("checked above").id,
+                                );
                             } else if response.clicked() {
                                 invoke_control_action(app, &action.id);
                             }
                         }
                     });
                 }
-                if show_stop && let Some(stop) = stop_action {
+                if is_motion && stop_action.is_some() {
                     ui.add_space(5.0);
                     ui.horizontal_centered(|ui| {
                         let width = ui.available_width().clamp(86.0, 160.0);
+                        let stop = stop_action.expect("checked above");
                         let label = responsive_action_label(stop, width);
-                        if ui
-                            .add_enabled(
-                                !app.estop_active,
-                                egui::Button::new(label).min_size(egui::vec2(width, 28.0)),
-                            )
-                            .on_hover_text(crate::ui::i18n::visual_text(app.language, &stop.name))
-                            .clicked()
-                        {
+                        let response = ui.allocate_ui_with_layout(
+                            egui::vec2(width, 28.0),
+                            egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                            |ui| show_stop.then(|| ui.add_enabled(
+                                    !app.estop_active,
+                                    egui::Button::new(label).min_size(egui::vec2(width, 28.0)),
+                                ).on_hover_text(crate::ui::i18n::visual_text(app.language, &stop.name))),
+                        );
+                        if response.inner.is_some_and(|response| response.clicked()) {
                             invoke_control_action(app, &stop.id);
                         }
                     });
@@ -1279,6 +1357,62 @@ mod timeline_row_tests {
         assert_eq!(pwm_raw(0.0), 0);
         assert_eq!(pwm_raw(100.0), 4095);
         assert_eq!(pwm_raw(12.5), 512);
+    }
+
+    #[test]
+    fn hold_motion_captures_press_and_stops_only_on_physical_release() {
+        assert_eq!(
+            hold_motion_transition(None, "seat.left.up", true, true),
+            HoldMotionTransition::Start
+        );
+        assert_eq!(
+            hold_motion_transition(Some("seat.left.up"), "seat.left.up", false, true),
+            HoldMotionTransition::None
+        );
+        assert_eq!(
+            hold_motion_transition(Some("seat.left.up"), "seat.left.up", false, false),
+            HoldMotionTransition::Stop
+        );
+    }
+
+    #[test]
+    fn seat_stop_visibility_ignores_other_sides_and_unrelated_relays() {
+        let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
+        capabilities.relays = vec![
+            crate::four_d::controller::HardwareOutput {
+                id: 1,
+                key: "relay.1".into(),
+                name: "Left up".into(),
+                role: "motion-left-up".into(),
+                control: "relay".into(),
+            },
+            crate::four_d::controller::HardwareOutput {
+                id: 3,
+                key: "relay.3".into(),
+                name: "Right up".into(),
+                role: "motion-right-up".into(),
+                control: "relay".into(),
+            },
+            crate::four_d::controller::HardwareOutput {
+                id: 5,
+                key: "relay.5".into(),
+                name: "Aux".into(),
+                role: "user-output".into(),
+                control: "relay".into(),
+            },
+        ];
+        let left = crate::four_d::controller::HardwareControl {
+            key: "seat.left".into(),
+            kind: "motion".into(),
+            ..Default::default()
+        };
+        capabilities.active_relays.insert(3);
+        assert!(!motion_control_is_active(&capabilities, &left));
+        capabilities.active_relays.clear();
+        capabilities.active_relays.insert(5);
+        assert!(!motion_control_is_active(&capabilities, &left));
+        capabilities.active_relays.insert(1);
+        assert!(motion_control_is_active(&capabilities, &left));
     }
 
     #[test]
@@ -2502,15 +2636,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                         if categorized.is_empty() {
                             ui.centered_and_justified(|ui| {
-                                let source = self
-                                    .app
-                                    .connected_board_display_name()
-                                    .unwrap_or_else(|| self.app.tr("connected hardware"));
                                 ui.label(
-                                    egui::RichText::new(format!(
-                                        "{} {source}.",
-                                        self.app.tr("No effects are advertised by")
-                                    ))
+                                    egui::RichText::new(self.app.tr("No effects"))
                                     .weak()
                                     .size(12.0),
                                 );
@@ -2891,7 +3018,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         let capabilities = self.app.advertised_hardware();
                         if !self.app.is_connected {
                             ui.label(egui::RichText::new(
-                                self.app.tr("Connect to PCController to discover live board controls.")
+                                self.app.tr("Hardware Disconnected")
                             ).weak());
                         } else if crate::four_d::controller::is_controller_endpoint(&self.app.serial_port)
                             && capabilities.is_none()
@@ -2911,7 +3038,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 });
                             } else {
                                 ui.label(egui::RichText::new(
-                                    self.app.tr("PCController is connected; requesting the board capability catalog…")
+                                    self.app.tr("Loading hardware…")
                                 ).weak());
                             }
                         } else if capabilities
@@ -3042,9 +3169,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let name_label = self.app.tr("Name");
                                 let name_hint = self.app.tr("Seat motion take");
                                 let start_label = self.app.tr("Start recording");
-                                let start_help = self.app.tr(
-                                    "Anchor at the current video time and capture board-applied actions from every PCController surface.",
-                                );
+                                let start_help = self.app.tr("Record from the current media time");
                                 let refresh_label = self.app.tr("Refresh status");
                                 let save_label = self.app.tr("Save and place");
                                 let discard_label = self.app.tr("Discard");
@@ -3052,8 +3177,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let capture_engine_label = self.app.tr("Capture engine");
                                 let host_engine_label = self.app.tr("PCController host");
                                 let board_engine_label = self.app.tr("Board RAM");
-                                let host_engine_help = self.app.tr("Captures relay, motion, MOSFET, display, buzzer, RF, and other coordinator actions.");
-                                let board_engine_help = self.app.tr("Captures the board's bounded live relay snapshots, then imports them into PCController when saved.");
+                                let host_engine_help = self.app.tr("All applied hardware actions");
+                                let board_engine_help = self.app.tr("Relay snapshots in board RAM");
                                 let record_open = self.app.hardware_effect_authoring.active
                                     || self.app.hardware_effect_authoring.pending_operation.is_some();
                                 ui.add_space(8.0);
@@ -3149,7 +3274,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                             if !capabilities.strip_effects.is_empty() {
-                                let strip_title = self.app.tr("Host-rendered lighting effects");
+                                let strip_title = self.app.tr("Lighting effects");
                                 let stop_label = self.app.tr("Stop preview");
                                 let preview_label = self.app.tr("Preview");
                                 ui.add_space(8.0);
@@ -3374,7 +3499,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     ui.horizontal(|ui| {
                                         ui.label(crate::ui::i18n::visual_text(display_language, &hardware_macro.name));
                                         if ui.button(self.app.tr("Play")).clicked() {
-                                            let command = format!("effect play sequence:{} {}", hardware_macro.id, hardware_macro.mode);
+                                            let command = format!("effect play {} {}", hardware_macro.id, hardware_macro.mode);
                                             let _ = self.app.engine_handle.sender.send(
                                                 crate::four_d::engine::EngineMessage::ControllerCall {
                                                     method: "controller.command.execute".to_string(),

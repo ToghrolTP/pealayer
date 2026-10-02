@@ -220,7 +220,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "PWM channels" => "کانال‌های PWM",
         "Peripherals" => "تجهیزات جانبی",
         "Macros" => "ماکروها",
-        "Strip renderers" => "پردازشگرهای نوار نور",
+        "Lighting effects" => "جلوه‌های نورپردازی",
         "Live front-panel state" => "وضعیت زندهٔ پنل جلویی",
         "The attached board does not advertise front-panel state." => {
             "برد متصل وضعیت پنل جلویی را اعلام نمی‌کند."
@@ -275,12 +275,8 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Workspace mode" => "حالت فضای کاری",
         "Search" => "جست‌وجو",
         "Search effects..." => "جست‌وجوی جلوه‌ها…",
-        "Connect to PCController to discover live board controls." => {
-            "برای دریافت کنترل‌های زندهٔ برد به PCController متصل شوید."
-        }
-        "PCController is connected; requesting the board capability catalog…" => {
-            "PCController متصل است؛ فهرست قابلیت‌های برد در حال درخواست است…"
-        }
+        "No effects" => "جلوه‌ای موجود نیست",
+        "Loading hardware…" => "در حال بارگذاری سخت‌افزار…",
         "Board connection failed" => "اتصال برد ناموفق بود",
         "PCController detected hardware on" => "PCController سخت‌افزار را در این مسیر شناسایی کرد:",
         "but the board is not responding. Check its USB cable, power, and operating-system device status." => {
@@ -315,15 +311,9 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Capture engine" => "موتور ضبط",
         "PCController host" => "میزبان PCController",
         "Board RAM" => "حافظهٔ برد",
-        "Captures relay, motion, MOSFET, display, buzzer, RF, and other coordinator actions." => {
-            "فرمان‌های رله، حرکت، ماسفت، نمایشگر، بوق، رادیو و دیگر عملیات هماهنگ‌کننده را ضبط می‌کند."
-        }
-        "Captures the board's bounded live relay snapshots, then imports them into PCController when saved." => {
-            "نمونه‌های زنده و محدود رله را در حافظهٔ برد ضبط می‌کند و هنگام ذخیره به PCController وارد می‌کند."
-        }
-        "Anchor at the current video time and capture board-applied actions from every PCController surface." => {
-            "ضبط را به زمان کنونی ویدئو متصل کنید و فرمان‌های اعمال‌شدهٔ برد را از همهٔ رابط‌های PCController بگیرید."
-        }
+        "Record from the current media time" => "ضبط از زمان کنونی رسانه",
+        "All applied hardware actions" => "همهٔ فرمان‌های اعمال‌شدهٔ سخت‌افزار",
+        "Relay snapshots in board RAM" => "نمونه‌های رله در حافظهٔ برد",
         "Refresh status" => "تازه‌سازی وضعیت",
         "Save and place" => "ذخیره و جای‌گذاری",
         "Discard" => "دور انداختن",
@@ -333,9 +323,6 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Preview" => "پیش‌نمایش",
         "No compatible relay effects are advertised by the connected PCController." => {
             "PCController متصل هیچ جلوهٔ رله‌ای سازگاری اعلام نکرده است."
-        }
-        "No effects are advertised by the connected PCController." => {
-            "PCController متصل هیچ جلوه‌ای اعلام نکرده است."
         }
         "Connection problem" => "مشکل اتصال",
         "Playback problem" => "مشکل پخش",

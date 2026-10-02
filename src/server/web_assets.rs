@@ -38,7 +38,7 @@ pub const INDEX_HTML: &str = r#"<!DOCTYPE html>
     .now-playing { text-align: center; }
     
     .video-frame-wrap { width: 100%; aspect-ratio: 16/9; background: #080810; border-radius: 0.85rem; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; overflow: hidden; margin-bottom: 1.25rem; position: relative; }
-    .video-frame-img { width: 100%; height: 100%; object-fit: cover; }
+    .video-frame-img { width: 100%; height: 100%; object-fit: contain; }
     .frame-placeholder { color: var(--text-muted); font-size: 0.95rem; display: flex; flex-direction: column; align-items: center; gap: 0.5rem; }
     
     .now-title { font-size: 1.15rem; font-weight: 700; margin-bottom: 0.35rem; word-break: break-all; color: var(--text-main); }

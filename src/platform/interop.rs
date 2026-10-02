@@ -167,6 +167,30 @@ pub enum InteropCommand {
     SetWorkspace {
         nle: bool,
     },
+    AddEffectCue {
+        effect_id: String,
+        start_time_ms: u64,
+    },
+    RemoveEffectCue {
+        instance_id: String,
+    },
+    AddControllerEffectCue {
+        reference: String,
+        start_time_ms: u64,
+    },
+    PlayControllerEffect {
+        reference: String,
+    },
+    StopControllerEffect,
+    DeleteControllerEffect {
+        reference: String,
+    },
+    SaveControllerEffect {
+        effect: WebControllerEffectDraft,
+    },
+    SetRecording {
+        enabled: bool,
+    },
     UpdateConfig {
         values: Value,
     },
@@ -198,6 +222,24 @@ impl InteropCommand {
             Self::Open { target } if target.trim().is_empty() || target.len() > 32_768 => {
                 Err("media target must contain 1 to 32768 bytes".to_string())
             }
+            Self::AddEffectCue { effect_id, .. }
+                if uuid::Uuid::parse_str(effect_id.trim()).is_err() =>
+            {
+                Err("effect_id must be a valid effect UUID".to_string())
+            }
+            Self::RemoveEffectCue { instance_id }
+                if uuid::Uuid::parse_str(instance_id.trim()).is_err() =>
+            {
+                Err("instance_id must be a valid cue UUID".to_string())
+            }
+            Self::AddControllerEffectCue { reference, .. }
+            | Self::PlayControllerEffect { reference }
+            | Self::DeleteControllerEffect { reference }
+                if !valid_controller_effect_reference(reference) =>
+            {
+                Err("controller effect reference is invalid".to_string())
+            }
+            Self::SaveControllerEffect { effect } => effect.validate(),
             Self::UpdateConfig { values } => crate::config::AppConfig::validate_patch_shape(values),
             _ => Ok(()),
         }
@@ -212,8 +254,10 @@ pub fn command_catalog() -> Value {
             "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
             "seek", "seek_to", "seek_abs", "set_volume", "set_mute", "toggle_mute",
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
-            "maximize", "restore", "open_preferences", "set_workspace", "update_config", "reload_config",
-            "get_status", "quit"
+            "maximize", "restore", "open_preferences", "set_workspace", "update_config",
+            "reload_config", "add_effect_cue", "remove_effect_cue", "set_recording",
+            "get_status", "quit", "controller_effect_cue.add", "controller_effect.play",
+            "controller_effect.stop", "controller_effect.save", "controller_effect.delete"
         ],
         "json_rpc_prefix": "pealayer",
         "discovery": "/api/player/commands"
@@ -241,6 +285,30 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "1" | "true" | "on" | "yes" => Ok(true),
         "0" | "false" | "off" | "no" => Ok(false),
         _ => Err("expected on/off, true/false, or 1/0".to_string()),
+    };
+    let effect_cue = || {
+        let mut values = argument.split_whitespace();
+        let effect_id = values
+            .next()
+            .ok_or_else(|| "add-effect-cue requires an effect UUID".to_string())?;
+        let start_time_ms = values
+            .next()
+            .map(|value| {
+                value
+                    .parse::<u64>()
+                    .map_err(|_| "add-effect-cue start time must be milliseconds".to_string())
+            })
+            .transpose()?
+            .unwrap_or_default();
+        if values.next().is_some() {
+            return Err(
+                "add-effect-cue accepts an effect UUID and optional start time".to_string(),
+            );
+        }
+        Ok(InteropCommand::AddEffectCue {
+            effect_id: effect_id.to_string(),
+            start_time_ms,
+        })
     };
     let command = match name.to_ascii_lowercase().as_str() {
         "play" => InteropCommand::Play,
@@ -287,6 +355,13 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
                 _ => return Err("workspace must be nle or simple".to_string()),
             }
         }
+        "add_effect_cue" | "add-effect-cue" => effect_cue()?,
+        "remove_effect_cue" | "remove-effect-cue" => InteropCommand::RemoveEffectCue {
+            instance_id: argument.to_string(),
+        },
+        "recording" | "set_recording" | "set-recording" => InteropCommand::SetRecording {
+            enabled: boolean()?,
+        },
         "status" | "get_status" | "get-status" => InteropCommand::GetStatus,
         "reload_config" | "reload-config" => InteropCommand::ReloadConfig,
         "quit" | "exit" => InteropCommand::Quit,
@@ -326,6 +401,118 @@ pub struct PlayerStatusResponse {
     pub hardware_connected: bool,
     #[serde(default)]
     pub hardware: Option<HardwareStatusSummary>,
+    #[serde(default)]
+    pub recording: bool,
+    #[serde(default)]
+    pub recording_armed: bool,
+    #[serde(default)]
+    pub recordable_track_count: usize,
+    #[serde(default)]
+    pub effects: Vec<WebEffectProfile>,
+    #[serde(default)]
+    pub controller_effects: Vec<WebControllerEffect>,
+    #[serde(default)]
+    pub cues: Vec<WebEffectCue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebEffectProfile {
+    pub id: String,
+    pub name: String,
+    pub duration_ms: u64,
+    pub action_count: usize,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebEffectCue {
+    pub id: String,
+    pub effect_id: String,
+    pub name: String,
+    pub start_time_ms: u64,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebControllerEffect {
+    pub reference: String,
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub description: String,
+    pub kind: String,
+    pub duration_ms: u64,
+    pub action_count: usize,
+    pub editable: bool,
+    pub program: Value,
+    pub default_fps: Option<u8>,
+    pub default_pixels: Option<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct WebControllerEffectDraft {
+    #[serde(default)]
+    pub reference: String,
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    #[serde(default)]
+    pub description: String,
+    pub kind: String,
+    #[serde(default)]
+    pub program: Value,
+    #[serde(default)]
+    pub color: String,
+    #[serde(default)]
+    pub default_fps: u8,
+    #[serde(default)]
+    pub duration_ms: u64,
+    #[serde(default)]
+    pub default_pixels: u16,
+    #[serde(default)]
+    pub is_new: bool,
+}
+
+fn valid_controller_effect_reference(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 128
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, ':' | '.' | '-' | '_')
+        })
+}
+
+impl WebControllerEffectDraft {
+    fn validate(&self) -> Result<(), String> {
+        let field = |label: &str, value: &str| {
+            let value = value.trim();
+            (!value.is_empty()
+                && value.len() <= 64
+                && value
+                    .chars()
+                    .all(|character| character.is_alphanumeric() || " -_".contains(character)))
+            .then_some(())
+            .ok_or_else(|| format!("{label} must contain 1 to 64 safe characters"))
+        };
+        field("effect name", &self.name)?;
+        field("effect category", &self.category)?;
+        match self.kind.as_str() {
+            "sequence" => self
+                .id
+                .parse::<u8>()
+                .map(|_| ())
+                .map_err(|_| "sequence effect id must be from 0 to 255".to_string()),
+            "strip-stream" => {
+                if !valid_controller_effect_reference(&self.id) || !self.program.is_object() {
+                    return Err(
+                        "lighting effect requires a safe id and a program object".to_string()
+                    );
+                }
+                Ok(())
+            }
+            _ => Err("effect kind must be sequence or strip-stream".to_string()),
+        }
+    }
 }
 
 fn default_playback_rate() -> f64 {
@@ -352,6 +539,12 @@ impl Default for PlayerStatusResponse {
             controller_connected: false,
             hardware_connected: false,
             hardware: None,
+            recording: false,
+            recording_armed: false,
+            recordable_track_count: 0,
+            effects: Vec::new(),
+            controller_effects: Vec::new(),
+            cues: Vec::new(),
         }
     }
 }
@@ -479,6 +672,59 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 "simple" | "player" => Some(InteropCommand::SetWorkspace { nle: false }),
                 _ => return Err("workspace must be nle or simple".to_string()),
             }
+        }
+        "effect_cue.add" | "pealayer.effect_cue.add" | "pealayer.timeline.effect.add" => {
+            Some(InteropCommand::AddEffectCue {
+                effect_id: string(&["effect_id", "effect"])?,
+                start_time_ms: request
+                    .params
+                    .get("start_time_ms")
+                    .or_else(|| request.params.get("time_ms"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+            })
+        }
+        "effect_cue.remove" | "pealayer.effect_cue.remove" | "pealayer.timeline.effect.remove" => {
+            Some(InteropCommand::RemoveEffectCue {
+                instance_id: string(&["instance_id", "cue_id"])?,
+            })
+        }
+        "controller_effect_cue.add" | "pealayer.controller_effect_cue.add" => {
+            Some(InteropCommand::AddControllerEffectCue {
+                reference: string(&["reference", "effect"])?,
+                start_time_ms: request
+                    .params
+                    .get("start_time_ms")
+                    .or_else(|| request.params.get("time_ms"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+            })
+        }
+        "controller_effect.play" | "pealayer.controller_effect.play" => {
+            Some(InteropCommand::PlayControllerEffect {
+                reference: string(&["reference", "effect"])?,
+            })
+        }
+        "controller_effect.stop" | "pealayer.controller_effect.stop" => {
+            Some(InteropCommand::StopControllerEffect)
+        }
+        "controller_effect.delete" | "pealayer.controller_effect.delete" => {
+            Some(InteropCommand::DeleteControllerEffect {
+                reference: string(&["reference", "effect"])?,
+            })
+        }
+        "controller_effect.save" | "pealayer.controller_effect.save" => {
+            let effect = serde_json::from_value::<WebControllerEffectDraft>(request.params.clone())
+                .map_err(|error| format!("invalid controller effect: {error}"))?;
+            Some(InteropCommand::SaveControllerEffect { effect })
+        }
+        "recording" | "recording.set" | "pealayer.recording.set" => {
+            let enabled = request
+                .params
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "missing boolean parameter: enabled".to_string())?;
+            Some(InteropCommand::SetRecording { enabled })
         }
         "config.update" | "pealayer.config.update" => {
             crate::config::AppConfig::validate_patch_shape(&request.params)?;
@@ -1123,15 +1369,18 @@ fn report_controller_instance(
                 "lease_seconds": 45,
                 "self": {
                     "kind": "native",
+                    "pid": std::process::id(),
                     "vars": {
-                        "pid": std::process::id().to_string(),
                         "rpc": format!("http://127.0.0.1:{}/api/rpc", crate::config::control_port()),
                         "websocket": format!("ws://127.0.0.1:{}/ws", crate::config::control_port()),
                         "ipc": format!("http://127.0.0.1:{}/api/ipc", crate::config::control_port()),
+                        "web_ui": format!("http://127.0.0.1:{}/", crate::config::control_port()),
                     },
                 },
                 "values": {
                     "app_actions": PCCONTROLLER_ACTIONS,
+                    "control_contract": "pealayer.control",
+                    "control_transports": "native,http,websocket,json-rpc",
                     "coordinator": "pccontroller",
                     "serial_owner": "pccontroller",
                 },
@@ -1484,6 +1733,35 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn web_controller_effect_commands_are_typed_and_validated() {
+        let cue: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.controller_effect_cue.add","params":{"reference":"effect:lighting-primary","start_time_ms":1250}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&cue).unwrap(),
+            Some(InteropCommand::AddControllerEffectCue { reference, start_time_ms: 1250 })
+                if reference == "effect:lighting-primary"
+        ));
+
+        let save: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":2,"method":"controller_effect.save","params":{"id":"lighting-primary","name":"Lighting primary","category":"Lighting","kind":"strip-stream","program":{"primitive":"police"},"default_fps":30,"duration_ms":5000,"default_pixels":100,"is_new":true}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&save).unwrap(),
+            Some(InteropCommand::SaveControllerEffect { effect })
+                if effect.id == "lighting-primary" && effect.program["primitive"] == "police"
+        ));
+
+        let invalid: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":3,"method":"controller_effect.play","params":{"reference":"effect; delete all"}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&invalid).is_err());
     }
 
     #[cfg(windows)]
