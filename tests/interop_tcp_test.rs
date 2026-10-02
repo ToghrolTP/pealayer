@@ -22,6 +22,7 @@ fn test_loopback_tcp_interop_commands_and_status() {
             "en".to_string(),
             "ltr".to_string(),
             "system".to_string(),
+            [0, 120, 212],
         ),
     );
 

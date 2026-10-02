@@ -23,6 +23,7 @@ fn test_cli_remote_and_single_instance_forwarding() {
             "en".to_string(),
             "ltr".to_string(),
             "system".to_string(),
+            [0, 120, 212],
         ),
     );
 

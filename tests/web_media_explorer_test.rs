@@ -128,6 +128,7 @@ fn status_is_unknown_until_first_authoritative_snapshot() {
             "fa".to_string(),
             "rtl".to_string(),
             "dark".to_string(),
+            [56, 210, 122],
         ),
     );
     std::thread::sleep(Duration::from_millis(100));
