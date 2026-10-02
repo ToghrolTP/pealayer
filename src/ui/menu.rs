@@ -429,15 +429,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         .on_disabled_hover_text(app.tr("E-STOP is available when a live board is connected"));
 
                     if btn.clicked() {
-                        app.estop_active = !app.estop_active;
-                        app.engine_handle
-                            .estop_active
-                            .store(app.estop_active, std::sync::atomic::Ordering::Relaxed);
-
-                        if app.estop_active {
-                            // Pause video playback immediately
-                            app.pause();
-                        }
+                        app.set_emergency_stop(!app.estop_active);
                     }
 
                     ui.separator();

@@ -51,6 +51,8 @@ PLAYER OPTIONS:
   --pause                   Pause playback
   --toggle-pause            Toggle play/pause
   --stop                    Stop and close the current media
+  --estop                   Latch E-STOP and release all motion/output sources
+  --reset-estop             Reset E-STOP without resuming motion
   --next | --previous       Navigate the playlist
   --seek <SECONDS>          Seek relative to the current position
   --seek-to <SECONDS>       Seek to an absolute playback time
@@ -141,6 +143,8 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
             "--pause" => commands.push(InteropCommand::Pause),
             "--toggle-pause" => commands.push(InteropCommand::TogglePause),
             "--stop" => commands.push(InteropCommand::Stop),
+            "--estop" => commands.push(InteropCommand::SetEmergencyStop { active: true }),
+            "--reset-estop" => commands.push(InteropCommand::SetEmergencyStop { active: false }),
             "--next" => commands.push(InteropCommand::Next),
             "--previous" => commands.push(InteropCommand::Previous),
             "--mute" => commands.push(InteropCommand::SetMute { muted: true }),
@@ -400,6 +404,13 @@ mod tests {
                 if commands == vec![InteropCommand::ShowMessage {
                     message: "Hardware ready".to_string()
                 }]
+        ));
+
+        let estop = parse_cli_args(vec!["pealayer".to_string(), "--estop".to_string()]).unwrap();
+        assert!(matches!(
+            estop,
+            CliAction::RunGui(CliOptions { commands, .. })
+                if commands == vec![InteropCommand::SetEmergencyStop { active: true }]
         ));
     }
 

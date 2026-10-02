@@ -145,6 +145,75 @@ fn stop_controller_effect(
     )
 }
 
+const EMERGENCY_STOP_CONTROLLER_COMMANDS: [&str; 5] = [
+    "effect cancel",
+    "effect stop",
+    "keyboard stop",
+    "relay side left stop",
+    "relay side right stop",
+];
+
+/// Releases physical outputs before and after cancelling every coordinator-side
+/// source that could reassert motion. Direct-serial diagnostics have no host
+/// coordinator to cancel, so the board-level all-relays-off path is issued
+/// twice there as well.
+fn enforce_emergency_stop(transport: &mut HardwareTransport) -> Result<(), String> {
+    let mut errors = Vec::new();
+    if let Err(error) = transport.send(Command::AllOff) {
+        errors.push(format!("initial output release: {error}"));
+    }
+    if matches!(transport, HardwareTransport::Controller(_)) {
+        for command in EMERGENCY_STOP_CONTROLLER_COMMANDS {
+            if let Err(error) = transport.call_controller(
+                "controller.command.execute",
+                serde_json::json!({"command": command}),
+            ) {
+                errors.push(format!("{command}: {error}"));
+            }
+        }
+    }
+    if let Err(error) = transport.send(Command::AllOff) {
+        errors.push(format!("final output release: {error}"));
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn controller_call_allowed_during_estop(method: &str, params: &serde_json::Value) -> bool {
+    if method == "controller.pwm.off" {
+        return true;
+    }
+    if method != "controller.command.execute" {
+        return false;
+    }
+    let Some(command) = params.get("command").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    let words = command
+        .split_whitespace()
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    match words
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        ["relay", "off"]
+        | ["keyboard", "stop"]
+        | ["effect", "cancel"]
+        | ["effect", "stop"]
+        | ["strip", "stop"]
+        | ["rgb", "effect", "stop"] => true,
+        ["effect", "stop", _] => true,
+        ["relay", "side", "left" | "right", "stop"] => true,
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CompiledAction {
     pub time_ms: u64,
@@ -269,6 +338,15 @@ impl EngineHandle {
     pub fn request_catalog_refresh(&self) {
         self.catalog_refresh_requested
             .store(true, Ordering::Relaxed);
+    }
+
+    pub fn set_emergency_stop(&self, active: bool) {
+        self.estop_active.store(active, Ordering::SeqCst);
+        if active {
+            // Stop timeline dispatch immediately; the engine thread performs the
+            // acknowledged hardware release on its next (5 ms) pass.
+            self.is_playing.store(false, Ordering::SeqCst);
+        }
     }
 }
 
@@ -418,7 +496,7 @@ pub fn spawn_engine() -> EngineHandle {
         let mut active_transport: Option<HardwareTransport> = None;
 
         loop {
-            let estop_now = engine_estop.load(Ordering::Relaxed);
+            let estop_now = engine_estop.load(Ordering::SeqCst);
             let requested = engine_connection_requested.load(Ordering::Relaxed);
             let mut connected = active_transport.is_some();
             engine_connected.store(connected, Ordering::Relaxed);
@@ -493,11 +571,11 @@ pub fn spawn_engine() -> EngineHandle {
                         engine_connected.store(true, Ordering::Relaxed);
                         connected = true;
                         let estop_reassert_error = engine_estop
-                            .load(Ordering::Relaxed)
+                            .load(Ordering::SeqCst)
                             .then(|| {
                                 active_transport
                                     .as_mut()
-                                    .and_then(|transport| transport.send(Command::AllOff).err())
+                                    .and_then(|transport| enforce_emergency_stop(transport).err())
                             })
                             .flatten();
                         if let Some(error) = estop_reassert_error {
@@ -554,6 +632,25 @@ pub fn spawn_engine() -> EngineHandle {
                 println!("[Engine] Disconnected hardware transport");
             }
 
+            if estop_now && !was_estop {
+                last_pwm_values.fill(0);
+                active_strip_effect = None;
+                if connected {
+                    if let Some(ref mut transport) = active_transport
+                        && let Err(error) = enforce_emergency_stop(transport)
+                        && let Ok(mut guard) = engine_conn_error.lock()
+                    {
+                        *guard = Some(format!("emergency stop: {error}"));
+                    }
+                    let port_name = {
+                        let guard = engine_port.lock().unwrap();
+                        guard.clone()
+                    };
+                    println!("[{}] ALL_OFF + MOTION_STOP (E-STOP)", port_name);
+                }
+            }
+            was_estop = estop_now;
+
             // Check for new messages (non-blocking)
             let mut channel_disconnected = false;
             loop {
@@ -579,7 +676,8 @@ pub fn spawn_engine() -> EngineHandle {
                     }
                     EngineMessage::UpdateControllerStripEffects(new_queue) => {
                         let current_time = engine_time.load(Ordering::Relaxed);
-                        let playing = engine_playing.load(Ordering::Relaxed);
+                        let playing = engine_playing.load(Ordering::Relaxed)
+                            && !engine_estop.load(Ordering::SeqCst);
                         let desired = playing
                             .then(|| active_controller_strip_effect_at(&new_queue, current_time))
                             .flatten()
@@ -611,6 +709,9 @@ pub fn spawn_engine() -> EngineHandle {
                         last_pwm_values.fill(0);
                     }
                     EngineMessage::LiveActuatorOverride { channel, value } => {
+                        if engine_estop.load(Ordering::SeqCst) {
+                            continue;
+                        }
                         let ch = channel as usize;
                         if ch < 16 && value != last_pwm_values[ch] {
                             last_pwm_values[ch] = value;
@@ -679,6 +780,11 @@ pub fn spawn_engine() -> EngineHandle {
                         last_pwm_values.fill(0);
                     }
                     EngineMessage::SendCommand(cmd) => {
+                        if engine_estop.load(Ordering::SeqCst)
+                            && !matches!(cmd, Command::Ping | Command::AllOff)
+                        {
+                            continue;
+                        }
                         if connected {
                             if let Some(ref mut transport) = active_transport {
                                 if let Err(e) = transport.send(cmd) {
@@ -718,6 +824,11 @@ pub fn spawn_engine() -> EngineHandle {
                         last_connect_attempt = None;
                     }
                     EngineMessage::ControllerCall { method, params } => {
+                        if engine_estop.load(Ordering::SeqCst)
+                            && !controller_call_allowed_during_estop(&method, &params)
+                        {
+                            continue;
+                        }
                         if connected {
                             if let Some(ref mut transport) = active_transport {
                                 if let Err(error) = transport.call_controller(&method, params) {
@@ -734,7 +845,11 @@ pub fn spawn_engine() -> EngineHandle {
                         method,
                         params,
                     } => {
-                        let result = if connected {
+                        let result = if engine_estop.load(Ordering::SeqCst)
+                            && !controller_call_allowed_during_estop(&method, &params)
+                        {
+                            Err("hardware command blocked while E-STOP is active".to_string())
+                        } else if connected {
                             active_transport
                                 .as_mut()
                                 .ok_or_else(|| "PCController transport is unavailable".to_string())
@@ -752,6 +867,14 @@ pub fn spawn_engine() -> EngineHandle {
                         }
                     }
                     EngineMessage::InvokeControllerAction { action_id } => {
+                        if engine_estop.load(Ordering::SeqCst) {
+                            if let Ok(mut guard) = engine_conn_error.lock() {
+                                *guard = Some(format!(
+                                    "controller action {action_id} blocked while E-STOP is active"
+                                ));
+                            }
+                            continue;
+                        }
                         if connected {
                             if let Some(ref mut transport) = active_transport {
                                 match transport.call_controller(
@@ -953,17 +1076,22 @@ pub fn spawn_engine() -> EngineHandle {
                 }
             }
 
+            let estop_now = engine_estop.load(Ordering::SeqCst);
             if estop_now && !was_estop {
                 last_pwm_values.fill(0);
+                active_strip_effect = None;
                 if connected {
-                    if let Some(ref mut transport) = active_transport {
-                        let _ = transport.send(Command::AllOff);
+                    if let Some(ref mut transport) = active_transport
+                        && let Err(error) = enforce_emergency_stop(transport)
+                        && let Ok(mut guard) = engine_conn_error.lock()
+                    {
+                        *guard = Some(format!("emergency stop: {error}"));
                     }
                     let port_name = {
                         let guard = engine_port.lock().unwrap();
                         guard.clone()
                     };
-                    println!("[{}] ALL_OFF (E-STOP)", port_name);
+                    println!("[{}] ALL_OFF + MOTION_STOP (E-STOP)", port_name);
                 }
             }
             was_estop = estop_now;
@@ -1705,6 +1833,68 @@ mod tests {
         assert!(!should_yield_direct_transport(true, true, true));
         assert!(!should_yield_direct_transport(true, false, false));
         assert!(!should_yield_direct_transport(false, false, true));
+    }
+
+    #[test]
+    fn emergency_stop_plan_releases_every_motion_source() {
+        assert_eq!(
+            EMERGENCY_STOP_CONTROLLER_COMMANDS,
+            [
+                "effect cancel",
+                "effect stop",
+                "keyboard stop",
+                "relay side left stop",
+                "relay side right stop",
+            ]
+        );
+    }
+
+    #[test]
+    fn emergency_stop_blocks_commands_that_can_reenergize_outputs() {
+        for (method, params) in [
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "relay 1 on"}),
+            ),
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "effect play seat-rise"}),
+            ),
+            (
+                "controller.pwm.set",
+                serde_json::json!({"channel": 0, "value": 4095}),
+            ),
+        ] {
+            assert!(!controller_call_allowed_during_estop(method, &params));
+        }
+        for (method, params) in [
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "relay off"}),
+            ),
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "relay side left stop"}),
+            ),
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "keyboard stop"}),
+            ),
+            ("controller.pwm.off", serde_json::json!({})),
+        ] {
+            assert!(controller_call_allowed_during_estop(method, &params));
+        }
+    }
+
+    #[test]
+    fn emergency_stop_handle_latches_and_pauses_timeline_dispatch() {
+        let handle = spawn_engine();
+        handle.is_playing.store(true, Ordering::Relaxed);
+        handle.set_emergency_stop(true);
+        assert!(handle.estop_active.load(Ordering::SeqCst));
+        assert!(!handle.is_playing.load(Ordering::SeqCst));
+        handle.set_emergency_stop(false);
+        assert!(!handle.estop_active.load(Ordering::SeqCst));
     }
 
     #[test]

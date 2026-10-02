@@ -194,6 +194,9 @@ pub enum InteropCommand {
     SetRecording {
         enabled: bool,
     },
+    SetEmergencyStop {
+        active: bool,
+    },
     UpdateConfig {
         values: Value,
     },
@@ -266,7 +269,8 @@ pub fn command_catalog() -> Value {
             "maximize", "restore", "open_preferences", "show_message", "set_workspace", "update_config",
             "reload_config", "add_effect_cue", "remove_effect_cue", "set_recording",
             "get_status", "quit", "controller_effect_cue.add", "controller_effect.play",
-            "controller_effect.stop", "controller_effect.save", "controller_effect.delete"
+            "controller_effect.stop", "controller_effect.save", "controller_effect.delete",
+            "set_emergency_stop"
         ],
         "json_rpc_prefix": "pealayer",
         "discovery": "/api/player/commands"
@@ -374,6 +378,9 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "recording" | "set_recording" | "set-recording" => InteropCommand::SetRecording {
             enabled: boolean()?,
         },
+        "estop" | "e-stop" | "emergency_stop" | "emergency-stop" => {
+            InteropCommand::SetEmergencyStop { active: boolean()? }
+        }
         "status" | "get_status" | "get-status" => InteropCommand::GetStatus,
         "reload_config" | "reload-config" => InteropCommand::ReloadConfig,
         "quit" | "exit" => InteropCommand::Quit,
@@ -411,6 +418,8 @@ pub struct PlayerStatusResponse {
     pub controller_connected: bool,
     #[serde(default)]
     pub hardware_connected: bool,
+    #[serde(default)]
+    pub estop_active: bool,
     #[serde(default)]
     pub hardware: Option<HardwareStatusSummary>,
     #[serde(default)]
@@ -553,6 +562,7 @@ impl Default for PlayerStatusResponse {
             workspace: String::new(),
             controller_connected: false,
             hardware_connected: false,
+            estop_active: false,
             hardware: None,
             recording: false,
             recording_armed: false,
@@ -743,6 +753,15 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 .and_then(Value::as_bool)
                 .ok_or_else(|| "missing boolean parameter: enabled".to_string())?;
             Some(InteropCommand::SetRecording { enabled })
+        }
+        "estop" | "emergency_stop" | "pealayer.estop.set" | "pealayer.emergency_stop.set" => {
+            let active = request
+                .params
+                .get("active")
+                .or_else(|| request.params.get("enabled"))
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "missing boolean parameter: active".to_string())?;
+            Some(InteropCommand::SetEmergencyStop { active })
         }
         "config.update" | "pealayer.config.update" => {
             crate::config::AppConfig::validate_patch_shape(&request.params)?;
@@ -1696,6 +1715,28 @@ mod tests {
             }
         );
         assert!(parse_text_command("message").is_err());
+        assert_eq!(
+            parse_text_command("estop on").unwrap(),
+            InteropCommand::SetEmergencyStop { active: true }
+        );
+        assert_eq!(
+            parse_text_command("emergency-stop off").unwrap(),
+            InteropCommand::SetEmergencyStop { active: false }
+        );
+    }
+
+    #[test]
+    fn json_rpc_exposes_the_same_emergency_stop_control() {
+        let request = JsonRpcRequest {
+            jsonrpc: Some("2.0".to_string()),
+            id: serde_json::json!(1),
+            method: "pealayer.estop.set".to_string(),
+            params: serde_json::json!({"active": true}),
+        };
+        assert_eq!(
+            command_from_json_rpc(&request).unwrap(),
+            Some(InteropCommand::SetEmergencyStop { active: true })
+        );
     }
 
     #[test]
@@ -1877,6 +1918,7 @@ mod tests {
         let resp = PlayerStatusResponse {
             status: "ok".to_string(),
             playing: true,
+            estop_active: true,
             volume: 80.0,
             playback_time: 15.0,
             duration: 120.0,
@@ -1890,6 +1932,7 @@ mod tests {
         assert!(json.contains("\"playing\":true"));
         assert!(json.contains("\"volume\":80.0"));
         assert!(json.contains("\"fullscreen\":true"));
+        assert!(json.contains("\"estop_active\":true"));
     }
 
     #[test]

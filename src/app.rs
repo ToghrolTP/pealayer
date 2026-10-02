@@ -561,6 +561,7 @@ impl eframe::App for PealayerApp {
                 .to_string(),
                 controller_connected,
                 hardware_connected,
+                estop_active: self.estop_active,
                 hardware: hardware.map(|capabilities| {
                     crate::platform::interop::HardwareStatusSummary {
                         board_name: capabilities.board_name,
@@ -1904,6 +1905,10 @@ impl PealayerApp {
                     self.set_osd(self.tr("No recordable hardware tracks are available"));
                 }
             }
+            InteropCommand::SetEmergencyStop { active } => {
+                self.set_emergency_stop(active);
+                return;
+            }
             InteropCommand::UpdateConfig { values } => {
                 match self.apply_config_patch(ctx, &values) {
                     Ok(()) => self.set_osd(self.tr("Preferences updated")),
@@ -2115,6 +2120,19 @@ impl PealayerApp {
             .is_playing
             .store(false, std::sync::atomic::Ordering::Relaxed);
         self.set_osd("Pause".to_string());
+    }
+
+    pub(crate) fn set_emergency_stop(&mut self, active: bool) {
+        if self.estop_active == active {
+            return;
+        }
+        self.estop_active = active;
+        self.held_motion_action = None;
+        self.engine_handle.set_emergency_stop(active);
+        if active {
+            self.pause();
+            self.set_osd(self.tr("E-STOP ACTIVE"));
+        }
     }
 
     /// Toggles play/pause, restarting if playback has reached the end.
