@@ -1,0 +1,26 @@
+{
+  "format": "pealayer-screenshots",
+  "generated_at_utc": "2026-10-02T18:42:23.8964581Z",
+  "git_commit": "9564fb400d4ed075a2af2dcf604f8f29386a2f88",
+  "executable": "pealayer.exe",
+  "executable_sha256": "d061e5ba2b6dba93ce4b22c3fbb18cda465dd15481fbee3fea05d1680dae1c86",
+  "application_name": "Pealayer",
+  "surface": "main",
+  "hardware_endpoint": "pccontroller://127.0.0.1:18787",
+  "isolated_profile": true,
+  "capture_method": "per-capture",
+  "captures": [
+    {
+      "file": "pealayer-en-light.png",
+      "locale": "en",
+      "direction": "ltr",
+      "theme": "light",
+      "width": 1204,
+      "height": 947,
+      "sha256": "8e678b491e6be421e34877ed1b4695d1e7e9c2aa190b3e1c9412efbfb2884d49",
+      "capture_method": "user32.PrintWindow(PW_RENDERFULLCONTENT)",
+      "process_id": 37364,
+      "session": "signed-in-interactive-desktop"
+    }
+  ]
+}
