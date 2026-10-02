@@ -83,13 +83,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     for (index, (icon, label)) in TABS.into_iter().enumerate() {
-                        if ui
-                            .add_sized(
-                                [142.0, 34.0],
-                                egui::Button::new(format!("{icon}  {}", app.tr(label)))
-                                    .selected(app.board_info_tab == index),
-                            )
-                            .clicked()
+                        if crate::ui::dialog::navigation_button(
+                            ui,
+                            app.board_info_tab == index,
+                            icon,
+                            &app.tr(label),
+                            ui.available_width(),
+                        )
+                        .clicked()
                         {
                             app.board_info_tab = index;
                         }

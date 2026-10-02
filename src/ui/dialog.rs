@@ -1,7 +1,16 @@
 use eframe::egui;
 
-const ACTION_BUTTON_SIZE: egui::Vec2 = egui::vec2(96.0, 32.0);
-const PRIMARY_ACTION_BUTTON_SIZE: egui::Vec2 = egui::vec2(108.0, 32.0);
+/// Shared geometry for every single-line navigation row and footer action.
+///
+/// Keep these values here instead of allowing individual dialogs to invent
+/// their own button metrics. This is deliberately public within the crate so
+/// regression tests can enforce a single dialog design system.
+pub const CONTROL_HEIGHT: f32 = 32.0;
+pub const NAVIGATION_DETAIL_HEIGHT: f32 = 44.0;
+const ACTION_BUTTON_MIN_WIDTH: f32 = 96.0;
+const PRIMARY_ACTION_BUTTON_MIN_WIDTH: f32 = 108.0;
+const CONTROL_CORNER_RADIUS: f32 = 7.0;
+const CONTROL_TEXT_SIZE: f32 = 13.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogHost {
@@ -29,27 +38,148 @@ pub fn centered_default_rect(bounds: egui::Rect, desired_size: egui::Vec2) -> eg
 
 /// A consistent, keyboard-focusable dialog action with a Phosphor icon.
 pub fn action_button(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Response {
-    ui.add_sized(
-        ACTION_BUTTON_SIZE,
-        egui::Button::new(egui::RichText::new(format!("{icon}  {label}")).size(15.0)),
-    )
+    action_button_with_kind(ui, icon, label, false)
 }
 
 /// The visually emphasized variant of [`action_button`]. Native and embedded
 /// dialog hosts use this same control, so dialog contents do not fork merely
 /// to obtain platform-appropriate action hierarchy.
 pub fn primary_action_button(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Response {
+    action_button_with_kind(ui, icon, label, true)
+}
+
+fn action_button_with_kind(
+    ui: &mut egui::Ui,
+    icon: &str,
+    label: &str,
+    primary: bool,
+) -> egui::Response {
     let selection = ui.visuals().selection;
-    ui.add_sized(
-        PRIMARY_ACTION_BUTTON_SIZE,
-        egui::Button::new(
-            egui::RichText::new(format!("{icon}  {label}"))
-                .size(15.0)
-                .color(selection.stroke.color),
-        )
-        .fill(selection.bg_fill)
-        .stroke(selection.stroke),
+    let minimum_width = if primary {
+        PRIMARY_ACTION_BUTTON_MIN_WIDTH
+    } else {
+        ACTION_BUTTON_MIN_WIDTH
+    };
+    let mut text = egui::RichText::new(format!("{icon}  {label}")).size(CONTROL_TEXT_SIZE);
+    let mut button = egui::Button::new(text.clone())
+        .min_size(egui::vec2(minimum_width, CONTROL_HEIGHT))
+        .corner_radius(CONTROL_CORNER_RADIUS);
+    if primary {
+        text = text.color(selection.stroke.color);
+        button = egui::Button::new(text)
+            .min_size(egui::vec2(minimum_width, CONTROL_HEIGHT))
+            .corner_radius(CONTROL_CORNER_RADIUS)
+            .fill(selection.bg_fill)
+            .stroke(egui::Stroke::new(
+                1.0_f32,
+                selection.bg_fill.gamma_multiply(1.35),
+            ));
+    }
+    ui.add(button)
+}
+
+/// A shared, left-aligned navigation row for modal/dialog side rails.
+pub fn navigation_button(
+    ui: &mut egui::Ui,
+    selected: bool,
+    icon: &str,
+    label: &str,
+    width: f32,
+) -> egui::Response {
+    navigation_control(ui, selected, icon, label, None, width, CONTROL_HEIGHT)
+}
+
+/// A two-line navigation row for modal/dialog lists that need compact metadata.
+pub fn navigation_detail_button(
+    ui: &mut egui::Ui,
+    selected: bool,
+    icon: &str,
+    label: &str,
+    metadata: &str,
+    width: f32,
+) -> egui::Response {
+    navigation_control(
+        ui,
+        selected,
+        icon,
+        label,
+        Some(metadata),
+        width,
+        NAVIGATION_DETAIL_HEIGHT,
     )
+}
+
+fn navigation_control(
+    ui: &mut egui::Ui,
+    selected: bool,
+    icon: &str,
+    label: &str,
+    metadata: Option<&str>,
+    width: f32,
+    height: f32,
+) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(width.max(80.0), height), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact_selectable(&response, selected);
+        let selection = ui.visuals().selection;
+        let fill = if selected {
+            selection.bg_fill.gamma_multiply(0.22)
+        } else {
+            visuals.weak_bg_fill
+        };
+        let stroke = if response.has_focus() {
+            egui::Stroke::new(1.5_f32, selection.bg_fill.gamma_multiply(1.25))
+        } else if selected {
+            egui::Stroke::new(1.0_f32, selection.bg_fill.gamma_multiply(1.18))
+        } else {
+            visuals.bg_stroke
+        };
+        let painter = ui.painter().with_clip_rect(rect);
+        painter.rect(
+            rect,
+            CONTROL_CORNER_RADIUS,
+            fill,
+            stroke,
+            egui::StrokeKind::Inside,
+        );
+
+        let icon_x = rect.left() + 17.0;
+        painter.text(
+            egui::pos2(icon_x, rect.center().y),
+            egui::Align2::CENTER_CENTER,
+            icon,
+            egui::FontId::proportional(15.0),
+            if selected {
+                selection.bg_fill
+            } else {
+                visuals.fg_stroke.color
+            },
+        );
+        let text_x = rect.left() + 33.0;
+        let title_y = if metadata.is_some() {
+            rect.center().y - 7.0
+        } else {
+            rect.center().y
+        };
+        painter.text(
+            egui::pos2(text_x, title_y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(CONTROL_TEXT_SIZE),
+            visuals.fg_stroke.color,
+        );
+        if let Some(metadata) = metadata {
+            painter.text(
+                egui::pos2(text_x, rect.center().y + 9.0),
+                egui::Align2::LEFT_CENTER,
+                metadata,
+                egui::FontId::proportional(10.5),
+                ui.visuals().weak_text_color(),
+            );
+        }
+    }
+    response
 }
 
 /// Align dialog actions to the conventional trailing edge while respecting
@@ -60,7 +190,11 @@ pub fn action_row(ui: &mut egui::Ui, rtl: bool, body: impl FnOnce(&mut egui::Ui)
     } else {
         egui::Layout::right_to_left(egui::Align::Center)
     };
-    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 32.0), layout, body);
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), CONTROL_HEIGHT),
+        layout,
+        body,
+    );
 }
 
 /// A full-width footer with a utility action at the leading edge and primary /
@@ -81,10 +215,18 @@ pub fn action_bar(
     } else {
         egui::Layout::right_to_left(egui::Align::Center)
     };
-    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 32.0), outer, |ui| {
-        leading(ui);
-        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 32.0), inner, trailing);
-    });
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), CONTROL_HEIGHT),
+        outer,
+        |ui| {
+            leading(ui);
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), CONTROL_HEIGHT),
+                inner,
+                trailing,
+            );
+        },
+    );
 }
 
 pub fn escape_pressed(ctx: &egui::Context) -> bool {
@@ -120,9 +262,29 @@ mod tests {
 
     #[test]
     fn primary_actions_are_more_prominent_than_secondary_actions() {
-        assert!(PRIMARY_ACTION_BUTTON_SIZE.x > ACTION_BUTTON_SIZE.x);
-        assert_eq!(PRIMARY_ACTION_BUTTON_SIZE.y, ACTION_BUTTON_SIZE.y);
-        assert!((31.0..=33.0).contains(&ACTION_BUTTON_SIZE.y));
+        assert!(PRIMARY_ACTION_BUTTON_MIN_WIDTH > ACTION_BUTTON_MIN_WIDTH);
+        assert!((31.0..=33.0).contains(&CONTROL_HEIGHT));
+        assert_eq!(NAVIGATION_DETAIL_HEIGHT, 44.0);
+    }
+
+    #[test]
+    fn navigation_and_footer_actions_share_one_control_height() {
+        assert_eq!(CONTROL_HEIGHT, 32.0);
+        for (name, source) in [
+            ("preferences", include_str!("preferences.rs")),
+            ("about", include_str!("about.rs")),
+            ("board information", include_str!("board_info.rs")),
+        ] {
+            assert!(
+                source.contains("dialog::navigation_button"),
+                "{name} must use the shared dialog navigation control"
+            );
+        }
+        let preferences = include_str!("preferences.rs");
+        assert!(!preferences.contains(concat!("const PREFERENCES_", "TAB_HEIGHT")));
+        assert!(!preferences.contains(concat!("const PREFERENCES_", "ACTION_HEIGHT")));
+        assert!(!preferences.contains(concat!("fn preferences_", "action_button(")));
+        assert!(include_str!("effects_library.rs").contains("dialog::navigation_detail_button"));
     }
 
     #[test]

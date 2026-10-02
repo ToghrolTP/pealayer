@@ -91,22 +91,19 @@ fn ensure_icon(app: &mut PealayerApp, ctx: &egui::Context) {
 
 fn draw_tabs(app: &mut PealayerApp, ui: &mut egui::Ui, compact: bool) {
     for (index, (icon, label)) in TABS.into_iter().enumerate() {
-        let text = if compact {
-            format!("{icon} {}", app.tr(label))
-        } else {
-            format!("{icon}  {}", app.tr(label))
-        };
         let width = if compact {
             (ui.available_width() / 2.0 - 4.0).max(118.0)
         } else {
             144.0
         };
-        if ui
-            .add_sized(
-                [width, 34.0],
-                egui::Button::new(text).selected(app.about_tab == index),
-            )
-            .clicked()
+        if crate::ui::dialog::navigation_button(
+            ui,
+            app.about_tab == index,
+            icon,
+            &app.tr(label),
+            width,
+        )
+        .clicked()
         {
             app.about_tab = index;
         }

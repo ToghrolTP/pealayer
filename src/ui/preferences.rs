@@ -7,27 +7,6 @@ use crate::preferences_contract::{
 use eframe::egui;
 
 const PREFERENCES_RAIL_WIDTH: f32 = 118.0;
-const PREFERENCES_TAB_WIDTH: f32 = 112.0;
-const PREFERENCES_TAB_HEIGHT: f32 = 29.0;
-const PREFERENCES_ACTION_HEIGHT: f32 = 28.0;
-
-fn preferences_action_button(
-    ui: &mut egui::Ui,
-    icon: &str,
-    label: &str,
-    primary: bool,
-) -> egui::Response {
-    let width = if primary { 88.0 } else { 82.0 };
-    let mut text = egui::RichText::new(format!("{icon} {label}")).size(13.0);
-    if primary {
-        text = text.color(ui.visuals().selection.stroke.color);
-    }
-    let mut button = egui::Button::new(text);
-    if primary {
-        button = button.fill(ui.visuals().selection.bg_fill);
-    }
-    ui.add_sized([width, PREFERENCES_ACTION_HEIGHT], button)
-}
 
 pub(crate) struct NativePreferencesController {
     child: std::process::Child,
@@ -391,6 +370,7 @@ fn native_tr(language: AppLanguage, key: &'static str) -> String {
 fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> PreferencesOutcome {
     let language = crate::config::resolved_language_preference(&draft.config);
     let tr = |key: &'static str| native_tr(language, key);
+    let rtl = crate::config::resolve_language(language) == AppLanguage::Persian;
     let mut outcome = PreferencesOutcome::default();
 
     egui::Panel::bottom("preferences_footer")
@@ -398,31 +378,34 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
         .show_separator_line(true)
         .show_inside(ui, |ui| {
             ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                if !draft.status.is_empty() {
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(&draft.status).small().weak())
-                            .truncate(),
-                    );
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if preferences_action_button(ui, crate::ui::icons::X, &tr("Close"), false)
+            crate::ui::dialog::action_bar(
+                ui,
+                rtl,
+                |ui| {
+                    if !draft.status.is_empty() {
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(&draft.status).small().weak())
+                                .truncate(),
+                        );
+                    }
+                },
+                |ui| {
+                    if crate::ui::dialog::action_button(ui, crate::ui::icons::X, &tr("Close"))
                         .clicked()
                     {
                         outcome.close = true;
                     }
-                    if preferences_action_button(
+                    if crate::ui::dialog::primary_action_button(
                         ui,
                         crate::ui::icons::FLOPPY_DISK,
                         &tr("Save"),
-                        true,
                     )
                     .clicked()
                     {
                         outcome.save = true;
                     }
-                });
-            });
+                },
+            );
             ui.add_space(1.0);
         });
 
@@ -784,49 +767,7 @@ fn preferences_tab_button(
     icon: &str,
     label: &str,
 ) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(PREFERENCES_TAB_WIDTH, PREFERENCES_TAB_HEIGHT),
-        egui::Sense::click(),
-    );
-    if ui.is_rect_visible(rect) {
-        let visuals = ui.style().interact_selectable(&response, selected);
-        let fill = if selected {
-            ui.visuals().selection.bg_fill.gamma_multiply(0.30)
-        } else {
-            visuals.weak_bg_fill
-        };
-        ui.painter().rect(
-            rect,
-            6.0,
-            fill,
-            if selected {
-                egui::Stroke::new(1.0_f32, ui.visuals().selection.bg_fill)
-            } else {
-                visuals.bg_stroke
-            },
-            egui::StrokeKind::Inside,
-        );
-        let color = if selected {
-            ui.visuals().selection.bg_fill
-        } else {
-            visuals.fg_stroke.color
-        };
-        ui.painter().text(
-            egui::pos2(rect.left() + 16.0, rect.center().y),
-            egui::Align2::CENTER_CENTER,
-            icon,
-            egui::FontId::proportional(15.0),
-            color,
-        );
-        ui.painter().text(
-            egui::pos2(rect.left() + 32.0, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            label,
-            egui::FontId::proportional(13.0),
-            visuals.fg_stroke.color,
-        );
-    }
-    response
+    crate::ui::dialog::navigation_button(ui, selected, icon, label, ui.available_width())
 }
 
 fn section_icon(section: &str) -> &'static str {
@@ -903,10 +844,13 @@ mod tests {
     }
 
     #[test]
-    fn navigation_and_actions_use_harmonious_control_heights() {
-        assert!((28.0..=30.0).contains(&PREFERENCES_TAB_HEIGHT));
-        assert!((27.0..=29.0).contains(&PREFERENCES_ACTION_HEIGHT));
-        assert!((PREFERENCES_TAB_HEIGHT - PREFERENCES_ACTION_HEIGHT).abs() <= 2.0);
-        assert!(PREFERENCES_TAB_WIDTH <= PREFERENCES_RAIL_WIDTH);
+    fn preferences_uses_the_shared_dialog_control_system() {
+        let source = include_str!("preferences.rs");
+        assert!(source.contains("dialog::navigation_button"));
+        assert!(source.contains("dialog::action_button"));
+        assert!(source.contains("dialog::primary_action_button"));
+        assert!(!source.contains(concat!("const PREFERENCES_", "TAB_HEIGHT")));
+        assert!(!source.contains(concat!("const PREFERENCES_", "ACTION_HEIGHT")));
+        assert!(PREFERENCES_RAIL_WIDTH >= 110.0);
     }
 }

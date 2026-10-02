@@ -252,55 +252,14 @@ fn effect_navigation_button(
     title: &str,
     metadata: &str,
 ) -> egui::Response {
-    let width = ui.available_width().max(80.0);
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 44.0), egui::Sense::click());
-    if ui.is_rect_visible(rect) {
-        let visuals = ui.style().interact_selectable(&response, selected);
-        let fill = if selected {
-            ui.visuals().selection.bg_fill.gamma_multiply(0.18)
-        } else {
-            visuals.weak_bg_fill
-        };
-        ui.painter().rect(
-            rect,
-            6.0,
-            fill,
-            if selected {
-                egui::Stroke::new(1.0_f32, ui.visuals().selection.bg_fill)
-            } else {
-                visuals.bg_stroke
-            },
-            egui::StrokeKind::Inside,
-        );
-        let icon_center = egui::pos2(rect.left() + 19.0, rect.center().y);
-        ui.painter().text(
-            icon_center,
-            egui::Align2::CENTER_CENTER,
-            icon,
-            egui::FontId::proportional(16.0),
-            if selected {
-                ui.visuals().selection.bg_fill
-            } else {
-                visuals.fg_stroke.color
-            },
-        );
-        let text_x = rect.left() + 36.0;
-        ui.painter().text(
-            egui::pos2(text_x, rect.center().y - 7.0),
-            egui::Align2::LEFT_CENTER,
-            title,
-            egui::FontId::proportional(13.0),
-            visuals.fg_stroke.color,
-        );
-        ui.painter().text(
-            egui::pos2(text_x, rect.center().y + 9.0),
-            egui::Align2::LEFT_CENTER,
-            metadata,
-            egui::FontId::proportional(10.5),
-            ui.visuals().weak_text_color(),
-        );
-    }
-    response
+    crate::ui::dialog::navigation_detail_button(
+        ui,
+        selected,
+        icon,
+        title,
+        metadata,
+        ui.available_width(),
+    )
 }
 
 pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
