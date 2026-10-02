@@ -48,6 +48,7 @@ fn drag_translation(
 const EFFECTS_PANEL_RIGHT_GUTTER: f32 = 10.0;
 const EFFECT_CARD_MIN_WIDTH: f32 = 140.0;
 const EFFECT_CARD_HORIZONTAL_MARGIN: i8 = 9;
+const EFFECT_CARD_ACTION_GUTTER: f32 = 100.0;
 
 fn effects_panel_content_width(available_width: f32) -> f32 {
     (available_width - EFFECTS_PANEL_RIGHT_GUTTER).max(EFFECT_CARD_MIN_WIDTH)
@@ -124,35 +125,6 @@ fn secondary_click_inside(ctx: &egui::Context, rect: egui::Rect) -> bool {
     })
 }
 
-fn primary_click_inside(ctx: &egui::Context, rect: egui::Rect, id: egui::Id) -> bool {
-    let armed_id = id.with("card-action-click");
-    let (pressed_inside, released, released_inside, dragged) = ctx.input(|input| {
-        (
-            input.pointer.button_pressed(egui::PointerButton::Primary)
-                && input
-                    .pointer
-                    .latest_pos()
-                    .is_some_and(|position| rect.contains(position)),
-            input.pointer.button_released(egui::PointerButton::Primary),
-            input
-                .pointer
-                .latest_pos()
-                .is_some_and(|position| rect.contains(position)),
-            input.pointer.is_decidedly_dragging(),
-        )
-    });
-    if pressed_inside {
-        ctx.data_mut(|data| data.insert_temp(armed_id, true));
-    }
-    if !released {
-        return false;
-    }
-    let armed = ctx
-        .data_mut(|data| data.remove_temp::<bool>(armed_id))
-        .unwrap_or(false);
-    armed && released_inside && !dragged
-}
-
 fn remember_effect_drag_offset_on_press(
     ctx: &egui::Context,
     rect: egui::Rect,
@@ -175,6 +147,16 @@ fn effect_drag_source<R>(
     ui: &mut egui::Ui,
     id: egui::Id,
     payload: EffectDragPayload,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    effect_drag_source_with_action_gutter(ui, id, payload, 0.0, add_contents)
+}
+
+fn effect_drag_source_with_action_gutter<R>(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    payload: EffectDragPayload,
+    action_gutter: f32,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<R> {
     let offset_id = id.with("pointer-offset");
@@ -217,8 +199,14 @@ fn effect_drag_source<R>(
         // the active-drag branch and the preview falls back to its center.
         remember_effect_drag_offset_on_press(ui.ctx(), response.response.rect, offset_id);
         ui.data_mut(|data| data.insert_temp(source_rect_id, response.response.rect));
+        // Action buttons are real child widgets and must own their hover,
+        // click, keyboard, and tooltip behavior. Keep the card drag target out
+        // of their right-hand strip instead of overlaying a competing drag
+        // response over them.
+        let mut drag_rect = response.response.rect;
+        drag_rect.max.x = (drag_rect.max.x - action_gutter).max(drag_rect.min.x);
         let drag = ui
-            .interact(response.response.rect, id, egui::Sense::drag())
+            .interact(drag_rect, id, egui::Sense::drag())
             .on_hover_cursor(egui::CursorIcon::Grab);
         if drag.drag_started() {
             // Establish the payload in the same input frame in which egui
@@ -1567,27 +1555,29 @@ mod timeline_row_tests {
                 },
                 |ui| {
                     let mut button_response = None;
-                    effect_drag_source(
+                    effect_drag_source_with_action_gutter(
                         ui,
                         egui::Id::new("effect-card-with-action"),
                         payload.clone(),
+                        110.0,
                         |ui| {
                             effect_card(ui, 260.0, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label("Seat rise");
-                                    let button = ui.button("More");
-                                    action_rect.set(button.rect);
-                                    button_response = Some(button);
-                                });
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let button = ui.button("More");
+                                        action_rect.set(button.rect);
+                                        button_response = Some(button);
+                                    },
+                                );
                             })
                         },
                     );
                     activated.set(
                         activated.get()
-                            || button_response.as_ref().is_some_and(|button| {
-                                button.clicked()
-                                    || primary_click_inside(ui.ctx(), button.rect, button.id)
-                            }),
+                            || button_response
+                                .as_ref()
+                                .is_some_and(egui::Response::clicked),
                     );
                 },
             );
@@ -3070,14 +3060,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let source = preset.source;
                                                 let mut run_now = false;
                                                 let mut place_at_playhead = false;
-                                                let mut run_response = None;
-                                                let mut place_response = None;
                                                 let mut more_response = None;
                                                 let card_width = effects_width;
-                                                let response = effect_drag_source(
+                                                let response = effect_drag_source_with_action_gutter(
                                                     ui,
                                                     item_id,
                                                     payload.clone(),
+                                                    EFFECT_CARD_ACTION_GUTTER,
                                                     |ui| {
                                                         effect_card(ui, card_width, |ui| {
                                                                 ui.horizontal(|ui| {
@@ -3133,7 +3122,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                                     self.app.tr("Place at playhead"),
                                                                                 );
                                                                             place_at_playhead = place.clicked();
-                                                                            place_response = Some(place);
                                                                             let run = ui
                                                                                 .add_sized(
                                                                                     [24.0, 24.0],
@@ -3144,7 +3132,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                                 )
                                                                                 .on_hover_text(self.app.tr("Run now"));
                                                                             run_now = run.clicked();
-                                                                            run_response = Some(run);
                                                                         },
                                                                     );
                                                                 });
@@ -3182,22 +3169,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 if response.response.dragged() {
                                                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                                                 }
-                                                run_now |= run_response.as_ref().is_some_and(|button| {
-                                                    primary_click_inside(
-                                                        ui.ctx(),
-                                                        button.rect,
-                                                        button.id,
-                                                    )
-                                                });
-                                                place_at_playhead |= place_response
-                                                    .as_ref()
-                                                    .is_some_and(|button| {
-                                                        primary_click_inside(
-                                                            ui.ctx(),
-                                                            button.rect,
-                                                            button.id,
-                                                        )
-                                                    });
                                                 if run_now
                                                     && let Err(error) = self
                                                         .app
@@ -3214,14 +3185,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     response.response.rect,
                                                 ) || more_response
                                                     .as_ref()
-                                                    .is_some_and(|button| {
-                                                        button.clicked()
-                                                            || primary_click_inside(
-                                                                ui.ctx(),
-                                                                button.rect,
-                                                                button.id,
-                                                            )
-                                                    });
+                                                    .is_some_and(egui::Response::clicked);
                                                 let menu_anchor = more_response
                                                     .as_ref()
                                                     .unwrap_or(&response.response);
