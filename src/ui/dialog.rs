@@ -6,7 +6,7 @@ use eframe::egui;
 /// their own button metrics. This is deliberately public within the crate so
 /// regression tests can enforce a single dialog design system.
 pub const NAVIGATION_HEIGHT: f32 = 32.0;
-pub const ACTION_HEIGHT: f32 = 30.0;
+pub const ACTION_HEIGHT: f32 = 28.0;
 pub const NAVIGATION_DETAIL_HEIGHT: f32 = 44.0;
 const ACTION_BUTTON_MIN_WIDTH: f32 = 96.0;
 const PRIMARY_ACTION_BUTTON_MIN_WIDTH: f32 = 108.0;
@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn primary_actions_are_more_prominent_than_secondary_actions() {
         assert!(PRIMARY_ACTION_BUTTON_MIN_WIDTH > ACTION_BUTTON_MIN_WIDTH);
-        assert!((29.0..=31.0).contains(&ACTION_HEIGHT));
+        assert!((27.0..=29.0).contains(&ACTION_HEIGHT));
         assert!(NAVIGATION_HEIGHT > ACTION_HEIGHT);
         assert_eq!(NAVIGATION_DETAIL_HEIGHT, 44.0);
     }
@@ -276,7 +276,7 @@ mod tests {
     #[test]
     fn navigation_and_footer_actions_share_one_control_height() {
         assert_eq!(NAVIGATION_HEIGHT, 32.0);
-        assert_eq!(ACTION_HEIGHT, 30.0);
+        assert_eq!(ACTION_HEIGHT, 28.0);
         for (name, source) in [
             ("preferences", include_str!("preferences.rs")),
             ("about", include_str!("about.rs")),

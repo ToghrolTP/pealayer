@@ -7,9 +7,10 @@ use crate::preferences_contract::{
 use eframe::egui;
 
 const PREFERENCES_RAIL_WIDTH: f32 = 118.0;
-const PREFERENCE_ROW_HEIGHT: f32 = 34.0;
+const PREFERENCE_ROW_HEIGHT: f32 = 36.0;
 const PREFERENCE_LABEL_WIDTH: f32 = 176.0;
-const PREFERENCE_COLUMN_GAP: f32 = 8.0;
+const PREFERENCE_COLUMN_GAP: f32 = 6.0;
+const PREFERENCE_CONTROL_MAX_WIDTH: f32 = 420.0;
 
 pub(crate) struct NativePreferencesController {
     child: std::process::Child,
@@ -203,7 +204,7 @@ impl eframe::App for StandalonePreferencesApp {
                         left: 12,
                         right: 12,
                         top: 12,
-                        bottom: 6,
+                        bottom: 2,
                     })
                     .show(ui, |ui| draw_preferences_editor(&mut self.draft, ui))
                     .inner
@@ -385,7 +386,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
         .resizable(false)
         .show_separator_line(true)
         .show_inside(ui, |ui| {
-            ui.add_space(7.0);
+            ui.add_space(9.0);
             crate::ui::dialog::action_bar(
                 ui,
                 rtl,
@@ -589,8 +590,9 @@ fn render_contract_control(
                 .map(|option| tr(option.label))
                 .unwrap_or_else(|| selected.to_string());
             preference_row(ui, control_icon, &tr(control.label), |ui| {
+                let control_width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
                 egui::ComboBox::from_id_salt(("preference", control.key))
-                    .width(ui.available_width().min(230.0))
+                    .width(control_width)
                     .selected_text(selected_label)
                     .show_ui(ui, |ui| {
                         for option in &control.options {
@@ -617,7 +619,8 @@ fn render_contract_control(
                 slider = slider.logarithmic(true);
             }
             let (_, response) = preference_row(ui, control_icon, &tr(control.label), |ui| {
-                ui.add_sized([ui.available_width(), PREFERENCE_ROW_HEIGHT], slider)
+                let control_width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
+                ui.add_sized([control_width, PREFERENCE_ROW_HEIGHT], slider)
             });
             if response.changed() {
                 replacement = Some(if current.is_u64() || current.is_i64() {
@@ -630,9 +633,10 @@ fn render_contract_control(
         PreferenceControlKind::Text => {
             let mut text = current.as_str().unwrap_or_default().to_string();
             preference_row(ui, control_icon, &tr(control.label), |ui| {
+                let control_width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut text)
-                        .desired_width(ui.available_width())
+                        .desired_width(control_width)
                         .hint_text(control.placeholder.unwrap_or_default()),
                 );
                 if response.changed() {
@@ -754,29 +758,25 @@ fn preference_row<R>(
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
             ui.spacing_mut().item_spacing.x = PREFERENCE_COLUMN_GAP;
-            let label_response = ui
-                .allocate_ui_with_layout(
-                    egui::vec2(label_width, PREFERENCE_ROW_HEIGHT),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        ui.spacing_mut().item_spacing.x = 7.0;
-                        let icon_response = ui.label(
-                            egui::RichText::new(icon)
-                                .size(14.0)
-                                .color(ui.visuals().selection.bg_fill),
-                        );
-                        let text_response = ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(label)
-                                    .size(13.0)
-                                    .color(ui.visuals().text_color()),
-                            )
-                            .truncate(),
-                        );
-                        icon_response.union(text_response)
-                    },
-                )
-                .inner;
+            let (label_rect, label_response) = ui.allocate_exact_size(
+                egui::vec2(label_width, PREFERENCE_ROW_HEIGHT),
+                egui::Sense::hover(),
+            );
+            let painter = ui.painter().with_clip_rect(label_rect);
+            painter.text(
+                egui::pos2(label_rect.left() + 8.0, label_rect.center().y),
+                egui::Align2::CENTER_CENTER,
+                icon,
+                egui::FontId::proportional(14.0),
+                ui.visuals().selection.bg_fill,
+            );
+            painter.text(
+                egui::pos2(label_rect.left() + 22.0, label_rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                label,
+                egui::FontId::proportional(13.0),
+                ui.visuals().text_color(),
+            );
             (label_response, body(ui))
         },
     )
@@ -912,6 +912,7 @@ mod tests {
         assert!(!source.contains(concat!("const PREFERENCES_", "ACTION_HEIGHT")));
         assert!(PREFERENCES_RAIL_WIDTH >= 110.0);
         assert!(PREFERENCE_ROW_HEIGHT > crate::ui::dialog::NAVIGATION_HEIGHT);
-        assert!(PREFERENCE_COLUMN_GAP <= 8.0);
+        assert!(PREFERENCE_COLUMN_GAP <= 6.0);
+        assert!(PREFERENCE_CONTROL_MAX_WIDTH >= 400.0);
     }
 }
