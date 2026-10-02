@@ -1064,7 +1064,7 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
             .then_with(|| left.key.cmp(&right.key))
     });
 
-    // An alpha/prototyping board may advertise the authoritative R1-R4
+    // An alpha/prototyping board may advertise the authoritative raw relay
     // direction/enable wiring before a named board profile has been saved.
     // Keep the higher-level seat controls available in that state while also
     // exposing the raw relays separately. The commands still run through
@@ -1734,10 +1734,10 @@ mod tests {
         });
         let catalog = json!({
             "peripherals": [
-                {"key":"relay.1","kind":"relay","role":"motion-left-up","index":1,"default_name":"R1","control":"relay"},
-                {"key":"relay.2","kind":"relay","role":"motion-left-down","index":2,"default_name":"R2","control":"relay"},
-                {"key":"relay.3","kind":"relay","role":"motion-right-up","index":3,"default_name":"R3","control":"relay"},
-                {"key":"relay.4","kind":"relay","role":"motion-right-down","index":4,"default_name":"R4","control":"relay"}
+                {"key":"relay.1","kind":"relay","role":"motion-left-up","index":1,"default_name":"Raw relay 1","control":"relay"},
+                {"key":"relay.2","kind":"relay","role":"motion-left-down","index":2,"default_name":"Raw relay 2","control":"relay"},
+                {"key":"relay.3","kind":"relay","role":"motion-right-up","index":3,"default_name":"Raw relay 3","control":"relay"},
+                {"key":"relay.4","kind":"relay","role":"motion-right-down","index":4,"default_name":"Raw relay 4","control":"relay"}
             ],
             "controls": [
                 {"key":"seat.left","kind":"motion","default_name":"Left seat","control":"seat","actions":[]}
@@ -1755,7 +1755,7 @@ mod tests {
     }
 
     #[test]
-    fn unconfigured_motion_wiring_exposes_seat_controls_and_raw_r1_to_r4() {
+    fn unconfigured_motion_wiring_exposes_seat_controls_and_raw_relays() {
         let snapshot = json!({
             "connected": true,
             "hello": {"capabilities": CAPABILITY_RELAY_MOTION}

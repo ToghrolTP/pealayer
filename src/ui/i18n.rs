@@ -156,7 +156,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Timeline" => "خط زمانی",
         "Hardware Monitor Dashboard" => "داشبورد پایش سخت‌افزار",
         "Hardware control" => "کنترل سخت‌افزار",
-        "Details and control..." => "جزئیات و کنترل…",
+        "Manage..." => "مدیریت…",
         "Presentation" => "نحوهٔ نمایش",
         "Save presentation" => "ذخیرهٔ نحوهٔ نمایش",
         "Restore defaults" => "بازگردانی پیش‌فرض‌ها",
@@ -263,13 +263,12 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Toggle" => "تغییر حالت",
         "Move only while the button is held" => "حرکت فقط هنگام نگه‌داشتن دکمه",
         "Keep moving until Stop is pressed" => "ادامهٔ حرکت تا فشردن توقف",
-        "Show raw R1-R4 controls below seat controls" => {
-            "نمایش کنترل‌های خام R1 تا R4 زیر کنترل صندلی"
-        }
-        "Prefix relay captions with their fixed R number" => {
-            "نمایش شمارهٔ ثابت رله پیش از نام کانال"
-        }
-        "Motion wiring" => "سیم‌کشی حرکت",
+        "Show raw relay controls" => "نمایش کنترل‌های رلهٔ خام",
+        "Show raw relay controls below seat controls" => "نمایش کنترل‌های رلهٔ خام زیر کنترل صندلی",
+        "Prefix relay captions with channel identifiers" => "نمایش شناسهٔ کانال پیش از نام رله",
+        "Raw relays" => "رله‌های خام",
+        "Raw relay" => "رلهٔ خام",
+        "Relay" => "رله",
         "Board controls" => "کنترل‌های برد",
         "Board tools" => "ابزارهای برد",
         "Message for the board displays" => "پیام برای نمایشگرهای برد",

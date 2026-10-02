@@ -330,16 +330,16 @@ pub fn preference_controls() -> Vec<PreferenceControl> {
             "Use one-row compact hardware controls",
         ),
         PreferenceControl::boolean(
-            "show_raw_motion_relays",
+            "show_raw_relays",
             "hardware",
             "Motion controls",
-            "Show raw R1-R4 controls below seat controls",
+            "Show raw relay controls below seat controls",
         ),
         PreferenceControl::boolean(
-            "prefix_relay_numbers",
+            "prefix_relay_identifiers",
             "hardware",
             "Motion controls",
-            "Prefix relay captions with their fixed R number",
+            "Prefix relay captions with channel identifiers",
         ),
         PreferenceControl::boolean(
             "live_pwm_updates",

@@ -163,8 +163,10 @@ pub struct AppConfig {
     pub fullscreen_video_background: VideoBackground,
     pub motion_control_mode: MotionControlMode,
     pub compact_hardware_controls: bool,
-    pub show_raw_motion_relays: bool,
-    pub prefix_relay_numbers: bool,
+    #[serde(alias = "show_raw_motion_relays")]
+    pub show_raw_relays: bool,
+    #[serde(alias = "prefix_relay_numbers")]
+    pub prefix_relay_identifiers: bool,
     pub live_pwm_updates: bool,
     pub hardware_actions_on_press: bool,
     pub single_instance: bool,
@@ -216,8 +218,8 @@ impl Default for AppConfig {
             fullscreen_video_background: VideoBackground::Black,
             motion_control_mode: MotionControlMode::Hold,
             compact_hardware_controls: false,
-            show_raw_motion_relays: true,
-            prefix_relay_numbers: true,
+            show_raw_relays: true,
+            prefix_relay_identifiers: true,
             live_pwm_updates: true,
             hardware_actions_on_press: true,
             single_instance: true,
@@ -1005,6 +1007,8 @@ mod tests {
                 "pause_on_hardware_disconnect": false,
                 "motion_control_mode": "hold",
                 "compact_hardware_controls": true,
+                "show_raw_relays": false,
+                "prefix_relay_identifiers": false,
                 "status_bar": {
                     "media_rate": false,
                     "hardware": true,
@@ -1023,6 +1027,8 @@ mod tests {
         assert!(!updated.pause_on_hardware_disconnect);
         assert_eq!(updated.motion_control_mode, MotionControlMode::Hold);
         assert!(updated.compact_hardware_controls);
+        assert!(!updated.show_raw_relays);
+        assert!(!updated.prefix_relay_identifiers);
         assert!(!updated.status_bar.media_rate);
         assert!(!updated.status_bar.workspace);
         assert!(
@@ -1044,6 +1050,35 @@ mod tests {
             .count();
         assert_eq!(leftovers, 0);
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn renamed_relay_presentation_settings_migrate_from_existing_config() {
+        let mut value = serde_json::to_value(AppConfig::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("show_raw_relays");
+        object.remove("prefix_relay_identifiers");
+        object.insert(
+            "show_raw_motion_relays".to_string(),
+            serde_json::json!(false),
+        );
+        object.insert("prefix_relay_numbers".to_string(), serde_json::json!(false));
+
+        let migrated: AppConfig = serde_json::from_value(value).unwrap();
+        assert!(!migrated.show_raw_relays);
+        assert!(!migrated.prefix_relay_identifiers);
+
+        let serialized = serde_json::to_value(migrated).unwrap();
+        assert_eq!(
+            serialized.get("show_raw_relays"),
+            Some(&serde_json::json!(false))
+        );
+        assert_eq!(
+            serialized.get("prefix_relay_identifiers"),
+            Some(&serde_json::json!(false))
+        );
+        assert!(serialized.get("show_raw_motion_relays").is_none());
+        assert!(serialized.get("prefix_relay_numbers").is_none());
     }
 
     #[test]

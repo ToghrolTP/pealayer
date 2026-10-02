@@ -299,8 +299,8 @@ pub struct PealayerApp {
     pub(crate) motion_control_mode: crate::config::MotionControlMode,
     pub(crate) held_motion_action: Option<(String, String)>,
     pub(crate) compact_hardware_controls: bool,
-    pub(crate) show_raw_motion_relays: bool,
-    pub(crate) prefix_relay_numbers: bool,
+    pub(crate) show_raw_relays: bool,
+    pub(crate) prefix_relay_identifiers: bool,
     pub(crate) live_pwm_updates: bool,
     pub(crate) hardware_actions_on_press: bool,
     pub(crate) single_instance: bool,
@@ -2612,8 +2612,8 @@ impl PealayerApp {
         cfg.fullscreen_video_background = self.fullscreen_video_background;
         cfg.motion_control_mode = self.motion_control_mode;
         cfg.compact_hardware_controls = self.compact_hardware_controls;
-        cfg.show_raw_motion_relays = self.show_raw_motion_relays;
-        cfg.prefix_relay_numbers = self.prefix_relay_numbers;
+        cfg.show_raw_relays = self.show_raw_relays;
+        cfg.prefix_relay_identifiers = self.prefix_relay_identifiers;
         cfg.live_pwm_updates = self.live_pwm_updates;
         cfg.hardware_actions_on_press = self.hardware_actions_on_press;
         cfg.single_instance = self.single_instance;
@@ -2697,8 +2697,8 @@ impl PealayerApp {
         self.fullscreen_video_background = config.fullscreen_video_background;
         self.motion_control_mode = config.motion_control_mode;
         self.compact_hardware_controls = config.compact_hardware_controls;
-        self.show_raw_motion_relays = config.show_raw_motion_relays;
-        self.prefix_relay_numbers = config.prefix_relay_numbers;
+        self.show_raw_relays = config.show_raw_relays;
+        self.prefix_relay_identifiers = config.prefix_relay_identifiers;
         self.live_pwm_updates = config.live_pwm_updates;
         self.hardware_actions_on_press = config.hardware_actions_on_press;
         self.single_instance = config.single_instance;
@@ -3208,8 +3208,8 @@ impl Default for PealayerApp {
             motion_control_mode: crate::config::MotionControlMode::Hold,
             held_motion_action: None,
             compact_hardware_controls: false,
-            show_raw_motion_relays: true,
-            prefix_relay_numbers: true,
+            show_raw_relays: true,
+            prefix_relay_identifiers: true,
             live_pwm_updates: true,
             hardware_actions_on_press: true,
             single_instance: true,

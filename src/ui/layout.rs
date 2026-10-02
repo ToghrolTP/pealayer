@@ -488,6 +488,15 @@ fn relay_id_from_control_key(key: &str) -> Option<u8> {
     key.strip_prefix("relay.")?.parse().ok()
 }
 
+fn relay_identifier_label(app: &PealayerApp, relay_id: u8) -> String {
+    let kind = if relay_id <= 4 {
+        app.tr("Raw relay")
+    } else {
+        app.tr("Relay")
+    };
+    format!("{kind} {relay_id}")
+}
+
 fn is_pwm_control(control: &crate::four_d::controller::HardwareControl) -> bool {
     matches!(control.kind.as_str(), "mosfet" | "pwm") || control.key.starts_with("pwm.")
 }
@@ -904,7 +913,7 @@ fn draw_control_context_menu(
         .button(format!(
             "{} {}",
             crate::ui::icons::SLIDERS_HORIZONTAL,
-            app.tr("Details and control...")
+            app.tr("Manage...")
         ))
         .clicked()
     {
@@ -957,6 +966,60 @@ fn draw_control_context_menu(
                 );
                 ui.close();
             }
+        }
+    }
+
+    if is_motion_control(control) {
+        ui.separator();
+        let hold_label = app.tr("Run only while held");
+        let toggle_label = app.tr("Toggle on press");
+        let hold_help = app.tr("Move only while the button is held");
+        let toggle_help = app.tr("Keep moving until Stop is pressed");
+        crate::ui::icons::submenu(
+            ui,
+            format!(
+                "{} {}",
+                crate::ui::icons::SLIDERS_HORIZONTAL,
+                app.tr("Button behavior")
+            ),
+            |ui| {
+                let mut changed = false;
+                changed |= ui
+                    .radio_value(
+                        &mut app.motion_control_mode,
+                        crate::config::MotionControlMode::Hold,
+                        &hold_label,
+                    )
+                    .on_hover_text(&hold_help)
+                    .changed();
+                changed |= ui
+                    .radio_value(
+                        &mut app.motion_control_mode,
+                        crate::config::MotionControlMode::Toggle,
+                        &toggle_label,
+                    )
+                    .on_hover_text(&toggle_help)
+                    .changed();
+                if changed {
+                    app.save_config();
+                }
+            },
+        );
+        let mut show_raw_relays = app.show_raw_relays;
+        if ui
+            .checkbox(
+                &mut show_raw_relays,
+                format!(
+                    "{} {}",
+                    crate::ui::icons::PLUG,
+                    app.tr("Show raw relay controls")
+                ),
+            )
+            .changed()
+        {
+            app.show_raw_relays = show_raw_relays;
+            app.save_config();
+            ui.close();
         }
     }
 
@@ -1379,8 +1442,12 @@ fn draw_compact_control_card(
                         },
                     );
                 }
-                if app.prefix_relay_numbers && let Some(id) = relay_id {
-                    ui.label(egui::RichText::new(format!("R{id}")).monospace().weak());
+                if app.prefix_relay_identifiers && let Some(id) = relay_id {
+                    ui.label(
+                        egui::RichText::new(relay_identifier_label(app, id))
+                            .monospace()
+                            .weak(),
+                    );
                 }
                 if control.locked {
                     ui.label(egui::RichText::new(crate::ui::icons::LOCK).weak())
@@ -1654,8 +1721,12 @@ fn draw_control_card(
                         },
                     );
                 }
-                if app.prefix_relay_numbers && let Some(id) = relay_id {
-                    ui.label(egui::RichText::new(format!("R{id}")).monospace().weak());
+                if app.prefix_relay_identifiers && let Some(id) = relay_id {
+                    ui.label(
+                        egui::RichText::new(relay_identifier_label(app, id))
+                            .monospace()
+                            .weak(),
+                    );
                 }
                 if control.locked {
                     ui.label(egui::RichText::new(crate::ui::icons::LOCK).weak())
@@ -1950,7 +2021,7 @@ fn draw_compact_relay_group(
                             continue;
                         };
                         let active = capabilities.active_relays.contains(&relay_id);
-                        let mut button = egui::Button::new(format!("R{relay_id}"))
+                        let mut button = egui::Button::new(relay_id.to_string())
                             .min_size(egui::vec2(42.0, 26.0))
                             .selected(active);
                         if active {
@@ -1996,17 +2067,21 @@ fn draw_compact_relay_group(
                                 ));
                             });
                             ui.label(
-                                egui::RichText::new(format!("R{relay_id} · {}", control.key))
-                                    .monospace()
-                                    .weak()
-                                    .small(),
+                                egui::RichText::new(format!(
+                                    "{} · {}",
+                                    relay_identifier_label(app, relay_id),
+                                    control.key
+                                ))
+                                .monospace()
+                                .weak()
+                                .small(),
                             );
                             ui.separator();
                             if ui
                                 .button(format!(
                                     "{} {}",
                                     crate::ui::icons::SLIDERS_HORIZONTAL,
-                                    app.tr("Details and control...")
+                                    app.tr("Manage...")
                                 ))
                                 .clicked()
                             {
@@ -4494,36 +4569,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     &title,
                                     true,
                                     |ui| {
-                                        let mut mode_changed = false;
-                                        let hold_label = self.app.tr("Hold");
-                                        let toggle_label = self.app.tr("Toggle");
-                                        let hold_help =
-                                            self.app.tr("Move only while the button is held");
-                                        let toggle_help =
-                                            self.app.tr("Keep moving until Stop is pressed");
-                                        ui.horizontal_wrapped(|ui| {
-                                            ui.label(self.app.tr("Button behavior"));
-                                            mode_changed |= ui
-                                                .selectable_value(
-                                                    &mut self.app.motion_control_mode,
-                                                    crate::config::MotionControlMode::Hold,
-                                                    &hold_label,
-                                                )
-                                                .on_hover_text(&hold_help)
-                                                .changed();
-                                            mode_changed |= ui
-                                                .selectable_value(
-                                                    &mut self.app.motion_control_mode,
-                                                    crate::config::MotionControlMode::Toggle,
-                                                    &toggle_label,
-                                                )
-                                                .on_hover_text(&toggle_help)
-                                                .changed();
-                                        });
-                                        if mode_changed {
-                                            self.app.save_config();
-                                        }
-                                        ui.add_space(6.0);
                                         draw_control_card_grid(
                                             self.app,
                                             ui,
@@ -4576,7 +4621,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             if !capabilities.relays.is_empty() {
                                 let relay_controls = capabilities.relays.iter()
                                     .filter(|relay| {
-                                        self.app.show_raw_motion_relays || relay.id > 4
+                                        self.app.show_raw_relays || relay.id > 4
                                     })
                                     .map(|relay| {
                                         capabilities.controls.iter()
@@ -4589,7 +4634,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 default_name: relay.name.clone(),
                                                 control: relay.control.clone(),
                                                 group: if relay.id <= 4 {
-                                                    self.app.tr("Motion wiring")
+                                                    self.app.tr("Raw relays")
                                                 } else {
                                                     relay.role.clone()
                                                 },
@@ -5471,7 +5516,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         }
 
                                                         let start_secs = primary_new_start as f64 / 1000.0;
-                                                        let track_name = target_relay.map(|r| format!("R{}", r)).unwrap_or_else(|| "Track".to_string());
+                                                        let track_name = target_relay
+                                                            .map(|relay_id| relay_identifier_label(self.app, relay_id))
+                                                            .unwrap_or_else(|| "Track".to_string());
                                                         format!("⏱ Start: {:.3}s | {}", start_secs, track_name)
                                                     }
                                                     crate::app::DragMode::ResizeRight => {

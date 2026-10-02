@@ -21,6 +21,7 @@ param(
     [ValidateRange(0.0, 1.0)]
     [double]$ScrollYRatio = 0.5,
     [string[]]$ClickClientPoint = @(),
+    [string[]]$RightClickClientPoint = @(),
     [ValidateRange(1, 30)]
     [int]$StartupTimeoutSeconds = 15
 )
@@ -186,6 +187,20 @@ public static class PealayerScreenshotNative {
         SetCursorPos(point.X, point.Y);
         mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
         mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
+        SetCursorPos(original.X, original.Y);
+    }
+
+    public static void SendMouseRightClick(IntPtr hwnd, int clientX, int clientY) {
+        Point original;
+        GetCursorPos(out original);
+        Point point = new Point { X = clientX, Y = clientY };
+        if (!ClientToScreen(hwnd, ref point)) {
+            throw new InvalidOperationException("ClientToScreen failed for right-click capture setup.");
+        }
+        SetForegroundWindow(hwnd);
+        SetCursorPos(point.X, point.Y);
+        mouse_event(0x0008, 0, 0, 0, UIntPtr.Zero);
+        mouse_event(0x0010, 0, 0, 0, UIntPtr.Zero);
         SetCursorPos(original.X, original.Y);
     }
 }
@@ -379,6 +394,17 @@ for ($localeIndex = 0; $localeIndex -lt $Locale.Count; $localeIndex++) {
             )
             Start-Sleep -Milliseconds 250
         }
+        foreach ($point in $RightClickClientPoint) {
+            if ($point -notmatch '^\s*(\d+)\s*,\s*(\d+)\s*$') {
+                throw "RightClickClientPoint must use the x,y format; received '$point'."
+            }
+            [PealayerScreenshotNative]::SendMouseRightClick(
+                $handle,
+                [int]$Matches[1],
+                [int]$Matches[2]
+            )
+            Start-Sleep -Milliseconds 250
+        }
         if ($ScrollNotches -ne 0) {
             $clientRect = New-Object PealayerScreenshotNative+Rect
             if (-not [PealayerScreenshotNative]::GetClientRect($handle, [ref]$clientRect)) {
@@ -440,6 +466,7 @@ $manifest = [ordered]@{
     requested_window_size = "${effectiveWindowWidth}x${effectiveWindowHeight}"
     scroll_notches = $ScrollNotches
     click_client_points = @($ClickClientPoint)
+    right_click_client_points = @($RightClickClientPoint)
     hardware_endpoint = if ($HardwareEndpoint) { $HardwareEndpoint.Trim() } else { $null }
     isolated_profile = $true
     capture_method = 'per-capture'

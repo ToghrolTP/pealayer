@@ -69,7 +69,7 @@ from the same catalog on their next authoritative snapshot.
 * **Audio & Subtitle Track Switching**: On-the-fly stream selection with fine-grained ±600s delay compensation and subtitle font sizing.
 
 ### ⏱ Premiere-Inspired NLE Timeline Editor
-* **Multi-Track Sequence Workspace**: Dedicated tracks for Video, Audio, Relays R1–R8, and Analog PWM automation curves.
+* **Multi-Track Sequence Workspace**: Dedicated tracks for Video, Audio, relay outputs, and Analog PWM automation curves.
 * **Magnetic Snapping**: 5-pixel threshold snapping to the playhead, neighboring clip edges, and keyframe points.
 * **Interactive Edge Trimming & Scaling**: Drag clip edges left or right to trim duration with proportional time-scale pattern stretching.
 * **Template Isolation (Copy-on-Write)**: Modifying a placed cue automatically clones the template, protecting shared library presets from unintended edits.
