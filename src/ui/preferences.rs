@@ -112,21 +112,36 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     root_ctx.request_repaint_of(egui::ViewportId::ROOT);
                     return;
                 }
-                let Ok(mut state) = state.lock() else {
-                    return;
+                // Never change native frame styles while holding the preferences
+                // state lock. Win32 frame changes synchronously dispatch resize and
+                // paint messages; doing that from this paint callback used to
+                // re-enter eframe while the mutex and GL viewport were active. The
+                // result was an unresponsive child whose last framebuffer was
+                // stretched by DWM while resizing.
+                let composition = {
+                    let Ok(state) = state.lock() else {
+                        return;
+                    };
+                    (
+                        ui.visuals().dark_mode,
+                        state.config.windows_dwm_theming,
+                        state.config.windows_mica_backdrop,
+                    )
                 };
-                let composition = (
-                    ui.visuals().dark_mode,
-                    state.config.windows_dwm_theming,
-                    state.config.windows_mica_backdrop,
-                );
-                if state.styled_composition != Some(composition) {
-                    match crate::platform::windows::style_preferences_tool_window(
+                let needs_style = state
+                    .lock()
+                    .is_ok_and(|state| state.styled_composition != Some(composition));
+                if needs_style {
+                    let style_result = crate::platform::windows::style_preferences_tool_window(
                         &style_title,
                         composition.0,
                         composition.1,
                         composition.2,
-                    ) {
+                    );
+                    let Ok(mut state) = state.lock() else {
+                        return;
+                    };
+                    match style_result {
                         Ok(true) => state.styled_composition = Some(composition),
                         Ok(false) => ui
                             .ctx()
@@ -137,6 +152,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         }
                     }
                 }
+                let Ok(mut state) = state.lock() else {
+                    return;
+                };
                 let close = egui::CentralPanel::default()
                     .show_inside(ui, |ui| {
                         egui::Frame::new()

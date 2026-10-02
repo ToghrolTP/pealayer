@@ -288,11 +288,12 @@ fn apply_windows_window_decorations_with(
     }
 }
 
-/// Apply the same DWM/Mica treatment as the root window to a secondary
-/// Preferences viewport and make it an owned tool window. `with_taskbar(false)`
-/// handles this through winit on normal paths; the explicit extended style is
-/// a Windows backstop and also gives existing windows the correct non-app
-/// chrome without recreating them.
+/// Apply the same DWM/Mica treatment as the root window to the Preferences
+/// viewport. Tool-window chrome and taskbar visibility are declared on the
+/// `ViewportBuilder` before winit creates the HWND. Do not mutate frame styles,
+/// ownership, or position from an egui paint callback: those Win32 operations
+/// synchronously dispatch resize/paint messages and can re-enter eframe while
+/// its GL viewport is active.
 #[cfg(target_os = "windows")]
 pub fn style_preferences_tool_window(
     title: &str,
@@ -301,11 +302,7 @@ pub fn style_preferences_tool_window(
     mica_backdrop: bool,
 ) -> Result<bool, String> {
     use windows::Win32::System::Threading::GetCurrentProcessId;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        FindWindowW, GWL_EXSTYLE, GWLP_HWNDPARENT, GetWindowLongPtrW, GetWindowThreadProcessId,
-        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW,
-        SetWindowPos, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
     use windows::core::PCWSTR;
 
     let wide_title: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
@@ -319,25 +316,6 @@ pub fn style_preferences_tool_window(
         return Ok(false);
     }
 
-    let existing = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
-    let tool_style = (existing | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
-    unsafe {
-        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, tool_style);
-        let root = get_registered_hwnd();
-        if root != 0 {
-            SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, root);
-        }
-        SetWindowPos(
-            hwnd,
-            None,
-            0,
-            0,
-            0,
-            0,
-            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
-        )
-        .map_err(|error| format!("style Preferences tool window: {error}"))?;
-    }
     apply_windows_window_decorations_with(hwnd.0 as isize, dark, dwm_theming, mica_backdrop);
     Ok(true)
 }
