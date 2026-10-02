@@ -174,6 +174,25 @@ pub fn get_registered_hwnd() -> isize {
     WINDOW_HWND.load(Ordering::SeqCst)
 }
 
+#[cfg(target_os = "windows")]
+pub fn set_window_owner(hwnd_raw: isize, owner_raw: isize) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{GWLP_HWNDPARENT, SetWindowLongPtrW};
+
+    if hwnd_raw == 0 || owner_raw == 0 {
+        return Ok(());
+    }
+    unsafe {
+        SetWindowLongPtrW(HWND(hwnd_raw as *mut _), GWLP_HWNDPARENT, owner_raw);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_window_owner(_hwnd_raw: isize, _owner_raw: isize) -> Result<(), String> {
+    Ok(())
+}
+
 pub fn set_window_theme(dark: bool) {
     let previous = WINDOW_DARK_THEME.swap(dark, Ordering::SeqCst);
     let hwnd = get_registered_hwnd();
@@ -286,48 +305,6 @@ fn apply_windows_window_decorations_with(
             std::mem::size_of::<u32>() as u32,
         );
     }
-}
-
-/// Apply the same DWM/Mica treatment as the root window to the Preferences
-/// viewport. Tool-window chrome and taskbar visibility are declared on the
-/// `ViewportBuilder` before winit creates the HWND. Do not mutate frame styles,
-/// ownership, or position from an egui paint callback: those Win32 operations
-/// synchronously dispatch resize/paint messages and can re-enter eframe while
-/// its GL viewport is active.
-#[cfg(target_os = "windows")]
-pub fn style_preferences_tool_window(
-    title: &str,
-    dark: bool,
-    dwm_theming: bool,
-    mica_backdrop: bool,
-) -> Result<bool, String> {
-    use windows::Win32::System::Threading::GetCurrentProcessId;
-    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
-    use windows::core::PCWSTR;
-
-    let wide_title: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
-    let hwnd = match unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide_title.as_ptr())) } {
-        Ok(hwnd) => hwnd,
-        Err(_) => return Ok(false),
-    };
-    let mut process_id = 0_u32;
-    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process_id)) };
-    if process_id != unsafe { GetCurrentProcessId() } {
-        return Ok(false);
-    }
-
-    apply_windows_window_decorations_with(hwnd.0 as isize, dark, dwm_theming, mica_backdrop);
-    Ok(true)
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn style_preferences_tool_window(
-    _title: &str,
-    _dark: bool,
-    _dwm_theming: bool,
-    _mica_backdrop: bool,
-) -> Result<bool, String> {
-    Ok(true)
 }
 
 #[cfg(not(target_os = "windows"))]

@@ -39,7 +39,11 @@ fn subtitle_font_directory() -> Option<std::path::PathBuf> {
 }
 
 fn main() -> eframe::Result {
-    if std::env::args().any(|argument| argument == "--smoke-test") {
+    let startup_args: Vec<String> = std::env::args().collect();
+    if startup_args
+        .iter()
+        .any(|argument| argument == "--smoke-test")
+    {
         match Mpv::new() {
             Ok(_) => std::process::exit(0),
             Err(error) => {
@@ -51,11 +55,14 @@ fn main() -> eframe::Result {
 
     env_logger::init();
 
+    if let Some(owner_hwnd) = crate::ui::preferences::preferences_helper_owner(&startup_args) {
+        return crate::ui::preferences::run_native_preferences(owner_hwnd);
+    }
+
     #[cfg(target_os = "windows")]
     let mut gui_ownership = None;
 
-    let args: Vec<String> = std::env::args().collect();
-    let cli_options = match crate::cli::parse_cli_args(args) {
+    let cli_options = match crate::cli::parse_cli_args(startup_args) {
         Ok(crate::cli::CliAction::PrintHelp(msg)) => {
             println!("{}", msg);
             return Ok(());

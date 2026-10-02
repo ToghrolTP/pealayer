@@ -3,10 +3,6 @@ use crate::config::{
     AppLanguage, AppTheme, MotionControlMode, OsdPosition, PlayerDragAction, VideoBackground,
 };
 use eframe::egui;
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
 
 const TABS: [(&str, &str); 5] = [
     (crate::ui::icons::SPARKLE, "Appearance"),
@@ -16,10 +12,8 @@ const TABS: [(&str, &str); 5] = [
     (crate::ui::icons::GEAR, "Advanced"),
 ];
 
-#[derive(Clone)]
 pub(crate) struct NativePreferencesController {
-    open: Arc<AtomicBool>,
-    state: Arc<Mutex<NativePreferencesState>>,
+    child: std::process::Child,
 }
 
 struct NativePreferencesState {
@@ -28,10 +22,37 @@ struct NativePreferencesState {
     proxy_url: String,
     tab: usize,
     status: String,
-    styled_composition: Option<(bool, bool, bool)>,
 }
 
 impl NativePreferencesController {
+    fn spawn(owner_hwnd: isize) -> Result<Self, String> {
+        let executable = std::env::current_exe()
+            .map_err(|error| format!("resolve Pealayer executable: {error}"))?;
+        let child = std::process::Command::new(executable)
+            .arg("--preferences-helper")
+            .arg(owner_hwnd.to_string())
+            .spawn()
+            .map_err(|error| format!("open native Preferences window: {error}"))?;
+        Ok(Self { child })
+    }
+
+    fn is_open(&mut self) -> bool {
+        self.child.try_wait().is_ok_and(|status| status.is_none())
+    }
+
+    fn close(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for NativePreferencesController {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+impl NativePreferencesState {
     fn from_live_config() -> Self {
         let config = crate::platform::interop::get_live_config();
         let endpoint = config
@@ -40,24 +61,12 @@ impl NativePreferencesController {
             .unwrap_or_else(|| crate::four_d::controller::DEFAULT_ENDPOINT.to_string());
         let proxy_url = config.open_url_proxy_url.clone().unwrap_or_default();
         Self {
-            open: Arc::new(AtomicBool::new(true)),
-            state: Arc::new(Mutex::new(NativePreferencesState {
-                config,
-                endpoint,
-                proxy_url,
-                tab: 0,
-                status: String::new(),
-                styled_composition: None,
-            })),
+            config,
+            endpoint,
+            proxy_url,
+            tab: 0,
+            status: String::new(),
         }
-    }
-
-    fn is_open(&self) -> bool {
-        self.open.load(Ordering::Acquire)
-    }
-
-    fn close(&self) {
-        self.open.store(false, Ordering::Release);
     }
 }
 
@@ -80,99 +89,174 @@ fn native_preferences_viewport(title: String) -> egui::ViewportBuilder {
     builder
 }
 
+pub(crate) fn preferences_helper_owner(args: &[String]) -> Option<isize> {
+    args.windows(2)
+        .find(|pair| pair[0] == "--preferences-helper")
+        .map(|pair| pair[1].parse::<isize>().unwrap_or_default())
+}
+
+struct StandalonePreferencesApp {
+    state: NativePreferencesState,
+    owner_hwnd: isize,
+    native_window_initialized: bool,
+    applied_appearance: Option<(AppTheme, bool, bool)>,
+}
+
+impl StandalonePreferencesApp {
+    fn apply_appearance(&mut self, ctx: &egui::Context) {
+        let appearance = (
+            crate::config::resolved_theme(&self.state.config),
+            self.state.config.windows_dwm_theming,
+            self.state.config.windows_mica_backdrop,
+        );
+        if self.applied_appearance == Some(appearance) {
+            return;
+        }
+        let theme = match appearance.0 {
+            AppTheme::System => egui::ThemePreference::System,
+            AppTheme::Light => egui::ThemePreference::Light,
+            AppTheme::Dark => egui::ThemePreference::Dark,
+        };
+        ctx.set_theme(theme);
+        crate::platform::windows::configure_window_composition(appearance.1, appearance.2);
+        crate::platform::windows::set_window_theme(ctx.global_style().visuals.dark_mode);
+        self.applied_appearance = Some(appearance);
+    }
+}
+
+impl eframe::App for StandalonePreferencesApp {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        #[cfg(target_os = "windows")]
+        if !self.native_window_initialized {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(handle) = frame.window_handle()
+                && let RawWindowHandle::Win32(handle) = handle.as_raw()
+            {
+                let hwnd = handle.hwnd.get() as isize;
+                crate::platform::windows::register_window_hwnd(hwnd);
+                let _ = crate::platform::windows::set_window_owner(hwnd, self.owner_hwnd);
+                self.native_window_initialized = true;
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = frame;
+            self.native_window_initialized = true;
+        }
+
+        self.apply_appearance(ui.ctx());
+        if crate::ui::dialog::escape_pressed(ui.ctx()) {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+        let close = egui::CentralPanel::default()
+            .show_inside(ui, |ui| {
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::same(12))
+                    .show(ui, |ui| {
+                        draw_native_preferences_surface(&mut self.state, ui)
+                    })
+                    .inner
+            })
+            .inner;
+        self.apply_appearance(ui.ctx());
+        if close {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+}
+
+pub(crate) fn run_native_preferences(owner_hwnd: isize) -> eframe::Result {
+    let config = crate::config::AppConfig::load();
+    crate::platform::interop::set_live_config(config.clone());
+    crate::platform::windows::configure_window_composition(
+        config.windows_dwm_theming,
+        config.windows_mica_backdrop,
+    );
+    let app_name = crate::config::resolved_app_name(&config);
+    let language =
+        crate::config::resolve_language(crate::config::resolved_language_preference(&config));
+    let title = format!(
+        "{} — {app_name}",
+        crate::ui::i18n::tr(language, "Preferences")
+    );
+    let options = eframe::NativeOptions {
+        viewport: native_preferences_viewport(title.clone()),
+        renderer: eframe::Renderer::Glow,
+        vsync: config.opengl_vsync,
+        ..Default::default()
+    };
+    eframe::run_native(
+        &title,
+        options,
+        Box::new(move |creation| {
+            crate::ui::i18n::configure_ui_fonts(
+                &creation.egui_ctx,
+                language == AppLanguage::Persian,
+            );
+            let mut dark_visuals = egui::Visuals::dark();
+            dark_visuals.panel_fill = egui::Color32::from_rgb(33, 33, 33);
+            dark_visuals.window_fill = egui::Color32::from_rgb(26, 26, 26);
+            creation
+                .egui_ctx
+                .set_visuals_of(egui::Theme::Dark, dark_visuals);
+            creation
+                .egui_ctx
+                .set_visuals_of(egui::Theme::Light, egui::Visuals::light());
+            let mut style = (*creation.egui_ctx.global_style()).clone();
+            for font_id in style.text_styles.values_mut() {
+                if font_id.size > 12.0 {
+                    font_id.size = 12.0;
+                }
+            }
+            crate::ui::configure_interaction_style(&mut style);
+            creation.egui_ctx.set_global_style(style);
+            Ok(Box::new(StandalonePreferencesApp {
+                state: NativePreferencesState::from_live_config(),
+                owner_hwnd,
+                native_window_initialized: false,
+                applied_appearance: None,
+            }))
+        }),
+    )
+}
+
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if !app.show_preferences_dialog {
         return;
     }
 
     if app.native_dialog_windows {
-        let ctx = ui.ctx().clone();
-        let title = format!("{} — {}", app.tr("Preferences"), app.app_name);
-        let controller = app
+        if app.native_preferences.is_none() {
+            let owner = app
+                .window_handle
+                .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
+            match NativePreferencesController::spawn(owner) {
+                Ok(controller) => app.native_preferences = Some(controller),
+                Err(error) => {
+                    app.config_status = error;
+                    // Keep Preferences usable even if process creation is blocked.
+                    // This changes only the live fallback, not the persisted choice.
+                    app.native_dialog_windows = false;
+                }
+            }
+        }
+        if app
             .native_preferences
-            .get_or_insert_with(NativePreferencesController::from_live_config)
-            .clone();
-        if !controller.is_open() {
+            .as_mut()
+            .is_some_and(NativePreferencesController::is_open)
+        {
+            return;
+        }
+        if app.native_dialog_windows {
             app.show_preferences_dialog = false;
             app.native_preferences = None;
             return;
         }
-        let open = Arc::clone(&controller.open);
-        let state = Arc::clone(&controller.state);
-        let root_ctx = ctx.clone();
-        let style_title = title.clone();
-        ctx.show_viewport_deferred(
-            egui::ViewportId::from_hash_of("pealayer_preferences_native"),
-            native_preferences_viewport(title),
-            move |ui, _class| {
-                if ui.input(|input| input.viewport().close_requested())
-                    || crate::ui::dialog::escape_pressed(ui.ctx())
-                {
-                    open.store(false, Ordering::Release);
-                    root_ctx.request_repaint_of(egui::ViewportId::ROOT);
-                    return;
-                }
-                // Never change native frame styles while holding the preferences
-                // state lock. Win32 frame changes synchronously dispatch resize and
-                // paint messages; doing that from this paint callback used to
-                // re-enter eframe while the mutex and GL viewport were active. The
-                // result was an unresponsive child whose last framebuffer was
-                // stretched by DWM while resizing.
-                let composition = {
-                    let Ok(state) = state.lock() else {
-                        return;
-                    };
-                    (
-                        ui.visuals().dark_mode,
-                        state.config.windows_dwm_theming,
-                        state.config.windows_mica_backdrop,
-                    )
-                };
-                let needs_style = state
-                    .lock()
-                    .is_ok_and(|state| state.styled_composition != Some(composition));
-                if needs_style {
-                    let style_result = crate::platform::windows::style_preferences_tool_window(
-                        &style_title,
-                        composition.0,
-                        composition.1,
-                        composition.2,
-                    );
-                    let Ok(mut state) = state.lock() else {
-                        return;
-                    };
-                    match style_result {
-                        Ok(true) => state.styled_composition = Some(composition),
-                        Ok(false) => ui
-                            .ctx()
-                            .request_repaint_after(std::time::Duration::from_millis(50)),
-                        Err(error) => {
-                            state.status = error;
-                            state.styled_composition = Some(composition);
-                        }
-                    }
-                }
-                let Ok(mut state) = state.lock() else {
-                    return;
-                };
-                let close = egui::CentralPanel::default()
-                    .show_inside(ui, |ui| {
-                        egui::Frame::new()
-                            .inner_margin(egui::Margin::same(12))
-                            .show(ui, |ui| draw_native_preferences_surface(&mut state, ui))
-                            .inner
-                    })
-                    .inner;
-                if close {
-                    open.store(false, Ordering::Release);
-                    root_ctx.request_repaint_of(egui::ViewportId::ROOT);
-                }
-            },
-        );
-        return;
     }
 
-    if let Some(controller) = app.native_preferences.take() {
+    if let Some(mut controller) = app.native_preferences.take() {
         controller.close();
     }
 
@@ -296,7 +380,6 @@ fn draw_native_preferences_surface(state: &mut NativePreferencesState, ui: &mut 
     });
 
     if changed {
-        state.styled_composition = None;
         save_native_preferences(state, ui.ctx());
     }
 
@@ -1602,11 +1685,18 @@ fn drag_action_name(action: PlayerDragAction) -> &'static str {
 mod tests {
     use super::*;
 
-    fn assert_send_sync<T: Send + Sync>() {}
-
     #[test]
-    fn deferred_preferences_state_is_safe_to_share_with_the_viewport_renderer() {
-        assert_send_sync::<NativePreferencesController>();
+    fn preferences_helper_bypasses_the_primary_single_instance_path() {
+        let args = vec![
+            "pealayer.exe".to_string(),
+            "--preferences-helper".to_string(),
+            "12345".to_string(),
+        ];
+        assert_eq!(preferences_helper_owner(&args), Some(12345));
+        assert_eq!(
+            preferences_helper_owner(&["pealayer.exe".to_string()]),
+            None
+        );
     }
 
     #[test]
