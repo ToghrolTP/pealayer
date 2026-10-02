@@ -228,6 +228,7 @@ fn main() -> eframe::Result {
                     font_id.size = 12.0;
                 }
             }
+            crate::ui::configure_interaction_style(&mut style);
             cc.egui_ctx.set_global_style(style);
 
             let get_proc = cc
@@ -530,6 +531,7 @@ fn main() -> eframe::Result {
                 windows_mica_backdrop: loaded_config.windows_mica_backdrop,
                 windows_dwm_theming: loaded_config.windows_dwm_theming,
                 opengl_vsync: loaded_config.opengl_vsync,
+                native_dialog_windows: loaded_config.native_dialog_windows,
                 status_bar: loaded_config.status_bar,
                 config_fingerprint: crate::config::AppConfig::fingerprint(
                     &crate::config::AppConfig::get_config_path(),

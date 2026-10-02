@@ -154,6 +154,7 @@ pub struct AppConfig {
     pub windows_mica_backdrop: bool,
     pub windows_dwm_theming: bool,
     pub opengl_vsync: bool,
+    pub native_dialog_windows: bool,
     pub status_bar: StatusBarConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_geometry: Option<WindowGeometry>,
@@ -203,6 +204,9 @@ impl Default for AppConfig {
             // swap loop. Some Windows OpenGL drivers flicker with V-Sync, so
             // keep it opt-in while retaining the persisted preference.
             opengl_vsync: false,
+            // Secondary egui viewports are real OS windows on supported native
+            // backends. Keep the experiment opt-in until more dialogs migrate.
+            native_dialog_windows: false,
             status_bar: StatusBarConfig::default(),
             window_geometry: None,
             workspace_dock_layout: None,
@@ -785,6 +789,7 @@ mod tests {
         assert!(cfg.open_url_recent_click_edits);
         assert!(cfg.open_url_use_proxy);
         assert!(cfg.open_url_proxy_url.is_none());
+        assert!(!cfg.native_dialog_windows);
     }
 
     #[test]
@@ -797,6 +802,7 @@ mod tests {
         cfg.open_url_recent_click_edits = false;
         cfg.open_url_use_proxy = false;
         cfg.open_url_proxy_url = Some("http://127.0.0.1:8080".to_string());
+        cfg.native_dialog_windows = true;
         cfg.recent_media.push(PathBuf::from("/test/file.mp4"));
 
         let json = serde_json::to_string(&cfg).unwrap();
@@ -814,6 +820,7 @@ mod tests {
         );
         assert_eq!(loaded.recent_media.len(), 1);
         assert_eq!(loaded.recent_media[0], PathBuf::from("/test/file.mp4"));
+        assert!(loaded.native_dialog_windows);
     }
 
     #[test]

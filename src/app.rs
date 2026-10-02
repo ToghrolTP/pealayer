@@ -301,6 +301,7 @@ pub struct PealayerApp {
     pub(crate) windows_mica_backdrop: bool,
     pub(crate) windows_dwm_theming: bool,
     pub(crate) opengl_vsync: bool,
+    pub(crate) native_dialog_windows: bool,
     pub(crate) status_bar: crate::config::StatusBarConfig,
     pub(crate) config_fingerprint: Option<u64>,
     pub(crate) last_config_poll: std::time::Instant,
@@ -2325,6 +2326,7 @@ impl PealayerApp {
         cfg.windows_mica_backdrop = self.windows_mica_backdrop;
         cfg.windows_dwm_theming = self.windows_dwm_theming;
         cfg.opengl_vsync = self.opengl_vsync;
+        cfg.native_dialog_windows = self.native_dialog_windows;
         cfg.status_bar = self.status_bar;
         cfg.window_geometry = self.window_geometry;
         let mut dock_state = self.dock_state.clone();
@@ -2405,6 +2407,7 @@ impl PealayerApp {
         self.windows_mica_backdrop = config.windows_mica_backdrop;
         self.windows_dwm_theming = config.windows_dwm_theming;
         self.opengl_vsync = config.opengl_vsync;
+        self.native_dialog_windows = config.native_dialog_windows;
         self.status_bar = config.status_bar;
         crate::platform::windows::configure_window_composition(
             self.windows_dwm_theming,
@@ -2909,6 +2912,7 @@ impl Default for PealayerApp {
             windows_mica_backdrop: false,
             windows_dwm_theming: true,
             opengl_vsync: false,
+            native_dialog_windows: false,
             status_bar: crate::config::StatusBarConfig::default(),
             config_fingerprint: crate::config::AppConfig::fingerprint(
                 &crate::config::AppConfig::get_config_path(),

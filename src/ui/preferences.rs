@@ -16,6 +16,34 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if !app.show_preferences_dialog {
         return;
     }
+
+    if app.native_dialog_windows {
+        let ctx = ui.ctx().clone();
+        let mut open = true;
+        let title = format!("{} — {}", app.tr("Preferences"), app.app_name);
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("pealayer_preferences_native"),
+            egui::ViewportBuilder::default()
+                .with_title(title)
+                .with_inner_size([700.0, 620.0])
+                .with_min_inner_size([420.0, 360.0])
+                .with_resizable(true)
+                .with_clamp_size_to_monitor_size(true),
+            |ui, _class| {
+                if ui.input(|input| input.viewport().close_requested())
+                    || crate::ui::dialog::escape_pressed(ui.ctx())
+                {
+                    open = false;
+                }
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::same(12))
+                    .show(ui, |ui| draw_preferences_surface(app, ui));
+            },
+        );
+        app.show_preferences_dialog = open;
+        return;
+    }
+
     let mut open = app.show_preferences_dialog;
     let bounds = ui.ctx().content_rect().shrink(18.0);
     let max_size = egui::vec2(bounds.width().min(700.0), bounds.height().min(620.0));
@@ -39,33 +67,35 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     .resizable(true)
     .movable(true)
     .collapsible(false)
-    .show(ui.ctx(), |ui| {
-        let mut changed = false;
-        // A vertical tab rail plus the minimum useful settings column needs
-        // considerably more than 500 points. Switch before either side starts
-        // squeezing controls into overlapping or single-glyph columns.
-        let narrow = ui.available_width() < 580.0;
-        if narrow {
-            draw_compact_tab_selector(app, ui);
+    .show(ui.ctx(), |ui| draw_preferences_surface(app, ui));
+    app.show_preferences_dialog = open;
+}
+
+fn draw_preferences_surface(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    let mut changed = false;
+    // A vertical tab rail plus the minimum useful settings column needs
+    // considerably more than 500 points. Switch before either side starts
+    // squeezing controls into overlapping or single-glyph columns.
+    let narrow = ui.available_width() < 580.0;
+    if narrow {
+        draw_compact_tab_selector(app, ui);
+        ui.separator();
+        draw_preferences_content(app, ui, &mut changed);
+    } else {
+        let content_height = ui.available_height();
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(126.0, content_height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| draw_tabs(app, ui, false),
+            );
             ui.separator();
             draw_preferences_content(app, ui, &mut changed);
-        } else {
-            let content_height = ui.available_height();
-            ui.horizontal_top(|ui| {
-                ui.allocate_ui_with_layout(
-                    egui::vec2(126.0, content_height),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| draw_tabs(app, ui, false),
-                );
-                ui.separator();
-                draw_preferences_content(app, ui, &mut changed);
-            });
-        }
-        if changed {
-            app.save_config();
-        }
-    });
-    app.show_preferences_dialog = open;
+        });
+    }
+    if changed {
+        app.save_config();
+    }
 }
 
 fn draw_tabs(app: &mut PealayerApp, ui: &mut egui::Ui, compact: bool) {
@@ -622,6 +652,30 @@ fn advanced_preferences(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 );
                 app.save_config();
             }
+        },
+    );
+    preference_section(
+        ui,
+        crate::ui::icons::APP_WINDOW,
+        &app.tr("Dialog windows"),
+        |ui| {
+            let label = app.tr("Open supported dialogs in separate OS windows");
+            if ui
+                .checkbox(&mut app.native_dialog_windows, label)
+                .on_hover_text(
+                    app.tr("Allows supported dialogs to move outside the main application window."),
+                )
+                .changed()
+            {
+                app.save_config();
+            }
+            ui.label(
+                egui::RichText::new(app.tr(
+                    "Experimental: Preferences is the first dialog using a native egui viewport.",
+                ))
+                .small()
+                .weak(),
+            );
         },
     );
     preference_section(ui, crate::ui::icons::GAUGE, &app.tr("Status bar"), |ui| {
