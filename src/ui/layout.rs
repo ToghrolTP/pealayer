@@ -57,6 +57,20 @@ fn begin_effect_drag(ctx: &egui::Context, payload: EffectDragPayload) {
     egui::DragAndDrop::set_payload(ctx, payload);
 }
 
+fn take_effect_drop_on_rect(
+    ctx: &egui::Context,
+    rect: egui::Rect,
+) -> Option<std::sync::Arc<EffectDragPayload>> {
+    let released_inside = ctx.input(|input| {
+        input.pointer.any_released()
+            && input
+                .pointer
+                .latest_pos()
+                .is_some_and(|position| rect.contains(position))
+    });
+    released_inside.then(|| egui::DragAndDrop::take_payload::<EffectDragPayload>(ctx))?
+}
+
 fn secondary_click_inside(ctx: &egui::Context, rect: egui::Rect) -> bool {
     ctx.input(|input| {
         input.pointer.button_clicked(egui::PointerButton::Secondary)
@@ -77,7 +91,12 @@ fn effect_drag_source<R>(
     if ui.ctx().is_being_dragged(id) {
         egui::DragAndDrop::set_payload(ui.ctx(), payload);
         let layer_id = egui::LayerId::new(egui::Order::Tooltip, id);
-        let response = ui.scope_builder(egui::UiBuilder::new().layer_id(layer_id), add_contents);
+        let response = ui.scope_builder(egui::UiBuilder::new().layer_id(layer_id), |ui| {
+            // A drag preview must remain visible after leaving the narrow
+            // Effects Library ScrollArea.
+            ui.set_clip_rect(ui.ctx().content_rect());
+            add_contents(ui)
+        });
         if let Some(pointer) = ui.ctx().pointer_interact_pos() {
             let offset = ui
                 .data_mut(|data| data.get_temp::<egui::Vec2>(offset_id))
@@ -98,8 +117,7 @@ fn effect_drag_source<R>(
             // Establish the payload in the same input frame in which egui
             // claims the drag. Waiting until the next paint left a race where
             // the pointer could enter (and even be released over) the timeline
-            // before any drop payload existed, so the cards looked draggable
-            // but every drop was ignored.
+            // before any drop payload existed.
             begin_effect_drag(ui.ctx(), payload);
             if let Some(pointer) = ui.ctx().pointer_interact_pos() {
                 ui.data_mut(|data| {
@@ -1328,6 +1346,119 @@ mod timeline_row_tests {
         assert!(
             dropped.get(),
             "effect card payload was not released by the drop zone"
+        );
+    }
+
+    #[test]
+    fn effect_card_drag_survives_the_real_scroll_area_gesture_competition() {
+        let context = egui::Context::default();
+        let payload = EffectDragPayload {
+            name: "Seat rise".to_string(),
+            icon: String::new(),
+            duration_ms: 750,
+            target: crate::four_d::models::HardwareTarget::ControllerMacro,
+            actions: Vec::new(),
+            controller_macro: Some(crate::four_d::models::ControllerMacroCue {
+                id: 7,
+                mode: "mcu".to_string(),
+            }),
+            controller_strip_effect: None,
+        };
+        let source = std::cell::Cell::new(egui::Rect::NOTHING);
+        let target = std::cell::Cell::new(egui::Rect::NOTHING);
+        let dropped = std::cell::Cell::new(false);
+        let render = |events: Vec<egui::Event>| {
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(620.0, 260.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.horizontal_top(|ui| {
+                        ui.allocate_ui(egui::vec2(230.0, 230.0), |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("verified-effects-scroll")
+                                .scroll_source(egui::scroll_area::ScrollSource::ALL)
+                                .show(ui, |ui| {
+                                    source.set(
+                                        effect_drag_source(
+                                            ui,
+                                            egui::Id::new("verified-scrolled-effect-card"),
+                                            payload.clone(),
+                                            |ui| {
+                                                egui::Frame::group(ui.style())
+                                                    .inner_margin(egui::Margin::same(8))
+                                                    .show(ui, |ui| {
+                                                        ui.set_min_width(180.0);
+                                                        ui.horizontal(|ui| {
+                                                            ui.label("icon");
+                                                            ui.label("Seat rise");
+                                                        });
+                                                    })
+                                            },
+                                        )
+                                        .response
+                                        .rect,
+                                    );
+                                    // Make the ScrollArea actually scrollable so it
+                                    // registers its own competing drag response.
+                                    ui.add_space(500.0);
+                                });
+                        });
+                        ui.add_space(24.0);
+                        let (_, timeline_response) = ui.allocate_exact_size(
+                            egui::vec2(300.0, 180.0),
+                            egui::Sense::click_and_drag(),
+                        );
+                        target.set(timeline_response.rect);
+                        let released = take_effect_drop_on_rect(ui.ctx(), timeline_response.rect);
+                        dropped.set(dropped.get() || released.as_deref() == Some(&payload));
+                    });
+                },
+            );
+            drop(output);
+        };
+
+        render(Vec::new());
+        let source_point = source.get().center();
+        render(vec![
+            egui::Event::PointerMoved(source_point),
+            egui::Event::PointerButton {
+                pos: source_point,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        render(vec![egui::Event::PointerMoved(
+            source_point + egui::vec2(20.0, 3.0),
+        )]);
+        assert_eq!(
+            egui::DragAndDrop::payload::<EffectDragPayload>(&context).as_deref(),
+            Some(&payload),
+            "the scrollable card never published its drag payload"
+        );
+        let target_point = target.get().center();
+        render(vec![egui::Event::PointerMoved(target_point)]);
+        assert_eq!(
+            egui::DragAndDrop::payload::<EffectDragPayload>(&context).as_deref(),
+            Some(&payload),
+            "the payload disappeared while crossing from the library to the timeline"
+        );
+        render(vec![egui::Event::PointerButton {
+            pos: target_point,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+
+        assert!(
+            dropped.get(),
+            "a scrollable Effects Library card did not reach the timeline drop zone"
         );
     }
 
@@ -3267,11 +3398,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let track_area_height = timeline_rows.len() as f32 * 32.0;
                             let total_height = 26.0 + track_area_height + (num_analog as f32 * 40.0);
 
-                            // Define dropping target zone
-                            let drop_res = ui.dnd_drop_zone::<EffectDragPayload, _>(egui::Frame::NONE, |ui| {
-                                egui::ScrollArea::both()
-                                    .id_salt("timeline_scroll")
-                                    .show(ui, |ui| {
+                            // The interactive timeline canvas itself is the drop
+                            // target. Wrapping it in `dnd_drop_zone` made the outer
+                            // response fail `contains_pointer`: the inner
+                            // click-and-drag canvas correctly owned the pointer and
+                            // occluded its parent, so releases were never accepted.
+                            let timeline_scroll = egui::ScrollArea::both()
+                                .id_salt("timeline_scroll")
+                                .show(ui, |ui| {
                                         let size = egui::vec2(total_width, total_height);
                                         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
 
@@ -4584,15 +4718,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
 
                                         ((rect, response), clicked_any_clip, clicked_any_keyframe)
-                                    })
-                            });
+                                });
 
-                            let ((rect, response), clicked_any_clip, clicked_any_keyframe) = drop_res.0.inner.inner;
+                            let ((rect, response), clicked_any_clip, clicked_any_keyframe) = timeline_scroll.inner;
 
                             let tracks_top = rect.min.y + 26.0;
 
                             // Successful drop logic
-                            if let Some(payload) = &drop_res.1 {
+                            if let Some(payload) = take_effect_drop_on_rect(ui.ctx(), rect) {
                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                     if rect.contains(mouse_pos) {
                                         let relative_y = mouse_pos.y - tracks_top;
@@ -4600,7 +4733,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let relative_x = mouse_pos.x - rect.min.x;
                                         let drop_time_secs = (relative_x / zoom) as f64;
 
-                                        self.app.handle_effect_drop(payload, visible_row, drop_time_secs);
+                                        self.app.handle_effect_drop(&payload, visible_row, drop_time_secs);
                                     }
                                 }
                             }

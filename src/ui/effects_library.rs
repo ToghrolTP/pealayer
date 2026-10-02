@@ -1,6 +1,36 @@
 use crate::app::{ControllerEffectDraft, PealayerApp};
 use eframe::egui;
 
+fn secondary_click_inside(ctx: &egui::Context, rect: egui::Rect) -> bool {
+    ctx.input(|input| {
+        input.pointer.button_clicked(egui::PointerButton::Secondary)
+            && input
+                .pointer
+                .interact_pos()
+                .is_some_and(|position| rect.contains(position))
+    })
+}
+
+fn show_saved_effect_context_menu(
+    app: &mut PealayerApp,
+    response: &egui::Response,
+    popup_id: egui::Id,
+    name: &str,
+    reference: &str,
+    payload: &crate::app::EffectDragPayload,
+    select: impl FnOnce(&mut PealayerApp),
+) {
+    let open = secondary_click_inside(&response.ctx, response.rect);
+    egui::Popup::menu(response)
+        .id(popup_id)
+        .at_pointer_fixed()
+        .open_memory(open.then_some(egui::SetOpenCommand::Bool(true)))
+        .show(|ui| {
+            select(app);
+            draw_saved_effect_context_menu(app, ui, name, reference, payload);
+        });
+}
+
 pub(crate) fn select_sequence(
     app: &mut PealayerApp,
     effect: &crate::four_d::controller::HardwareMacro,
@@ -266,10 +296,15 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 if response.clicked() {
                                     select_sequence(app, effect);
                                 }
-                                response.context_menu(|ui| {
-                                    select_sequence(app, effect);
-                                    draw_saved_effect_context_menu(app, ui, &effect.name, &reference, &payload);
-                                });
+                                show_saved_effect_context_menu(
+                                    app,
+                                    &response,
+                                    egui::Id::new(("effect-manager-sequence-menu", effect.id)),
+                                    &effect.name,
+                                    &reference,
+                                    &payload,
+                                    |app| select_sequence(app, effect),
+                                );
                             }
                             for effect in &strips {
                                 let reference = format!("strip:{}", effect.id);
@@ -291,10 +326,15 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 if response.clicked() {
                                     select_strip(app, effect);
                                 }
-                                response.context_menu(|ui| {
-                                    select_strip(app, effect);
-                                    draw_saved_effect_context_menu(app, ui, &effect.name, &reference, &payload);
-                                });
+                                show_saved_effect_context_menu(
+                                    app,
+                                    &response,
+                                    egui::Id::new(("effect-manager-strip-menu", &effect.id)),
+                                    &effect.name,
+                                    &reference,
+                                    &payload,
+                                    |app| select_strip(app, effect),
+                                );
                             }
                         });
                     },
