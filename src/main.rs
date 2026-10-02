@@ -531,6 +531,7 @@ fn main() -> eframe::Result {
                 motion_control_mode: loaded_config.motion_control_mode,
                 held_motion_action: None,
                 compact_hardware_controls: loaded_config.compact_hardware_controls,
+                show_raw_motion_relays: loaded_config.show_raw_motion_relays,
                 single_instance: loaded_config.single_instance,
                 windows_mica_backdrop: loaded_config.windows_mica_backdrop,
                 windows_dwm_theming: loaded_config.windows_dwm_theming,

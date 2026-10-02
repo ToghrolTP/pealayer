@@ -428,13 +428,26 @@ fn row(ui: &mut egui::Ui, label: &str, value: &str) {
 }
 
 fn pill(ui: &mut egui::Ui, text: &str) {
+    let width = capability_pill_width(text, ui.available_width());
     egui::Frame::new()
         .fill(ui.visuals().selection.bg_fill.gamma_multiply(0.34))
         .corner_radius(99.0)
         .inner_margin(egui::Margin::symmetric(8, 3))
         .show(ui, |ui| {
-            ui.label(egui::RichText::new(text).small().strong());
+            let content_width = (width - 16.0).max(28.0);
+            ui.set_min_width(content_width);
+            ui.set_max_width(content_width);
+            ui.add_sized(
+                [content_width, 18.0],
+                egui::Label::new(egui::RichText::new(text).small().strong()).truncate(),
+            )
+            .on_hover_text(text);
         });
+}
+
+fn capability_pill_width(text: &str, available_width: f32) -> f32 {
+    let natural_width = text.chars().count() as f32 * 7.0 + 24.0;
+    natural_width.clamp(44.0, available_width.clamp(44.0, 220.0))
 }
 
 fn unavailable(ui: &mut egui::Ui, message: &str) {
@@ -447,4 +460,16 @@ fn unavailable(ui: &mut egui::Ui, message: &str) {
 
 fn yes_no(app: &PealayerApp, value: bool) -> String {
     app.tr(if value { "Yes" } else { "No" })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::capability_pill_width;
+
+    #[test]
+    fn capability_pills_are_clamped_to_the_visible_panel() {
+        assert_eq!(capability_pill_width("RF", 180.0), 44.0);
+        assert_eq!(capability_pill_width(&"x".repeat(80), 180.0), 180.0);
+        assert_eq!(capability_pill_width(&"x".repeat(80), 480.0), 220.0);
+    }
 }

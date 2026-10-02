@@ -54,6 +54,7 @@ pub struct HardwareBoardProfile {
     pub mode: String,
     pub configured: bool,
     pub attached: bool,
+    pub expose_raw_relays: bool,
     pub revision: String,
 }
 
@@ -929,6 +930,10 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
                 .get("attached")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
+            expose_raw_relays: profile
+                .get("expose_raw_relays")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             revision: profile
                 .get("revision")
                 .and_then(Value::as_str)
@@ -1049,10 +1054,71 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
             .then_with(|| left.key.cmp(&right.key))
     });
 
+    // An alpha/prototyping board may advertise the authoritative R1-R4
+    // direction/enable wiring before a named board profile has been saved.
+    // Keep the higher-level seat controls available in that state while also
+    // exposing the raw relays separately. The commands still run through
+    // PCController's motion interlock and door-policy implementation.
+    if board_connected
+        && !controls.iter().any(|control| {
+            control.kind.eq_ignore_ascii_case("motion")
+                || control.control.eq_ignore_ascii_case("seat")
+                || control.control.eq_ignore_ascii_case("motion")
+        })
+    {
+        let has_raw_pair = |direction: u8, enable: u8| {
+            outputs.iter().any(|(kind, output)| {
+                kind == "relay"
+                    && output.id == direction
+                    && output.role.eq_ignore_ascii_case("motion-direction")
+            }) && outputs.iter().any(|(kind, output)| {
+                kind == "relay"
+                    && output.id == enable
+                    && output.role.eq_ignore_ascii_case("motion-enable")
+            })
+        };
+        for (side, direction, enable, order, name) in [
+            ("left", 1_u8, 2_u8, 1_u16, "Seat A"),
+            ("right", 3_u8, 4_u8, 2_u16, "Seat B"),
+        ] {
+            if has_raw_pair(direction, enable) {
+                controls.push(HardwareControl {
+                    key: format!("seat.{side}"),
+                    kind: "motion".to_string(),
+                    order,
+                    name: name.to_string(),
+                    default_name: name.to_string(),
+                    control: "raw-motion".to_string(),
+                    icon: "seat".to_string(),
+                    group: "Motion / seat".to_string(),
+                    actions: ["up", "down", "stop"]
+                        .into_iter()
+                        .map(|verb| HardwareAction {
+                            id: format!("raw-motion.{side}.{verb}"),
+                            verb: verb.to_string(),
+                            name: match verb {
+                                "up" => "Up",
+                                "down" => "Down",
+                                _ => "Stop",
+                            }
+                            .to_string(),
+                            icon: verb.to_string(),
+                        })
+                        .collect(),
+                });
+            }
+        }
+        controls.sort_by(|left, right| {
+            left.order
+                .cmp(&right.order)
+                .then_with(|| left.key.cmp(&right.key))
+        });
+    }
+
     let relays = if board_connected && capability_bits & CAPABILITY_RELAY_MOTION != 0 {
         outputs
             .iter()
-            .filter(|(kind, output)| kind == "relay" && output.control == "relay" && output.id != 0)
+            .filter(|(kind, output)| kind == "relay" && output.id != 0)
             .map(|(_, output)| output.clone())
             .collect()
     } else {
@@ -1672,6 +1738,57 @@ mod tests {
                 .collect::<Vec<_>>(),
             [1, 2, 3, 4]
         );
+    }
+
+    #[test]
+    fn unconfigured_motion_wiring_exposes_seat_controls_and_raw_r1_to_r4() {
+        let snapshot = json!({
+            "connected": true,
+            "hello": {"capabilities": CAPABILITY_RELAY_MOTION}
+        });
+        let catalog = json!({
+            "board_profile": {
+                "mode": "unconfigured",
+                "configured": false,
+                "attached": true,
+                "expose_raw_relays": false
+            },
+            "peripherals": [
+                {"key":"relay.1","kind":"relay","role":"motion-direction","index":1,"default_name":"Side A Direction","control":"unavailable"},
+                {"key":"relay.2","kind":"relay","role":"motion-enable","index":2,"default_name":"Side A Output","control":"unavailable"},
+                {"key":"relay.3","kind":"relay","role":"motion-direction","index":3,"default_name":"Side B Direction","control":"unavailable"},
+                {"key":"relay.4","kind":"relay","role":"motion-enable","index":4,"default_name":"Side B Output","control":"unavailable"},
+                {"key":"relay.5","kind":"relay","role":"user-output","index":5,"default_name":"User Relay 5","control":"relay"}
+            ],
+            "controls": []
+        });
+
+        let parsed = parse_hardware_capabilities(&snapshot, &catalog);
+        assert_eq!(
+            parsed
+                .relays
+                .iter()
+                .map(|relay| relay.id)
+                .collect::<Vec<_>>(),
+            [1, 2, 3, 4, 5]
+        );
+        let seats = parsed
+            .controls
+            .iter()
+            .filter(|control| control.control == "raw-motion")
+            .collect::<Vec<_>>();
+        assert_eq!(seats.len(), 2);
+        assert_eq!(seats[0].key, "seat.left");
+        assert_eq!(seats[1].key, "seat.right");
+        assert_eq!(
+            seats[0]
+                .actions
+                .iter()
+                .map(|action| action.verb.as_str())
+                .collect::<Vec<_>>(),
+            ["up", "down", "stop"]
+        );
+        assert!(!parsed.board_profile.as_ref().unwrap().expose_raw_relays);
     }
 
     #[test]

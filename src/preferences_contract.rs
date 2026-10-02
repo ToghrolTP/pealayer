@@ -329,6 +329,12 @@ pub fn preference_controls() -> Vec<PreferenceControl> {
             "Motion controls",
             "Use one-row compact hardware controls",
         ),
+        PreferenceControl::boolean(
+            "show_raw_motion_relays",
+            "hardware",
+            "Motion controls",
+            "Show raw R1-R4 controls below seat controls",
+        ),
         PreferenceControl::select(
             "paused_drag_action",
             "input",

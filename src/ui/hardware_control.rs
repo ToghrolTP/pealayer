@@ -59,6 +59,19 @@ enum HardwareActionDispatch {
 }
 
 fn action_dispatch(control: &HardwareControl, action: &HardwareAction) -> HardwareActionDispatch {
+    if control.control.eq_ignore_ascii_case("raw-motion") {
+        let side = match control.key.as_str() {
+            "seat.left" | "seat.a" => Some("left"),
+            "seat.right" | "seat.b" => Some("right"),
+            _ => None,
+        };
+        let verb = action.verb.to_ascii_lowercase();
+        if let Some(side) = side
+            && matches!(verb.as_str(), "up" | "down" | "stop")
+        {
+            return HardwareActionDispatch::ControllerCommand(format!("relay side {side} {verb}"));
+        }
+    }
     // A raw relay remains directly controllable even while a board profile is
     // being configured. PCController advertises those controls so operators
     // can use them, but semantic action invocation is deliberately rejected
@@ -420,6 +433,26 @@ mod tests {
         assert_eq!(
             action_dispatch(&control, &up),
             HardwareActionDispatch::Advertised("seat.left.up".to_string())
+        );
+    }
+
+    #[test]
+    fn unconfigured_raw_motion_routes_through_interlocked_side_command() {
+        let control = HardwareControl {
+            key: "seat.left".to_string(),
+            kind: "motion".to_string(),
+            control: "raw-motion".to_string(),
+            ..HardwareControl::default()
+        };
+        let action = HardwareAction {
+            id: "raw-motion.left.up".to_string(),
+            verb: "up".to_string(),
+            name: "Up".to_string(),
+            ..HardwareAction::default()
+        };
+        assert_eq!(
+            action_dispatch(&control, &action),
+            HardwareActionDispatch::ControllerCommand("relay side left up".to_string())
         );
     }
 }

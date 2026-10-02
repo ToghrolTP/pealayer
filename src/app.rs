@@ -299,6 +299,7 @@ pub struct PealayerApp {
     pub(crate) motion_control_mode: crate::config::MotionControlMode,
     pub(crate) held_motion_action: Option<(String, String)>,
     pub(crate) compact_hardware_controls: bool,
+    pub(crate) show_raw_motion_relays: bool,
     pub(crate) single_instance: bool,
     pub(crate) windows_mica_backdrop: bool,
     pub(crate) windows_dwm_theming: bool,
@@ -2590,6 +2591,7 @@ impl PealayerApp {
         cfg.fullscreen_video_background = self.fullscreen_video_background;
         cfg.motion_control_mode = self.motion_control_mode;
         cfg.compact_hardware_controls = self.compact_hardware_controls;
+        cfg.show_raw_motion_relays = self.show_raw_motion_relays;
         cfg.single_instance = self.single_instance;
         cfg.windows_mica_backdrop = self.windows_mica_backdrop;
         cfg.windows_dwm_theming = self.windows_dwm_theming;
@@ -2671,6 +2673,7 @@ impl PealayerApp {
         self.fullscreen_video_background = config.fullscreen_video_background;
         self.motion_control_mode = config.motion_control_mode;
         self.compact_hardware_controls = config.compact_hardware_controls;
+        self.show_raw_motion_relays = config.show_raw_motion_relays;
         self.single_instance = config.single_instance;
         self.windows_mica_backdrop = config.windows_mica_backdrop;
         self.windows_dwm_theming = config.windows_dwm_theming;
@@ -3175,9 +3178,10 @@ impl Default for PealayerApp {
             paused_drag_action: crate::config::PlayerDragAction::MoveWindow,
             playing_drag_action: crate::config::PlayerDragAction::TemporaryFastForward,
             fullscreen_video_background: crate::config::VideoBackground::Black,
-            motion_control_mode: crate::config::MotionControlMode::Toggle,
+            motion_control_mode: crate::config::MotionControlMode::Hold,
             held_motion_action: None,
             compact_hardware_controls: false,
+            show_raw_motion_relays: true,
             single_instance: true,
             windows_mica_backdrop: false,
             windows_dwm_theming: true,
