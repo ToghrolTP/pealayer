@@ -13,6 +13,8 @@ param(
     [string[]]$Locale = @('en', 'fa'),
     [ValidateSet('main', 'preferences')]
     [string]$Surface = 'main',
+    [int]$WindowWidth = 0,
+    [int]$WindowHeight = 0,
     [ValidateRange(1, 30)]
     [int]$StartupTimeoutSeconds = 15
 )
@@ -34,6 +36,14 @@ if (-not $OutputDirectory) {
 }
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $resolvedOutput = (Resolve-Path -LiteralPath $OutputDirectory).Path
+$effectiveWindowWidth = if ($WindowWidth -gt 0) { $WindowWidth } elseif ($Surface -eq 'main') { 1920 } else { 1000 }
+$effectiveWindowHeight = if ($WindowHeight -gt 0) { $WindowHeight } elseif ($Surface -eq 'main') { 1080 } else { 900 }
+if ($effectiveWindowWidth -lt 800 -or $effectiveWindowWidth -gt 3840) {
+    throw 'WindowWidth must be between 800 and 3840 pixels.'
+}
+if ($effectiveWindowHeight -lt 600 -or $effectiveWindowHeight -gt 2160) {
+    throw 'WindowHeight must be between 600 and 2160 pixels.'
+}
 
 Add-Type -AssemblyName System.Drawing
 Add-Type @'
@@ -299,6 +309,19 @@ for ($localeIndex = 0; $localeIndex -lt $Locale.Count; $localeIndex++) {
     try {
         [void]$process.WaitForInputIdle(5000)
         $handle = Wait-MainWindow $process $StartupTimeoutSeconds
+        $showWindow = 0x0040
+        if (-not [PealayerScreenshotNative]::SetWindowPos(
+                $handle,
+                [IntPtr]::Zero,
+                24,
+                24,
+                $effectiveWindowWidth,
+                $effectiveWindowHeight,
+                $showWindow
+            )) {
+            throw "Could not resize Pealayer to ${effectiveWindowWidth}x${effectiveWindowHeight}."
+        }
+        Start-Sleep -Milliseconds 500
         $surfaceSuffix = if ($Surface -eq 'main') { '' } else { "-$Surface" }
         $fileName = "pealayer$surfaceSuffix-$language-$Theme.png"
         $path = Join-Path $resolvedOutput $fileName
@@ -342,6 +365,7 @@ $manifest = [ordered]@{
     executable_sha256 = $executableHash
     application_name = $effectiveAppName
     surface = $Surface
+    requested_window_size = "${effectiveWindowWidth}x${effectiveWindowHeight}"
     hardware_endpoint = if ($HardwareEndpoint) { $HardwareEndpoint.Trim() } else { $null }
     isolated_profile = $true
     capture_method = 'per-capture'
