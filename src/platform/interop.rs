@@ -162,6 +162,7 @@ pub enum InteropCommand {
     Minimize,
     Maximize,
     Restore,
+    OpenPreferences,
     Quit,
     SetWorkspace {
         nle: bool,
@@ -253,10 +254,10 @@ pub fn command_catalog() -> Value {
             "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
             "seek", "seek_to", "seek_abs", "set_volume", "set_mute", "toggle_mute",
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
-            "maximize", "restore", "set_workspace", "update_config", "reload_config",
-            "add_effect_cue", "remove_effect_cue", "set_recording", "get_status", "quit"
-            , "controller_effect_cue.add", "controller_effect.play", "controller_effect.stop",
-            "controller_effect.save", "controller_effect.delete"
+            "maximize", "restore", "open_preferences", "set_workspace", "update_config",
+            "reload_config", "add_effect_cue", "remove_effect_cue", "set_recording",
+            "get_status", "quit", "controller_effect_cue.add", "controller_effect.play",
+            "controller_effect.stop", "controller_effect.save", "controller_effect.delete"
         ],
         "json_rpc_prefix": "pealayer",
         "discovery": "/api/player/commands"
@@ -346,6 +347,7 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "minimize" => InteropCommand::Minimize,
         "maximize" => InteropCommand::Maximize,
         "restore" => InteropCommand::Restore,
+        "preferences" | "open_preferences" | "open-preferences" => InteropCommand::OpenPreferences,
         "workspace" | "set_workspace" | "set-workspace" => {
             match argument.to_ascii_lowercase().as_str() {
                 "nle" | "editor" => InteropCommand::SetWorkspace { nle: true },
@@ -659,6 +661,9 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "minimize" | "pealayer.window.minimize" => Some(InteropCommand::Minimize),
         "maximize" | "pealayer.window.maximize" => Some(InteropCommand::Maximize),
         "restore" | "pealayer.window.restore" => Some(InteropCommand::Restore),
+        "preferences" | "open_preferences" | "pealayer.window.preferences" => {
+            Some(InteropCommand::OpenPreferences)
+        }
         "quit" | "exit" | "pealayer.quit" => Some(InteropCommand::Quit),
         "workspace" | "set_workspace" | "pealayer.workspace.set" => {
             let workspace = string(&["workspace", "value"])?;
@@ -1660,6 +1665,11 @@ mod tests {
         } else {
             panic!("Expected SetVolume command with aliases");
         }
+
+        assert_eq!(
+            parse_text_command("preferences").unwrap(),
+            InteropCommand::OpenPreferences
+        );
     }
 
     #[test]
@@ -1885,6 +1895,15 @@ mod tests {
             Some(InteropCommand::Seek { seconds: 12.5 })
         ));
         assert!(json_rpc_result(&request.id, serde_json::json!({"ok":true})).contains("\"id\":7"));
+
+        let preferences: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":8,"method":"pealayer.window.preferences"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&preferences).unwrap(),
+            Some(InteropCommand::OpenPreferences)
+        );
     }
 
     #[test]

@@ -12,10 +12,254 @@ const TABS: [(&str, &str); 5] = [
     (crate::ui::icons::GEAR, "Advanced"),
 ];
 
+pub(crate) struct NativePreferencesController {
+    child: std::process::Child,
+}
+
+struct NativePreferencesState {
+    config: crate::config::AppConfig,
+    endpoint: String,
+    proxy_url: String,
+    tab: usize,
+    status: String,
+}
+
+impl NativePreferencesController {
+    fn spawn(owner_hwnd: isize) -> Result<Self, String> {
+        let executable = std::env::current_exe()
+            .map_err(|error| format!("resolve Pealayer executable: {error}"))?;
+        let child = std::process::Command::new(executable)
+            .arg("--preferences-helper")
+            .arg(owner_hwnd.to_string())
+            .spawn()
+            .map_err(|error| format!("open native Preferences window: {error}"))?;
+        Ok(Self { child })
+    }
+
+    fn is_open(&mut self) -> bool {
+        self.child.try_wait().is_ok_and(|status| status.is_none())
+    }
+
+    fn close(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for NativePreferencesController {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+impl NativePreferencesState {
+    fn from_live_config() -> Self {
+        let config = crate::platform::interop::get_live_config();
+        let endpoint = config
+            .hardware_endpoint
+            .clone()
+            .unwrap_or_else(|| crate::four_d::controller::DEFAULT_ENDPOINT.to_string());
+        let proxy_url = config.open_url_proxy_url.clone().unwrap_or_default();
+        Self {
+            config,
+            endpoint,
+            proxy_url,
+            tab: 0,
+            status: String::new(),
+        }
+    }
+}
+
+fn native_preferences_viewport(title: String) -> egui::ViewportBuilder {
+    let mut builder = egui::ViewportBuilder::default()
+        .with_title(title)
+        .with_inner_size([700.0, 620.0])
+        .with_min_inner_size([420.0, 360.0])
+        .with_resizable(true)
+        .with_decorations(true)
+        .with_taskbar(false)
+        .with_minimize_button(false)
+        .with_maximize_button(false)
+        .with_clamp_size_to_monitor_size(true);
+    if let Ok(icon) =
+        eframe::icon_data::from_png_bytes(include_bytes!("../../assets/pealayer-icon.png"))
+    {
+        builder = builder.with_icon(icon);
+    }
+    builder
+}
+
+pub(crate) fn preferences_helper_owner(args: &[String]) -> Option<isize> {
+    args.windows(2)
+        .find(|pair| pair[0] == "--preferences-helper")
+        .map(|pair| pair[1].parse::<isize>().unwrap_or_default())
+}
+
+struct StandalonePreferencesApp {
+    state: NativePreferencesState,
+    owner_hwnd: isize,
+    native_window_initialized: bool,
+    applied_appearance: Option<(AppTheme, bool, bool)>,
+}
+
+impl StandalonePreferencesApp {
+    fn apply_appearance(&mut self, ctx: &egui::Context) {
+        let appearance = (
+            crate::config::resolved_theme(&self.state.config),
+            self.state.config.windows_dwm_theming,
+            self.state.config.windows_mica_backdrop,
+        );
+        if self.applied_appearance == Some(appearance) {
+            return;
+        }
+        let theme = match appearance.0 {
+            AppTheme::System => egui::ThemePreference::System,
+            AppTheme::Light => egui::ThemePreference::Light,
+            AppTheme::Dark => egui::ThemePreference::Dark,
+        };
+        ctx.set_theme(theme);
+        crate::platform::windows::configure_window_composition(appearance.1, appearance.2);
+        crate::platform::windows::set_window_theme(ctx.global_style().visuals.dark_mode);
+        self.applied_appearance = Some(appearance);
+    }
+}
+
+impl eframe::App for StandalonePreferencesApp {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        #[cfg(target_os = "windows")]
+        if !self.native_window_initialized {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(handle) = frame.window_handle()
+                && let RawWindowHandle::Win32(handle) = handle.as_raw()
+            {
+                let hwnd = handle.hwnd.get() as isize;
+                crate::platform::windows::register_window_hwnd(hwnd);
+                let _ = crate::platform::windows::set_window_owner(hwnd, self.owner_hwnd);
+                self.native_window_initialized = true;
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = frame;
+            self.native_window_initialized = true;
+        }
+
+        self.apply_appearance(ui.ctx());
+        if crate::ui::dialog::escape_pressed(ui.ctx()) {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+        let close = egui::CentralPanel::default()
+            .show_inside(ui, |ui| {
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::same(12))
+                    .show(ui, |ui| {
+                        draw_native_preferences_surface(&mut self.state, ui)
+                    })
+                    .inner
+            })
+            .inner;
+        self.apply_appearance(ui.ctx());
+        if close {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+}
+
+pub(crate) fn run_native_preferences(owner_hwnd: isize) -> eframe::Result {
+    let config = crate::config::AppConfig::load();
+    crate::platform::interop::set_live_config(config.clone());
+    crate::platform::windows::configure_window_composition(
+        config.windows_dwm_theming,
+        config.windows_mica_backdrop,
+    );
+    let app_name = crate::config::resolved_app_name(&config);
+    let language =
+        crate::config::resolve_language(crate::config::resolved_language_preference(&config));
+    let title = format!(
+        "{} — {app_name}",
+        crate::ui::i18n::tr(language, "Preferences")
+    );
+    let options = eframe::NativeOptions {
+        viewport: native_preferences_viewport(title.clone()),
+        renderer: eframe::Renderer::Glow,
+        vsync: config.opengl_vsync,
+        ..Default::default()
+    };
+    eframe::run_native(
+        &title,
+        options,
+        Box::new(move |creation| {
+            crate::ui::i18n::configure_ui_fonts(
+                &creation.egui_ctx,
+                language == AppLanguage::Persian,
+            );
+            let mut dark_visuals = egui::Visuals::dark();
+            dark_visuals.panel_fill = egui::Color32::from_rgb(33, 33, 33);
+            dark_visuals.window_fill = egui::Color32::from_rgb(26, 26, 26);
+            creation
+                .egui_ctx
+                .set_visuals_of(egui::Theme::Dark, dark_visuals);
+            creation
+                .egui_ctx
+                .set_visuals_of(egui::Theme::Light, egui::Visuals::light());
+            let mut style = (*creation.egui_ctx.global_style()).clone();
+            for font_id in style.text_styles.values_mut() {
+                if font_id.size > 12.0 {
+                    font_id.size = 12.0;
+                }
+            }
+            crate::ui::configure_interaction_style(&mut style);
+            creation.egui_ctx.set_global_style(style);
+            Ok(Box::new(StandalonePreferencesApp {
+                state: NativePreferencesState::from_live_config(),
+                owner_hwnd,
+                native_window_initialized: false,
+                applied_appearance: None,
+            }))
+        }),
+    )
+}
+
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if !app.show_preferences_dialog {
         return;
     }
+
+    if app.native_dialog_windows {
+        if app.native_preferences.is_none() {
+            let owner = app
+                .window_handle
+                .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
+            match NativePreferencesController::spawn(owner) {
+                Ok(controller) => app.native_preferences = Some(controller),
+                Err(error) => {
+                    app.config_status = error;
+                    // Keep Preferences usable even if process creation is blocked.
+                    // This changes only the live fallback, not the persisted choice.
+                    app.native_dialog_windows = false;
+                }
+            }
+        }
+        if app
+            .native_preferences
+            .as_mut()
+            .is_some_and(NativePreferencesController::is_open)
+        {
+            return;
+        }
+        if app.native_dialog_windows {
+            app.show_preferences_dialog = false;
+            app.native_preferences = None;
+            return;
+        }
+    }
+
+    if let Some(mut controller) = app.native_preferences.take() {
+        controller.close();
+    }
+
     let mut open = app.show_preferences_dialog;
     let bounds = ui.ctx().content_rect().shrink(18.0);
     let max_size = egui::vec2(bounds.width().min(700.0), bounds.height().min(620.0));
@@ -39,33 +283,672 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     .resizable(true)
     .movable(true)
     .collapsible(false)
-    .show(ui.ctx(), |ui| {
-        let mut changed = false;
-        // A vertical tab rail plus the minimum useful settings column needs
-        // considerably more than 500 points. Switch before either side starts
-        // squeezing controls into overlapping or single-glyph columns.
-        let narrow = ui.available_width() < 580.0;
-        if narrow {
-            draw_compact_tab_selector(app, ui);
-            ui.separator();
-            draw_preferences_content(app, ui, &mut changed);
-        } else {
-            let content_height = ui.available_height();
-            ui.horizontal_top(|ui| {
-                ui.allocate_ui_with_layout(
-                    egui::vec2(126.0, content_height),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| draw_tabs(app, ui, false),
-                );
-                ui.separator();
-                draw_preferences_content(app, ui, &mut changed);
-            });
+    .show(ui.ctx(), |ui| draw_preferences_surface(app, ui));
+    app.show_preferences_dialog = open;
+}
+
+fn native_tr(language: AppLanguage, key: &'static str) -> String {
+    crate::ui::i18n::tr(crate::config::resolve_language(language), key)
+}
+
+fn save_native_preferences(state: &mut NativePreferencesState, ctx: &egui::Context) {
+    state.config.hardware_endpoint =
+        (!state.endpoint.trim().is_empty()).then(|| state.endpoint.trim().to_string());
+    let proxy = state.proxy_url.trim();
+    let proxy_valid = proxy.is_empty()
+        || url::Url::parse(proxy).is_ok_and(|value| {
+            matches!(value.scheme(), "http" | "https") && value.host_str().is_some()
+        });
+    if !proxy_valid {
+        state.status = native_tr(
+            state.config.language,
+            "Enter a complete HTTP or HTTPS proxy URL.",
+        );
+        return;
+    }
+    state.config.open_url_proxy_url = (!proxy.is_empty()).then(|| proxy.to_string());
+    match state.config.save() {
+        Ok(()) => {
+            crate::platform::interop::set_live_config(state.config.clone());
+            state.status = format!(
+                "{} {}",
+                native_tr(state.config.language, "Saved"),
+                crate::config::AppConfig::get_config_path().display()
+            );
+            ctx.request_repaint_of(egui::ViewportId::ROOT);
         }
-        if changed {
-            app.save_config();
+        Err(error) => state.status = error,
+    }
+}
+
+fn draw_native_preferences_surface(state: &mut NativePreferencesState, ui: &mut egui::Ui) -> bool {
+    let language = crate::config::resolved_language_preference(&state.config);
+    let tr = |key: &'static str| native_tr(language, key);
+    let mut changed = false;
+    let mut close = false;
+
+    let narrow = ui.available_width() < 580.0;
+    if narrow {
+        let (active_icon, active_name) = TABS[state.tab.min(TABS.len() - 1)];
+        egui::ComboBox::from_id_salt("native_preferences_compact_tab")
+            .width(ui.available_width())
+            .selected_text(format!("{active_icon}  {}", tr(active_name)))
+            .show_ui(ui, |ui| {
+                for (index, (icon, name)) in TABS.into_iter().enumerate() {
+                    ui.selectable_value(&mut state.tab, index, format!("{icon}  {}", tr(name)));
+                }
+            });
+        ui.separator();
+    }
+
+    ui.horizontal_top(|ui| {
+        if !narrow {
+            ui.allocate_ui_with_layout(
+                egui::vec2(126.0, ui.available_height()),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.spacing_mut().item_spacing.y = 5.0;
+                    for (index, (icon, name)) in TABS.into_iter().enumerate() {
+                        if ui
+                            .add_sized(
+                                [120.0, 32.0],
+                                egui::Button::new(format!("{icon}  {}", tr(name)))
+                                    .selected(state.tab == index),
+                            )
+                            .clicked()
+                        {
+                            state.tab = index;
+                        }
+                    }
+                },
+            );
+            ui.separator();
+        }
+
+        let detail_width = ui.available_width();
+        crate::ui::dialog::scroll_column(ui, "native_preferences_content", None, |ui| {
+            ui.set_max_width((detail_width - 8.0).max(180.0));
+            ui.spacing_mut().item_spacing.y = 8.0;
+            match state.tab {
+                0 => native_appearance_preferences(state, ui, &tr, &mut changed),
+                1 => native_playback_preferences(state, ui, &tr, &mut changed),
+                2 => native_hardware_preferences(state, ui, &tr, &mut changed),
+                3 => native_input_preferences(state, ui, &tr, &mut changed),
+                _ => native_advanced_preferences(state, ui, &tr, &mut changed),
+            }
+        });
+    });
+
+    if changed {
+        save_native_preferences(state, ui.ctx());
+    }
+
+    ui.separator();
+    ui.horizontal(|ui| {
+        if !state.status.is_empty() {
+            ui.add(egui::Label::new(egui::RichText::new(&state.status).small().weak()).truncate());
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .button(format!("{}  {}", crate::ui::icons::X, tr("Close")))
+                .clicked()
+            {
+                close = true;
+            }
+            if ui
+                .button(format!(
+                    "{}  {}",
+                    crate::ui::icons::FLOPPY_DISK,
+                    tr("Save now")
+                ))
+                .clicked()
+            {
+                save_native_preferences(state, ui.ctx());
+            }
+        });
+    });
+    close || !state.config.native_dialog_windows
+}
+
+fn native_appearance_preferences(
+    state: &mut NativePreferencesState,
+    ui: &mut egui::Ui,
+    tr: &impl Fn(&'static str) -> String,
+    changed: &mut bool,
+) {
+    ui.heading(tr("Appearance and language"));
+    preference_section(ui, crate::ui::icons::SPARKLE, &tr("Interface"), |ui| {
+        preference_grid(ui, "native_appearance_preferences_grid", |ui| {
+            ui.label(tr("Theme"));
+            egui::ComboBox::from_id_salt("native_preferences_theme")
+                .selected_text(match state.config.theme {
+                    AppTheme::System => tr("System"),
+                    AppTheme::Light => tr("Light"),
+                    AppTheme::Dark => tr("Dark"),
+                })
+                .show_ui(ui, |ui| {
+                    for (theme, label) in [
+                        (AppTheme::System, "System"),
+                        (AppTheme::Light, "Light"),
+                        (AppTheme::Dark, "Dark"),
+                    ] {
+                        *changed |= ui
+                            .selectable_value(&mut state.config.theme, theme, tr(label))
+                            .changed();
+                    }
+                });
+            ui.end_row();
+
+            ui.label(tr("Language"));
+            egui::ComboBox::from_id_salt("native_preferences_language")
+                .selected_text(match state.config.language {
+                    AppLanguage::System => tr("System language"),
+                    AppLanguage::English => tr("English"),
+                    AppLanguage::Persian => tr("Persian"),
+                })
+                .show_ui(ui, |ui| {
+                    for (value, label) in [
+                        (AppLanguage::System, "System language"),
+                        (AppLanguage::English, "English"),
+                        (AppLanguage::Persian, "Persian"),
+                    ] {
+                        *changed |= ui
+                            .selectable_value(&mut state.config.language, value, tr(label))
+                            .changed();
+                    }
+                });
+            ui.end_row();
+
+            ui.label(tr("Fullscreen background"));
+            egui::ComboBox::from_id_salt("native_fullscreen_background")
+                .selected_text(match state.config.fullscreen_video_background {
+                    VideoBackground::Black => tr("Black"),
+                    VideoBackground::DarkGray => tr("Dark gray"),
+                    VideoBackground::Theme => tr("Use app theme"),
+                })
+                .show_ui(ui, |ui| {
+                    for (value, label) in [
+                        (VideoBackground::Black, "Black"),
+                        (VideoBackground::DarkGray, "Dark gray"),
+                        (VideoBackground::Theme, "Use app theme"),
+                    ] {
+                        *changed |= ui
+                            .selectable_value(
+                                &mut state.config.fullscreen_video_background,
+                                value,
+                                tr(label),
+                            )
+                            .changed();
+                    }
+                });
+            ui.end_row();
+        });
+    });
+    preference_section(
+        ui,
+        crate::ui::icons::MONITOR_PLAY,
+        &tr("On-screen display"),
+        |ui| {
+            preference_grid(ui, "native_osd_preferences_grid", |ui| {
+                ui.label(tr("Position"));
+                egui::ComboBox::from_id_salt("native_osd_position")
+                    .selected_text(match state.config.osd_position {
+                        OsdPosition::TopLeft => tr("Top left"),
+                        OsdPosition::Center => tr("Center"),
+                    })
+                    .show_ui(ui, |ui| {
+                        *changed |= ui
+                            .selectable_value(
+                                &mut state.config.osd_position,
+                                OsdPosition::TopLeft,
+                                tr("Top left"),
+                            )
+                            .changed();
+                        *changed |= ui
+                            .selectable_value(
+                                &mut state.config.osd_position,
+                                OsdPosition::Center,
+                                tr("Center"),
+                            )
+                            .changed();
+                    });
+                ui.end_row();
+            });
+            *changed |= ui
+                .add(
+                    egui::Slider::new(&mut state.config.osd_timeout_seconds, 1.0..=12.0)
+                        .text(tr("OSD timeout (seconds)")),
+                )
+                .changed();
+        },
+    );
+}
+
+fn native_playback_preferences(
+    state: &mut NativePreferencesState,
+    ui: &mut egui::Ui,
+    tr: &impl Fn(&'static str) -> String,
+    changed: &mut bool,
+) {
+    ui.heading(tr("Playback behavior"));
+    preference_section(ui, crate::ui::icons::PLAY, &tr("Player controls"), |ui| {
+        *changed |= ui
+            .checkbox(
+                &mut state.config.click_player_to_toggle,
+                tr("Single-click the picture to play or pause"),
+            )
+            .changed();
+        *changed |= ui
+            .checkbox(
+                &mut state.config.show_subseconds,
+                tr("Show milliseconds in time displays"),
+            )
+            .changed();
+        *changed |= ui
+            .add(
+                egui::Slider::new(&mut state.config.quick_seek_seconds, 0.1..=600.0)
+                    .logarithmic(true)
+                    .text(tr("Skip button and arrow-key step (seconds)")),
+            )
+            .changed();
+        *changed |= ui
+            .add(
+                egui::Slider::new(&mut state.config.frame_step_count, 1..=120)
+                    .text(tr("Frames per frame-step action")),
+            )
+            .changed();
+        *changed |= ui
+            .add(
+                egui::Slider::new(&mut state.config.wheel_seek_seconds, 0.1..=60.0)
+                    .logarithmic(true)
+                    .text(tr("Mouse-wheel seek step (seconds)")),
+            )
+            .changed();
+    });
+    preference_section(
+        ui,
+        crate::ui::icons::LINK_SIMPLE,
+        &tr("Open Location / URL"),
+        |ui| {
+            *changed |= ui
+                .checkbox(
+                    &mut state.config.open_url_multiline,
+                    tr("Wrap long URLs in a text area"),
+                )
+                .changed();
+            *changed |= ui
+                .checkbox(
+                    &mut state.config.open_url_history_expanded,
+                    tr("Expand recent URL history by default"),
+                )
+                .changed();
+            let mut play_recent = !state.config.open_url_recent_click_edits;
+            if ui
+                .checkbox(
+                    &mut play_recent,
+                    tr("Play when a recent location is clicked"),
+                )
+                .changed()
+            {
+                state.config.open_url_recent_click_edits = !play_recent;
+                *changed = true;
+            }
+            *changed |= ui
+                .checkbox(
+                    &mut state.config.open_url_use_proxy,
+                    tr("Use a proxy for remote inspection and playback"),
+                )
+                .changed();
+            ui.label(tr("Custom proxy URL"));
+            ui.add(
+                egui::TextEdit::singleline(&mut state.proxy_url)
+                    .desired_width(ui.available_width())
+                    .hint_text("http://proxy.example:8080"),
+            );
+            let proxy = state.proxy_url.trim();
+            if !proxy.is_empty()
+                && !url::Url::parse(proxy).is_ok_and(|value| {
+                    matches!(value.scheme(), "http" | "https") && value.host_str().is_some()
+                })
+            {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    tr("Enter a complete HTTP or HTTPS proxy URL."),
+                );
+            }
+            let remote_count = state
+                .config
+                .recent_media
+                .iter()
+                .filter(|path| crate::media::is_remote_media_target(&path.to_string_lossy()))
+                .count();
+            if ui
+                .add_enabled(
+                    remote_count > 0,
+                    egui::Button::new(format!(
+                        "{}  {} ({remote_count})",
+                        crate::ui::icons::TRASH,
+                        tr("Clear remote history")
+                    )),
+                )
+                .clicked()
+            {
+                state
+                    .config
+                    .recent_media
+                    .retain(|path| !crate::media::is_remote_media_target(&path.to_string_lossy()));
+                *changed = true;
+            }
+        },
+    );
+}
+
+fn native_hardware_preferences(
+    state: &mut NativePreferencesState,
+    ui: &mut egui::Ui,
+    tr: &impl Fn(&'static str) -> String,
+    changed: &mut bool,
+) {
+    ui.heading(tr("PCController and hardware"));
+    preference_section(ui, crate::ui::icons::PLUG, &tr("Connection"), |ui| {
+        *changed |= ui
+            .checkbox(
+                &mut state.config.auto_connect_hardware,
+                tr("Discover and connect to PCController on startup"),
+            )
+            .changed();
+        *changed |= ui
+            .checkbox(
+                &mut state.config.pause_on_hardware_disconnect,
+                tr("Pause playback when hardware disconnects unexpectedly"),
+            )
+            .changed();
+        ui.label(tr("Preferred endpoint"));
+        if ui
+            .add(
+                egui::TextEdit::singleline(&mut state.endpoint)
+                    .desired_width(ui.available_width())
+                    .hint_text(tr(
+                        "pccontroller://host:port, tcp://host:port, or direct:<device>",
+                    )),
+            )
+            .changed()
+        {
+            *changed = true;
         }
     });
-    app.show_preferences_dialog = open;
+    preference_section(ui, crate::ui::icons::SEAT, &tr("Motion controls"), |ui| {
+        preference_grid(ui, "native_motion_control_preferences", |ui| {
+            ui.label(tr("Button behavior"));
+            egui::ComboBox::from_id_salt("native_motion_control_mode")
+                .selected_text(match state.config.motion_control_mode {
+                    MotionControlMode::Toggle => tr("Toggle on press"),
+                    MotionControlMode::Hold => tr("Run only while held"),
+                })
+                .show_ui(ui, |ui| {
+                    *changed |= ui
+                        .selectable_value(
+                            &mut state.config.motion_control_mode,
+                            MotionControlMode::Toggle,
+                            tr("Toggle on press"),
+                        )
+                        .changed();
+                    *changed |= ui
+                        .selectable_value(
+                            &mut state.config.motion_control_mode,
+                            MotionControlMode::Hold,
+                            tr("Run only while held"),
+                        )
+                        .changed();
+                });
+            ui.end_row();
+        });
+        *changed |= ui
+            .checkbox(
+                &mut state.config.compact_hardware_controls,
+                tr("Use one-row compact hardware controls"),
+            )
+            .changed();
+    });
+}
+
+fn native_input_preferences(
+    state: &mut NativePreferencesState,
+    ui: &mut egui::Ui,
+    tr: &impl Fn(&'static str) -> String,
+    changed: &mut bool,
+) {
+    ui.heading(tr("Mouse and gesture bindings"));
+    preference_section(
+        ui,
+        crate::ui::icons::SELECTION_ALL,
+        &tr("Video surface"),
+        |ui| {
+            *changed |= drag_action_selector(
+                ui,
+                tr("Drag while paused"),
+                &mut state.config.paused_drag_action,
+            );
+            *changed |= drag_action_selector(
+                ui,
+                tr("Drag while playing"),
+                &mut state.config.playing_drag_action,
+            );
+        },
+    );
+}
+
+fn native_advanced_preferences(
+    state: &mut NativePreferencesState,
+    ui: &mut egui::Ui,
+    tr: &impl Fn(&'static str) -> String,
+    changed: &mut bool,
+) {
+    ui.heading(tr("Configuration"));
+    preference_section(
+        ui,
+        crate::ui::icons::APP_WINDOW,
+        &tr("Application instance"),
+        |ui| {
+            *changed |= ui
+                .checkbox(
+                    &mut state.config.single_instance,
+                    tr("Use a single application instance"),
+                )
+                .changed();
+        },
+    );
+    preference_section(
+        ui,
+        crate::ui::icons::FILE_VIDEO,
+        &tr("File associations"),
+        |ui| {
+            let registered = crate::platform::associations::SUPPORTED_EXTENSIONS
+                .iter()
+                .filter(|extension| {
+                    crate::platform::associations::is_file_association_registered(extension)
+                })
+                .count();
+            ui.label(format!(
+                "{}: {registered}/{}",
+                tr("Registered media types"),
+                crate::platform::associations::SUPPORTED_EXTENSIONS.len()
+            ));
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .button(format!(
+                        "{}  {}",
+                        crate::ui::icons::CHECK_SQUARE,
+                        tr("Register as a media player")
+                    ))
+                    .clicked()
+                {
+                    state.status =
+                        match crate::platform::associations::register_file_associations(None) {
+                            Ok(count) => format!("{}: {count}", tr("Registered media types")),
+                            Err(error) => error,
+                        };
+                }
+                if ui
+                    .add_enabled(
+                        registered > 0,
+                        egui::Button::new(format!(
+                            "{}  {}",
+                            crate::ui::icons::X,
+                            tr("Remove file associations")
+                        )),
+                    )
+                    .clicked()
+                {
+                    state.status =
+                        match crate::platform::associations::unregister_file_associations() {
+                            Ok(count) => format!("{}: {count}", tr("Removed media types")),
+                            Err(error) => error,
+                        };
+                }
+            });
+        },
+    );
+    preference_section(
+        ui,
+        crate::ui::icons::APP_WINDOW,
+        &tr("Windows graphics and composition"),
+        |ui| {
+            *changed |= ui
+                .checkbox(
+                    &mut state.config.windows_dwm_theming,
+                    tr("Use DWM title-bar theming"),
+                )
+                .changed();
+            *changed |= ui
+                .checkbox(
+                    &mut state.config.windows_mica_backdrop,
+                    tr("Use Mica backdrop (may flicker with some OpenGL drivers)"),
+                )
+                .changed();
+            *changed |= ui
+                .checkbox(
+                    &mut state.config.opengl_vsync,
+                    tr("Use OpenGL vertical sync"),
+                )
+                .changed();
+        },
+    );
+    preference_section(
+        ui,
+        crate::ui::icons::APP_WINDOW,
+        &tr("Dialog windows"),
+        |ui| {
+            *changed |= ui
+                .checkbox(
+                    &mut state.config.native_dialog_windows,
+                    tr("Open supported dialogs in separate OS windows"),
+                )
+                .changed();
+            ui.label(
+            egui::RichText::new(tr(
+                "Preferences runs as an independent owned tool window so the player stays responsive.",
+            ))
+            .small()
+            .weak(),
+        );
+        },
+    );
+    preference_section(ui, crate::ui::icons::GAUGE, &tr("Status bar"), |ui| {
+        *changed |= ui
+            .checkbox(
+                &mut state.config.status_bar.hardware,
+                tr("Hardware connection"),
+            )
+            .changed();
+        *changed |= ui
+            .checkbox(
+                &mut state.config.status_bar.status_rgb,
+                tr("Physical status RGB"),
+            )
+            .changed();
+        *changed |= ui
+            .checkbox(
+                &mut state.config.status_bar.warnings,
+                tr("Hardware warnings"),
+            )
+            .changed();
+        *changed |= ui
+            .checkbox(&mut state.config.status_bar.media_rate, tr("Media rate"))
+            .changed();
+        *changed |= ui
+            .checkbox(&mut state.config.status_bar.telemetry, tr("Telemetry"))
+            .changed();
+        *changed |= ui
+            .checkbox(&mut state.config.status_bar.workspace, tr("Workspace mode"))
+            .changed();
+    });
+    preference_section(
+        ui,
+        crate::ui::icons::FLOPPY_DISK,
+        &tr("Config file"),
+        |ui| {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(
+                        crate::config::AppConfig::get_config_path()
+                            .display()
+                            .to_string(),
+                    )
+                    .monospace(),
+                )
+                .wrap()
+                .selectable(true),
+            );
+            if ui
+                .button(format!(
+                    "{}  {}",
+                    crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                    tr("Reload from disk")
+                ))
+                .clicked()
+            {
+                match crate::config::AppConfig::load_from_path(
+                    &crate::config::AppConfig::get_config_path(),
+                ) {
+                    Ok(config) => {
+                        state.endpoint = config.hardware_endpoint.clone().unwrap_or_default();
+                        state.proxy_url = config.open_url_proxy_url.clone().unwrap_or_default();
+                        state.config = config;
+                        state.status = tr("Preferences reloaded from disk");
+                    }
+                    Err(error) => state.status = error,
+                }
+            }
+        },
+    );
+}
+
+fn draw_preferences_surface(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    let mut changed = false;
+    // A vertical tab rail plus the minimum useful settings column needs
+    // considerably more than 500 points. Switch before either side starts
+    // squeezing controls into overlapping or single-glyph columns.
+    let narrow = ui.available_width() < 580.0;
+    if narrow {
+        draw_compact_tab_selector(app, ui);
+        ui.separator();
+        draw_preferences_content(app, ui, &mut changed);
+    } else {
+        let content_height = ui.available_height();
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(126.0, content_height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| draw_tabs(app, ui, false),
+            );
+            ui.separator();
+            draw_preferences_content(app, ui, &mut changed);
+        });
+    }
+    if changed {
+        app.save_config();
+    }
 }
 
 fn draw_tabs(app: &mut PealayerApp, ui: &mut egui::Ui, compact: bool) {
@@ -624,6 +1507,30 @@ fn advanced_preferences(app: &mut PealayerApp, ui: &mut egui::Ui) {
             }
         },
     );
+    preference_section(
+        ui,
+        crate::ui::icons::APP_WINDOW,
+        &app.tr("Dialog windows"),
+        |ui| {
+            let label = app.tr("Open supported dialogs in separate OS windows");
+            if ui
+                .checkbox(&mut app.native_dialog_windows, label)
+                .on_hover_text(
+                    app.tr("Allows supported dialogs to move outside the main application window."),
+                )
+                .changed()
+            {
+                app.save_config();
+            }
+            ui.label(
+                egui::RichText::new(app.tr(
+                    "Preferences runs as an independent owned tool window so the player stays responsive.",
+                ))
+                .small()
+                .weak(),
+            );
+        },
+    );
     preference_section(ui, crate::ui::icons::GAUGE, &app.tr("Status bar"), |ui| {
         let hardware_label = app.tr("Hardware connection");
         let rgb_label = app.tr("Physical status RGB");
@@ -771,5 +1678,34 @@ fn drag_action_name(action: PlayerDragAction) -> &'static str {
         PlayerDragAction::Seek => "Seek",
         PlayerDragAction::TemporaryFastForward => "Temporary fast-forward",
         PlayerDragAction::None => "No action",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preferences_helper_bypasses_the_primary_single_instance_path() {
+        let args = vec![
+            "pealayer.exe".to_string(),
+            "--preferences-helper".to_string(),
+            "12345".to_string(),
+        ];
+        assert_eq!(preferences_helper_owner(&args), Some(12345));
+        assert_eq!(
+            preferences_helper_owner(&["pealayer.exe".to_string()]),
+            None
+        );
+    }
+
+    #[test]
+    fn native_preferences_use_owned_tool_window_chrome() {
+        let builder = native_preferences_viewport("Preferences — Pealayer".to_string());
+        assert_eq!(builder.taskbar, Some(false));
+        assert_eq!(builder.decorations, Some(true));
+        assert_eq!(builder.minimize_button, Some(false));
+        assert_eq!(builder.maximize_button, Some(false));
+        assert_eq!(builder.resizable, Some(true));
     }
 }

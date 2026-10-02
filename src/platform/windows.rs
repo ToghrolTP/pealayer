@@ -174,6 +174,25 @@ pub fn get_registered_hwnd() -> isize {
     WINDOW_HWND.load(Ordering::SeqCst)
 }
 
+#[cfg(target_os = "windows")]
+pub fn set_window_owner(hwnd_raw: isize, owner_raw: isize) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{GWLP_HWNDPARENT, SetWindowLongPtrW};
+
+    if hwnd_raw == 0 || owner_raw == 0 {
+        return Ok(());
+    }
+    unsafe {
+        SetWindowLongPtrW(HWND(hwnd_raw as *mut _), GWLP_HWNDPARENT, owner_raw);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_window_owner(_hwnd_raw: isize, _owner_raw: isize) -> Result<(), String> {
+    Ok(())
+}
+
 pub fn set_window_theme(dark: bool) {
     let previous = WINDOW_DARK_THEME.swap(dark, Ordering::SeqCst);
     let hwnd = get_registered_hwnd();
@@ -202,6 +221,21 @@ fn decoration_colors(dark: bool) -> (u32, u32) {
 
 #[cfg(target_os = "windows")]
 pub fn apply_windows_window_decorations(hwnd_raw: isize) {
+    apply_windows_window_decorations_with(
+        hwnd_raw,
+        WINDOW_DARK_THEME.load(Ordering::SeqCst),
+        WINDOW_DWM_THEMING.load(Ordering::SeqCst),
+        WINDOW_MICA_BACKDROP.load(Ordering::SeqCst),
+    );
+}
+
+#[cfg(target_os = "windows")]
+fn apply_windows_window_decorations_with(
+    hwnd_raw: isize,
+    dark: bool,
+    dwm_theming: bool,
+    mica_backdrop: bool,
+) {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE;
     use windows::Win32::Graphics::Dwm::{
@@ -214,9 +248,6 @@ pub fn apply_windows_window_decorations(hwnd_raw: isize) {
         return;
     }
     let hwnd = HWND(hwnd_raw as *mut _);
-    let dark = WINDOW_DARK_THEME.load(Ordering::SeqCst);
-    let dwm_theming = WINDOW_DWM_THEMING.load(Ordering::SeqCst);
-    let mica_backdrop = WINDOW_MICA_BACKDROP.load(Ordering::SeqCst);
     let (caption_color, text_color) = decoration_colors(dark);
 
     unsafe {

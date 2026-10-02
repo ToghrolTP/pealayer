@@ -275,6 +275,10 @@ pub struct PealayerApp {
     pub(crate) show_board_info_dialog: bool,
     pub(crate) board_info_tab: usize,
     pub(crate) board_name_draft: String,
+    pub(crate) hardware_control_dialog_key: Option<String>,
+    pub(crate) hardware_control_name_draft: String,
+    pub(crate) hardware_control_group_draft: String,
+    pub(crate) hardware_control_pwm_percent: f64,
     pub(crate) board_operation: Option<String>,
     pub(crate) board_operation_status: String,
     pub(crate) board_reboot_armed: bool,
@@ -297,6 +301,8 @@ pub struct PealayerApp {
     pub(crate) windows_mica_backdrop: bool,
     pub(crate) windows_dwm_theming: bool,
     pub(crate) opengl_vsync: bool,
+    pub(crate) native_dialog_windows: bool,
+    pub(crate) native_preferences: Option<crate::ui::preferences::NativePreferencesController>,
     pub(crate) status_bar: crate::config::StatusBarConfig,
     pub(crate) config_fingerprint: Option<u64>,
     pub(crate) last_config_poll: std::time::Instant,
@@ -1011,6 +1017,7 @@ impl eframe::App for PealayerApp {
                 crate::ui::preferences::draw(self, ui);
                 crate::ui::effects_library::draw_editor(self, ui);
                 crate::ui::board_info::draw(self, ui);
+                crate::ui::hardware_control::draw(self, ui);
 
                 crate::ui::open_url::draw(self, ui);
 
@@ -1448,6 +1455,16 @@ impl PealayerApp {
         )
     }
 
+    pub(crate) fn stop_controller_effect(&mut self, reference: &str) -> Result<(), String> {
+        if reference.trim().is_empty() {
+            return Err("Select a PCController effect first".to_string());
+        }
+        self.request_hardware_effect_command(
+            "effect-stop",
+            format!("effect stop {}", reference.trim()),
+        )
+    }
+
     fn request_board_operation(
         &mut self,
         operation: &str,
@@ -1719,6 +1736,11 @@ impl PealayerApp {
             InteropCommand::Restore => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            InteropCommand::OpenPreferences => {
+                self.show_preferences_dialog = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
             InteropCommand::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
@@ -2557,6 +2579,7 @@ impl PealayerApp {
         cfg.windows_mica_backdrop = self.windows_mica_backdrop;
         cfg.windows_dwm_theming = self.windows_dwm_theming;
         cfg.opengl_vsync = self.opengl_vsync;
+        cfg.native_dialog_windows = self.native_dialog_windows;
         cfg.status_bar = self.status_bar;
         cfg.window_geometry = self.window_geometry;
         let mut dock_state = self.dock_state.clone();
@@ -2637,6 +2660,7 @@ impl PealayerApp {
         self.windows_mica_backdrop = config.windows_mica_backdrop;
         self.windows_dwm_theming = config.windows_dwm_theming;
         self.opengl_vsync = config.opengl_vsync;
+        self.native_dialog_windows = config.native_dialog_windows;
         self.status_bar = config.status_bar;
         crate::platform::windows::configure_window_composition(
             self.windows_dwm_theming,
@@ -3115,6 +3139,10 @@ impl Default for PealayerApp {
             show_board_info_dialog: false,
             board_info_tab: 0,
             board_name_draft: String::new(),
+            hardware_control_dialog_key: None,
+            hardware_control_name_draft: String::new(),
+            hardware_control_group_draft: String::new(),
+            hardware_control_pwm_percent: 0.0,
             board_operation: None,
             board_operation_status: String::new(),
             board_reboot_armed: false,
@@ -3137,6 +3165,8 @@ impl Default for PealayerApp {
             windows_mica_backdrop: false,
             windows_dwm_theming: true,
             opengl_vsync: false,
+            native_dialog_windows: false,
+            native_preferences: None,
             status_bar: crate::config::StatusBarConfig::default(),
             config_fingerprint: crate::config::AppConfig::fingerprint(
                 &crate::config::AppConfig::get_config_path(),

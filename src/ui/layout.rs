@@ -57,6 +57,63 @@ fn begin_effect_drag(ctx: &egui::Context, payload: EffectDragPayload) {
     egui::DragAndDrop::set_payload(ctx, payload);
 }
 
+fn take_effect_drop_on_rect(
+    ctx: &egui::Context,
+    rect: egui::Rect,
+) -> Option<std::sync::Arc<EffectDragPayload>> {
+    let released_inside = ctx.input(|input| {
+        input.pointer.any_released()
+            && input
+                .pointer
+                .latest_pos()
+                .is_some_and(|position| rect.contains(position))
+    });
+    released_inside.then(|| egui::DragAndDrop::take_payload::<EffectDragPayload>(ctx))?
+}
+
+fn effect_preset_reference(preset: &crate::app::EffectPreset) -> Option<String> {
+    match preset.source {
+        crate::app::EffectPresetSource::ControllerMacro(id) => Some(format!("sequence:{id}")),
+        crate::app::EffectPresetSource::ControllerStrip => preset
+            .effect
+            .controller_strip_effect
+            .as_ref()
+            .map(|effect| effect.id.trim())
+            .filter(|id| !id.is_empty())
+            .map(|id| format!("strip:{id}")),
+    }
+}
+
+fn secondary_click_inside(ctx: &egui::Context, rect: egui::Rect) -> bool {
+    ctx.input(|input| {
+        input
+            .pointer
+            .button_released(egui::PointerButton::Secondary)
+            && input
+                .pointer
+                .latest_pos()
+                .is_some_and(|position| rect.contains(position))
+    })
+}
+
+fn remember_effect_drag_offset_on_press(
+    ctx: &egui::Context,
+    rect: egui::Rect,
+    offset_id: egui::Id,
+) {
+    let press_origin = ctx.input(|input| {
+        input
+            .pointer
+            .primary_down()
+            .then(|| input.pointer.press_origin())
+            .flatten()
+            .filter(|position| rect.contains(*position))
+    });
+    if let Some(position) = press_origin {
+        ctx.data_mut(|data| data.insert_temp(offset_id, position - rect.min));
+    }
+}
+
 fn effect_drag_source<R>(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -64,10 +121,23 @@ fn effect_drag_source<R>(
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<R> {
     let offset_id = id.with("pointer-offset");
+    let source_rect_id = id.with("source-rect");
+    // A `Sense::drag` response may be promoted to the active drag before this
+    // function gets another chance to lay out the normal card. Keep the last
+    // laid-out source rect so the press frame can always record the grab point
+    // before branching on `is_being_dragged`.
+    if let Some(source_rect) = ui.data_mut(|data| data.get_temp::<egui::Rect>(source_rect_id)) {
+        remember_effect_drag_offset_on_press(ui.ctx(), source_rect, offset_id);
+    }
     if ui.ctx().is_being_dragged(id) {
         egui::DragAndDrop::set_payload(ui.ctx(), payload);
         let layer_id = egui::LayerId::new(egui::Order::Tooltip, id);
-        let response = ui.scope_builder(egui::UiBuilder::new().layer_id(layer_id), add_contents);
+        let response = ui.scope_builder(egui::UiBuilder::new().layer_id(layer_id), |ui| {
+            // A drag preview must remain visible after leaving the narrow
+            // Effects Library ScrollArea.
+            ui.set_clip_rect(ui.ctx().content_rect());
+            add_contents(ui)
+        });
         if let Some(pointer) = ui.ctx().pointer_interact_pos() {
             let offset = ui
                 .data_mut(|data| data.get_temp::<egui::Vec2>(offset_id))
@@ -78,9 +148,16 @@ fn effect_drag_source<R>(
                 egui::emath::TSTransform::from_translation(translation),
             );
         }
+        ui.data_mut(|data| data.insert_temp(source_rect_id, response.response.rect));
         response
     } else {
         let response = ui.scope(add_contents);
+        // Capture the exact grab point on mouse-down, before egui promotes the
+        // gesture to a drag on a later frame. Recording this only from
+        // `drag_started()` is too late: by then this function can already be in
+        // the active-drag branch and the preview falls back to its center.
+        remember_effect_drag_offset_on_press(ui.ctx(), response.response.rect, offset_id);
+        ui.data_mut(|data| data.insert_temp(source_rect_id, response.response.rect));
         let drag = ui
             .interact(response.response.rect, id, egui::Sense::drag())
             .on_hover_cursor(egui::CursorIcon::Grab);
@@ -88,14 +165,8 @@ fn effect_drag_source<R>(
             // Establish the payload in the same input frame in which egui
             // claims the drag. Waiting until the next paint left a race where
             // the pointer could enter (and even be released over) the timeline
-            // before any drop payload existed, so the cards looked draggable
-            // but every drop was ignored.
+            // before any drop payload existed.
             begin_effect_drag(ui.ctx(), payload);
-            if let Some(pointer) = ui.ctx().pointer_interact_pos() {
-                ui.data_mut(|data| {
-                    data.insert_temp(offset_id, pointer - response.response.rect.min)
-                });
-            }
         }
         egui::InnerResponse::new(response.inner, drag | response.response)
     }
@@ -297,7 +368,7 @@ fn humanize_machine_label(value: &str) -> String {
         .join(" ")
 }
 
-fn update_control_name(
+pub(crate) fn update_control_name(
     app: &PealayerApp,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
@@ -333,7 +404,7 @@ fn update_control_name(
     );
 }
 
-fn update_control_group(
+pub(crate) fn update_control_group(
     app: &PealayerApp,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
@@ -446,6 +517,180 @@ fn motion_control_is_active(
         capabilities.active_relays.contains(&relay.id)
             && side.is_none_or(|aliases| aliases.iter().any(|alias| role.contains(alias)))
     })
+}
+
+fn open_control_dialog(
+    app: &mut PealayerApp,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+) {
+    app.hardware_control_dialog_key = Some(control.key.clone());
+    app.hardware_control_name_draft = control.name.clone();
+    app.hardware_control_group_draft = control.group.clone();
+    app.hardware_control_pwm_percent = capabilities
+        .pwm_channels
+        .iter()
+        .find(|channel| channel.key == control.key)
+        .and_then(|channel| {
+            (capabilities.telemetry.pwm_channel == Some(channel.id))
+                .then_some(capabilities.telemetry.pwm_value.unwrap_or(0))
+        })
+        .map(pwm_percent)
+        .unwrap_or(0.0);
+}
+
+fn draw_control_context_menu(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+    edit_id: egui::Id,
+    draft_id: egui::Id,
+    group_edit_id: egui::Id,
+    group_draft_id: egui::Id,
+) {
+    ui.horizontal(|ui| {
+        ui.label(crate::ui::icons::control(&control.kind, &control.icon));
+        ui.strong(crate::ui::i18n::visual_text(app.language, &control.name));
+    });
+    ui.label(egui::RichText::new(&control.key).monospace().weak().small());
+    ui.separator();
+
+    if ui
+        .button(format!(
+            "{} {}",
+            crate::ui::icons::SLIDERS_HORIZONTAL,
+            app.tr("Details and control...")
+        ))
+        .clicked()
+    {
+        open_control_dialog(app, capabilities, control);
+        ui.close();
+    }
+
+    if !control.actions.is_empty() {
+        crate::ui::icons::submenu(
+            ui,
+            format!("{} {}", crate::ui::icons::PLAY, app.tr("Actions")),
+            |ui| {
+                for action in &control.actions {
+                    if ui
+                        .add_enabled(
+                            !app.estop_active,
+                            egui::Button::new(format!(
+                                "{} {}",
+                                crate::ui::icons::action(&action.verb),
+                                crate::ui::i18n::visual_text(app.language, &action.name)
+                            )),
+                        )
+                        .clicked()
+                    {
+                        invoke_control_action(app, &action.id);
+                        ui.close();
+                    }
+                }
+            },
+        );
+    } else if let Some(relay_id) = relay_id_from_control_key(&control.key) {
+        for (state, icon, label) in [
+            (true, crate::ui::icons::LIGHTNING, app.tr("Turn on")),
+            (false, crate::ui::icons::STOP_CIRCLE, app.tr("Turn off")),
+        ] {
+            if ui
+                .add_enabled(
+                    !app.estop_active,
+                    egui::Button::new(format!("{icon} {label}")),
+                )
+                .clicked()
+            {
+                let _ = app.engine_handle.sender.send(
+                    crate::four_d::engine::EngineMessage::ControllerCall {
+                        method: "controller.command.execute".to_string(),
+                        params: serde_json::json!({
+                            "command": format!("relay {relay_id} {}", if state { "on" } else { "off" })
+                        }),
+                    },
+                );
+                ui.close();
+            }
+        }
+    }
+
+    ui.separator();
+    if ui
+        .button(format!(
+            "{} {}",
+            crate::ui::icons::PENCIL_SIMPLE,
+            app.tr("Rename")
+        ))
+        .clicked()
+    {
+        ui.data_mut(|data| {
+            data.insert_temp(draft_id, control.name.clone());
+            data.insert_temp(edit_id, true);
+        });
+        ui.close();
+    }
+    if ui
+        .button(format!(
+            "{} {}",
+            crate::ui::icons::FOLDER_OPEN,
+            app.tr("Change group")
+        ))
+        .clicked()
+    {
+        ui.data_mut(|data| {
+            data.insert_temp(group_draft_id, control.group.clone());
+            data.insert_temp(group_edit_id, true);
+        });
+        ui.close();
+    }
+    if !control.default_name.is_empty()
+        && control.name != control.default_name
+        && ui
+            .button(format!(
+                "{} {}",
+                crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                app.tr("Restore default name")
+            ))
+            .clicked()
+    {
+        update_control_name(app, capabilities, control, String::new());
+        ui.close();
+    }
+}
+
+fn control_context_popup(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    card_response: &egui::Response,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+    edit_id: egui::Id,
+    draft_id: egui::Id,
+    group_edit_id: egui::Id,
+    group_draft_id: egui::Id,
+) {
+    // Read the pointer directly instead of relying on the frame response. Child
+    // buttons and labels own their own responses, so a normal context_menu on
+    // the frame only worked in its empty padding and appeared to be missing.
+    let open = secondary_click_inside(ui.ctx(), card_response.rect);
+    egui::Popup::menu(card_response)
+        .id(ui.make_persistent_id(("hardware-control-context", control.key.as_str())))
+        .at_pointer_fixed()
+        .open_memory(open.then_some(egui::SetOpenCommand::Bool(true)))
+        .show(|ui| {
+            draw_control_context_menu(
+                app,
+                ui,
+                capabilities,
+                control,
+                edit_id,
+                draft_id,
+                group_edit_id,
+                group_draft_id,
+            );
+        });
 }
 
 fn responsive_action_label(
@@ -693,43 +938,17 @@ fn draw_compact_control_card(
             });
         });
 
-    card.response.context_menu(|ui| {
-        if ui
-            .button(format!(
-                "{} {}",
-                crate::ui::icons::PENCIL_SIMPLE,
-                app.tr("Rename")
-            ))
-            .clicked()
-        {
-            ui.data_mut(|data| {
-                data.insert_temp(draft_id, control.name.clone());
-                data.insert_temp(edit_id, true);
-            });
-            ui.close();
-        }
-        if ui
-            .button(format!(
-                "{} {}",
-                crate::ui::icons::FOLDER_OPEN,
-                app.tr("Change group")
-            ))
-            .clicked()
-        {
-            ui.data_mut(|data| {
-                data.insert_temp(group_draft_id, control.group.clone());
-                data.insert_temp(group_edit_id, true);
-            });
-            ui.close();
-        }
-        if !control.default_name.is_empty()
-            && control.name != control.default_name
-            && ui.button(app.tr("Restore default name")).clicked()
-        {
-            update_control_name(app, capabilities, control, String::new());
-            ui.close();
-        }
-    });
+    control_context_popup(
+        app,
+        ui,
+        &card.response,
+        capabilities,
+        control,
+        edit_id,
+        draft_id,
+        group_edit_id,
+        group_draft_id,
+    );
 }
 
 fn draw_control_card(
@@ -1042,42 +1261,17 @@ fn draw_control_card(
             }
         });
 
-    // Use the frame's own response for the context menu. A second full-card
-    // interaction layer would sit above and steal clicks from every child.
-    card.response.context_menu(|ui| {
-        if ui
-            .button(format!(
-                "{} {}",
-                crate::ui::icons::PENCIL_SIMPLE,
-                app.tr("Rename")
-            ))
-            .clicked()
-        {
-            ui.data_mut(|data| data.insert_temp(edit_id, true));
-            ui.close();
-        }
-        if ui
-            .button(format!(
-                "{} {}",
-                crate::ui::icons::FOLDER_OPEN,
-                app.tr("Change group")
-            ))
-            .clicked()
-        {
-            ui.data_mut(|data| {
-                data.insert_temp(group_draft_id, control.group.clone());
-                data.insert_temp(group_edit_id, true);
-            });
-            ui.close();
-        }
-        if !control.default_name.is_empty()
-            && control.name != control.default_name
-            && ui.button(app.tr("Restore default name")).clicked()
-        {
-            update_control_name(app, capabilities, control, String::new());
-            ui.close();
-        }
-    });
+    control_context_popup(
+        app,
+        ui,
+        &card.response,
+        capabilities,
+        control,
+        edit_id,
+        draft_id,
+        group_edit_id,
+        group_draft_id,
+    );
 }
 
 fn draw_control_card_grid(
@@ -1231,6 +1425,61 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn effect_card_captures_grab_offset_on_press_before_drag_promotion() {
+        let context = egui::Context::default();
+        let payload = EffectDragPayload {
+            name: "Seat rise".to_string(),
+            icon: String::new(),
+            duration_ms: 750,
+            target: crate::four_d::models::HardwareTarget::ControllerMacro,
+            actions: Vec::new(),
+            controller_macro: None,
+            controller_strip_effect: None,
+        };
+        let source = std::cell::Cell::new(egui::Rect::NOTHING);
+        let id = egui::Id::new("press-offset-effect-card");
+        let render = |events: Vec<egui::Event>| {
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(360.0, 180.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    source.set(
+                        effect_drag_source(ui, id, payload.clone(), |ui| {
+                            ui.add_sized([180.0, 48.0], egui::Label::new("Seat rise"))
+                        })
+                        .response
+                        .rect,
+                    );
+                },
+            );
+            drop(output);
+        };
+
+        render(Vec::new());
+        let grab_offset = egui::vec2(23.0, 9.0);
+        let press = source.get().min + grab_offset;
+        render(vec![
+            egui::Event::PointerMoved(press),
+            egui::Event::PointerButton {
+                pos: press,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+
+        let captured =
+            context.data_mut(|data| data.get_temp::<egui::Vec2>(id.with("pointer-offset")));
+        assert_eq!(captured, Some(grab_offset));
+    }
+
+    #[test]
     fn effect_drag_start_publishes_the_payload_in_the_same_frame() {
         let context = egui::Context::default();
         let payload = EffectDragPayload {
@@ -1249,6 +1498,42 @@ mod timeline_row_tests {
         assert_eq!(
             egui::DragAndDrop::payload::<EffectDragPayload>(&context).as_deref(),
             Some(&payload)
+        );
+    }
+
+    #[test]
+    fn controller_effect_reference_is_stable_when_view_models_are_rebuilt() {
+        let first = crate::app::EffectPreset {
+            category: "Cinema".to_string(),
+            source: crate::app::EffectPresetSource::ControllerMacro(7),
+            effect: crate::four_d::models::Effect::controller_macro(
+                "Seat rise".to_string(),
+                String::new(),
+                750,
+                7,
+                "mcu".to_string(),
+            ),
+        };
+        let second = crate::app::EffectPreset {
+            category: "Cinema".to_string(),
+            source: crate::app::EffectPresetSource::ControllerMacro(7),
+            effect: crate::four_d::models::Effect::controller_macro(
+                "Seat rise".to_string(),
+                String::new(),
+                750,
+                7,
+                "mcu".to_string(),
+            ),
+        };
+
+        assert_ne!(first.effect.id, second.effect.id);
+        assert_eq!(
+            effect_preset_reference(&first),
+            effect_preset_reference(&second)
+        );
+        assert_eq!(
+            effect_preset_reference(&first).as_deref(),
+            Some("sequence:7")
         );
     }
 
@@ -1330,6 +1615,160 @@ mod timeline_row_tests {
             dropped.get(),
             "effect card payload was not released by the drop zone"
         );
+    }
+
+    #[test]
+    fn effect_card_drag_survives_the_real_scroll_area_gesture_competition() {
+        let context = egui::Context::default();
+        let payload = EffectDragPayload {
+            name: "Seat rise".to_string(),
+            icon: String::new(),
+            duration_ms: 750,
+            target: crate::four_d::models::HardwareTarget::ControllerMacro,
+            actions: Vec::new(),
+            controller_macro: Some(crate::four_d::models::ControllerMacroCue {
+                id: 7,
+                mode: "mcu".to_string(),
+            }),
+            controller_strip_effect: None,
+        };
+        let source = std::cell::Cell::new(egui::Rect::NOTHING);
+        let target = std::cell::Cell::new(egui::Rect::NOTHING);
+        let dropped = std::cell::Cell::new(false);
+        let render = |events: Vec<egui::Event>| {
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(620.0, 260.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.horizontal_top(|ui| {
+                        ui.allocate_ui(egui::vec2(230.0, 230.0), |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_salt("verified-effects-scroll")
+                                .scroll_source(egui::scroll_area::ScrollSource::ALL)
+                                .show(ui, |ui| {
+                                    source.set(
+                                        effect_drag_source(
+                                            ui,
+                                            egui::Id::new("verified-scrolled-effect-card"),
+                                            payload.clone(),
+                                            |ui| {
+                                                egui::Frame::group(ui.style())
+                                                    .inner_margin(egui::Margin::same(8))
+                                                    .show(ui, |ui| {
+                                                        ui.set_min_width(180.0);
+                                                        ui.horizontal(|ui| {
+                                                            ui.label("icon");
+                                                            ui.label("Seat rise");
+                                                        });
+                                                    })
+                                            },
+                                        )
+                                        .response
+                                        .rect,
+                                    );
+                                    // Make the ScrollArea actually scrollable so it
+                                    // registers its own competing drag response.
+                                    ui.add_space(500.0);
+                                });
+                        });
+                        ui.add_space(24.0);
+                        let (_, timeline_response) = ui.allocate_exact_size(
+                            egui::vec2(300.0, 180.0),
+                            egui::Sense::click_and_drag(),
+                        );
+                        target.set(timeline_response.rect);
+                        let released = take_effect_drop_on_rect(ui.ctx(), timeline_response.rect);
+                        dropped.set(dropped.get() || released.as_deref() == Some(&payload));
+                    });
+                },
+            );
+            drop(output);
+        };
+
+        render(Vec::new());
+        let source_point = source.get().center();
+        render(vec![
+            egui::Event::PointerMoved(source_point),
+            egui::Event::PointerButton {
+                pos: source_point,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        render(vec![egui::Event::PointerMoved(
+            source_point + egui::vec2(20.0, 3.0),
+        )]);
+        assert_eq!(
+            egui::DragAndDrop::payload::<EffectDragPayload>(&context).as_deref(),
+            Some(&payload),
+            "the scrollable card never published its drag payload"
+        );
+        let target_point = target.get().center();
+        render(vec![egui::Event::PointerMoved(target_point)]);
+        assert_eq!(
+            egui::DragAndDrop::payload::<EffectDragPayload>(&context).as_deref(),
+            Some(&payload),
+            "the payload disappeared while crossing from the library to the timeline"
+        );
+        render(vec![egui::Event::PointerButton {
+            pos: target_point,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+
+        assert!(
+            dropped.get(),
+            "a scrollable Effects Library card did not reach the timeline drop zone"
+        );
+    }
+
+    #[test]
+    fn nested_card_context_trigger_uses_the_whole_item_rectangle() {
+        let context = egui::Context::default();
+        let card = egui::Rect::from_min_max(egui::pos2(20.0, 20.0), egui::pos2(220.0, 90.0));
+        let point = egui::pos2(120.0, 55.0);
+        let mut clicked_inside = false;
+        for events in [
+            vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Secondary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Secondary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        ] {
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(320.0, 160.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |_ui| {
+                    clicked_inside |= secondary_click_inside(&context, card);
+                },
+            );
+            drop(output);
+        }
+        assert!(clicked_inside);
     }
 
     #[test]
@@ -2319,9 +2758,19 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         if open {
                                             ui.add_space(5.0);
                                             for preset in presets {
+                                                let Some(reference) =
+                                                    effect_preset_reference(preset)
+                                                else {
+                                                    continue;
+                                                };
+                                                // `advertised_effect_presets` materializes fresh
+                                                // timeline Effect values every frame, including a
+                                                // fresh UUID. Interaction IDs must instead use the
+                                                // controller-owned durable reference or neither a
+                                                // drag nor a popup can survive into the next frame.
                                                 let item_id = ui.make_persistent_id((
                                                     "effect-card",
-                                                    preset.effect.id,
+                                                    &reference,
                                                 ));
                                                 let payload = EffectDragPayload {
                                                     name: preset.effect.name.clone(),
@@ -2353,10 +2802,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         &preset.effect.name,
                                                     );
                                                 let source = preset.source;
+                                                let mut run_now = false;
+                                                let mut place_at_playhead = false;
+                                                let mut more_response = None;
                                                 let response = effect_drag_source(
                                                     ui,
                                                     item_id,
-                                                    payload,
+                                                    payload.clone(),
                                                     |ui| {
                                                         egui::Frame::group(ui.style())
                                                             .inner_margin(egui::Margin::symmetric(9, 7))
@@ -2371,7 +2823,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                         )
                                                                         .size(16.0),
                                                                     );
-                                                                    ui.add(
+                                                                    let reserved_actions = 78.0;
+                                                                    let title_width = (ui.available_width()
+                                                                        - reserved_actions)
+                                                                        .max(28.0);
+                                                                    ui.add_sized(
+                                                                        [title_width, 24.0],
                                                                         egui::Label::new(
                                                                             egui::RichText::new(
                                                                                 &displayed_effect_name,
@@ -2380,6 +2837,40 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                         )
                                                                         .truncate(),
                                                                     );
+                                                                    run_now = ui
+                                                                        .add_sized(
+                                                                            [24.0, 24.0],
+                                                                            egui::Button::new(
+                                                                                crate::ui::icons::PLAY,
+                                                                            )
+                                                                            .frame(false),
+                                                                        )
+                                                                        .on_hover_text(self.app.tr("Run now"))
+                                                                        .clicked();
+                                                                    place_at_playhead = ui
+                                                                        .add_sized(
+                                                                            [24.0, 24.0],
+                                                                            egui::Button::new(
+                                                                                crate::ui::icons::PLUS,
+                                                                            )
+                                                                            .frame(false),
+                                                                        )
+                                                                        .on_hover_text(
+                                                                            self.app.tr("Place at playhead"),
+                                                                        )
+                                                                        .clicked();
+                                                                    let more = ui
+                                                                        .add_sized(
+                                                                            [24.0, 24.0],
+                                                                            egui::Button::new(
+                                                                                crate::ui::icons::DOTS_THREE,
+                                                                            )
+                                                                            .frame(false),
+                                                                        )
+                                                                        .on_hover_text(
+                                                                            self.app.tr("More actions"),
+                                                                        );
+                                                                    more_response = Some(more);
                                                                 });
                                                                 ui.add_space(5.0);
                                                                 ui.horizontal(|ui| {
@@ -2415,35 +2906,79 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 if response.response.dragged() {
                                                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                                                 }
-                                                response.response.context_menu(|ui| {
+                                                if run_now
+                                                    && let Err(error) = self
+                                                        .app
+                                                        .play_controller_effect(&reference)
+                                                {
+                                                    self.app.set_osd(error);
+                                                }
+                                                if place_at_playhead {
+                                                    self.app
+                                                        .place_controller_effect_at_playhead(&payload);
+                                                }
+                                                let open_effect_menu = secondary_click_inside(
+                                                    ui.ctx(),
+                                                    response.response.rect,
+                                                ) || more_response
+                                                    .as_ref()
+                                                    .is_some_and(egui::Response::clicked);
+                                                let menu_anchor = more_response
+                                                    .as_ref()
+                                                    .unwrap_or(&response.response);
+                                                egui::Popup::menu(menu_anchor)
+                                                    .id(item_id.with("context-menu"))
+                                                    .at_pointer_fixed()
+                                                    .open_memory(open_effect_menu.then_some(egui::SetOpenCommand::Bool(true)))
+                                                    .show(|ui| {
                                                     ui.strong(&displayed_effect_name);
+                                                    ui.label(egui::RichText::new(&reference).monospace().weak().small());
                                                     ui.separator();
                                                     if ui.button(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, self.app.tr("Properties and edit"))).clicked() {
-                                                        if let Some(capabilities) = self.app.advertised_hardware() {
-                                                            match source {
-                                                                crate::app::EffectPresetSource::ControllerMacro(id) => {
-                                                                    if let Some(effect) = capabilities.macros.iter().find(|effect| effect.id == id) {
-                                                                        crate::ui::effects_library::select_sequence(self.app, effect);
-                                                                    }
-                                                                }
-                                                                crate::app::EffectPresetSource::ControllerStrip => {
-                                                                    if let Some(id) = preset.effect.controller_strip_effect.as_ref().map(|value| value.id.as_str())
-                                                                        && let Some(effect) = capabilities.strip_effects.iter().find(|effect| effect.id == id)
-                                                                    {
-                                                                        crate::ui::effects_library::select_strip(self.app, effect);
-                                                                    }
-                                                                }
-                                                            }
+                                                        if crate::ui::effects_library::select_advertised_effect(
+                                                            self.app,
+                                                            source,
+                                                            preset.effect.controller_strip_effect.as_ref().map(|value| value.id.as_str()),
+                                                        ).is_some() {
                                                             self.app.show_effect_library_editor = true;
                                                         }
                                                         ui.close();
                                                     }
-                                                    let reference = match source {
-                                                        crate::app::EffectPresetSource::ControllerMacro(id) => id.to_string(),
-                                                        crate::app::EffectPresetSource::ControllerStrip => preset.effect.controller_strip_effect.as_ref().map(|value| value.id.clone()).unwrap_or_default(),
-                                                    };
                                                     if ui.button(format!("{} {}", crate::ui::icons::PLAY, self.app.tr("Run now"))).clicked() {
                                                         if let Err(error) = self.app.play_controller_effect(&reference) {
+                                                            self.app.set_osd(error);
+                                                        }
+                                                        ui.close();
+                                                    }
+                                                    if ui.button(format!("{} {}", crate::ui::icons::STOP_CIRCLE, self.app.tr("Stop"))).clicked() {
+                                                        if let Err(error) = self.app.stop_controller_effect(&reference) {
+                                                            self.app.set_osd(error);
+                                                        }
+                                                        ui.close();
+                                                    }
+                                                    if ui.button(format!("{} {}", crate::ui::icons::PLUS, self.app.tr("Place at playhead"))).clicked() {
+                                                        self.app.place_controller_effect_at_playhead(&payload);
+                                                        ui.close();
+                                                    }
+                                                    ui.separator();
+                                                    if ui.button(format!("{} {}", crate::ui::icons::COPY, self.app.tr("Duplicate"))).clicked() {
+                                                        if crate::ui::effects_library::select_advertised_effect(
+                                                            self.app,
+                                                            source,
+                                                            preset.effect.controller_strip_effect.as_ref().map(|value| value.id.as_str()),
+                                                        ).is_some() {
+                                                            crate::ui::effects_library::duplicate_selected(self.app);
+                                                        }
+                                                        ui.close();
+                                                    }
+                                                    if ui.button(format!("{} {}", crate::ui::icons::TRASH, self.app.tr("Delete"))).clicked() {
+                                                        if crate::ui::effects_library::select_advertised_effect(
+                                                            self.app,
+                                                            source,
+                                                            preset.effect.controller_strip_effect.as_ref().map(|value| value.id.as_str()),
+                                                        ).is_some()
+                                                            && let Err(error) = self.app.delete_controller_effect()
+                                                        {
                                                             self.app.set_osd(error);
                                                         }
                                                         ui.close();
@@ -3186,11 +3721,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let track_area_height = timeline_rows.len() as f32 * 32.0;
                             let total_height = 26.0 + track_area_height + (num_analog as f32 * 40.0);
 
-                            // Define dropping target zone
-                            let drop_res = ui.dnd_drop_zone::<EffectDragPayload, _>(egui::Frame::NONE, |ui| {
-                                egui::ScrollArea::both()
-                                    .id_salt("timeline_scroll")
-                                    .show(ui, |ui| {
+                            // The interactive timeline canvas itself is the drop
+                            // target. Wrapping it in `dnd_drop_zone` made the outer
+                            // response fail `contains_pointer`: the inner
+                            // click-and-drag canvas correctly owned the pointer and
+                            // occluded its parent, so releases were never accepted.
+                            let timeline_scroll = egui::ScrollArea::both()
+                                .id_salt("timeline_scroll")
+                                .show(ui, |ui| {
                                         let size = egui::vec2(total_width, total_height);
                                         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
 
@@ -4503,15 +5041,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
 
                                         ((rect, response), clicked_any_clip, clicked_any_keyframe)
-                                    })
-                            });
+                                });
 
-                            let ((rect, response), clicked_any_clip, clicked_any_keyframe) = drop_res.0.inner.inner;
+                            let ((rect, response), clicked_any_clip, clicked_any_keyframe) = timeline_scroll.inner;
 
                             let tracks_top = rect.min.y + 26.0;
 
                             // Successful drop logic
-                            if let Some(payload) = &drop_res.1 {
+                            if let Some(payload) = take_effect_drop_on_rect(ui.ctx(), rect) {
                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                     if rect.contains(mouse_pos) {
                                         let relative_y = mouse_pos.y - tracks_top;
@@ -4519,7 +5056,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let relative_x = mouse_pos.x - rect.min.x;
                                         let drop_time_secs = (relative_x / zoom) as f64;
 
-                                        self.app.handle_effect_drop(payload, visible_row, drop_time_secs);
+                                        self.app.handle_effect_drop(&payload, visible_row, drop_time_secs);
                                     }
                                 }
                             }
@@ -4919,6 +5456,21 @@ fn format_timecode(t: f64) -> String {
 }
 
 impl PealayerApp {
+    pub(crate) fn place_controller_effect_at_playhead(
+        &mut self,
+        payload: &EffectDragPayload,
+    ) -> bool {
+        let rows = timeline_track_rows(self);
+        let Some(index) = rows
+            .iter()
+            .position(|row| row.kind == TimelineTrackKind::ControllerMacros)
+        else {
+            self.set_osd(self.tr("The Controller effects track is not available."));
+            return false;
+        };
+        self.handle_effect_drop(payload, index as i32, self.playback_time)
+    }
+
     /// Locks or unlocks a capability-advertised output track.
     pub fn lock_track(&mut self, relay_id: u8, locked: bool) {
         if locked {

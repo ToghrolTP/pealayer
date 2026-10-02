@@ -39,7 +39,11 @@ fn subtitle_font_directory() -> Option<std::path::PathBuf> {
 }
 
 fn main() -> eframe::Result {
-    if std::env::args().any(|argument| argument == "--smoke-test") {
+    let startup_args: Vec<String> = std::env::args().collect();
+    if startup_args
+        .iter()
+        .any(|argument| argument == "--smoke-test")
+    {
         match Mpv::new() {
             Ok(_) => std::process::exit(0),
             Err(error) => {
@@ -51,11 +55,14 @@ fn main() -> eframe::Result {
 
     env_logger::init();
 
+    if let Some(owner_hwnd) = crate::ui::preferences::preferences_helper_owner(&startup_args) {
+        return crate::ui::preferences::run_native_preferences(owner_hwnd);
+    }
+
     #[cfg(target_os = "windows")]
     let mut gui_ownership = None;
 
-    let args: Vec<String> = std::env::args().collect();
-    let cli_options = match crate::cli::parse_cli_args(args) {
+    let cli_options = match crate::cli::parse_cli_args(startup_args) {
         Ok(crate::cli::CliAction::PrintHelp(msg)) => {
             println!("{}", msg);
             return Ok(());
@@ -228,6 +235,7 @@ fn main() -> eframe::Result {
                     font_id.size = 12.0;
                 }
             }
+            crate::ui::configure_interaction_style(&mut style);
             cc.egui_ctx.set_global_style(style);
 
             let get_proc = cc
@@ -504,6 +512,10 @@ fn main() -> eframe::Result {
                 show_board_info_dialog: false,
                 board_info_tab: 0,
                 board_name_draft: String::new(),
+                hardware_control_dialog_key: None,
+                hardware_control_name_draft: String::new(),
+                hardware_control_group_draft: String::new(),
+                hardware_control_pwm_percent: 0.0,
                 board_operation: None,
                 board_operation_status: String::new(),
                 board_reboot_armed: false,
@@ -526,6 +538,8 @@ fn main() -> eframe::Result {
                 windows_mica_backdrop: loaded_config.windows_mica_backdrop,
                 windows_dwm_theming: loaded_config.windows_dwm_theming,
                 opengl_vsync: loaded_config.opengl_vsync,
+                native_dialog_windows: loaded_config.native_dialog_windows,
+                native_preferences: None,
                 status_bar: loaded_config.status_bar,
                 config_fingerprint: crate::config::AppConfig::fingerprint(
                     &crate::config::AppConfig::get_config_path(),

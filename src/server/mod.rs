@@ -888,8 +888,17 @@ mod tests {
 
     #[test]
     fn runtime_icon_mime_supports_native_windows_icons() {
-        assert_eq!(mime_for_path(std::path::Path::new("brand.ico")), "image/x-icon");
-        assert_eq!(mime_for_path(std::path::Path::new("brand.svg")), "image/svg+xml");
-        assert_eq!(mime_for_path(std::path::Path::new("brand.png")), "image/png");
+        assert_eq!(
+            mime_for_path(std::path::Path::new("brand.ico")),
+            "image/x-icon"
+        );
+        assert_eq!(
+            mime_for_path(std::path::Path::new("brand.svg")),
+            "image/svg+xml"
+        );
+        assert_eq!(
+            mime_for_path(std::path::Path::new("brand.png")),
+            "image/png"
+        );
     }
 }
