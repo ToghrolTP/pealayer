@@ -42,6 +42,16 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     draw_hardware_status(app, ui);
                 }
 
+                if let Some(message) = current_status_message(app) {
+                    ui.separator();
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(&message).small())
+                            .truncate()
+                            .selectable(false),
+                    )
+                    .on_hover_text(message);
+                }
+
                 if app.estop_active {
                     ui.separator();
                     ui.colored_label(
@@ -103,6 +113,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 app.save_config();
             }
         });
+}
+
+fn current_status_message(app: &PealayerApp) -> Option<String> {
+    let (message, timestamp) = app.osd_message.as_ref()?;
+    let lifetime = std::time::Duration::from_secs_f32(app.osd_timeout_seconds.max(1.0));
+    (timestamp.elapsed() <= lifetime).then(|| message.clone())
 }
 
 fn hide_item_menu(app: &PealayerApp, response: egui::Response, label: String) -> bool {
@@ -300,6 +316,17 @@ mod tests {
         assert_eq!(
             status_led_display_color(&led),
             egui::Color32::from_rgb(0, 255, 0)
+        );
+    }
+
+    #[test]
+    fn status_bar_message_uses_the_same_lifetime_as_osd() {
+        let mut app = PealayerApp::default();
+        app.osd_timeout_seconds = 4.0;
+        app.set_osd("Remote command accepted".to_string());
+        assert_eq!(
+            current_status_message(&app).as_deref(),
+            Some("Remote command accepted")
         );
     }
 }

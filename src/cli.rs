@@ -66,6 +66,7 @@ PLAYER OPTIONS:
   --activate                Activate and focus the window
   --minimize | --maximize   Change the window state
   --restore                 Restore and focus the window
+  --message <TEXT>          Show a message in the OSD and status bar
   --quit                    Close the running application
   --command <COMMAND>       Queue a unified text or JSON command; repeatable
   --remote <COMMAND>        Send one unified command and exit
@@ -149,6 +150,12 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
             "--minimize" => commands.push(InteropCommand::Minimize),
             "--maximize" => commands.push(InteropCommand::Maximize),
             "--restore" => commands.push(InteropCommand::Restore),
+            "--message" => {
+                let message = args_iter.next().ok_or("Option '--message' requires text")?;
+                let command = InteropCommand::ShowMessage { message };
+                command.validate()?;
+                commands.push(command);
+            }
             "--quit" => commands.push(InteropCommand::Quit),
             "--seek" | "--seek-to" | "--seek-percent" | "--rate" => {
                 let val_str = args_iter
@@ -379,6 +386,20 @@ mod tests {
         assert!(matches!(
             parse_cli_args(args_v).unwrap(),
             CliAction::PrintVersion(_)
+        ));
+
+        let message = parse_cli_args(vec![
+            "pealayer".to_string(),
+            "--message".to_string(),
+            "Hardware ready".to_string(),
+        ])
+        .unwrap();
+        assert!(matches!(
+            message,
+            CliAction::RunGui(CliOptions { commands, .. })
+                if commands == vec![InteropCommand::ShowMessage {
+                    message: "Hardware ready".to_string()
+                }]
         ));
     }
 

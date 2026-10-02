@@ -2646,6 +2646,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             egui::ScrollArea::vertical()
                                 .id_salt("effects_scroll")
                                 .show(ui, |ui| {
+                                    // Keep a deliberate gutter between cards and the scrollbar /
+                                    // right panel edge. The previous full-width inner frame caused
+                                    // its stroke and action row to crowd or clip against that edge.
+                                    ui.set_width((ui.available_width() - 10.0).max(140.0));
                                     for (category, presets) in categorized {
                                         let group_id = ui.make_persistent_id(("effect-group", &category));
                                         let mut open = ui.data_mut(|data| {
@@ -2814,16 +2818,21 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                             .inner_margin(egui::Margin::symmetric(9, 7))
                                                             .corner_radius(8.0)
                                                             .show(ui, |ui| {
-                                                                ui.set_min_width(ui.available_width());
-                                                                ui.set_max_width(ui.available_width());
+                                                                let card_width = ui.available_width();
+                                                                ui.set_min_width(card_width);
+                                                                ui.set_max_width(card_width);
                                                                 ui.horizontal(|ui| {
-                                                                    ui.label(
+                                                                    ui.add_sized(
+                                                                        [20.0, 24.0],
+                                                                        egui::Label::new(
                                                                         egui::RichText::new(
                                                                             crate::ui::icons::SPARKLE,
                                                                         )
                                                                         .size(16.0),
+                                                                        ),
                                                                     );
-                                                                    let reserved_actions = 78.0;
+                                                                    let action_spacing = ui.spacing().item_spacing.x;
+                                                                    let reserved_actions = 72.0 + action_spacing * 2.0;
                                                                     let title_width = (ui.available_width()
                                                                         - reserved_actions)
                                                                         .max(28.0);
@@ -2837,40 +2846,46 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                         )
                                                                         .truncate(),
                                                                     );
-                                                                    run_now = ui
-                                                                        .add_sized(
-                                                                            [24.0, 24.0],
-                                                                            egui::Button::new(
-                                                                                crate::ui::icons::PLAY,
-                                                                            )
-                                                                            .frame(false),
-                                                                        )
-                                                                        .on_hover_text(self.app.tr("Run now"))
-                                                                        .clicked();
-                                                                    place_at_playhead = ui
-                                                                        .add_sized(
-                                                                            [24.0, 24.0],
-                                                                            egui::Button::new(
-                                                                                crate::ui::icons::PLUS,
-                                                                            )
-                                                                            .frame(false),
-                                                                        )
-                                                                        .on_hover_text(
-                                                                            self.app.tr("Place at playhead"),
-                                                                        )
-                                                                        .clicked();
-                                                                    let more = ui
-                                                                        .add_sized(
-                                                                            [24.0, 24.0],
-                                                                            egui::Button::new(
-                                                                                crate::ui::icons::DOTS_THREE,
-                                                                            )
-                                                                            .frame(false),
-                                                                        )
-                                                                        .on_hover_text(
-                                                                            self.app.tr("More actions"),
-                                                                        );
-                                                                    more_response = Some(more);
+                                                                    ui.allocate_ui_with_layout(
+                                                                        egui::vec2(reserved_actions, 24.0),
+                                                                        egui::Layout::right_to_left(egui::Align::Center),
+                                                                        |ui| {
+                                                                            let more = ui
+                                                                                .add_sized(
+                                                                                    [24.0, 24.0],
+                                                                                    egui::Button::new(
+                                                                                        crate::ui::icons::DOTS_THREE,
+                                                                                    )
+                                                                                    .frame(false),
+                                                                                )
+                                                                                .on_hover_text(
+                                                                                    self.app.tr("More actions"),
+                                                                                );
+                                                                            more_response = Some(more);
+                                                                            place_at_playhead = ui
+                                                                                .add_sized(
+                                                                                    [24.0, 24.0],
+                                                                                    egui::Button::new(
+                                                                                        crate::ui::icons::PLUS,
+                                                                                    )
+                                                                                    .frame(false),
+                                                                                )
+                                                                                .on_hover_text(
+                                                                                    self.app.tr("Place at playhead"),
+                                                                                )
+                                                                                .clicked();
+                                                                            run_now = ui
+                                                                                .add_sized(
+                                                                                    [24.0, 24.0],
+                                                                                    egui::Button::new(
+                                                                                        crate::ui::icons::PLAY,
+                                                                                    )
+                                                                                    .frame(false),
+                                                                                )
+                                                                                .on_hover_text(self.app.tr("Run now"))
+                                                                                .clicked();
+                                                                        },
+                                                                    );
                                                                 });
                                                                 ui.add_space(5.0);
                                                                 ui.horizontal(|ui| {

@@ -81,12 +81,52 @@ fn native_preferences_viewport(title: String) -> egui::ViewportBuilder {
         .with_minimize_button(false)
         .with_maximize_button(false)
         .with_clamp_size_to_monitor_size(true);
-    if let Ok(icon) =
-        eframe::icon_data::from_png_bytes(include_bytes!("../../assets/pealayer-icon.png"))
-    {
+    let icon = phosphor_preferences_icon().or_else(|| {
+        eframe::icon_data::from_png_bytes(include_bytes!("../../assets/pealayer-icon.png")).ok()
+    });
+    if let Some(icon) = icon {
         builder = builder.with_icon(icon);
     }
     builder
+}
+
+/// Rasterize a compact gear using the same outline proportions as the
+/// Phosphor Gear glyph used throughout the application. A native viewport
+/// needs RGBA icon pixels rather than an egui font glyph, so this keeps the
+/// Preferences identity consistent without adding another bundled asset.
+fn phosphor_preferences_icon() -> Option<egui::IconData> {
+    use ab_glyph::{Font, FontRef, PxScale, point};
+
+    const SIZE: usize = 32;
+    let font = FontRef::try_from_slice(egui_phosphor::Variant::Regular.font_bytes()).ok()?;
+    let character = crate::ui::icons::GEAR.chars().next()?;
+    let glyph_id = font.glyph_id(character);
+    let scale = PxScale::from(24.0);
+    let initial = font.outline_glyph(glyph_id.with_scale(scale))?;
+    let bounds = initial.px_bounds();
+    let position = point(
+        (SIZE as f32 - bounds.width()) * 0.5 - bounds.min.x,
+        (SIZE as f32 - bounds.height()) * 0.5 - bounds.min.y,
+    );
+    let outlined = font.outline_glyph(glyph_id.with_scale_and_position(scale, position))?;
+    let mut rgba = vec![0_u8; SIZE * SIZE * 4];
+    let pixel_bounds = outlined.px_bounds();
+    outlined.draw(|x, y, coverage| {
+        let px = pixel_bounds.min.x.floor() as i32 + x as i32;
+        let py = pixel_bounds.min.y.floor() as i32 + y as i32;
+        if px >= 0 && py >= 0 && px < SIZE as i32 && py < SIZE as i32 {
+            let offset = (py as usize * SIZE + px as usize) * 4;
+            rgba[offset] = 236;
+            rgba[offset + 1] = 241;
+            rgba[offset + 2] = 247;
+            rgba[offset + 3] = (coverage * 255.0).round() as u8;
+        }
+    });
+    Some(egui::IconData {
+        rgba,
+        width: SIZE as u32,
+        height: SIZE as u32,
+    })
 }
 
 pub(crate) fn preferences_helper_owner(args: &[String]) -> Option<isize> {
@@ -269,7 +309,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if crate::ui::dialog::escape_pressed(ui.ctx()) {
         open = false;
     }
-    egui::Window::new(format!(
+    let close = egui::Window::new(format!(
         "{} {}",
         crate::ui::icons::GEAR,
         app.tr("Preferences")
@@ -283,7 +323,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     .resizable(true)
     .movable(true)
     .collapsible(false)
-    .show(ui.ctx(), |ui| draw_preferences_surface(app, ui));
+    .show(ui.ctx(), |ui| draw_preferences_surface(app, ui))
+    .and_then(|response| response.inner)
+    .unwrap_or(false);
+    if close {
+        open = false;
+    }
     app.show_preferences_dialog = open;
 }
 
@@ -327,86 +372,98 @@ fn draw_native_preferences_surface(state: &mut NativePreferencesState, ui: &mut 
     let mut changed = false;
     let mut close = false;
 
-    let narrow = ui.available_width() < 580.0;
-    if narrow {
-        let (active_icon, active_name) = TABS[state.tab.min(TABS.len() - 1)];
-        egui::ComboBox::from_id_salt("native_preferences_compact_tab")
-            .width(ui.available_width())
-            .selected_text(format!("{active_icon}  {}", tr(active_name)))
-            .show_ui(ui, |ui| {
-                for (index, (icon, name)) in TABS.into_iter().enumerate() {
-                    ui.selectable_value(&mut state.tab, index, format!("{icon}  {}", tr(name)));
+    egui::Panel::bottom("native_preferences_footer")
+        .resizable(false)
+        .show_separator_line(true)
+        .show_inside(ui, |ui| {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if !state.status.is_empty() {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(&state.status).small().weak())
+                            .truncate(),
+                    );
                 }
-            });
-        ui.separator();
-    }
-
-    ui.horizontal_top(|ui| {
-        if !narrow {
-            ui.allocate_ui_with_layout(
-                egui::vec2(126.0, ui.available_height()),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    ui.spacing_mut().item_spacing.y = 5.0;
-                    for (index, (icon, name)) in TABS.into_iter().enumerate() {
-                        if ui
-                            .add_sized(
-                                [120.0, 32.0],
-                                egui::Button::new(format!("{icon}  {}", tr(name)))
-                                    .selected(state.tab == index),
-                            )
-                            .clicked()
-                        {
-                            state.tab = index;
-                        }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .button(format!("{}  {}", crate::ui::icons::X, tr("Close")))
+                        .clicked()
+                    {
+                        close = true;
                     }
-                },
-            );
+                    if ui
+                        .button(format!(
+                            "{}  {}",
+                            crate::ui::icons::FLOPPY_DISK,
+                            tr("Save now")
+                        ))
+                        .clicked()
+                    {
+                        save_native_preferences(state, ui.ctx());
+                    }
+                });
+            });
+            ui.add_space(3.0);
+        });
+
+    egui::CentralPanel::default().show_inside(ui, |ui| {
+        let narrow = ui.available_width() < 580.0;
+        if narrow {
+            let (active_icon, active_name) = TABS[state.tab.min(TABS.len() - 1)];
+            egui::ComboBox::from_id_salt("native_preferences_compact_tab")
+                .width(ui.available_width())
+                .selected_text(format!("{active_icon}  {}", tr(active_name)))
+                .show_ui(ui, |ui| {
+                    for (index, (icon, name)) in TABS.into_iter().enumerate() {
+                        ui.selectable_value(&mut state.tab, index, format!("{icon}  {}", tr(name)));
+                    }
+                });
             ui.separator();
         }
 
-        let detail_width = ui.available_width();
-        crate::ui::dialog::scroll_column(ui, "native_preferences_content", None, |ui| {
-            ui.set_max_width((detail_width - 8.0).max(180.0));
-            ui.spacing_mut().item_spacing.y = 8.0;
-            match state.tab {
-                0 => native_appearance_preferences(state, ui, &tr, &mut changed),
-                1 => native_playback_preferences(state, ui, &tr, &mut changed),
-                2 => native_hardware_preferences(state, ui, &tr, &mut changed),
-                3 => native_input_preferences(state, ui, &tr, &mut changed),
-                _ => native_advanced_preferences(state, ui, &tr, &mut changed),
+        ui.horizontal_top(|ui| {
+            if !narrow {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(142.0, ui.available_height()),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.spacing_mut().item_spacing.y = 5.0;
+                        for (index, (icon, name)) in TABS.into_iter().enumerate() {
+                            if preferences_tab_button(
+                                ui,
+                                136.0,
+                                state.tab == index,
+                                icon,
+                                &tr(name),
+                            )
+                            .clicked()
+                            {
+                                state.tab = index;
+                            }
+                        }
+                    },
+                );
+                ui.separator();
             }
+
+            let detail_width = ui.available_width();
+            crate::ui::dialog::scroll_column(ui, "native_preferences_content", None, |ui| {
+                ui.set_max_width((detail_width - 8.0).max(180.0));
+                ui.spacing_mut().item_spacing.y = 8.0;
+                match state.tab {
+                    0 => native_appearance_preferences(state, ui, &tr, &mut changed),
+                    1 => native_playback_preferences(state, ui, &tr, &mut changed),
+                    2 => native_hardware_preferences(state, ui, &tr, &mut changed),
+                    3 => native_input_preferences(state, ui, &tr, &mut changed),
+                    _ => native_advanced_preferences(state, ui, &tr, &mut changed),
+                }
+            });
         });
     });
 
     if changed {
         save_native_preferences(state, ui.ctx());
     }
-
-    ui.separator();
-    ui.horizontal(|ui| {
-        if !state.status.is_empty() {
-            ui.add(egui::Label::new(egui::RichText::new(&state.status).small().weak()).truncate());
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .button(format!("{}  {}", crate::ui::icons::X, tr("Close")))
-                .clicked()
-            {
-                close = true;
-            }
-            if ui
-                .button(format!(
-                    "{}  {}",
-                    crate::ui::icons::FLOPPY_DISK,
-                    tr("Save now")
-                ))
-                .clicked()
-            {
-                save_native_preferences(state, ui.ctx());
-            }
-        });
-    });
     close || !state.config.native_dialog_windows
 }
 
@@ -924,31 +981,62 @@ fn native_advanced_preferences(
     );
 }
 
-fn draw_preferences_surface(app: &mut PealayerApp, ui: &mut egui::Ui) {
+fn draw_preferences_surface(app: &mut PealayerApp, ui: &mut egui::Ui) -> bool {
     let mut changed = false;
-    // A vertical tab rail plus the minimum useful settings column needs
-    // considerably more than 500 points. Switch before either side starts
-    // squeezing controls into overlapping or single-glyph columns.
-    let narrow = ui.available_width() < 580.0;
-    if narrow {
-        draw_compact_tab_selector(app, ui);
-        ui.separator();
-        draw_preferences_content(app, ui, &mut changed);
-    } else {
-        let content_height = ui.available_height();
-        ui.horizontal_top(|ui| {
-            ui.allocate_ui_with_layout(
-                egui::vec2(126.0, content_height),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| draw_tabs(app, ui, false),
-            );
+    let mut close = false;
+    egui::Panel::bottom("embedded_preferences_footer")
+        .resizable(false)
+        .show_separator_line(true)
+        .show_inside(ui, |ui| {
+            ui.add_space(6.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .button(format!("{}  {}", crate::ui::icons::X, app.tr("Close")))
+                    .clicked()
+                {
+                    close = true;
+                }
+                if ui
+                    .button(format!(
+                        "{}  {}",
+                        crate::ui::icons::FLOPPY_DISK,
+                        app.tr("Save now")
+                    ))
+                    .clicked()
+                {
+                    app.save_config();
+                    app.set_osd(app.tr("Preferences saved"));
+                }
+            });
+            ui.add_space(3.0);
+        });
+
+    egui::CentralPanel::default().show_inside(ui, |ui| {
+        // A vertical tab rail plus the minimum useful settings column needs
+        // considerably more than 500 points. Switch before either side starts
+        // squeezing controls into overlapping or single-glyph columns.
+        let narrow = ui.available_width() < 580.0;
+        if narrow {
+            draw_compact_tab_selector(app, ui);
             ui.separator();
             draw_preferences_content(app, ui, &mut changed);
-        });
-    }
+        } else {
+            let content_height = ui.available_height();
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(142.0, content_height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| draw_tabs(app, ui, false),
+                );
+                ui.separator();
+                draw_preferences_content(app, ui, &mut changed);
+            });
+        }
+    });
     if changed {
         app.save_config();
     }
+    close
 }
 
 fn draw_tabs(app: &mut PealayerApp, ui: &mut egui::Ui, compact: bool) {
@@ -959,17 +1047,48 @@ fn draw_tabs(app: &mut PealayerApp, ui: &mut egui::Ui, compact: bool) {
         } else {
             120.0
         };
-        if ui
-            .add_sized(
-                [width, 32.0],
-                egui::Button::new(format!("{icon}  {}", app.tr(tab)))
-                    .selected(app.preferences_tab == index),
-            )
+        if preferences_tab_button(ui, width, app.preferences_tab == index, icon, &app.tr(tab))
             .clicked()
         {
             app.preferences_tab = index;
         }
     }
+}
+
+fn preferences_tab_button(
+    ui: &mut egui::Ui,
+    width: f32,
+    selected: bool,
+    icon: &str,
+    label: &str,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact_selectable(&response, selected);
+        ui.painter().rect(
+            rect,
+            visuals.corner_radius,
+            visuals.weak_bg_fill,
+            visuals.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+        let color = visuals.fg_stroke.color;
+        ui.painter().text(
+            egui::pos2(rect.left() + 18.0, rect.center().y),
+            egui::Align2::CENTER_CENTER,
+            icon,
+            egui::FontId::proportional(17.0),
+            color,
+        );
+        ui.painter().text(
+            egui::pos2(rect.left() + 38.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(16.0),
+            color,
+        );
+    }
+    response
 }
 
 fn draw_compact_tab_selector(app: &mut PealayerApp, ui: &mut egui::Ui) {
@@ -1707,5 +1826,13 @@ mod tests {
         assert_eq!(builder.minimize_button, Some(false));
         assert_eq!(builder.maximize_button, Some(false));
         assert_eq!(builder.resizable, Some(true));
+    }
+
+    #[test]
+    fn native_preferences_use_a_dedicated_phosphor_style_icon() {
+        let icon = phosphor_preferences_icon().expect("preferences icon");
+        assert_eq!((icon.width, icon.height), (32, 32));
+        assert!(icon.rgba.chunks_exact(4).any(|pixel| pixel[3] == 255));
+        assert!(icon.rgba.chunks_exact(4).any(|pixel| pixel[3] == 0));
     }
 }

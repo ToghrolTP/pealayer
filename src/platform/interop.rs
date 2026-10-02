@@ -163,6 +163,9 @@ pub enum InteropCommand {
     Maximize,
     Restore,
     OpenPreferences,
+    ShowMessage {
+        message: String,
+    },
     Quit,
     SetWorkspace {
         nle: bool,
@@ -240,6 +243,12 @@ impl InteropCommand {
                 Err("controller effect reference is invalid".to_string())
             }
             Self::SaveControllerEffect { effect } => effect.validate(),
+            Self::ShowMessage { message } if message.trim().is_empty() => {
+                Err("message must not be empty".to_string())
+            }
+            Self::ShowMessage { message } if message.chars().count() > 2_048 => {
+                Err("message must not exceed 2048 characters".to_string())
+            }
             Self::UpdateConfig { values } => crate::config::AppConfig::validate_patch_shape(values),
             _ => Ok(()),
         }
@@ -254,7 +263,7 @@ pub fn command_catalog() -> Value {
             "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
             "seek", "seek_to", "seek_abs", "set_volume", "set_mute", "toggle_mute",
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
-            "maximize", "restore", "open_preferences", "set_workspace", "update_config",
+            "maximize", "restore", "open_preferences", "show_message", "set_workspace", "update_config",
             "reload_config", "add_effect_cue", "remove_effect_cue", "set_recording",
             "get_status", "quit", "controller_effect_cue.add", "controller_effect.play",
             "controller_effect.stop", "controller_effect.save", "controller_effect.delete"
@@ -348,6 +357,9 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "maximize" => InteropCommand::Maximize,
         "restore" => InteropCommand::Restore,
         "preferences" | "open_preferences" | "open-preferences" => InteropCommand::OpenPreferences,
+        "message" | "show_message" | "show-message" => InteropCommand::ShowMessage {
+            message: argument.to_string(),
+        },
         "workspace" | "set_workspace" | "set-workspace" => {
             match argument.to_ascii_lowercase().as_str() {
                 "nle" | "editor" => InteropCommand::SetWorkspace { nle: true },
@@ -664,6 +676,9 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "preferences" | "open_preferences" | "pealayer.window.preferences" => {
             Some(InteropCommand::OpenPreferences)
         }
+        "message" | "show_message" | "pealayer.message.show" => Some(InteropCommand::ShowMessage {
+            message: string(&["message", "text", "value"])?,
+        }),
         "quit" | "exit" | "pealayer.quit" => Some(InteropCommand::Quit),
         "workspace" | "set_workspace" | "pealayer.workspace.set" => {
             let workspace = string(&["workspace", "value"])?;
@@ -1670,6 +1685,13 @@ mod tests {
             parse_text_command("preferences").unwrap(),
             InteropCommand::OpenPreferences
         );
+        assert_eq!(
+            parse_text_command("message Render complete").unwrap(),
+            InteropCommand::ShowMessage {
+                message: "Render complete".to_string()
+            }
+        );
+        assert!(parse_text_command("message").is_err());
     }
 
     #[test]
@@ -1723,6 +1745,18 @@ mod tests {
             params: serde_json::json!({"seconds": 12.5}),
         };
         assert_eq!(command_from_json_rpc(&request).unwrap(), Some(text));
+        let message_request = JsonRpcRequest {
+            jsonrpc: Some("2.0".to_string()),
+            id: serde_json::json!(2),
+            method: "pealayer.message.show".to_string(),
+            params: serde_json::json!({"message": "Hardware ready"}),
+        };
+        assert_eq!(
+            command_from_json_rpc(&message_request).unwrap(),
+            Some(InteropCommand::ShowMessage {
+                message: "Hardware ready".to_string()
+            })
+        );
         assert!(parse_text_command("volume 131").is_err());
         assert!(parse_text_command("rate 0").is_err());
         assert!(parse_text_command("seek-to -1").is_err());
