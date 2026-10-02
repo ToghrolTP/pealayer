@@ -48,6 +48,7 @@ fn drag_translation(
 const EFFECTS_PANEL_RIGHT_GUTTER: f32 = 10.0;
 const EFFECT_CARD_MIN_WIDTH: f32 = 140.0;
 const EFFECT_CARD_HORIZONTAL_MARGIN: i8 = 9;
+const EFFECT_CARD_STROKE_WIDTH: f32 = 1.0;
 const EFFECT_CARD_ACTION_GUTTER: f32 = 100.0;
 
 fn effects_panel_content_width(available_width: f32) -> f32 {
@@ -55,7 +56,8 @@ fn effects_panel_content_width(available_width: f32) -> f32 {
 }
 
 fn effects_frame_content_width(outer_width: f32) -> f32 {
-    (outer_width - f32::from(EFFECT_CARD_HORIZONTAL_MARGIN) * 2.0).max(1.0)
+    (outer_width - (f32::from(EFFECT_CARD_HORIZONTAL_MARGIN) + EFFECT_CARD_STROKE_WIDTH) * 2.0)
+        .max(1.0)
 }
 
 fn effect_card<R>(
@@ -67,9 +69,35 @@ fn effect_card<R>(
     // Frame child feeds its margins back into egui's sizing pass, which made
     // cards grow on successive paints and resized the drag preview.
     ui.set_width(outer_width);
+    let stroke_color = ui.visuals().widgets.noninteractive.bg_stroke.color;
     egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::symmetric(EFFECT_CARD_HORIZONTAL_MARGIN, 7))
+        .stroke(egui::Stroke::new(EFFECT_CARD_STROKE_WIDTH, stroke_color))
         .corner_radius(8.0)
+        .show(ui, |ui| {
+            let content_width = effects_frame_content_width(outer_width);
+            ui.set_width(content_width);
+            add_contents(ui)
+        })
+}
+
+fn effect_group_header<R>(
+    ui: &mut egui::Ui,
+    outer_width: f32,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    // Category rows and their child cards are peers in the Effects Library,
+    // so they deliberately use the same outer/content width contract. Keep
+    // this separate from `effect_card` because the header has a lighter fill
+    // and tighter vertical padding, not because it is a different width.
+    ui.set_width(outer_width);
+    let fill = ui.visuals().widgets.inactive.weak_bg_fill;
+    let stroke_color = ui.visuals().widgets.noninteractive.bg_stroke.color;
+    egui::Frame::new()
+        .fill(fill)
+        .stroke(egui::Stroke::new(EFFECT_CARD_STROKE_WIDTH, stroke_color))
+        .corner_radius(7.0)
+        .inner_margin(egui::Margin::symmetric(EFFECT_CARD_HORIZONTAL_MARGIN, 6))
         .show(ui, |ui| {
             let content_width = effects_frame_content_width(outer_width);
             ui.set_width(content_width);
@@ -2528,11 +2556,40 @@ mod timeline_row_tests {
         let outer = effects_panel_content_width(327.0);
         let content = effects_frame_content_width(outer);
         assert_eq!(outer, 317.0);
-        assert_eq!(content, 299.0);
+        assert_eq!(content, 297.0);
         assert_eq!(
-            content + f32::from(EFFECT_CARD_HORIZONTAL_MARGIN) * 2.0,
+            content + (f32::from(EFFECT_CARD_HORIZONTAL_MARGIN) + EFFECT_CARD_STROKE_WIDTH) * 2.0,
             outer
         );
+
+        let context = egui::Context::default();
+        let painted_widths = std::cell::Cell::new((0.0_f32, 0.0_f32));
+        let output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(327.0, 180.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let header = effect_group_header(ui, outer, |ui| {
+                    ui.label("Lighting");
+                });
+                let card = effect_card(ui, outer, |ui| {
+                    ui.add_sized(
+                        [ui.available_width(), 24.0],
+                        egui::Label::new("White thunder").halign(egui::Align::Min),
+                    );
+                });
+                painted_widths.set((header.response.rect.width(), card.response.rect.width()));
+            },
+        );
+        drop(output);
+        let (header_width, card_width) = painted_widths.get();
+        assert_eq!(header_width, outer);
+        assert_eq!(card_width, outer);
+        assert_eq!(header_width, card_width);
     }
 
     #[test]
@@ -3924,19 +3981,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             display_language,
                                             &category,
                                         );
-                                        let group_header = egui::Frame::new()
-                                            .fill(ui.visuals().widgets.inactive.weak_bg_fill)
-                                            .stroke(egui::Stroke::new(
-                                                1.0_f32,
-                                                ui.visuals().widgets.noninteractive.bg_stroke.color,
-                                            ))
-                                            .corner_radius(7.0)
-                                            .inner_margin(egui::Margin::symmetric(9, 6))
-                                            .show(ui, |ui| {
-                                                let header_content_width =
-                                                    effects_frame_content_width(effects_width);
-                                                ui.set_min_width(header_content_width);
-                                                ui.set_max_width(header_content_width);
+                                        let group_header = effect_group_header(
+                                            ui,
+                                            effects_width,
+                                            |ui| {
                                                 ui.horizontal(|ui| {
                                                     ui.label(if open {
                                                         crate::ui::icons::CARET_DOWN
@@ -3974,7 +4022,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         },
                                                     );
                                                 });
-                                            });
+                                            },
+                                        );
                                         let group_response = group_header.response.interact(egui::Sense::click());
                                         if group_response.clicked() {
                                             open = !open;
@@ -4106,6 +4155,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                             )
                                                                             .strong(),
                                                                         )
+                                                                        .halign(egui::Align::Min)
                                                                         .truncate(),
                                                                     );
                                                                     ui.allocate_ui_with_layout(
