@@ -167,7 +167,7 @@ fn navigation_control(
             egui::Align2::LEFT_CENTER,
             label,
             egui::FontId::proportional(CONTROL_TEXT_SIZE),
-            ui.visuals().strong_text_color(),
+            ui.visuals().text_color(),
         );
         if let Some(metadata) = metadata {
             painter.text(
@@ -285,6 +285,9 @@ mod tests {
         assert!(!preferences.contains(concat!("const PREFERENCES_", "ACTION_HEIGHT")));
         assert!(!preferences.contains(concat!("fn preferences_", "action_button(")));
         assert!(include_str!("effects_library.rs").contains("dialog::navigation_detail_button"));
+        let shared_dialog = include_str!("dialog.rs");
+        assert!(shared_dialog.contains("ui.visuals().text_color()"));
+        assert!(!shared_dialog.contains(concat!("strong_", "text_color()")));
     }
 
     #[test]
@@ -306,7 +309,7 @@ pub fn section(ui: &mut egui::Ui, icon: &str, title: &str, body: impl FnOnce(&mu
                 ui.label(
                     egui::RichText::new(format!("{icon}  {title}"))
                         .strong()
-                        .color(ui.visuals().strong_text_color()),
+                        .color(ui.visuals().text_color()),
                 );
                 ui.add_space(6.0);
                 body(ui);
