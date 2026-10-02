@@ -7,6 +7,7 @@ fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PreferenceControlKind {
+    Accent,
     Boolean,
     Number,
     Select,
@@ -17,6 +18,8 @@ pub enum PreferenceControlKind {
 pub struct PreferenceOption {
     pub value: serde_json::Value,
     pub label: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -42,6 +45,8 @@ pub struct PreferenceControl {
     pub inverted: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_key: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,6 +85,7 @@ impl PreferenceControl {
             logarithmic: false,
             inverted: false,
             placeholder: None,
+            custom_key: None,
         }
     }
 
@@ -97,8 +103,58 @@ impl PreferenceControl {
             .map(|(value, label)| PreferenceOption {
                 value: serde_json::Value::String((*value).to_string()),
                 label,
+                color: None,
             })
             .collect();
+        control
+    }
+
+    fn accent(config: &crate::config::AppConfig) -> Self {
+        let mut control = Self::boolean("accent_color", "appearance", "Interface", "Accent color");
+        control.kind = PreferenceControlKind::Accent;
+        control.custom_key = Some("custom_accent_color");
+        let [red, green, blue] =
+            crate::platform::windows::system_accent_color().unwrap_or_else(|| {
+                if cfg!(target_os = "macos") {
+                    [10, 132, 255]
+                } else {
+                    [0, 120, 212]
+                }
+            });
+        let system_color = format!("#{red:02x}{green:02x}{blue:02x}");
+        let custom_color = config
+            .custom_accent_color
+            .as_deref()
+            .and_then(crate::config::parse_rgb_hex)
+            .map(|[red, green, blue]| format!("#{red:02x}{green:02x}{blue:02x}"))
+            .unwrap_or_else(|| "#0078d4".to_string());
+        control.options = vec![
+            PreferenceOption {
+                value: serde_json::json!("system"),
+                label: "System accent",
+                color: Some(system_color),
+            },
+            PreferenceOption {
+                value: serde_json::json!("pealayer_green"),
+                label: "Pealayer green",
+                color: Some("#38d27a".to_string()),
+            },
+            PreferenceOption {
+                value: serde_json::json!("windows_blue"),
+                label: "Windows blue",
+                color: Some("#0078d4".to_string()),
+            },
+            PreferenceOption {
+                value: serde_json::json!("macos_blue"),
+                label: "macOS blue",
+                color: Some("#0a84ff".to_string()),
+            },
+            PreferenceOption {
+                value: serde_json::json!("custom"),
+                label: "Custom",
+                color: Some(custom_color),
+            },
+        ];
         control
     }
 
@@ -163,7 +219,7 @@ pub fn preference_sections() -> Vec<PreferenceSection> {
     ]
 }
 
-pub fn preference_controls() -> Vec<PreferenceControl> {
+pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceControl> {
     let mut controls = vec![
         PreferenceControl::select(
             "theme",
@@ -172,26 +228,7 @@ pub fn preference_controls() -> Vec<PreferenceControl> {
             "Theme",
             &[("system", "System"), ("light", "Light"), ("dark", "Dark")],
         ),
-        PreferenceControl::select(
-            "accent_color",
-            "appearance",
-            "Interface",
-            "Accent color",
-            &[
-                ("system", "System accent"),
-                ("pealayer_green", "Pealayer green"),
-                ("windows_blue", "Windows blue"),
-                ("macos_blue", "macOS blue"),
-                ("custom", "Custom"),
-            ],
-        ),
-        PreferenceControl::text(
-            "custom_accent_color",
-            "appearance",
-            "Interface",
-            "Custom accent",
-            "#0078d4",
-        ),
+        PreferenceControl::accent(config),
         PreferenceControl::select(
             "language",
             "appearance",
@@ -444,8 +481,11 @@ pub fn preference_controls() -> Vec<PreferenceControl> {
             "Workspace mode",
         ),
     ];
-    controls[9].logarithmic = true;
-    controls[11].logarithmic = true;
+    for key in ["quick_seek_seconds", "mouse_seek_seconds_per_notch"] {
+        if let Some(control) = controls.iter_mut().find(|control| control.key == key) {
+            control.logarithmic = true;
+        }
+    }
     let mut recent_click = PreferenceControl::boolean(
         "open_url_recent_click_edits",
         "playback",
@@ -461,7 +501,7 @@ pub fn preferences_contract(config: &crate::config::AppConfig) -> PreferencesCon
     PreferencesContract {
         format: "pealayer-preferences",
         sections: preference_sections(),
-        controls: preference_controls(),
+        controls: preference_controls(config),
         values: serde_json::to_value(config).unwrap_or_else(|_| serde_json::json!({})),
     }
 }
@@ -502,8 +542,8 @@ mod tests {
     #[test]
     fn contract_keys_resolve_against_the_real_config() {
         let config = crate::config::AppConfig::default();
-        let values = serde_json::to_value(config).unwrap();
-        for control in preference_controls() {
+        let values = serde_json::to_value(&config).unwrap();
+        for control in preference_controls(&config) {
             assert!(
                 value_at_path(&values, control.key).is_some(),
                 "{}",
@@ -522,5 +562,34 @@ mod tests {
         );
         let config: crate::config::AppConfig = serde_json::from_value(values).unwrap();
         assert!(!config.status_bar.hardware);
+    }
+
+    #[test]
+    fn accent_is_one_compound_control_with_swatch_metadata() {
+        let config = crate::config::AppConfig {
+            custom_accent_color: Some("#A142F4".to_string()),
+            ..crate::config::AppConfig::default()
+        };
+        let controls = preference_controls(&config);
+        let accent = controls
+            .iter()
+            .find(|control| control.key == "accent_color")
+            .expect("accent control");
+        assert!(matches!(accent.kind, PreferenceControlKind::Accent));
+        assert_eq!(accent.custom_key, Some("custom_accent_color"));
+        assert_eq!(
+            accent
+                .options
+                .iter()
+                .find(|option| option.value == serde_json::json!("custom"))
+                .and_then(|option| option.color.as_deref()),
+            Some("#a142f4")
+        );
+        assert!(
+            controls
+                .iter()
+                .all(|control| control.key != "custom_accent_color"),
+            "the custom hex value belongs inline with the accent picker"
+        );
     }
 }

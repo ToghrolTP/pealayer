@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  ColorPicker,
   Input,
   InputNumber,
   Select,
@@ -37,6 +38,7 @@ interface PreferenceSection {
 interface PreferenceOption {
   value: string | number | boolean;
   label: string;
+  color?: string;
 }
 
 interface PreferenceControl {
@@ -44,7 +46,7 @@ interface PreferenceControl {
   section: string;
   group: string;
   label: string;
-  kind: 'boolean' | 'number' | 'select' | 'text';
+  kind: 'accent' | 'boolean' | 'number' | 'select' | 'text';
   description?: string;
   options?: PreferenceOption[];
   minimum?: number;
@@ -53,6 +55,7 @@ interface PreferenceControl {
   logarithmic?: boolean;
   inverted?: boolean;
   placeholder?: string;
+  custom_key?: string;
 }
 
 interface PreferencesContract {
@@ -77,6 +80,7 @@ const sectionIcons: Record<string, React.ReactNode> = {
 };
 
 const controlIcons: Record<PreferenceControl['kind'], React.ReactNode> = {
+  accent: <BgColorsOutlined />,
   boolean: <CheckSquareOutlined />,
   number: <ControlOutlined />,
   select: <BarsOutlined />,
@@ -137,18 +141,17 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
   );
   const groups = useMemo(() => Array.from(new Set(controls.map((control) => control.group))), [controls]);
 
-  const update = async (control: PreferenceControl, displayedValue: any) => {
+  const updatePath = async (key: string, storedValue: any) => {
     if (!contract) return;
-    const storedValue = control.inverted ? !displayedValue : displayedValue;
-    const nextValues = valueWithPath(contract.values, control.key, storedValue === '' ? null : storedValue);
+    const nextValues = valueWithPath(contract.values, key, storedValue === '' ? null : storedValue);
     setContract({ ...contract, values: nextValues });
-    setSaving(control.key);
+    setSaving(key);
     setStatus(null);
     try {
       const response = await fetch(`${apiBaseUrl}/api/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patchForPath(nextValues, control.key)),
+        body: JSON.stringify(patchForPath(nextValues, key)),
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
@@ -164,6 +167,11 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
     }
   };
 
+  const update = async (control: PreferenceControl, displayedValue: any) => {
+    const storedValue = control.inverted ? !displayedValue : displayedValue;
+    await updatePath(control.key, storedValue);
+  };
+
   const renderControl = (control: PreferenceControl) => {
     const stored = valueAtPath(contract?.values ?? {}, control.key);
     const value = control.inverted ? !Boolean(stored) : stored;
@@ -173,6 +181,47 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
         <span>{tr(locale, control.label)}</span>
       </span>
     );
+    if (control.kind === 'accent') {
+      const customKey = control.custom_key ?? 'custom_accent_color';
+      const customHex = String(valueAtPath(contract?.values ?? {}, customKey) ?? '#0078d4');
+      const accentOptions = (control.options ?? []).map((option) => ({
+        value: option.value,
+        label: (
+          <span className="accent-option">
+            <span className="accent-option__swatch" style={{ backgroundColor: option.color || 'transparent' }} />
+            <span>{tr(locale, option.label)}</span>
+          </span>
+        ),
+      }));
+      return (
+        <label className="preference-control" key={control.key}>
+          {commonLabel}
+          <div className="preference-control__accent">
+            <Select
+              value={value}
+              options={accentOptions}
+              onChange={(next) => void update(control, next)}
+            />
+            {value === 'custom' && <>
+              <ColorPicker
+                value={customHex}
+                disabledAlpha
+                onChangeComplete={(color) => void updatePath(customKey, color.toHexString().toUpperCase())}
+              />
+              <Input
+                key={customHex}
+                className="preference-control__hex"
+                defaultValue={customHex.toUpperCase()}
+                maxLength={7}
+                aria-label={tr(locale, 'Custom accent')}
+                onPressEnter={(event) => void updatePath(customKey, event.currentTarget.value.trim())}
+                onBlur={(event) => event.currentTarget.value !== customHex && void updatePath(customKey, event.currentTarget.value.trim())}
+              />
+            </>}
+          </div>
+        </label>
+      );
+    }
     if (control.kind === 'boolean') {
       return (
         <label className="preference-control preference-control--boolean" key={control.key}>

@@ -481,7 +481,7 @@ fn draw_contract_section(
     let section = &sections[draft.tab.min(sections.len() - 1)];
     ui.heading(tr(section_heading(section.id)));
     ui.add_space(2.0);
-    let controls = preference_controls();
+    let controls = preference_controls(&draft.config);
     let mut values = serde_json::to_value(&draft.config).unwrap_or_else(|_| serde_json::json!({}));
     let mut changed = false;
     let mut clear_remote_history = false;
@@ -558,8 +558,100 @@ fn render_contract_control(
         .cloned()
         .unwrap_or_default();
     let mut replacement = None;
+    let mut companion_changed = false;
     let control_icon = preference_control_icon(&control.kind);
     match control.kind {
+        PreferenceControlKind::Accent => {
+            let selected = current.as_str().unwrap_or("system");
+            let selected_label = control
+                .options
+                .iter()
+                .find(|option| option.value.as_str() == Some(selected))
+                .map(|option| tr(option.label))
+                .unwrap_or_else(|| selected.to_string());
+            preference_row(ui, control_icon, &tr(control.label), |ui| {
+                let control_width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(control_width, PREFERENCE_ROW_HEIGHT),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        if let Some(color) = control
+                            .options
+                            .iter()
+                            .find(|option| option.value.as_str() == Some(selected))
+                            .and_then(|option| option.color.as_deref())
+                            .and_then(crate::config::parse_rgb_hex)
+                        {
+                            color_swatch(ui, color);
+                        }
+                        let reserve_custom = if selected == "custom" { 128.0 } else { 0.0 };
+                        egui::ComboBox::from_id_salt(("preference-accent", control.key))
+                            .width((ui.available_width() - reserve_custom).max(108.0))
+                            .selected_text(selected_label)
+                            .show_ui(ui, |ui| {
+                                for option in &control.options {
+                                    ui.horizontal(|ui| {
+                                        if let Some(color) = option
+                                            .color
+                                            .as_deref()
+                                            .and_then(crate::config::parse_rgb_hex)
+                                        {
+                                            color_swatch(ui, color);
+                                        }
+                                        if ui
+                                            .selectable_label(
+                                                option.value == current,
+                                                tr(option.label),
+                                            )
+                                            .clicked()
+                                        {
+                                            replacement = Some(option.value.clone());
+                                            ui.close();
+                                        }
+                                    });
+                                }
+                            });
+
+                        let custom_selected = selected == "custom"
+                            || replacement.as_ref().and_then(serde_json::Value::as_str)
+                                == Some("custom");
+                        if custom_selected {
+                            let custom_key = control.custom_key.unwrap_or("custom_accent_color");
+                            let mut hex = value_at_path(values, custom_key)
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("#0078d4")
+                                .to_string();
+                            let mut rgb =
+                                crate::config::parse_rgb_hex(&hex).unwrap_or([0, 120, 212]);
+                            if ui.color_edit_button_srgb(&mut rgb).changed() {
+                                hex = format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
+                                companion_changed |= set_value_at_path(
+                                    values,
+                                    custom_key,
+                                    serde_json::Value::String(hex.clone()),
+                                )
+                                .is_ok();
+                            }
+                            let response = ui.add(
+                                egui::TextEdit::singleline(&mut hex)
+                                    .desired_width(88.0)
+                                    .char_limit(7)
+                                    .hint_text("#0078D4"),
+                            );
+                            if response.changed() {
+                                companion_changed |= set_value_at_path(
+                                    values,
+                                    custom_key,
+                                    serde_json::Value::String(hex.trim().to_string()),
+                                )
+                                .is_ok();
+                            }
+                        }
+                    },
+                );
+            });
+        }
         PreferenceControlKind::Boolean => {
             let stored = current.as_bool().unwrap_or_default();
             let mut displayed = if control.inverted { !stored } else { stored };
@@ -655,6 +747,21 @@ fn render_contract_control(
     }
     replacement
         .is_some_and(|replacement| set_value_at_path(values, control.key, replacement).is_ok())
+        || companion_changed
+}
+
+fn color_swatch(ui: &mut egui::Ui, [red, green, blue]: [u8; 3]) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+    ui.painter().circle_filled(
+        rect.center(),
+        5.0,
+        egui::Color32::from_rgb(red, green, blue),
+    );
+    ui.painter().circle_stroke(
+        rect.center(),
+        5.0,
+        egui::Stroke::new(1.0_f32, ui.visuals().widgets.noninteractive.bg_stroke.color),
+    );
 }
 
 fn draw_advanced_actions(
@@ -786,6 +893,7 @@ fn preference_row<R>(
 
 fn preference_control_icon(kind: &PreferenceControlKind) -> &'static str {
     match kind {
+        PreferenceControlKind::Accent => crate::ui::icons::PALETTE,
         PreferenceControlKind::Boolean => crate::ui::icons::CHECK_SQUARE,
         PreferenceControlKind::Number => crate::ui::icons::SLIDERS_HORIZONTAL,
         PreferenceControlKind::Select => crate::ui::icons::LIST_CHECKS,

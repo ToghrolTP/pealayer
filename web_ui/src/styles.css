@@ -137,6 +137,12 @@ body {
 .preference-control__number { min-width: 0; display: grid; grid-template-columns: minmax(90px, 1fr) 90px; align-items: center; gap: 14px; }
 .preference-control__number .ant-slider { margin: 0; }
 .preference-control .ant-select, .preference-control .ant-input, .preference-control .ant-input-number { width: 100%; }
+.preference-control__accent { min-width: 0; display: flex; align-items: center; gap: 8px; }
+.preference-control__accent > .ant-select { min-width: 138px; flex: 1 1 auto; }
+.preference-control__accent > .ant-color-picker-trigger { flex: 0 0 auto; }
+.preference-control__accent .preference-control__hex { width: 92px; flex: 0 0 92px; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; text-transform: uppercase; }
+.accent-option { min-width: 0; display: inline-flex; align-items: center; gap: 8px; }
+.accent-option__swatch { width: 12px; height: 12px; flex: 0 0 12px; border: 1px solid color-mix(in srgb, currentColor 38%, transparent); border-radius: 999px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--canvas) 30%, transparent); }
 .preferences-save-state { min-height: 32px; padding-inline: 4px; display: flex; justify-content: flex-end; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
 .preferences-save-state .anticon { color: var(--accent); }
 
