@@ -480,7 +480,7 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
         ("GET", "/healthz") => HttpResponse::json(
             200,
             "OK",
-            r#"{"status":"ok","service":"pealayer","rpc":"2.0","transport":"unified"}"#,
+            r#"{"status":"ok","service":"pealayer","rpc":"2.0"}"#,
         ),
         ("GET", "/api/runtime/config") => {
             HttpResponse::json(200, "OK", state.runtime_config_json.to_string())

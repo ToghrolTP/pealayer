@@ -189,7 +189,9 @@ fn http_websocket_and_ipc_share_one_port() {
 
     let health = get(18086, "/healthz");
     assert!(health.contains("200 OK"));
-    assert!(health.contains("\"transport\":\"unified\""));
+    assert!(health.contains("\"service\":\"pealayer\""));
+    assert!(health.contains("\"rpc\":\"2.0\""));
+    assert!(!health.contains("\"transport\""));
 
     let (mut websocket, _) = tungstenite::connect("ws://127.0.0.1:18086/ws")
         .expect("WebSocket must upgrade on the unified port");
