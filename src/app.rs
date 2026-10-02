@@ -1610,6 +1610,11 @@ impl PealayerApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
+            InteropCommand::OpenPreferences => {
+                self.show_preferences_dialog = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
             InteropCommand::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             InteropCommand::SetWorkspace { nle } => {
                 let observed = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
