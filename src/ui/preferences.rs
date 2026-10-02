@@ -661,18 +661,8 @@ fn render_contract_control(
         PreferenceControlKind::Boolean => {
             let stored = current.as_bool().unwrap_or_default();
             let mut displayed = if control.inverted { !stored } else { stored };
-            let (label_response, checkbox_response) =
-                preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
-                    ui.checkbox(&mut displayed, "")
-                });
-            let label_clicked = label_response
-                .interact(egui::Sense::click())
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .clicked();
-            if label_clicked {
-                displayed = !displayed;
-            }
-            if checkbox_response.changed() || label_clicked {
+            let checkbox_response = preference_checkbox_row(ui, &tr(control.label), &mut displayed);
+            if checkbox_response.changed() {
                 replacement = Some(serde_json::Value::Bool(if control.inverted {
                     !displayed
                 } else {
@@ -920,6 +910,25 @@ fn preference_row<R>(
     .inner
 }
 
+fn preference_checkbox_row(ui: &mut egui::Ui, label: &str, checked: &mut bool) -> egui::Response {
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), PREFERENCE_ROW_HEIGHT),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            // Keep the real checkbox and its caption in one widget. Rendering a
+            // decorative checkbox icon in the label column and an empty checkbox
+            // in the value column let responsive stacking split them across two
+            // lines, making the visible icon look like a non-interactive control.
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+            ui.add(egui::Checkbox::new(
+                checked,
+                egui::RichText::new(label).size(13.0),
+            ))
+        },
+    )
+    .inner
+}
+
 fn inline_preference_label_width(row_width: f32, desired_label_width: f32) -> Option<f32> {
     let maximum = (row_width - PREFERENCE_CONTROL_MIN_WIDTH - PREFERENCE_COLUMN_GAP).max(128.0);
     (desired_label_width <= maximum).then_some(desired_label_width.min(maximum))
@@ -1091,5 +1100,20 @@ mod tests {
     fn preference_captions_expand_for_content_and_stack_before_clipping() {
         assert_eq!(inline_preference_label_width(700.0, 286.0), Some(286.0));
         assert_eq!(inline_preference_label_width(420.0, 286.0), None);
+    }
+
+    #[test]
+    fn boolean_preferences_use_one_real_inline_checkbox() {
+        let source = include_str!("preferences.rs");
+        let boolean_branch = source
+            .split_once("PreferenceControlKind::Boolean => {")
+            .expect("boolean preference branch")
+            .1
+            .split_once("PreferenceControlKind::Select => {")
+            .expect("select preference branch")
+            .0;
+        assert!(boolean_branch.contains("preference_checkbox_row"));
+        assert!(!boolean_branch.contains("preference_row("));
+        assert!(!boolean_branch.contains("CHECK_SQUARE"));
     }
 }
