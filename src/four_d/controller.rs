@@ -757,7 +757,7 @@ fn parse_strip_effects(value: &Value) -> Vec<HardwareStripEffect> {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
-                program: entry.get("program")?.clone(),
+                program: entry.get("program").cloned().unwrap_or(Value::Null),
                 engine: entry
                     .get("engine")
                     .and_then(Value::as_str)
@@ -1238,10 +1238,12 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
         })
         .collect();
     let strip_effects = snapshot
-        .get("effects")
+        .get("strip_effects")
         .map(parse_strip_effects)
         .unwrap_or_default();
-    let sequence_entries = snapshot.get("effects").and_then(Value::as_array);
+    let sequence_entries = snapshot
+        .pointer("/macros/library")
+        .and_then(Value::as_array);
     let macros = sequence_entries
         .into_iter()
         .flatten()
@@ -1529,11 +1531,11 @@ mod tests {
     }
 
     #[test]
-    fn lighting_effects_are_consumed_only_from_the_unified_snapshot_catalog() {
+    fn lighting_effects_are_consumed_from_the_live_snapshot_catalog() {
         let snapshot = json!({
             "connected": true,
             "hello": {"capabilities": CAPABILITY_ADDRESSABLE_LED},
-            "effects": [
+            "strip_effects": [
             {
                 "id": "lighting-primary",
                 "name": "Primary lighting",
@@ -1623,7 +1625,7 @@ mod tests {
             "connected": true,
             "hello": {"name": "Cinema", "capabilities": CAPABILITY_PWM | CAPABILITY_RELAY_MOTION},
             "status": {"active_relays": 16},
-            "effects": [{"id": "3", "name": "Thunder", "kind": "sequence", "engine": "mcu", "steps": [{"at_us": 250000, "kind": "relay-mask"}]}]
+            "macros": {"library": [{"id": 3, "name": "Thunder", "mode": "mcu", "steps": [{"at_us": 250000, "kind": "relay-mask"}]}]}
         });
         let catalog = json!({
             "peripheral_names": {"relay.5": "Left Air"},
