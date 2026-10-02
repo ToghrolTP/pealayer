@@ -2153,6 +2153,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -3123,6 +3125,7 @@ dependencies = [
  "egui_dock",
  "env_logger",
  "httparse",
+ "image",
  "jiff",
  "libloading 0.9.0",
  "libmpv2",

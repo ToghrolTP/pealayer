@@ -319,6 +319,18 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Expand recent URL history by default",
         ),
         PreferenceControl::boolean(
+            "open_url_fetch_remote_info",
+            "playback",
+            "Open Location / URL",
+            "Fetch remote media information automatically",
+        ),
+        PreferenceControl::boolean(
+            "open_url_fetch_remote_thumbnail",
+            "playback",
+            "Open Location / URL",
+            "Fetch a remote media thumbnail automatically",
+        ),
+        PreferenceControl::boolean(
             "open_url_use_proxy",
             "playback",
             "Open Location / URL",

@@ -379,7 +379,6 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Close" => "بستن",
         "Open Location / URL" => "باز کردن نشانی یا پیوند",
         "Enter a remote media location" => "نشانی رسانهٔ راه‌دور را وارد کنید",
-        "Remote file information and preview" => "اطلاعات و پیش‌نمایش پروندهٔ راه‌دور",
         "Enter a media URL (HTTP/HTTPS, HLS, RTSP, RTMP, SRT, UDP, or TCP):" => {
             "نشانی رسانه (HTTP/HTTPS،‏ HLS،‏ RTSP،‏ RTMP،‏ SRT،‏ UDP یا TCP) را وارد کنید:"
         }
@@ -397,6 +396,12 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "No recent remote locations." => "نشانی راه‌دور اخیری وجود ندارد.",
         "Remove from history" => "حذف از تاریخچه",
         "Expand recent URL history by default" => "تاریخچهٔ نشانی‌های اخیر به‌طور پیش‌فرض باز باشد",
+        "Fetch remote media information automatically" => {
+            "اطلاعات رسانهٔ راه‌دور به‌طور خودکار دریافت شود"
+        }
+        "Fetch a remote media thumbnail automatically" => {
+            "تصویر بندانگشتی رسانهٔ راه‌دور به‌طور خودکار دریافت شود"
+        }
         "Use a proxy for URL inspection" => "استفاده از پراکسی برای بررسی نشانی",
         "Use a proxy for remote inspection and playback" => {
             "استفاده از پراکسی برای بررسی و پخش رسانهٔ راه‌دور"
@@ -434,15 +439,15 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Fetch details" => "دریافت جزئیات",
         "Fetching details" => "در حال دریافت جزئیات",
         "Preparing remote media details…" => "در حال آماده‌سازی جزئیات رسانهٔ راه‌دور…",
+        "Automatic remote information is disabled." => {
+            "دریافت خودکار اطلاعات رسانهٔ راه‌دور غیرفعال است."
+        }
         "Invalid media location" => "نشانی رسانه نامعتبر است",
         "Problem" => "مشکل",
         "Entered value" => "مقدار واردشده",
         "How to fix" => "راه‌حل",
         "Enter a complete supported URL including its protocol." => {
             "یک نشانی کامل و پشتیبانی‌شده همراه با پروتکل آن وارد کنید."
-        }
-        "Enter a location to validate and preview it." => {
-            "برای اعتبارسنجی و پیش‌نمایش، یک نشانی وارد کنید."
         }
         "Could not fetch remote media details" => "جزئیات رسانهٔ راه‌دور دریافت نشد",
         "Target" => "مقصد",
@@ -473,6 +478,9 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Last modified" => "آخرین تغییر",
         "Server" => "سرور",
         "Response time" => "زمان پاسخ",
+        "Thumbnail at 20%" => "تصویر بندانگشتی در ۲۰٪",
+        "Initial frame" => "نخستین قاب",
+        "Thumbnail unavailable" => "تصویر بندانگشتی در دسترس نیست",
         "Paste" => "چسباندن",
         "Open" => "باز کردن",
         "Cancel" => "انصراف",

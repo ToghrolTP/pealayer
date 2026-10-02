@@ -4,6 +4,13 @@ use std::process::{Command, Stdio};
 
 const THUMBNAIL_PIPELINE_REVISION: &str = "fit-letterbox-v2";
 const THUMBNAIL_FILTER: &str = "thumbnail=60,scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2:color=0x0b0f14";
+const REMOTE_THUMBNAIL_PIPELINE_REVISION: &str = "remote-20-percent-v1";
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoteThumbnailFile {
+    pub path: PathBuf,
+    pub position_seconds: Option<f64>,
+}
 
 pub fn get_thumbnail_cache_dir() -> PathBuf {
     if let Ok(cache) = std::env::var("XDG_CACHE_HOME") {
@@ -101,6 +108,162 @@ pub fn get_or_generate_thumbnail(video_path: &Path) -> Option<PathBuf> {
     Some(thumb_path)
 }
 
+/// Fetch a representative frame for a remote media target without showing a
+/// console window. Finite media is sampled at roughly 20% of its duration;
+/// duration-less streams fall back to their initial decodable frame.
+pub fn get_or_generate_remote_thumbnail(
+    media_url: &str,
+    cache_identity: &str,
+    use_proxy: bool,
+    proxy_url: Option<&str>,
+) -> Result<RemoteThumbnailFile, String> {
+    let cache_dir = get_thumbnail_cache_dir().join("remote");
+    std::fs::create_dir_all(&cache_dir)
+        .map_err(|error| format!("Could not create the thumbnail cache: {error}"))?;
+
+    let position_seconds = probe_remote_duration(media_url, use_proxy, proxy_url)
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+        .map(|duration| duration * 0.20);
+    let cache_key = remote_thumbnail_cache_key(media_url, cache_identity);
+    let thumb_path = cache_dir.join(format!("{cache_key}.jpg"));
+    if thumb_path.exists() {
+        return Ok(RemoteThumbnailFile {
+            path: thumb_path,
+            position_seconds,
+        });
+    }
+
+    let staged_path = cache_dir.join(format!("{cache_key}.tmp.jpg"));
+    let _ = std::fs::remove_file(&staged_path);
+    let output = staged_path.to_string_lossy().into_owned();
+    let seek = position_seconds.unwrap_or(0.0).to_string();
+
+    let mut ffmpeg = silent_command("ffmpeg");
+    configure_remote_proxy(&mut ffmpeg, use_proxy, proxy_url);
+    let ffmpeg_ok = ffmpeg
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-rw_timeout",
+            "8000000",
+            "-ss",
+            seek.as_str(),
+            "-i",
+            media_url,
+            "-an",
+            "-sn",
+            "-dn",
+            "-frames:v",
+            "1",
+            "-vf",
+            THUMBNAIL_FILTER,
+            "-q:v",
+            "4",
+            "-y",
+            output.as_str(),
+        ])
+        .status()
+        .is_ok_and(|status| status.success());
+
+    let generated = ffmpeg_ok && staged_path.exists() || {
+        let mpv_filter = format!("--vf=lavfi=[{THUMBNAIL_FILTER}]");
+        let output_arg = format!("--o={output}");
+        let start_arg = format!("--start={seek}");
+        let mut mpv = silent_command("mpv");
+        configure_remote_proxy(&mut mpv, use_proxy, proxy_url);
+        mpv.args([
+            media_url,
+            "--no-config",
+            "--no-audio",
+            start_arg.as_str(),
+            "--frames=1",
+            "--ovc=mjpeg",
+            "--of=image2",
+            mpv_filter.as_str(),
+            output_arg.as_str(),
+        ])
+        .status()
+        .is_ok_and(|status| status.success())
+            && staged_path.exists()
+    };
+
+    if !generated {
+        let _ = std::fs::remove_file(&staged_path);
+        return Err(
+            "No representative frame could be decoded with the available FFmpeg/MPV tools."
+                .to_string(),
+        );
+    }
+
+    if std::fs::rename(&staged_path, &thumb_path).is_err() && !thumb_path.exists() {
+        let _ = std::fs::remove_file(&staged_path);
+        return Err("The completed remote thumbnail could not be published.".to_string());
+    }
+    let _ = std::fs::remove_file(&staged_path);
+    Ok(RemoteThumbnailFile {
+        path: thumb_path,
+        position_seconds,
+    })
+}
+
+fn probe_remote_duration(media_url: &str, use_proxy: bool, proxy_url: Option<&str>) -> Option<f64> {
+    let mut command = silent_command("ffprobe");
+    command.stdout(Stdio::piped());
+    configure_remote_proxy(&mut command, use_proxy, proxy_url);
+    let output = command
+        .args([
+            "-v",
+            "error",
+            "-rw_timeout",
+            "8000000",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            media_url,
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()?
+        .trim()
+        .parse::<f64>()
+        .ok()
+}
+
+fn configure_remote_proxy(command: &mut Command, use_proxy: bool, proxy_url: Option<&str>) {
+    const PROXY_VARIABLES: [&str; 6] = [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ];
+    if !use_proxy {
+        for variable in PROXY_VARIABLES {
+            command.env_remove(variable);
+        }
+    } else if let Some(proxy) = proxy_url.filter(|proxy| !proxy.trim().is_empty()) {
+        for variable in PROXY_VARIABLES {
+            command.env(variable, proxy);
+        }
+    }
+}
+
+fn remote_thumbnail_cache_key(media_url: &str, cache_identity: &str) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    REMOTE_THUMBNAIL_PIPELINE_REVISION.hash(&mut hasher);
+    media_url.hash(&mut hasher);
+    cache_identity.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
 fn silent_command(program: &str) -> Command {
     let mut command = Command::new(program);
     command
@@ -151,5 +314,18 @@ mod tests {
     fn thumbnail_filter_preserves_source_aspect_ratio() {
         assert!(THUMBNAIL_FILTER.contains("force_original_aspect_ratio=decrease"));
         assert!(THUMBNAIL_FILTER.contains("pad=640:360"));
+    }
+
+    #[test]
+    fn remote_cache_identity_is_stable_and_sensitive_to_metadata() {
+        let first = remote_thumbnail_cache_key("https://example.test/movie.mp4", "etag-one");
+        assert_eq!(
+            first,
+            remote_thumbnail_cache_key("https://example.test/movie.mp4", "etag-one")
+        );
+        assert_ne!(
+            first,
+            remote_thumbnail_cache_key("https://example.test/movie.mp4", "etag-two")
+        );
     }
 }

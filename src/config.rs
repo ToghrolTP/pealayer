@@ -136,6 +136,8 @@ pub struct AppConfig {
     pub open_url_multiline: bool,
     pub open_url_history_expanded: bool,
     pub open_url_recent_click_edits: bool,
+    pub open_url_fetch_remote_info: bool,
+    pub open_url_fetch_remote_thumbnail: bool,
     pub open_url_use_proxy: bool,
     pub open_url_proxy_url: Option<String>,
     pub recent_media: Vec<PathBuf>,
@@ -191,6 +193,8 @@ impl Default for AppConfig {
             open_url_multiline: true,
             open_url_history_expanded: true,
             open_url_recent_click_edits: true,
+            open_url_fetch_remote_info: true,
+            open_url_fetch_remote_thumbnail: true,
             open_url_use_proxy: true,
             open_url_proxy_url: None,
             recent_media: Vec::new(),
@@ -832,6 +836,8 @@ mod tests {
         assert!(cfg.open_url_multiline);
         assert!(cfg.open_url_history_expanded);
         assert!(cfg.open_url_recent_click_edits);
+        assert!(cfg.open_url_fetch_remote_info);
+        assert!(cfg.open_url_fetch_remote_thumbnail);
         assert!(cfg.open_url_use_proxy);
         assert!(cfg.open_url_proxy_url.is_none());
         assert!(cfg.native_dialog_windows);
@@ -845,6 +851,8 @@ mod tests {
         cfg.open_url_multiline = false;
         cfg.open_url_history_expanded = false;
         cfg.open_url_recent_click_edits = false;
+        cfg.open_url_fetch_remote_info = false;
+        cfg.open_url_fetch_remote_thumbnail = false;
         cfg.open_url_use_proxy = false;
         cfg.open_url_proxy_url = Some("http://127.0.0.1:8080".to_string());
         cfg.native_dialog_windows = true;
@@ -858,6 +866,8 @@ mod tests {
         assert!(!loaded.open_url_multiline);
         assert!(!loaded.open_url_history_expanded);
         assert!(!loaded.open_url_recent_click_edits);
+        assert!(!loaded.open_url_fetch_remote_info);
+        assert!(!loaded.open_url_fetch_remote_thumbnail);
         assert!(!loaded.open_url_use_proxy);
         assert_eq!(
             loaded.open_url_proxy_url.as_deref(),

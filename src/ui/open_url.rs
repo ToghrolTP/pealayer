@@ -93,13 +93,29 @@ pub enum ProbeStatus {
 #[derive(Clone, Debug)]
 struct ProbeResult {
     generation: u64,
-    result: Result<RemoteMediaInfo, String>,
+    result: Result<RemoteProbePayload, String>,
+}
+
+#[derive(Clone, Debug)]
+struct RemoteProbePayload {
+    info: RemoteMediaInfo,
+    thumbnail: Option<RemoteThumbnailPixels>,
+    thumbnail_error: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct RemoteThumbnailPixels {
+    rgba: Vec<u8>,
+    width: usize,
+    height: usize,
+    position_seconds: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct ProbeNetworkSettings {
     use_proxy: bool,
     proxy_url: Option<String>,
+    fetch_thumbnail: bool,
 }
 
 pub struct UrlInspector {
@@ -110,7 +126,11 @@ pub struct UrlInspector {
     last_changed: Instant,
     requested_input: Option<String>,
     last_network: Option<ProbeNetworkSettings>,
+    last_auto_fetch: bool,
     pub status: ProbeStatus,
+    thumbnail_texture: Option<egui::TextureHandle>,
+    thumbnail_position_seconds: Option<f64>,
+    thumbnail_error: Option<String>,
 }
 
 impl Default for UrlInspector {
@@ -124,19 +144,46 @@ impl Default for UrlInspector {
             last_changed: Instant::now(),
             requested_input: None,
             last_network: None,
+            last_auto_fetch: true,
             status: ProbeStatus::Idle,
+            thumbnail_texture: None,
+            thumbnail_position_seconds: None,
+            thumbnail_error: None,
         }
     }
 }
 
 impl UrlInspector {
-    fn update(&mut self, input: &str, ctx: &egui::Context, network: ProbeNetworkSettings) {
+    fn update(
+        &mut self,
+        input: &str,
+        ctx: &egui::Context,
+        network: ProbeNetworkSettings,
+        auto_fetch: bool,
+    ) {
         while let Ok(probe) = self.rx.try_recv() {
             if probe.generation != self.generation {
                 continue;
             }
             self.status = match probe.result {
-                Ok(info) => ProbeStatus::Ready(info),
+                Ok(payload) => {
+                    self.thumbnail_texture = payload.thumbnail.as_ref().map(|thumbnail| {
+                        ctx.load_texture(
+                            format!("remote-media-thumbnail-{}", self.generation),
+                            egui::ColorImage::from_rgba_unmultiplied(
+                                [thumbnail.width, thumbnail.height],
+                                &thumbnail.rgba,
+                            ),
+                            egui::TextureOptions::LINEAR,
+                        )
+                    });
+                    self.thumbnail_position_seconds = payload
+                        .thumbnail
+                        .as_ref()
+                        .and_then(|thumbnail| thumbnail.position_seconds);
+                    self.thumbnail_error = payload.thumbnail_error;
+                    ProbeStatus::Ready(payload.info)
+                }
                 Err(message) => ProbeStatus::Failed {
                     url: self.last_input.clone(),
                     message,
@@ -145,13 +192,20 @@ impl UrlInspector {
         }
 
         let trimmed = input.trim();
-        if self.last_input != trimmed || self.last_network.as_ref() != Some(&network) {
+        if self.last_input != trimmed
+            || self.last_network.as_ref() != Some(&network)
+            || self.last_auto_fetch != auto_fetch
+        {
             self.generation = self.generation.wrapping_add(1);
             self.last_input = trimmed.to_owned();
             self.last_network = Some(network.clone());
+            self.last_auto_fetch = auto_fetch;
             self.last_changed = Instant::now();
             self.requested_input = None;
             self.status = ProbeStatus::Idle;
+            self.thumbnail_texture = None;
+            self.thumbnail_position_seconds = None;
+            self.thumbnail_error = None;
         }
 
         let Ok(validated) = validate_media_url(trimmed) else {
@@ -162,6 +216,10 @@ impl UrlInspector {
                 url: validated.normalized,
                 message: "This protocol is accepted by the media engine, but does not expose HTTP file metadata before playback.".to_string(),
             };
+            return;
+        }
+
+        if !auto_fetch {
             return;
         }
 
@@ -203,6 +261,9 @@ impl UrlInspector {
         let generation = self.generation;
         self.requested_input = Some(self.last_input.clone());
         self.status = ProbeStatus::Checking(url.clone());
+        self.thumbnail_texture = None;
+        self.thumbnail_position_seconds = None;
+        self.thumbnail_error = None;
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             let result = probe_remote_media(&url, &network);
@@ -239,9 +300,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         // standard exclusions such as NO_PROXY continue to work.
         proxy_url: (!app.open_url_proxy_url.trim().is_empty())
             .then(|| app.open_url_proxy_url.trim().to_string()),
+        fetch_thumbnail: app.open_url_fetch_remote_thumbnail,
     };
-    app.url_inspector
-        .update(&app.url_input_buffer, ui.ctx(), network.clone());
+    app.url_inspector.update(
+        &app.url_input_buffer,
+        ui.ctx(),
+        network.clone(),
+        app.open_url_fetch_remote_info,
+    );
     let remote_history = app
         .recent_media
         .iter()
@@ -293,7 +359,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     egui::RichText::new(format!(
                                         "{}  {}",
                                         crate::ui::icons::LINK_SIMPLE,
-                                        app.tr("Remote file information and preview")
+                                        app.tr("Remote media information")
                                     ))
                                     .strong(),
                                 );
@@ -811,14 +877,24 @@ fn draw_location_and_remote_details(
                 .max_col_width((ui.available_width() * 0.7).max(180.0))
                 .spacing([18.0, 6.0])
                 .show(ui, |ui| {
-                    metadata_row(ui, &app.tr("Problem"), message);
                     metadata_row(
                         ui,
+                        app.language,
+                        crate::ui::icons::WARNING,
+                        &app.tr("Problem"),
+                        message,
+                    );
+                    metadata_row(
+                        ui,
+                        app.language,
+                        crate::ui::icons::LINK_SIMPLE,
                         &app.tr("Entered value"),
                         &crate::media::redact_media_target(app.url_input_buffer.trim()),
                     );
                     metadata_row(
                         ui,
+                        app.language,
+                        crate::ui::icons::INFO,
                         &app.tr("How to fix"),
                         &app.tr("Enter a complete supported URL including its protocol."),
                     );
@@ -827,7 +903,7 @@ fn draw_location_and_remote_details(
         }
         Err(_) => {
             ui.label(
-                egui::RichText::new(app.tr("Enter a location to validate and preview it.")).weak(),
+                egui::RichText::new(app.tr("Enter a location to validate and inspect it.")).weak(),
             );
             return;
         }
@@ -868,7 +944,12 @@ fn draw_location_and_remote_details(
 
     match status {
         ProbeStatus::Idle => {
-            ui.label(egui::RichText::new(app.tr("Preparing remote media details…")).weak());
+            let message = if app.open_url_fetch_remote_info {
+                app.tr("Preparing remote media details…")
+            } else {
+                app.tr("Automatic remote information is disabled.")
+            };
+            ui.label(egui::RichText::new(message).weak());
         }
         ProbeStatus::Checking(url) => {
             ui.horizontal(|ui| {
@@ -891,38 +972,79 @@ fn draw_location_and_remote_details(
                 .show(ui, |ui| {
                     metadata_row_colored(
                         ui,
+                        app.language,
+                        crate::ui::icons::CHECK,
                         &app.tr("Status"),
                         &format!("{} {}", info.status, info.status_text),
                         status_color,
                     );
-                    metadata_row(ui, &app.tr("Final URL"), &info.final_url);
-                    optional_metadata_row(ui, &app.tr("File name"), info.file_name.as_deref());
+                    metadata_row(
+                        ui,
+                        app.language,
+                        crate::ui::icons::LINK,
+                        &app.tr("Final URL"),
+                        &info.final_url,
+                    );
                     optional_metadata_row(
                         ui,
+                        app.language,
+                        crate::ui::icons::FILE_VIDEO,
+                        &app.tr("File name"),
+                        info.file_name.as_deref(),
+                    );
+                    optional_metadata_row(
+                        ui,
+                        app.language,
+                        crate::ui::icons::FILE_VIDEO,
                         &app.tr("Content type"),
                         info.content_type.as_deref(),
                     );
                     if let Some(length) = info.content_length {
-                        metadata_row(ui, &app.tr("Remote size"), &human_bytes(length));
+                        metadata_row(
+                            ui,
+                            app.language,
+                            crate::ui::icons::GAUGE,
+                            &app.tr("Remote size"),
+                            &human_bytes(length),
+                        );
                     }
                     optional_metadata_row(
                         ui,
+                        app.language,
+                        crate::ui::icons::ARROWS_OUT,
                         &app.tr("Byte ranges"),
                         info.accept_ranges.as_deref(),
                     );
                     optional_metadata_row(
                         ui,
+                        app.language,
+                        crate::ui::icons::CLOCK_COUNTER_CLOCKWISE,
                         &app.tr("Last modified"),
                         info.last_modified.as_deref(),
                     );
-                    optional_metadata_row(ui, "ETag", info.etag.as_deref());
-                    optional_metadata_row(ui, &app.tr("Server"), info.server.as_deref());
+                    optional_metadata_row(
+                        ui,
+                        app.language,
+                        crate::ui::icons::KEYBOARD,
+                        "ETag",
+                        info.etag.as_deref(),
+                    );
+                    optional_metadata_row(
+                        ui,
+                        app.language,
+                        crate::ui::icons::CPU,
+                        &app.tr("Server"),
+                        info.server.as_deref(),
+                    );
                     metadata_row(
                         ui,
+                        app.language,
+                        crate::ui::icons::CLOCK,
                         &app.tr("Response time"),
                         &format!("{} ms", info.elapsed_ms),
                     );
                 });
+            draw_remote_thumbnail(ui, app);
         }
         ProbeStatus::Failed { url, message } => {
             ui.label(
@@ -942,10 +1064,18 @@ fn draw_location_and_remote_details(
                 .show(ui, |ui| {
                     metadata_row(
                         ui,
+                        app.language,
+                        crate::ui::icons::LINK_SIMPLE,
                         &app.tr("Target"),
                         &crate::media::redact_media_target(url),
                     );
-                    metadata_row(ui, &app.tr("Reason"), message);
+                    metadata_row(
+                        ui,
+                        app.language,
+                        crate::ui::icons::WARNING,
+                        &app.tr("Reason"),
+                        message,
+                    );
                     let proxy = if app.open_url_use_proxy {
                         effective_proxy
                             .map(proxy_display_value)
@@ -953,9 +1083,17 @@ fn draw_location_and_remote_details(
                     } else {
                         app.tr("Disabled")
                     };
-                    metadata_row(ui, &app.tr("Proxy"), &proxy);
                     metadata_row(
                         ui,
+                        app.language,
+                        crate::ui::icons::GLOBE,
+                        &app.tr("Proxy"),
+                        &proxy,
+                    );
+                    metadata_row(
+                        ui,
+                        app.language,
+                        crate::ui::icons::INFO,
                         &app.tr("Next step"),
                         &app.tr("Check the address or connection, then retry the details request."),
                     );
@@ -1115,22 +1253,119 @@ fn draw_recent_location(
     action
 }
 
-fn metadata_row(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.label(egui::RichText::new(label).strong());
-    ui.add(egui::Label::new(value).wrap());
+fn metadata_row(
+    ui: &mut egui::Ui,
+    language: crate::config::AppLanguage,
+    icon: &str,
+    label: &str,
+    value: &str,
+) {
+    ui.label(egui::RichText::new(format!("{icon}  {label}")).strong());
+    copyable_metadata_value(ui, language, value, egui::RichText::new(value));
     ui.end_row();
 }
 
-fn metadata_row_colored(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32) {
-    ui.label(egui::RichText::new(label).strong());
-    ui.label(egui::RichText::new(value).strong().color(color));
+fn metadata_row_colored(
+    ui: &mut egui::Ui,
+    language: crate::config::AppLanguage,
+    icon: &str,
+    label: &str,
+    value: &str,
+    color: egui::Color32,
+) {
+    ui.label(egui::RichText::new(format!("{icon}  {label}")).strong());
+    copyable_metadata_value(
+        ui,
+        language,
+        value,
+        egui::RichText::new(value).strong().color(color),
+    );
     ui.end_row();
 }
 
-fn optional_metadata_row(ui: &mut egui::Ui, label: &str, value: Option<&str>) {
+fn optional_metadata_row(
+    ui: &mut egui::Ui,
+    language: crate::config::AppLanguage,
+    icon: &str,
+    label: &str,
+    value: Option<&str>,
+) {
     if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
-        metadata_row(ui, label, value);
+        metadata_row(ui, language, icon, label, value);
     }
+}
+
+fn copyable_metadata_value(
+    ui: &mut egui::Ui,
+    language: crate::config::AppLanguage,
+    value: &str,
+    text: egui::RichText,
+) {
+    let value = value.to_owned();
+    let response = ui.add(egui::Label::new(text).wrap().sense(egui::Sense::click()));
+    response.context_menu(|ui| {
+        if ui
+            .button(format!(
+                "{}  {}",
+                crate::ui::icons::COPY,
+                tr(language, "Copy")
+            ))
+            .clicked()
+        {
+            ui.ctx().copy_text(value.clone());
+            ui.close();
+        }
+    });
+}
+
+fn draw_remote_thumbnail(ui: &mut egui::Ui, app: &PealayerApp) {
+    if !app.open_url_fetch_remote_thumbnail {
+        return;
+    }
+    if let Some(texture) = app.url_inspector.thumbnail_texture.as_ref() {
+        ui.add_space(10.0);
+        let source_size = texture.size_vec2();
+        let width = ui.available_width().min(480.0);
+        let height = (width * source_size.y / source_size.x.max(1.0)).min(270.0);
+        egui::Frame::group(ui.style())
+            .corner_radius(8.0)
+            .inner_margin(egui::Margin::same(6))
+            .show(ui, |ui| {
+                ui.add(egui::Image::new(texture).fit_to_exact_size(egui::vec2(width, height)));
+            });
+        let caption = app
+            .url_inspector
+            .thumbnail_position_seconds
+            .map(|seconds| {
+                format!(
+                    "{} · {}",
+                    app.tr("Thumbnail at 20%"),
+                    format_thumbnail_time(seconds)
+                )
+            })
+            .unwrap_or_else(|| app.tr("Initial frame"));
+        ui.label(
+            egui::RichText::new(format!("{}  {caption}", crate::ui::icons::FILE_VIDEO))
+                .small()
+                .weak(),
+        );
+    } else if let Some(error) = app.url_inspector.thumbnail_error.as_deref() {
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new(format!(
+                "{}  {}: {error}",
+                crate::ui::icons::WARNING,
+                app.tr("Thumbnail unavailable")
+            ))
+            .small()
+            .weak(),
+        );
+    }
+}
+
+fn format_thumbnail_time(seconds: f64) -> String {
+    let total = seconds.max(0.0).round() as u64;
+    format!("{}:{:02}", total / 60, total % 60)
 }
 
 pub fn validate_media_url(input: &str) -> Result<ValidatedMediaUrl, String> {
@@ -1182,7 +1417,7 @@ pub fn validate_media_url(input: &str) -> Result<ValidatedMediaUrl, String> {
 fn probe_remote_media(
     url: &str,
     network: &ProbeNetworkSettings,
-) -> Result<RemoteMediaInfo, String> {
+) -> Result<RemoteProbePayload, String> {
     let mut builder = reqwest::blocking::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(PROBE_TIMEOUT)
@@ -1238,22 +1473,71 @@ fn probe_remote_media(
                 .map(str::to_owned)
         });
     let status = response.status();
-    Ok(RemoteMediaInfo {
+    let content_type = header_string(headers, CONTENT_TYPE);
+    let accept_ranges = header_string(headers, ACCEPT_RANGES);
+    let last_modified = header_string(headers, LAST_MODIFIED);
+    let etag = header_string(headers, ETAG);
+    let server = header_string(headers, SERVER);
+    let info = RemoteMediaInfo {
         requested_url: url.to_owned(),
-        final_url,
+        final_url: final_url.clone(),
         status: status.as_u16(),
         status_text: status
             .canonical_reason()
             .unwrap_or("Unknown status")
             .to_string(),
-        content_type: header_string(headers, CONTENT_TYPE),
+        content_type,
         content_length,
         file_name,
-        accept_ranges: header_string(headers, ACCEPT_RANGES),
-        last_modified: header_string(headers, LAST_MODIFIED),
-        etag: header_string(headers, ETAG),
-        server: header_string(headers, SERVER),
+        accept_ranges,
+        last_modified,
+        etag,
+        server,
         elapsed_ms: started.elapsed().as_millis(),
+    };
+
+    let (thumbnail, thumbnail_error) = if network.fetch_thumbnail {
+        let cache_identity = format!(
+            "{}|{}|{}",
+            info.etag.as_deref().unwrap_or_default(),
+            info.last_modified.as_deref().unwrap_or_default(),
+            info.content_length.unwrap_or_default()
+        );
+        match crate::server::thumbnails::get_or_generate_remote_thumbnail(
+            &final_url,
+            &cache_identity,
+            network.use_proxy,
+            network.proxy_url.as_deref(),
+        ) {
+            Ok(thumbnail) => match decode_remote_thumbnail(&thumbnail) {
+                Ok(thumbnail) => (Some(thumbnail), None),
+                Err(error) => (None, Some(error)),
+            },
+            Err(error) => (None, Some(error)),
+        }
+    } else {
+        (None, None)
+    };
+
+    Ok(RemoteProbePayload {
+        info,
+        thumbnail,
+        thumbnail_error,
+    })
+}
+
+fn decode_remote_thumbnail(
+    thumbnail: &crate::server::thumbnails::RemoteThumbnailFile,
+) -> Result<RemoteThumbnailPixels, String> {
+    let decoded = image::open(&thumbnail.path)
+        .map_err(|error| format!("The fetched thumbnail could not be decoded: {error}"))?
+        .into_rgba8();
+    let (width, height) = decoded.dimensions();
+    Ok(RemoteThumbnailPixels {
+        rgba: decoded.into_raw(),
+        width: width as usize,
+        height: height as usize,
+        position_seconds: thumbnail.position_seconds,
     })
 }
 
@@ -1339,6 +1623,7 @@ mod tests {
             Some("movie.mp4".to_string())
         );
         assert_eq!(human_bytes(6419456), "6.12 MiB (6419456 bytes)");
+        assert_eq!(format_thumbnail_time(125.4), "2:05");
     }
 
     #[test]
