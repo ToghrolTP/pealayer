@@ -7,8 +7,8 @@ use crate::preferences_contract::{
 use eframe::egui;
 
 const PREFERENCES_RAIL_WIDTH: f32 = 118.0;
-const PREFERENCE_ROW_HEIGHT: f32 = 36.0;
-const PREFERENCE_ROW_GAP: f32 = 1.0;
+const PREFERENCE_ROW_HEIGHT: f32 = 33.0;
+const PREFERENCE_ROW_GAP: f32 = 3.0;
 const PREFERENCE_COLUMN_GAP: f32 = 6.0;
 const PREFERENCE_CONTROL_MAX_WIDTH: f32 = 420.0;
 const PREFERENCE_CONTROL_MIN_WIDTH: f32 = 180.0;
@@ -1081,7 +1081,8 @@ mod tests {
         assert!(!source.contains(concat!("const PREFERENCES_", "ACTION_HEIGHT")));
         assert!(PREFERENCES_RAIL_WIDTH >= 110.0);
         assert!(PREFERENCE_ROW_HEIGHT > crate::ui::dialog::NAVIGATION_HEIGHT);
-        assert!(PREFERENCE_ROW_GAP <= 1.0);
+        assert_eq!(PREFERENCE_ROW_GAP, 3.0);
+        assert!(PREFERENCE_ROW_HEIGHT + PREFERENCE_ROW_GAP < 37.0);
         assert!(PREFERENCE_COLUMN_GAP <= 6.0);
         assert!(PREFERENCE_CONTROL_MAX_WIDTH >= 400.0);
     }
