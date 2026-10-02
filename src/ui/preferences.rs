@@ -12,6 +12,13 @@ const TABS: [(&str, &str); 5] = [
     (crate::ui::icons::GEAR, "Advanced"),
 ];
 
+const PREFERENCES_RAIL_WIDTH: f32 = 118.0;
+const PREFERENCES_TAB_WIDTH: f32 = 112.0;
+const PREFERENCES_TAB_HEIGHT: f32 = 30.0;
+const PREFERENCES_PRIMARY_ACTION_WIDTH: f32 = 124.0;
+const PREFERENCES_SECONDARY_ACTION_WIDTH: f32 = 104.0;
+const PREFERENCES_ACTION_HEIGHT: f32 = 36.0;
+
 pub(crate) struct NativePreferencesController {
     child: std::process::Child,
 }
@@ -385,19 +392,18 @@ fn draw_native_preferences_surface(state: &mut NativePreferencesState, ui: &mut 
                     );
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .button(format!("{}  {}", crate::ui::icons::X, tr("Close")))
+                    if preferences_action_button(ui, crate::ui::icons::X, &tr("Close"), false)
                         .clicked()
                     {
                         close = true;
                     }
-                    if ui
-                        .button(format!(
-                            "{}  {}",
-                            crate::ui::icons::FLOPPY_DISK,
-                            tr("Save now")
-                        ))
-                        .clicked()
+                    if preferences_action_button(
+                        ui,
+                        crate::ui::icons::FLOPPY_DISK,
+                        &tr("Save now"),
+                        true,
+                    )
+                    .clicked()
                     {
                         save_native_preferences(state, ui.ctx());
                     }
@@ -424,14 +430,14 @@ fn draw_native_preferences_surface(state: &mut NativePreferencesState, ui: &mut 
         ui.horizontal_top(|ui| {
             if !narrow {
                 ui.allocate_ui_with_layout(
-                    egui::vec2(142.0, ui.available_height()),
+                    egui::vec2(PREFERENCES_RAIL_WIDTH, ui.available_height()),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
                         ui.spacing_mut().item_spacing.y = 5.0;
                         for (index, (icon, name)) in TABS.into_iter().enumerate() {
                             if preferences_tab_button(
                                 ui,
-                                136.0,
+                                PREFERENCES_TAB_WIDTH,
                                 state.tab == index,
                                 icon,
                                 &tr(name),
@@ -899,7 +905,7 @@ fn native_advanced_preferences(
             *changed |= ui
                 .checkbox(
                     &mut state.config.native_dialog_windows,
-                    tr("Open supported dialogs in separate OS windows"),
+                    tr("Open Preferences in a separate native window"),
                 )
                 .changed();
             ui.label(
@@ -990,19 +996,18 @@ fn draw_preferences_surface(app: &mut PealayerApp, ui: &mut egui::Ui) -> bool {
         .show_inside(ui, |ui| {
             ui.add_space(6.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .button(format!("{}  {}", crate::ui::icons::X, app.tr("Close")))
+                if preferences_action_button(ui, crate::ui::icons::X, &app.tr("Close"), false)
                     .clicked()
                 {
                     close = true;
                 }
-                if ui
-                    .button(format!(
-                        "{}  {}",
-                        crate::ui::icons::FLOPPY_DISK,
-                        app.tr("Save now")
-                    ))
-                    .clicked()
+                if preferences_action_button(
+                    ui,
+                    crate::ui::icons::FLOPPY_DISK,
+                    &app.tr("Save now"),
+                    true,
+                )
+                .clicked()
                 {
                     app.save_config();
                     app.set_osd(app.tr("Preferences saved"));
@@ -1024,7 +1029,7 @@ fn draw_preferences_surface(app: &mut PealayerApp, ui: &mut egui::Ui) -> bool {
             let content_height = ui.available_height();
             ui.horizontal_top(|ui| {
                 ui.allocate_ui_with_layout(
-                    egui::vec2(142.0, content_height),
+                    egui::vec2(PREFERENCES_RAIL_WIDTH, content_height),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| draw_tabs(app, ui, false),
                 );
@@ -1045,7 +1050,7 @@ fn draw_tabs(app: &mut PealayerApp, ui: &mut egui::Ui, compact: bool) {
         let width = if compact {
             (ui.available_width() / 2.0 - 4.0).max(112.0)
         } else {
-            120.0
+            PREFERENCES_TAB_WIDTH
         };
         if preferences_tab_button(ui, width, app.preferences_tab == index, icon, &app.tr(tab))
             .clicked()
@@ -1062,7 +1067,10 @@ fn preferences_tab_button(
     icon: &str,
     label: &str,
 ) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 32.0), egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(width, PREFERENCES_TAB_HEIGHT),
+        egui::Sense::click(),
+    );
     if ui.is_rect_visible(rect) {
         let visuals = ui.style().interact_selectable(&response, selected);
         ui.painter().rect(
@@ -1074,21 +1082,43 @@ fn preferences_tab_button(
         );
         let color = visuals.fg_stroke.color;
         ui.painter().text(
-            egui::pos2(rect.left() + 18.0, rect.center().y),
+            egui::pos2(rect.left() + 16.0, rect.center().y),
             egui::Align2::CENTER_CENTER,
             icon,
-            egui::FontId::proportional(17.0),
+            egui::FontId::proportional(15.0),
             color,
         );
         ui.painter().text(
-            egui::pos2(rect.left() + 38.0, rect.center().y),
+            egui::pos2(rect.left() + 32.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
             label,
-            egui::FontId::proportional(16.0),
+            egui::FontId::proportional(14.0),
             color,
         );
     }
     response
+}
+
+fn preferences_action_button(
+    ui: &mut egui::Ui,
+    icon: &str,
+    label: &str,
+    primary: bool,
+) -> egui::Response {
+    let width = if primary {
+        PREFERENCES_PRIMARY_ACTION_WIDTH
+    } else {
+        PREFERENCES_SECONDARY_ACTION_WIDTH
+    };
+    let text = egui::RichText::new(format!("{icon}  {label}")).size(15.0);
+    let button = if primary {
+        egui::Button::new(text.color(ui.visuals().selection.stroke.color))
+            .fill(ui.visuals().selection.bg_fill)
+            .stroke(ui.visuals().selection.stroke)
+    } else {
+        egui::Button::new(text)
+    };
+    ui.add_sized([width, PREFERENCES_ACTION_HEIGHT], button)
 }
 
 fn draw_compact_tab_selector(app: &mut PealayerApp, ui: &mut egui::Ui) {
@@ -1631,11 +1661,11 @@ fn advanced_preferences(app: &mut PealayerApp, ui: &mut egui::Ui) {
         crate::ui::icons::APP_WINDOW,
         &app.tr("Dialog windows"),
         |ui| {
-            let label = app.tr("Open supported dialogs in separate OS windows");
+            let label = app.tr("Open Preferences in a separate native window");
             if ui
                 .checkbox(&mut app.native_dialog_windows, label)
                 .on_hover_text(
-                    app.tr("Allows supported dialogs to move outside the main application window."),
+                    app.tr("Allows Preferences to move outside the main application window."),
                 )
                 .changed()
             {
@@ -1834,5 +1864,13 @@ mod tests {
         assert_eq!((icon.width, icon.height), (32, 32));
         assert!(icon.rgba.chunks_exact(4).any(|pixel| pixel[3] == 255));
         assert!(icon.rgba.chunks_exact(4).any(|pixel| pixel[3] == 0));
+    }
+
+    #[test]
+    fn preferences_actions_have_more_visual_weight_than_navigation_tabs() {
+        assert!(PREFERENCES_TAB_HEIGHT < PREFERENCES_ACTION_HEIGHT);
+        assert!(PREFERENCES_TAB_WIDTH < PREFERENCES_PRIMARY_ACTION_WIDTH);
+        assert!(PREFERENCES_SECONDARY_ACTION_WIDTH < PREFERENCES_PRIMARY_ACTION_WIDTH);
+        assert!(PREFERENCES_RAIL_WIDTH >= PREFERENCES_TAB_WIDTH);
     }
 }

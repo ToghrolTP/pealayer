@@ -204,9 +204,10 @@ impl Default for AppConfig {
             // swap loop. Some Windows OpenGL drivers flicker with V-Sync, so
             // keep it opt-in while retaining the persisted preference.
             opengl_vsync: false,
-            // Secondary egui viewports are real OS windows on supported native
-            // backends. Keep the experiment opt-in until more dialogs migrate.
-            native_dialog_windows: false,
+            // Preferences is an owned native tool window on Windows. Keep the
+            // embedded implementation as a runtime fallback when process or
+            // window creation is unavailable.
+            native_dialog_windows: true,
             status_bar: StatusBarConfig::default(),
             window_geometry: None,
             workspace_dock_layout: None,
@@ -789,7 +790,7 @@ mod tests {
         assert!(cfg.open_url_recent_click_edits);
         assert!(cfg.open_url_use_proxy);
         assert!(cfg.open_url_proxy_url.is_none());
-        assert!(!cfg.native_dialog_windows);
+        assert!(cfg.native_dialog_windows);
     }
 
     #[test]

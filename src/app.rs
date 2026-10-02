@@ -3169,7 +3169,7 @@ impl Default for PealayerApp {
             windows_mica_backdrop: false,
             windows_dwm_theming: true,
             opengl_vsync: false,
-            native_dialog_windows: false,
+            native_dialog_windows: true,
             native_preferences: None,
             status_bar: crate::config::StatusBarConfig::default(),
             config_fingerprint: crate::config::AppConfig::fingerprint(
