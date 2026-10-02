@@ -41,6 +41,13 @@ function resolvedAccent(runtime: RuntimeConfig | null, config: Record<string, an
   }
 }
 
+function accentForeground(accent: string): string {
+  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(accent);
+  if (!match) return '#ffffff';
+  const [red, green, blue] = match.slice(1).map((value) => Number.parseInt(value, 16));
+  return (red * 299 + green * 587 + blue * 114) > 150_000 ? '#141414' : '#ffffff';
+}
+
 const App: React.FC = () => {
   const [collapsed, setCollapsed] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<string>('studio');
@@ -78,12 +85,13 @@ const App: React.FC = () => {
   }, [runtime, appConfig?.theme]);
 
   const accentColor = resolvedAccent(runtime, appConfig);
+  const accentTextColor = accentForeground(accentColor);
 
   useEffect(() => {
-    const accent = resolvedAccent(runtime, appConfig);
-    document.documentElement.style.setProperty('--accent', accent);
-    document.documentElement.style.setProperty('--accent-soft', `color-mix(in srgb, ${accent} 16%, transparent)`);
-  }, [runtime, appConfig?.accent_color, appConfig?.custom_accent_color]);
+    document.documentElement.style.setProperty('--accent', accentColor);
+    document.documentElement.style.setProperty('--accent-text', accentTextColor);
+    document.documentElement.style.setProperty('--accent-soft', `color-mix(in srgb, ${accentColor} 16%, transparent)`);
+  }, [accentColor, accentTextColor]);
 
   const nextRequestId = useRef(1);
   const sendCmd = useCallback((command: string, payload: Record<string, any> = {}) => {
@@ -289,6 +297,7 @@ const App: React.FC = () => {
         algorithm: resolvedTheme === 'light' ? theme.defaultAlgorithm : theme.darkAlgorithm,
         token: {
           colorPrimary: accentColor,
+          colorTextLightSolid: accentTextColor,
           colorInfo: '#68a7ff',
           colorSuccess: '#38d27a',
           colorWarning: '#f3b954',

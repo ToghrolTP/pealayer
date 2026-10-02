@@ -114,6 +114,7 @@ pub struct EffectDragPayload {
 pub struct HardwareEffectAuthoringState {
     pub name: String,
     pub active: bool,
+    pub preview_active: bool,
     pub anchor_ms: u64,
     pub pending_operation: Option<String>,
     pub pending_saved_macro_id: Option<u64>,
@@ -1564,6 +1565,12 @@ impl PealayerApp {
                             self.hardware_effect_authoring.active = false;
                             self.hardware_effect_authoring.pending_saved_macro_id = None;
                         }
+                        "effect-preview" => {
+                            self.hardware_effect_authoring.preview_active = true;
+                        }
+                        "effect-stop" => {
+                            self.hardware_effect_authoring.preview_active = false;
+                        }
                         "board-name" | "board-silent" | "board-reboot" => {
                             self.engine_handle.request_catalog_refresh();
                         }
@@ -1580,6 +1587,9 @@ impl PealayerApp {
                     self.set_osd(output);
                 }
                 Err(error) => {
+                    if result.operation == "effect-preview" {
+                        self.hardware_effect_authoring.preview_active = false;
+                    }
                     if is_board_operation {
                         self.board_operation_status = error.clone();
                     } else {

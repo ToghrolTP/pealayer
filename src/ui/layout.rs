@@ -485,7 +485,7 @@ fn is_motion_control(control: &crate::four_d::controller::HardwareControl) -> bo
         })
 }
 
-fn invoke_control_action(app: &PealayerApp, action_id: &str) {
+fn invoke_advertised_action(app: &PealayerApp, action_id: &str) {
     let _ = app.engine_handle.sender.send(
         crate::four_d::engine::EngineMessage::InvokeControllerAction {
             action_id: action_id.to_string(),
@@ -511,14 +511,14 @@ fn update_held_motion_action(
     ) {
         HoldMotionTransition::Start => {
             if let Some((_, previous_stop)) = app.held_motion_action.take() {
-                invoke_control_action(app, &previous_stop);
+                invoke_advertised_action(app, &previous_stop);
             }
-            invoke_control_action(app, action_id);
+            invoke_advertised_action(app, action_id);
             app.held_motion_action = Some((action_id.to_string(), stop_id.to_string()));
         }
         HoldMotionTransition::Stop => {
             if let Some((_, stop)) = app.held_motion_action.take() {
-                invoke_control_action(app, &stop);
+                invoke_advertised_action(app, &stop);
             }
         }
         HoldMotionTransition::None => {}
@@ -593,6 +593,7 @@ fn draw_control_context_menu(
     control: &crate::four_d::controller::HardwareControl,
     edit_id: egui::Id,
     draft_id: egui::Id,
+    focus_pending_id: egui::Id,
     group_edit_id: egui::Id,
     group_draft_id: egui::Id,
 ) {
@@ -632,7 +633,7 @@ fn draw_control_context_menu(
                         )
                         .clicked()
                     {
-                        invoke_control_action(app, &action.id);
+                        crate::ui::hardware_control::invoke_action(app, control, action);
                         ui.close();
                     }
                 }
@@ -675,6 +676,7 @@ fn draw_control_context_menu(
         ui.data_mut(|data| {
             data.insert_temp(draft_id, control.name.clone());
             data.insert_temp(edit_id, true);
+            data.insert_temp(focus_pending_id, true);
         });
         ui.close();
     }
@@ -715,6 +717,7 @@ fn control_context_popup(
     control: &crate::four_d::controller::HardwareControl,
     edit_id: egui::Id,
     draft_id: egui::Id,
+    focus_pending_id: egui::Id,
     group_edit_id: egui::Id,
     group_draft_id: egui::Id,
 ) {
@@ -734,6 +737,7 @@ fn control_context_popup(
                 control,
                 edit_id,
                 draft_id,
+                focus_pending_id,
                 group_edit_id,
                 group_draft_id,
             );
@@ -752,6 +756,10 @@ fn responsive_action_label(
     }
 }
 
+fn should_show_stop_preview(preview_active: bool, pending_operation: Option<&str>) -> bool {
+    preview_active || pending_operation == Some("effect-stop")
+}
+
 fn draw_compact_control_card(
     app: &mut PealayerApp,
     ui: &mut egui::Ui,
@@ -760,6 +768,8 @@ fn draw_compact_control_card(
 ) {
     let edit_id = ui.make_persistent_id(("control-name-editing", control.key.as_str()));
     let draft_id = ui.make_persistent_id(("control-name-draft", control.key.as_str()));
+    let focus_pending_id = ui.make_persistent_id(("control-name-focus", control.key.as_str()));
+    let text_edit_id = ui.make_persistent_id(("control-name-input", control.key.as_str()));
     let group_edit_id = ui.make_persistent_id(("control-group-editing", control.key.as_str()));
     let group_draft_id = ui.make_persistent_id(("control-group-draft", control.key.as_str()));
     let relay_id = relay_id_from_control_key(&control.key);
@@ -799,8 +809,15 @@ fn draw_compact_control_card(
                     let edit_width = (ui.available_width() * 0.42).clamp(64.0, 190.0);
                     let edit = ui.add_sized(
                         [edit_width, 24.0],
-                        egui::TextEdit::singleline(&mut draft).hint_text(&control.default_name),
+                        egui::TextEdit::singleline(&mut draft)
+                            .id(text_edit_id)
+                            .hint_text(&control.default_name),
                     );
+                    if ui.data_mut(|data| data.remove_temp::<bool>(focus_pending_id))
+                        == Some(true)
+                    {
+                        edit.request_focus();
+                    }
                     if edit.changed() {
                         ui.data_mut(|data| data.insert_temp(draft_id, draft.clone()));
                     }
@@ -858,6 +875,7 @@ fn draw_compact_control_card(
                         ui.data_mut(|data| {
                             data.insert_temp(draft_id, control.name.clone());
                             data.insert_temp(edit_id, true);
+                            data.insert_temp(focus_pending_id, true);
                         });
                     }
                     response.on_hover_text(format!("{} — {}", title, app.tr("Rename")));
@@ -937,7 +955,7 @@ fn draw_compact_control_card(
                                     &stop.expect("checked above").id,
                                 );
                             } else if response.clicked() {
-                                invoke_control_action(app, &action.id);
+                                crate::ui::hardware_control::invoke_action(app, control, action);
                             }
                         }
                         if is_motion && let Some(stop) = stop {
@@ -952,7 +970,7 @@ fn draw_compact_control_card(
                                 .on_hover_text(crate::ui::i18n::visual_text(app.language, &stop.name))),
                             );
                             if response.inner.is_some_and(|response| response.clicked()) {
-                                invoke_control_action(app, &stop.id);
+                                crate::ui::hardware_control::invoke_action(app, control, stop);
                             }
                         }
                     });
@@ -993,6 +1011,7 @@ fn draw_compact_control_card(
         control,
         edit_id,
         draft_id,
+        focus_pending_id,
         group_edit_id,
         group_draft_id,
     );
@@ -1010,6 +1029,8 @@ fn draw_control_card(
     }
     let edit_id = ui.make_persistent_id(("control-name-editing", control.key.as_str()));
     let draft_id = ui.make_persistent_id(("control-name-draft", control.key.as_str()));
+    let focus_pending_id = ui.make_persistent_id(("control-name-focus", control.key.as_str()));
+    let text_edit_id = ui.make_persistent_id(("control-name-input", control.key.as_str()));
     let source_id = ui.make_persistent_id(("control-name-source", control.key.as_str()));
     let group_edit_id = ui.make_persistent_id(("control-group-editing", control.key.as_str()));
     let group_draft_id = ui.make_persistent_id(("control-group-draft", control.key.as_str()));
@@ -1065,10 +1086,17 @@ fn draw_control_card(
                         let width = ui.available_width().max(56.0);
                         edit_response = Some(ui.add_sized(
                             [width, 24.0],
-                            egui::TextEdit::singleline(&mut draft).hint_text(&control.default_name),
+                            egui::TextEdit::singleline(&mut draft)
+                                .id(text_edit_id)
+                                .hint_text(&control.default_name),
                         ));
                     });
                     let edit = edit_response.expect("rename editor is always rendered");
+                    if ui.data_mut(|data| data.remove_temp::<bool>(focus_pending_id))
+                        == Some(true)
+                    {
+                        edit.request_focus();
+                    }
                     if edit.changed() {
                         ui.data_mut(|data| data.insert_temp(draft_id, draft.clone()));
                     }
@@ -1090,7 +1118,11 @@ fn draw_control_card(
                         if ui.button(crate::ui::icons::PENCIL_SIMPLE)
                             .on_hover_text(app.tr("Rename")).clicked()
                         {
-                            ui.data_mut(|data| data.insert_temp(edit_id, true));
+                            ui.data_mut(|data| {
+                                data.insert_temp(draft_id, control.name.clone());
+                                data.insert_temp(edit_id, true);
+                                data.insert_temp(focus_pending_id, true);
+                            });
                         }
                         let title = ui.add_sized(
                             [ui.available_width().max(52.0), 24.0],
@@ -1101,7 +1133,11 @@ fn draw_control_card(
                             .sense(egui::Sense::click()),
                         );
                         if title.clicked() {
-                            ui.data_mut(|data| data.insert_temp(edit_id, true));
+                            ui.data_mut(|data| {
+                                data.insert_temp(draft_id, control.name.clone());
+                                data.insert_temp(edit_id, true);
+                                data.insert_temp(focus_pending_id, true);
+                            });
                         }
                         title.on_hover_text(format!("{} — {}", title_text, app.tr("Rename")));
                     });
@@ -1238,7 +1274,7 @@ fn draw_control_card(
                                     &stop_action.expect("checked above").id,
                                 );
                             } else if response.clicked() {
-                                invoke_control_action(app, &action.id);
+                                crate::ui::hardware_control::invoke_action(app, control, action);
                             }
                         }
                     });
@@ -1258,7 +1294,7 @@ fn draw_control_card(
                                 ).on_hover_text(crate::ui::i18n::visual_text(app.language, &stop.name))),
                         );
                         if response.inner.is_some_and(|response| response.clicked()) {
-                            invoke_control_action(app, &stop.id);
+                            crate::ui::hardware_control::invoke_action(app, control, stop);
                         }
                     });
                 }
@@ -1316,6 +1352,7 @@ fn draw_control_card(
         control,
         edit_id,
         draft_id,
+        focus_pending_id,
         group_edit_id,
         group_draft_id,
     );
@@ -1395,6 +1432,14 @@ mod timeline_row_tests {
         assert_eq!(control_grid_columns(720.0), 2);
         assert_eq!(action_grid_columns(280.0, 2), 2);
         assert_eq!(action_grid_columns(420.0, 3), 3);
+    }
+
+    #[test]
+    fn stop_preview_is_only_visible_for_an_active_or_stopping_preview() {
+        assert!(!should_show_stop_preview(false, None));
+        assert!(!should_show_stop_preview(false, Some("effect-preview")));
+        assert!(should_show_stop_preview(true, None));
+        assert!(should_show_stop_preview(false, Some("effect-stop")));
     }
 
     #[test]
@@ -3555,15 +3600,24 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     {
                                         self.app.show_effect_library_editor = true;
                                     }
-                                    if ui
-                                        .add_enabled(
-                                            self.app.hardware_effect_authoring.pending_operation.is_none(),
-                                            egui::Button::new(&stop_label),
-                                        )
-                                        .clicked()
-                                    {
-                                        if let Err(error) = self.app.stop_strip_preview() {
-                                            self.app.set_osd(error);
+                                    if should_show_stop_preview(
+                                        self.app.hardware_effect_authoring.preview_active,
+                                        self.app.hardware_effect_authoring.pending_operation.as_deref(),
+                                    ) {
+                                        if ui
+                                            .add_enabled(
+                                                self.app.hardware_effect_authoring.pending_operation.is_none(),
+                                                egui::Button::new(format!(
+                                                    "{} {}",
+                                                    crate::ui::icons::STOP_CIRCLE,
+                                                    stop_label
+                                                )),
+                                            )
+                                            .clicked()
+                                        {
+                                            if let Err(error) = self.app.stop_strip_preview() {
+                                                self.app.set_osd(error);
+                                            }
                                         }
                                     }
                                 });

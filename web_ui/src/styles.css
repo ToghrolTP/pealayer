@@ -12,6 +12,7 @@
   --green: #38d27a;
   --green-soft: rgba(56, 210, 122, .14);
   --accent: #0078d4;
+  --accent-text: #ffffff;
   --accent-soft: rgba(0, 120, 212, .16);
   --blue: #68a7ff;
   --red: #ff5c68;
@@ -206,7 +207,8 @@ body {
   transition: border-color .14s ease, background .14s ease, transform .14s ease;
 }
 .effect-profile:hover { border-color: var(--line-strong); transform: translateY(-1px); }
-.effect-profile.is-selected { border-color: color-mix(in srgb, var(--green) 65%, var(--line)); background: var(--green-soft); }
+.effect-profile.is-selected { border-color: color-mix(in srgb, var(--accent) 68%, var(--line)); background: var(--accent-soft); }
+.effect-profile.is-selected .effect-profile__icon { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 48%, var(--line)); }
 .effect-profile__icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 8px; color: var(--green); background: var(--surface-0); border: 1px solid var(--line); font-size: 17px; }
 .effect-profile__body { min-width: 0; display: grid; gap: 3px; }
 .effect-profile__body strong { overflow: hidden; color: var(--text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }

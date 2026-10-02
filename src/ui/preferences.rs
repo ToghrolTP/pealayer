@@ -9,6 +9,25 @@ use eframe::egui;
 const PREFERENCES_RAIL_WIDTH: f32 = 118.0;
 const PREFERENCES_TAB_WIDTH: f32 = 112.0;
 const PREFERENCES_TAB_HEIGHT: f32 = 29.0;
+const PREFERENCES_ACTION_HEIGHT: f32 = 28.0;
+
+fn preferences_action_button(
+    ui: &mut egui::Ui,
+    icon: &str,
+    label: &str,
+    primary: bool,
+) -> egui::Response {
+    let width = if primary { 88.0 } else { 82.0 };
+    let mut text = egui::RichText::new(format!("{icon} {label}")).size(13.0);
+    if primary {
+        text = text.color(ui.visuals().selection.stroke.color);
+    }
+    let mut button = egui::Button::new(text);
+    if primary {
+        button = button.fill(ui.visuals().selection.bg_fill);
+    }
+    ui.add_sized([width, PREFERENCES_ACTION_HEIGHT], button)
+}
 
 pub(crate) struct NativePreferencesController {
     child: std::process::Child,
@@ -378,7 +397,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
         .resizable(false)
         .show_separator_line(true)
         .show_inside(ui, |ui| {
-            ui.add_space(5.0);
+            ui.add_space(2.0);
             ui.horizontal(|ui| {
                 if !draft.status.is_empty() {
                     ui.add(
@@ -387,15 +406,16 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
                     );
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if crate::ui::dialog::action_button(ui, crate::ui::icons::X, &tr("Close"))
+                    if preferences_action_button(ui, crate::ui::icons::X, &tr("Close"), false)
                         .clicked()
                     {
                         outcome.close = true;
                     }
-                    if crate::ui::dialog::primary_action_button(
+                    if preferences_action_button(
                         ui,
                         crate::ui::icons::FLOPPY_DISK,
                         &tr("Save"),
+                        true,
                     )
                     .clicked()
                     {
@@ -403,7 +423,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
                     }
                 });
             });
-            ui.add_space(2.0);
+            ui.add_space(1.0);
         });
 
     egui::CentralPanel::default().show_inside(ui, |ui| {
@@ -885,6 +905,8 @@ mod tests {
     #[test]
     fn navigation_and_actions_use_harmonious_control_heights() {
         assert!((28.0..=30.0).contains(&PREFERENCES_TAB_HEIGHT));
+        assert!((27.0..=29.0).contains(&PREFERENCES_ACTION_HEIGHT));
+        assert!((PREFERENCES_TAB_HEIGHT - PREFERENCES_ACTION_HEIGHT).abs() <= 2.0);
         assert!(PREFERENCES_TAB_WIDTH <= PREFERENCES_RAIL_WIDTH);
     }
 }

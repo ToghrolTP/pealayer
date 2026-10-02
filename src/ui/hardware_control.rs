@@ -1,5 +1,5 @@
 use crate::app::PealayerApp;
-use crate::four_d::controller::{HardwareCapabilities, HardwareControl};
+use crate::four_d::controller::{HardwareAction, HardwareCapabilities, HardwareControl};
 use eframe::egui;
 
 fn selected_control(capabilities: &HardwareCapabilities, key: &str) -> Option<HardwareControl> {
@@ -52,12 +52,46 @@ fn pwm_channel(capabilities: &HardwareCapabilities, key: &str) -> Option<u8> {
         .map(|channel| channel.id)
 }
 
-fn invoke_action(app: &PealayerApp, action_id: &str) {
-    let _ = app.engine_handle.sender.send(
-        crate::four_d::engine::EngineMessage::InvokeControllerAction {
-            action_id: action_id.to_string(),
-        },
-    );
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HardwareActionDispatch {
+    Advertised(String),
+    ControllerCommand(String),
+}
+
+fn action_dispatch(control: &HardwareControl, action: &HardwareAction) -> HardwareActionDispatch {
+    // A raw relay remains directly controllable even while a board profile is
+    // being configured. PCController advertises those controls so operators
+    // can use them, but semantic action invocation is deliberately rejected
+    // until a profile exists. Route the two stable relay verbs through the
+    // controller command contract; profile-defined motion and every other
+    // peripheral continue to use their advertised action IDs.
+    if let Some(relay) = relay_id(&control.key) {
+        match action.verb.to_ascii_lowercase().as_str() {
+            "on" => {
+                return HardwareActionDispatch::ControllerCommand(format!("relay {relay} on"));
+            }
+            "off" => {
+                return HardwareActionDispatch::ControllerCommand(format!("relay {relay} off"));
+            }
+            _ => {}
+        }
+    }
+    HardwareActionDispatch::Advertised(action.id.clone())
+}
+
+pub(crate) fn invoke_action(app: &PealayerApp, control: &HardwareControl, action: &HardwareAction) {
+    let message = match action_dispatch(control, action) {
+        HardwareActionDispatch::Advertised(action_id) => {
+            crate::four_d::engine::EngineMessage::InvokeControllerAction { action_id }
+        }
+        HardwareActionDispatch::ControllerCommand(command) => {
+            crate::four_d::engine::EngineMessage::ControllerCall {
+                method: "controller.command.execute".to_string(),
+                params: serde_json::json!({"command": command}),
+            }
+        }
+    };
+    let _ = app.engine_handle.sender.send(message);
 }
 
 fn set_relay(app: &PealayerApp, relay: u8, on: bool) {
@@ -237,7 +271,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             )
                             .clicked()
                         {
-                            invoke_action(app, &action.id);
+                            invoke_action(app, &control, action);
                         }
                     }
                 });
@@ -349,5 +383,43 @@ mod tests {
         assert_eq!(relay_id("relay.5"), Some(5));
         assert_eq!(relay_id("pwm.5"), None);
         assert_eq!(relay_id("relay.left"), None);
+    }
+
+    #[test]
+    fn advertised_raw_relay_actions_use_the_profile_independent_command_path() {
+        let control = HardwareControl {
+            key: "relay.5".to_string(),
+            kind: "relay".to_string(),
+            ..Default::default()
+        };
+        let on = HardwareAction {
+            id: "relay.5.on".to_string(),
+            verb: "on".to_string(),
+            name: "On".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            action_dispatch(&control, &on),
+            HardwareActionDispatch::ControllerCommand("relay 5 on".to_string())
+        );
+    }
+
+    #[test]
+    fn semantic_controls_keep_their_advertised_action_contract() {
+        let control = HardwareControl {
+            key: "seat.left".to_string(),
+            kind: "motion".to_string(),
+            ..Default::default()
+        };
+        let up = HardwareAction {
+            id: "seat.left.up".to_string(),
+            verb: "up".to_string(),
+            name: "Up".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            action_dispatch(&control, &up),
+            HardwareActionDispatch::Advertised("seat.left.up".to_string())
+        );
     }
 }

@@ -48,6 +48,16 @@ pub fn platform_accent_rgb(config: &crate::config::AppConfig) -> [u8; 3] {
     }
 }
 
+fn accent_foreground(accent: eframe::egui::Color32) -> eframe::egui::Color32 {
+    if (u32::from(accent.r()) * 299 + u32::from(accent.g()) * 587 + u32::from(accent.b()) * 114)
+        > 150_000
+    {
+        eframe::egui::Color32::from_rgb(20, 20, 20)
+    } else {
+        eframe::egui::Color32::WHITE
+    }
+}
+
 /// Install a restrained native desktop palette for both themes. The active
 /// theme can change later without reconstructing widget styling, and both the
 /// main window and independently hosted dialogs use this same function.
@@ -56,21 +66,15 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
 
     let [red, green, blue] = platform_accent_rgb(config);
     let accent = Color32::from_rgb(red, green, blue);
-    let accent_text = if (u32::from(accent.r()) * 299
-        + u32::from(accent.g()) * 587
-        + u32::from(accent.b()) * 114)
-        > 150_000
-    {
-        Color32::from_rgb(20, 20, 20)
-    } else {
-        Color32::WHITE
-    };
+    let accent_text = accent_foreground(accent);
 
     let mut dark = Visuals::dark();
     dark.panel_fill = Color32::from_rgb(32, 32, 32);
     dark.window_fill = Color32::from_rgb(36, 36, 36);
     dark.extreme_bg_color = Color32::from_rgb(24, 24, 24);
     dark.faint_bg_color = Color32::from_rgb(45, 45, 45);
+    dark.weak_text_alpha = 0.74;
+    dark.hyperlink_color = accent;
     dark.selection.bg_fill = accent;
     dark.selection.stroke = Stroke::new(1.0_f32, accent_text);
     dark.widgets.inactive.weak_bg_fill = Color32::from_rgb(45, 45, 45);
@@ -88,6 +92,11 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
     light.window_fill = Color32::from_rgb(250, 250, 250);
     light.extreme_bg_color = Color32::WHITE;
     light.faint_bg_color = Color32::from_rgb(238, 238, 238);
+    light.weak_text_alpha = 0.76;
+    light.hyperlink_color = accent;
+    light.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(35, 42, 52));
+    light.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(42, 50, 61));
+    light.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(23, 29, 38));
     light.selection.bg_fill = accent;
     light.selection.stroke = Stroke::new(1.0_f32, accent_text);
     light.widgets.inactive.weak_bg_fill = Color32::from_rgb(251, 251, 251);
@@ -109,6 +118,8 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
 
 #[cfg(test)]
 mod tests {
+    use eframe::egui::Color32;
+
     #[test]
     fn desktop_style_disables_accidental_caption_selection() {
         let mut style = eframe::egui::Style::default();
@@ -127,5 +138,29 @@ mod tests {
             super::platform_accent_rgb(&crate::config::AppConfig::default()),
             [0, 0, 0]
         );
+    }
+
+    #[test]
+    fn accent_foreground_stays_readable_for_every_built_in_accent() {
+        assert_eq!(
+            super::accent_foreground(Color32::from_rgb(56, 210, 122)),
+            Color32::from_rgb(20, 20, 20)
+        );
+        assert_eq!(
+            super::accent_foreground(Color32::from_rgb(0, 120, 212)),
+            Color32::WHITE
+        );
+        assert_eq!(
+            super::accent_foreground(Color32::from_rgb(10, 132, 255)),
+            Color32::WHITE
+        );
+    }
+
+    #[test]
+    fn web_and_native_accent_presets_are_kept_in_lockstep() {
+        let web = include_str!("../../web_ui/src/App.tsx").to_ascii_lowercase();
+        for color in ["#38d27a", "#0078d4", "#0a84ff"] {
+            assert!(web.contains(color), "web accent preset {color} drifted");
+        }
     }
 }
