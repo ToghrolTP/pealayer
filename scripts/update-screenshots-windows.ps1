@@ -9,6 +9,8 @@ param(
     [string]$Theme = 'dark',
     [ValidateSet('en', 'fa')]
     [string[]]$Locale = @('en', 'fa'),
+    [ValidateSet('main', 'preferences')]
+    [string]$Surface = 'main',
     [ValidateRange(1, 30)]
     [int]$StartupTimeoutSeconds = 15
 )
@@ -272,6 +274,12 @@ for ($localeIndex = 0; $localeIndex -lt $Locale.Count; $localeIndex++) {
     $start.EnvironmentVariables['PEALAYER_INSTANCE_ID'] = "screenshot-$captureSession-$language"
     $start.EnvironmentVariables['PEALAYER_CONFIG_FILE'] = Join-Path $captureProfile "$language-settings.json"
     $start.EnvironmentVariables['PEALAYER_PORT'] = (28080 + ($localeIndex * 10)).ToString()
+    if ($Surface -eq 'preferences') {
+        $start.ArgumentList.Add('--preferences-helper')
+        $start.ArgumentList.Add('0')
+        $start.ArgumentList.Add('--preferences-tab')
+        $start.ArgumentList.Add('0')
+    }
     if ($resolvedBranding) {
         $start.EnvironmentVariables['APPLICATION_BRAND'] = $resolvedBranding
     }
@@ -280,7 +288,8 @@ for ($localeIndex = 0; $localeIndex -lt $Locale.Count; $localeIndex++) {
     try {
         [void]$process.WaitForInputIdle(5000)
         $handle = Wait-MainWindow $process $StartupTimeoutSeconds
-        $fileName = "pealayer-$language-$Theme.png"
+        $surfaceSuffix = if ($Surface -eq 'main') { '' } else { "-$Surface" }
+        $fileName = "pealayer$surfaceSuffix-$language-$Theme.png"
         $path = Join-Path $resolvedOutput $fileName
         $capture = Save-WindowScreenshot $handle $process.Id $path
         $captures += [ordered]@{
@@ -321,6 +330,7 @@ $manifest = [ordered]@{
     executable = Split-Path -Leaf $resolvedExecutable
     executable_sha256 = $executableHash
     application_name = $effectiveAppName
+    surface = $Surface
     isolated_profile = $true
     capture_method = 'per-capture'
     captures = $captures

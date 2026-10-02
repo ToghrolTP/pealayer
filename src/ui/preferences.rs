@@ -753,7 +753,8 @@ fn preference_section(
             ui.label(
                 egui::RichText::new(format!("{icon}  {title}"))
                     .size(15.0)
-                    .strong(),
+                    .strong()
+                    .color(ui.visuals().strong_text_color()),
             );
             ui.add_space(8.0);
             body(ui);
