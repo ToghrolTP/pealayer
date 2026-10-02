@@ -13,8 +13,11 @@ import {
 } from 'antd';
 import {
   BgColorsOutlined,
+  BarsOutlined,
   CheckOutlined,
+  CheckSquareOutlined,
   ControlOutlined,
+  EditOutlined,
   ExperimentOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
@@ -71,6 +74,13 @@ const sectionIcons: Record<string, React.ReactNode> = {
   hardware: <ExperimentOutlined />,
   input: <ControlOutlined />,
   advanced: <SettingOutlined />,
+};
+
+const controlIcons: Record<PreferenceControl['kind'], React.ReactNode> = {
+  boolean: <CheckSquareOutlined />,
+  number: <ControlOutlined />,
+  select: <BarsOutlined />,
+  text: <EditOutlined />,
 };
 
 function valueAtPath(root: JsonObject, path: string): any {
@@ -157,7 +167,12 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
   const renderControl = (control: PreferenceControl) => {
     const stored = valueAtPath(contract?.values ?? {}, control.key);
     const value = control.inverted ? !Boolean(stored) : stored;
-    const commonLabel = <span className="preference-control__label">{tr(locale, control.label)}</span>;
+    const commonLabel = (
+      <span className="preference-control__label">
+        {controlIcons[control.kind]}
+        <span>{tr(locale, control.label)}</span>
+      </span>
+    );
     if (control.kind === 'boolean') {
       return (
         <label className="preference-control preference-control--boolean" key={control.key}>

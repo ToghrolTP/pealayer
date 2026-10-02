@@ -7,6 +7,9 @@ use crate::preferences_contract::{
 use eframe::egui;
 
 const PREFERENCES_RAIL_WIDTH: f32 = 118.0;
+const PREFERENCE_ROW_HEIGHT: f32 = 34.0;
+const PREFERENCE_LABEL_WIDTH: f32 = 176.0;
+const PREFERENCE_COLUMN_GAP: f32 = 8.0;
 
 pub(crate) struct NativePreferencesController {
     child: std::process::Child,
@@ -196,7 +199,12 @@ impl eframe::App for StandalonePreferencesApp {
         let outcome = egui::CentralPanel::default()
             .show_inside(ui, |ui| {
                 egui::Frame::new()
-                    .inner_margin(egui::Margin::same(12))
+                    .inner_margin(egui::Margin {
+                        left: 12,
+                        right: 12,
+                        top: 12,
+                        bottom: 6,
+                    })
                     .show(ui, |ui| draw_preferences_editor(&mut self.draft, ui))
                     .inner
             })
@@ -377,7 +385,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
         .resizable(false)
         .show_separator_line(true)
         .show_inside(ui, |ui| {
-            ui.add_space(2.0);
+            ui.add_space(7.0);
             crate::ui::dialog::action_bar(
                 ui,
                 rtl,
@@ -406,7 +414,6 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
                     }
                 },
             );
-            ui.add_space(1.0);
         });
 
     egui::CentralPanel::default().show_inside(ui, |ui| {
@@ -487,6 +494,7 @@ fn draw_contract_section(
     }
     for group in groups {
         preference_section(ui, group_icon(group), &tr(group), |ui| {
+            ui.spacing_mut().item_spacing.y = 4.0;
             for control in controls
                 .iter()
                 .filter(|control| control.section == section.id && control.group == group)
@@ -548,11 +556,23 @@ fn render_contract_control(
         .cloned()
         .unwrap_or_default();
     let mut replacement = None;
+    let control_icon = preference_control_icon(&control.kind);
     match control.kind {
         PreferenceControlKind::Boolean => {
             let stored = current.as_bool().unwrap_or_default();
             let mut displayed = if control.inverted { !stored } else { stored };
-            if ui.checkbox(&mut displayed, tr(control.label)).changed() {
+            let (label_response, checkbox_response) =
+                preference_row(ui, control_icon, &tr(control.label), |ui| {
+                    ui.checkbox(&mut displayed, "")
+                });
+            let label_clicked = label_response
+                .interact(egui::Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked();
+            if label_clicked {
+                displayed = !displayed;
+            }
+            if checkbox_response.changed() || label_clicked {
                 replacement = Some(serde_json::Value::Bool(if control.inverted {
                     !displayed
                 } else {
@@ -568,7 +588,7 @@ fn render_contract_control(
                 .find(|option| option.value.as_str() == Some(selected))
                 .map(|option| tr(option.label))
                 .unwrap_or_else(|| selected.to_string());
-            preference_row(ui, &tr(control.label), |ui| {
+            preference_row(ui, control_icon, &tr(control.label), |ui| {
                 egui::ComboBox::from_id_salt(("preference", control.key))
                     .width(ui.available_width().min(230.0))
                     .selected_text(selected_label)
@@ -589,15 +609,17 @@ fn render_contract_control(
             let mut slider = egui::Slider::new(
                 &mut number,
                 control.minimum.unwrap_or(0.0)..=control.maximum.unwrap_or(100.0),
-            )
-            .text(tr(control.label));
+            );
             if let Some(step) = control.step {
                 slider = slider.step_by(step);
             }
             if control.logarithmic {
                 slider = slider.logarithmic(true);
             }
-            if ui.add(slider).changed() {
+            let (_, response) = preference_row(ui, control_icon, &tr(control.label), |ui| {
+                ui.add_sized([ui.available_width(), PREFERENCE_ROW_HEIGHT], slider)
+            });
+            if response.changed() {
                 replacement = Some(if current.is_u64() || current.is_i64() {
                     serde_json::json!(number.round() as u64)
                 } else {
@@ -607,7 +629,7 @@ fn render_contract_control(
         }
         PreferenceControlKind::Text => {
             let mut text = current.as_str().unwrap_or_default().to_string();
-            preference_row(ui, &tr(control.label), |ui| {
+            preference_row(ui, control_icon, &tr(control.label), |ui| {
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut text)
                         .desired_width(ui.available_width())
@@ -719,19 +741,55 @@ fn draw_advanced_actions(
     );
 }
 
-fn preference_row(ui: &mut egui::Ui, label: &str, body: impl FnOnce(&mut egui::Ui)) {
+fn preference_row<R>(
+    ui: &mut egui::Ui,
+    icon: &str,
+    label: &str,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> (egui::Response, R) {
     let width = ui.available_width();
+    let label_width = PREFERENCE_LABEL_WIDTH.min((width * 0.42).max(128.0));
     ui.allocate_ui_with_layout(
-        egui::vec2(width, 30.0),
+        egui::vec2(width, PREFERENCE_ROW_HEIGHT),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            ui.add_sized(
-                [width.min(190.0), 28.0],
-                egui::Label::new(egui::RichText::new(label).weak()).truncate(),
-            );
-            body(ui);
+            ui.spacing_mut().item_spacing.x = PREFERENCE_COLUMN_GAP;
+            let label_response = ui
+                .allocate_ui_with_layout(
+                    egui::vec2(label_width, PREFERENCE_ROW_HEIGHT),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.spacing_mut().item_spacing.x = 7.0;
+                        let icon_response = ui.label(
+                            egui::RichText::new(icon)
+                                .size(14.0)
+                                .color(ui.visuals().selection.bg_fill),
+                        );
+                        let text_response = ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(label)
+                                    .size(13.0)
+                                    .color(ui.visuals().text_color()),
+                            )
+                            .truncate(),
+                        );
+                        icon_response.union(text_response)
+                    },
+                )
+                .inner;
+            (label_response, body(ui))
         },
-    );
+    )
+    .inner
+}
+
+fn preference_control_icon(kind: &PreferenceControlKind) -> &'static str {
+    match kind {
+        PreferenceControlKind::Boolean => crate::ui::icons::CHECK_SQUARE,
+        PreferenceControlKind::Number => crate::ui::icons::SLIDERS_HORIZONTAL,
+        PreferenceControlKind::Select => crate::ui::icons::LIST_CHECKS,
+        PreferenceControlKind::Text => crate::ui::icons::PENCIL_SIMPLE,
+    }
 }
 
 fn preference_section(
@@ -853,5 +911,7 @@ mod tests {
         assert!(!source.contains(concat!("const PREFERENCES_", "TAB_HEIGHT")));
         assert!(!source.contains(concat!("const PREFERENCES_", "ACTION_HEIGHT")));
         assert!(PREFERENCES_RAIL_WIDTH >= 110.0);
+        assert!(PREFERENCE_ROW_HEIGHT > crate::ui::dialog::NAVIGATION_HEIGHT);
+        assert!(PREFERENCE_COLUMN_GAP <= 8.0);
     }
 }

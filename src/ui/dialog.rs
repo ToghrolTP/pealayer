@@ -5,7 +5,8 @@ use eframe::egui;
 /// Keep these values here instead of allowing individual dialogs to invent
 /// their own button metrics. This is deliberately public within the crate so
 /// regression tests can enforce a single dialog design system.
-pub const CONTROL_HEIGHT: f32 = 32.0;
+pub const NAVIGATION_HEIGHT: f32 = 32.0;
+pub const ACTION_HEIGHT: f32 = 30.0;
 pub const NAVIGATION_DETAIL_HEIGHT: f32 = 44.0;
 const ACTION_BUTTON_MIN_WIDTH: f32 = 96.0;
 const PRIMARY_ACTION_BUTTON_MIN_WIDTH: f32 = 108.0;
@@ -62,12 +63,12 @@ fn action_button_with_kind(
     };
     let mut text = egui::RichText::new(format!("{icon}  {label}")).size(CONTROL_TEXT_SIZE);
     let mut button = egui::Button::new(text.clone())
-        .min_size(egui::vec2(minimum_width, CONTROL_HEIGHT))
+        .min_size(egui::vec2(minimum_width, ACTION_HEIGHT))
         .corner_radius(CONTROL_CORNER_RADIUS);
     if primary {
         text = text.color(selection.stroke.color);
         button = egui::Button::new(text)
-            .min_size(egui::vec2(minimum_width, CONTROL_HEIGHT))
+            .min_size(egui::vec2(minimum_width, ACTION_HEIGHT))
             .corner_radius(CONTROL_CORNER_RADIUS)
             .fill(selection.bg_fill)
             .stroke(egui::Stroke::new(
@@ -86,7 +87,7 @@ pub fn navigation_button(
     label: &str,
     width: f32,
 ) -> egui::Response {
-    navigation_control(ui, selected, icon, label, None, width, CONTROL_HEIGHT)
+    navigation_control(ui, selected, icon, label, None, width, NAVIGATION_HEIGHT)
 }
 
 /// A two-line navigation row for modal/dialog lists that need compact metadata.
@@ -195,7 +196,7 @@ pub fn action_row(ui: &mut egui::Ui, rtl: bool, body: impl FnOnce(&mut egui::Ui)
         egui::Layout::right_to_left(egui::Align::Center)
     };
     ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), CONTROL_HEIGHT),
+        egui::vec2(ui.available_width(), ACTION_HEIGHT),
         layout,
         body,
     );
@@ -220,12 +221,12 @@ pub fn action_bar(
         egui::Layout::right_to_left(egui::Align::Center)
     };
     ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), CONTROL_HEIGHT),
+        egui::vec2(ui.available_width(), ACTION_HEIGHT),
         outer,
         |ui| {
             leading(ui);
             ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), CONTROL_HEIGHT),
+                egui::vec2(ui.available_width(), ACTION_HEIGHT),
                 inner,
                 trailing,
             );
@@ -267,13 +268,15 @@ mod tests {
     #[test]
     fn primary_actions_are_more_prominent_than_secondary_actions() {
         assert!(PRIMARY_ACTION_BUTTON_MIN_WIDTH > ACTION_BUTTON_MIN_WIDTH);
-        assert!((31.0..=33.0).contains(&CONTROL_HEIGHT));
+        assert!((29.0..=31.0).contains(&ACTION_HEIGHT));
+        assert!(NAVIGATION_HEIGHT > ACTION_HEIGHT);
         assert_eq!(NAVIGATION_DETAIL_HEIGHT, 44.0);
     }
 
     #[test]
     fn navigation_and_footer_actions_share_one_control_height() {
-        assert_eq!(CONTROL_HEIGHT, 32.0);
+        assert_eq!(NAVIGATION_HEIGHT, 32.0);
+        assert_eq!(ACTION_HEIGHT, 30.0);
         for (name, source) in [
             ("preferences", include_str!("preferences.rs")),
             ("about", include_str!("about.rs")),
