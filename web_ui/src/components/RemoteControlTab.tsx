@@ -42,6 +42,7 @@ export interface PlayerState {
     id: string;
     name: string;
     duration_ms: number;
+    duration_display: string;
     action_count: number;
     target: string;
   }>;
@@ -53,6 +54,7 @@ export interface PlayerState {
     description: string;
     kind: 'sequence' | 'strip-stream';
     duration_ms: number;
+    duration_display: string;
     action_count: number;
     editable: boolean;
     program: unknown;
@@ -65,6 +67,7 @@ export interface PlayerState {
     name: string;
     start_time_ms: number;
     duration_ms: number;
+    duration_display: string;
   }>;
 }
 

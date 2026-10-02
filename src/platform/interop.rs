@@ -432,6 +432,7 @@ pub struct WebEffectProfile {
     pub id: String,
     pub name: String,
     pub duration_ms: u64,
+    pub duration_display: String,
     pub action_count: usize,
     pub target: String,
 }
@@ -443,6 +444,7 @@ pub struct WebEffectCue {
     pub name: String,
     pub start_time_ms: u64,
     pub duration_ms: u64,
+    pub duration_display: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -454,6 +456,7 @@ pub struct WebControllerEffect {
     pub description: String,
     pub kind: String,
     pub duration_ms: u64,
+    pub duration_display: String,
     pub action_count: usize,
     pub editable: bool,
     pub program: Value,

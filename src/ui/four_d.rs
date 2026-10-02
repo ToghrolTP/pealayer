@@ -111,7 +111,10 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     for template in &app.timeline.templates {
                         ui.label(crate::ui::icons::SPARKLE);
                         ui.label(app.display_text(&template.name));
-                        ui.label(format!("{}ms", template.duration_ms));
+                        ui.label(crate::duration::format_effect_duration_for_language(
+                            display_language,
+                            template.duration_ms,
+                        ));
                         if ui.button(app.tr("Add to timeline")).clicked() {
                             let new_instance = crate::four_d::models::EffectInstance::new(
                                 template.id,
@@ -419,9 +422,12 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "{}: {}ms | {}: {}",
+                                    "{}: {} | {}: {}",
                                     duration_label,
-                                    duration_ms,
+                                    crate::duration::format_effect_duration_for_language(
+                                        display_language,
+                                        duration_ms,
+                                    ),
                                     end_label,
                                     format_ms(end_time_ms)
                                 ))

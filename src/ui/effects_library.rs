@@ -308,6 +308,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
         return;
     }
     let mut open = app.show_effect_library_editor;
+    let display_language = app.language;
     let capabilities = app.advertised_hardware();
     let sequences = capabilities
         .as_ref()
@@ -382,7 +383,15 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     selected,
                                     crate::ui::icons::WAVEFORM,
                                     &crate::ui::i18n::visual_text(app.language, &effect.name),
-                                    &format!("{} · {}", effect.category, effect.mode),
+                                    &format!(
+                                        "{} · {} · {}",
+                                        effect.category,
+                                        effect.mode,
+                                        crate::duration::format_effect_duration_for_language(
+                                            display_language,
+                                            effect.duration_ms
+                                        )
+                                    ),
                                 );
                                 if response.clicked() {
                                     select_sequence(app, effect);
@@ -419,7 +428,15 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     selected,
                                     crate::ui::icons::SPARKLE,
                                     &crate::ui::i18n::visual_text(app.language, &effect.name),
-                                    &format!("{} · {}", effect.category, effect.engine),
+                                    &format!(
+                                        "{} · {} · {}",
+                                        effect.category,
+                                        effect.engine,
+                                        crate::duration::format_effect_duration_for_language(
+                                            display_language,
+                                            effect.default_duration_ms.unwrap_or_default()
+                                        )
+                                    ),
                                 );
                                 if response.clicked() {
                                     select_strip(app, effect);
@@ -516,6 +533,16 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                                 .speed(100.0),
                                         );
                                         ui.label(&labels.9);
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "({})",
+                                                crate::duration::format_effect_duration_for_language(
+                                                    display_language,
+                                                    draft.duration_ms
+                                                )
+                                            ))
+                                            .weak(),
+                                        );
                                     });
                                     ui.end_row();
                                 });

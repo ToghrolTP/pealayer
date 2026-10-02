@@ -297,6 +297,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Search" => "جست‌وجو",
         "Search effects..." => "جست‌وجوی جلوه‌ها…",
         "No effects" => "جلوه‌ای موجود نیست",
+        "Until stopped" => "تا زمان توقف",
         "Loading hardware…" => "در حال بارگذاری سخت‌افزار…",
         "Board connection failed" => "اتصال برد ناموفق بود",
         "PCController detected hardware on" => "PCController سخت‌افزار را در این مسیر شناسایی کرد:",

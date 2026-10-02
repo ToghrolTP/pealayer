@@ -79,6 +79,7 @@ const fa: Record<string, string> = {
   'Add cue at playhead': 'افزودن نشانه در نشانگر پخش',
   'No effect profiles are available in the current project.': 'در پروژهٔ کنونی نمایهٔ افکتی وجود ندارد.',
   'No hardware': 'بدون سخت‌افزار',
+  'Until stopped': 'تا زمان توقف',
   'Program monitor': 'نمایشگر برنامه',
   'Effect timeline': 'خط زمانی افکت',
   'Cues': 'نشانه‌ها',

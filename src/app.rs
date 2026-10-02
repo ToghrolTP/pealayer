@@ -472,6 +472,10 @@ impl eframe::App for PealayerApp {
                             description: String::new(),
                             kind: "sequence".to_string(),
                             duration_ms: effect.duration_ms,
+                            duration_display: crate::duration::format_effect_duration_for_language(
+                                self.language,
+                                effect.duration_ms,
+                            ),
                             action_count: effect.steps.len(),
                             editable: true,
                             program: serde_json::Value::Array(
@@ -500,6 +504,11 @@ impl eframe::App for PealayerApp {
                                 description: effect.description.clone(),
                                 kind: "strip-stream".to_string(),
                                 duration_ms: effect.default_duration_ms.unwrap_or_default(),
+                                duration_display:
+                                    crate::duration::format_effect_duration_for_language(
+                                        self.language,
+                                        effect.default_duration_ms.unwrap_or_default(),
+                                    ),
                                 action_count: 1,
                                 editable: effect.editable,
                                 program: effect.program.clone(),
@@ -571,6 +580,10 @@ impl eframe::App for PealayerApp {
                         id: effect.id.to_string(),
                         name: effect.name.clone(),
                         duration_ms: effect.duration_ms,
+                        duration_display: crate::duration::format_effect_duration_for_language(
+                            self.language,
+                            effect.duration_ms,
+                        ),
                         action_count: effect.actions.len(),
                         target: match effect.target {
                             crate::four_d::models::HardwareTarget::Any => "any".to_string(),
@@ -599,6 +612,11 @@ impl eframe::App for PealayerApp {
                                 name: effect.name.clone(),
                                 start_time_ms: instance.start_time_ms,
                                 duration_ms: effect.duration_ms,
+                                duration_display:
+                                    crate::duration::format_effect_duration_for_language(
+                                        self.language,
+                                        effect.duration_ms,
+                                    ),
                             })
                     })
                     .collect(),

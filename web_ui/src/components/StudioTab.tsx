@@ -132,7 +132,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                 <span className="effect-profile__icon">{effectGlyph(effect.kind === 'sequence' ? 'controller' : 'strip')}</span>
                 <div className="effect-profile__body">
                   <strong>{effect.name}</strong>
-                  <span>{effect.category} · {effect.action_count} {tr(locale, 'actions')} · {effect.duration_ms} ms</span>
+                  <span>{effect.category} · {effect.action_count} {tr(locale, 'actions')} · {effect.duration_display}</span>
                 </div>
                 <Tooltip title={tr(locale, 'Play effect')}>
                   <Button
@@ -355,7 +355,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                     </button>
                   ))}
                 </div>
-                <span className="timeline-row__duration">{effect.duration_ms} ms</span>
+                <span className="timeline-row__duration">{effect.duration_display}</span>
               </div>
             );
           })}

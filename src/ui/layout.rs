@@ -3629,9 +3629,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 ui.horizontal(|ui| {
                                                                     for text in [
                                                                         target_label.clone(),
-                                                                        format!(
-                                                                            "{} ms",
-                                                                            preset.effect.duration_ms
+                                                                        crate::duration::format_effect_duration_for_language(
+                                                                            display_language,
+                                                                            preset.effect.duration_ms,
                                                                         ),
                                                                     ] {
                                                                         egui::Frame::new()
