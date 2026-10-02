@@ -534,6 +534,8 @@ fn main() -> eframe::Result {
                 compact_hardware_controls: loaded_config.compact_hardware_controls,
                 show_raw_motion_relays: loaded_config.show_raw_motion_relays,
                 prefix_relay_numbers: loaded_config.prefix_relay_numbers,
+                live_pwm_updates: loaded_config.live_pwm_updates,
+                hardware_actions_on_press: loaded_config.hardware_actions_on_press,
                 single_instance: loaded_config.single_instance,
                 windows_mica_backdrop: loaded_config.windows_mica_backdrop,
                 windows_dwm_theming: loaded_config.windows_dwm_theming,

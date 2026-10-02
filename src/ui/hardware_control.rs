@@ -315,18 +315,26 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             for row in actions.chunks(columns) {
                 ui.columns(columns, |uis| {
                     for (index, action) in row.iter().enumerate() {
-                        if uis[index]
-                            .add_enabled(
-                                !app.estop_active && !control.locked,
-                                egui::Button::new(format!(
-                                    "{} {}",
-                                    crate::ui::icons::action(&action.verb),
-                                    crate::ui::i18n::visual_text(app.language, &action.name)
-                                ))
-                                .min_size(egui::vec2(uis[index].available_width(), 32.0)),
+                        let response = uis[index].add_enabled(
+                            !app.estop_active && !control.locked,
+                            egui::Button::new(format!(
+                                "{} {}",
+                                crate::ui::icons::action(&action.verb),
+                                crate::ui::i18n::visual_text(app.language, &action.name)
+                            ))
+                            .min_size(egui::vec2(uis[index].available_width(), 32.0)),
+                        );
+                        let verb = action.verb.to_ascii_lowercase();
+                        let activated = if matches!(verb.as_str(), "on" | "off") {
+                            crate::ui::layout::hardware_control_activated(
+                                app,
+                                &uis[index],
+                                &response,
                             )
-                            .clicked()
-                        {
+                        } else {
+                            response.clicked()
+                        };
+                        if activated {
                             invoke_action(app, &control, action);
                         }
                     }
@@ -341,29 +349,24 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 .into_iter()
                 .enumerate()
                 {
-                    if uis[index]
-                        .add_enabled(
-                            !app.estop_active && !control.locked,
-                            egui::Button::new(format!("{icon} {label}"))
-                                .min_size(egui::vec2(uis[index].available_width(), 34.0)),
-                        )
-                        .clicked()
-                    {
+                    let response = uis[index].add_enabled(
+                        !app.estop_active && !control.locked,
+                        egui::Button::new(format!("{icon} {label}"))
+                            .min_size(egui::vec2(uis[index].available_width(), 34.0)),
+                    );
+                    if crate::ui::layout::hardware_control_activated(app, &uis[index], &response) {
                         set_relay(app, relay, on);
                     }
                 }
             });
         } else if let Some(channel) = pwm_channel(&capabilities, &control.key) {
             ui.add_space(6.0);
-            let changed = ui
-                .add_enabled(
-                    !control.locked,
-                    egui::Slider::new(&mut app.hardware_control_pwm_percent, 0.0..=100.0)
-                        .fixed_decimals(1)
-                        .suffix("%"),
-                )
-                .drag_stopped();
-            if changed {
+            let pwm_response = crate::ui::layout::draw_pwm_editor_row(
+                ui,
+                &mut app.hardware_control_pwm_percent,
+                !control.locked,
+            );
+            if pwm_response.should_transmit(app.live_pwm_updates) {
                 set_pwm(app, channel, app.hardware_control_pwm_percent);
             }
             ui.horizontal_wrapped(|ui| {

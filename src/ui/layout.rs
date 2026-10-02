@@ -85,6 +85,177 @@ fn pwm_raw(percent: f64) -> u16 {
     (percent.clamp(0.0, 100.0) * 4095.0 / 100.0).round() as u16
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PwmEditorResponse {
+    changed: bool,
+    committed: bool,
+}
+
+fn pwm_editor_widths(row_width: f32, gap: f32) -> (f32, f32) {
+    let number_width = 76.0_f32.min((row_width - gap - 56.0).max(52.0));
+    let slider_width = (row_width - number_width - gap).max(1.0);
+    (slider_width, number_width)
+}
+
+impl PwmEditorResponse {
+    pub(crate) fn should_transmit(self, live_updates: bool) -> bool {
+        if live_updates {
+            self.changed
+        } else {
+            self.committed
+        }
+    }
+}
+
+fn pwm_wheel_steps(ui: &egui::Ui, response: &egui::Response) -> f64 {
+    if !response.hovered() {
+        return 0.0;
+    }
+    ui.ctx().input_mut(|input| {
+        let steps = input
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                egui::Event::MouseWheel { delta, .. } => {
+                    let delta = if delta.y.abs() >= delta.x.abs() {
+                        delta.y
+                    } else {
+                        delta.x
+                    };
+                    (delta != 0.0).then_some(f64::from(delta.signum()))
+                }
+                _ => None,
+            })
+            .sum::<f64>();
+        if steps != 0.0 {
+            // The hovered PWM slider owns this wheel gesture; do not also
+            // scroll the enclosing Hardware Monitor panel.
+            input.smooth_scroll_delta = egui::Vec2::ZERO;
+        }
+        steps
+    })
+}
+
+pub(crate) fn draw_pwm_editor_row(
+    ui: &mut egui::Ui,
+    percent: &mut f64,
+    enabled: bool,
+) -> PwmEditorResponse {
+    let row_width = ui.available_width();
+    let mut outcome = PwmEditorResponse::default();
+    ui.allocate_ui_with_layout(
+        egui::vec2(row_width, 26.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            let gap = ui.spacing().item_spacing.x;
+            let (slider_width, number_width) = pwm_editor_widths(row_width, gap);
+            let slider = ui
+                .add_enabled_ui(enabled, |ui| {
+                    ui.add_sized(
+                        [slider_width, 24.0],
+                        egui::Slider::new(percent, 0.0..=100.0)
+                            .show_value(false)
+                            .step_by(0.1),
+                    )
+                })
+                .inner;
+            let wheel_steps = if enabled {
+                pwm_wheel_steps(ui, &slider)
+            } else {
+                0.0
+            };
+            if wheel_steps != 0.0 {
+                *percent = (*percent + wheel_steps).clamp(0.0, 100.0);
+            }
+            let value = ui
+                .add_enabled_ui(enabled, |ui| {
+                    ui.add_sized(
+                        [number_width, 24.0],
+                        egui::DragValue::new(percent)
+                            .range(0.0..=100.0)
+                            .speed(0.1)
+                            .fixed_decimals(1)
+                            .suffix("%")
+                            .max_decimals(1),
+                    )
+                })
+                .inner;
+            outcome.changed = slider.changed() || value.changed() || wheel_steps != 0.0;
+            outcome.committed = slider.drag_stopped()
+                || value.lost_focus()
+                || (value.changed() && ui.input(|input| input.key_pressed(egui::Key::Enter)))
+                || wheel_steps != 0.0;
+        },
+    );
+    outcome
+}
+
+pub(crate) fn hardware_control_activated(
+    app: &PealayerApp,
+    ui: &egui::Ui,
+    response: &egui::Response,
+) -> bool {
+    hardware_control_activation(
+        app.hardware_actions_on_press,
+        response.is_pointer_button_down_on(),
+        ui.input(|input| input.pointer.button_pressed(egui::PointerButton::Primary)),
+        response.clicked(),
+    )
+}
+
+fn hardware_control_activation(
+    activate_on_press: bool,
+    pointer_down_on_control: bool,
+    primary_pressed_this_frame: bool,
+    clicked_on_release: bool,
+) -> bool {
+    if activate_on_press {
+        pointer_down_on_control && primary_pressed_this_frame
+    } else {
+        clicked_on_release
+    }
+}
+
+fn send_pwm_raw(app: &PealayerApp, channel: u8, raw: u16) {
+    let _ = app
+        .engine_handle
+        .sender
+        .send(crate::four_d::engine::EngineMessage::ControllerCall {
+            method: "controller.pwm.set".to_string(),
+            params: serde_json::json!({"channel": channel, "value": raw}),
+        });
+}
+
+fn draw_pwm_card_editor(
+    app: &PealayerApp,
+    ui: &mut egui::Ui,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+    channel: &crate::four_d::controller::HardwareOutput,
+) {
+    let value_id = ui.make_persistent_id(("pwm_value", channel.id));
+    let sent_id = ui.make_persistent_id(("pwm_sent_value", channel.id));
+    let telemetry_raw = if capabilities.telemetry.pwm_channel == Some(channel.id) {
+        capabilities.telemetry.pwm_value.unwrap_or(0)
+    } else {
+        0
+    };
+    let displayed_raw = ui
+        .data_mut(|data| data.get_temp::<u16>(value_id))
+        .unwrap_or(telemetry_raw);
+    let last_sent = ui
+        .data_mut(|data| data.get_temp::<u16>(sent_id))
+        .unwrap_or(telemetry_raw);
+    let mut percent = pwm_percent(displayed_raw);
+    let response = draw_pwm_editor_row(ui, &mut percent, !control.locked);
+    let raw = pwm_raw(percent);
+    ui.data_mut(|data| data.insert_temp(value_id, raw));
+    if response.should_transmit(app.live_pwm_updates) && raw != last_sent {
+        send_pwm_raw(app, channel.id, raw);
+        ui.data_mut(|data| data.insert_temp(sent_id, raw));
+    }
+}
+
 fn begin_effect_drag(ctx: &egui::Context, payload: EffectDragPayload) {
     egui::DragAndDrop::set_payload(ctx, payload);
 }
@@ -1173,7 +1344,10 @@ fn draw_compact_control_card(
                     indicator_state,
                     relay_id.is_some() && !control.locked,
                 );
-                if indicator.clicked() && !control.locked && let Some(id) = relay_id {
+                if hardware_control_activated(app, ui, &indicator)
+                    && !control.locked
+                    && let Some(id) = relay_id
+                {
                     let turn_on = indicator_state != ControlIndicatorState::Active;
                     let _ = app.engine_handle.sender.send(
                         crate::four_d::engine::EngineMessage::ControllerCall {
@@ -1314,38 +1488,7 @@ fn draw_compact_control_card(
                         .iter()
                         .find(|channel| channel.key == control.key)
                     {
-                        let value_id = ui.make_persistent_id(("pwm_value", channel.id));
-                        let raw = ui.data_mut(|data| {
-                            data.get_temp::<u16>(value_id).unwrap_or_else(|| {
-                                if capabilities.telemetry.pwm_channel == Some(channel.id) {
-                                    capabilities.telemetry.pwm_value.unwrap_or(0)
-                                } else {
-                                    0
-                                }
-                            })
-                        });
-                        let mut percent = pwm_percent(raw);
-                        let width = ui.available_width().max(96.0);
-                        let response = ui
-                            .add_enabled_ui(!control.locked, |ui| {
-                                ui.add_sized(
-                                    [width, 24.0],
-                                    egui::Slider::new(&mut percent, 0.0..=100.0)
-                                        .fixed_decimals(1)
-                                        .suffix("%"),
-                                )
-                            })
-                            .inner;
-                        let raw = pwm_raw(percent);
-                        ui.data_mut(|data| data.insert_temp(value_id, raw));
-                        if response.drag_stopped() || response.lost_focus() {
-                            let _ = app.engine_handle.sender.send(
-                                crate::four_d::engine::EngineMessage::ControllerCall {
-                                    method: "controller.pwm.set".to_string(),
-                                    params: serde_json::json!({"channel": channel.id, "value": raw}),
-                                },
-                            );
-                        }
+                        draw_pwm_card_editor(app, ui, capabilities, control, channel);
                     }
                 } else if !control.actions.is_empty() {
                     let is_motion = is_motion_control(control);
@@ -1379,7 +1522,11 @@ fn draw_compact_control_card(
                                     action,
                                     stop.expect("checked above"),
                                 );
-                            } else if response.clicked() {
+                            } else if (matches!(action.verb.to_ascii_lowercase().as_str(), "on" | "off")
+                                && hardware_control_activated(app, ui, &response))
+                                || (!matches!(action.verb.to_ascii_lowercase().as_str(), "on" | "off")
+                                    && response.clicked())
+                            {
                                 crate::ui::hardware_control::invoke_action(app, control, action);
                             }
                         }
@@ -1390,14 +1537,13 @@ fn draw_compact_control_card(
                             (false, crate::ui::icons::STOP_CIRCLE, app.tr("OFF")),
                             (true, crate::ui::icons::LIGHTNING, app.tr("ON")),
                         ] {
-                            if ui
+                            let response = ui
                                 .add_enabled(
                                     !app.estop_active && !control.locked,
                                     egui::Button::new(icon).min_size(egui::vec2(28.0, 26.0)),
                                 )
-                                .on_hover_text(label)
-                                .clicked()
-                            {
+                                .on_hover_text(label);
+                            if hardware_control_activated(app, ui, &response) {
                                 let _ = app.engine_handle.sender.send(
                                     crate::four_d::engine::EngineMessage::ControllerCall {
                                         method: "controller.command.execute".to_string(),
@@ -1465,7 +1611,10 @@ fn draw_control_card(
                     indicator_state,
                     relay_id.is_some() && !control.locked,
                 );
-                if indicator.clicked() && !control.locked && let Some(id) = relay_id {
+                if hardware_control_activated(app, ui, &indicator)
+                    && !control.locked
+                    && let Some(id) = relay_id
+                {
                     let turn_on = indicator_state != ControlIndicatorState::Active;
                     let _ = app.engine_handle.sender.send(
                         crate::four_d::engine::EngineMessage::ControllerCall {
@@ -1616,56 +1765,8 @@ fn draw_control_card(
                 if let Some(channel) = capabilities.pwm_channels.iter()
                     .find(|channel| channel.key == control.key)
                 {
-                    let value_id = ui.make_persistent_id(("pwm_value", channel.id));
-                    let raw_value = ui.data_mut(|data| {
-                        data.get_temp::<u16>(value_id).unwrap_or_else(|| {
-                            if capabilities.telemetry.pwm_channel == Some(channel.id) {
-                                capabilities.telemetry.pwm_value.unwrap_or(0)
-                            } else { 0 }
-                        })
-                    });
-                    let mut percent = pwm_percent(raw_value);
                     ui.add_space(if app.compact_hardware_controls { 3.0 } else { 8.0 });
-                    let mut commit = false;
-                    ui.horizontal(|ui| {
-                        let number_width = 66.0;
-                        let slider_width = (ui.available_width() - number_width - 8.0).max(72.0);
-                        let slider = ui
-                            .add_enabled_ui(!control.locked, |ui| {
-                                ui.add_sized(
-                                    [slider_width, 24.0],
-                                    egui::Slider::new(&mut percent, 0.0..=100.0)
-                                        .show_value(false),
-                                )
-                            })
-                            .inner;
-                        let value = ui
-                            .add_enabled_ui(!control.locked, |ui| {
-                                ui.add_sized(
-                                    [number_width, 24.0],
-                                    egui::DragValue::new(&mut percent)
-                                        .range(0.0..=100.0)
-                                        .speed(0.1)
-                                        .fixed_decimals(1)
-                                        .suffix("%"),
-                                )
-                            })
-                            .inner;
-                        commit = slider.drag_stopped()
-                            || value.lost_focus()
-                            || (value.changed()
-                                && ui.input(|input| input.key_pressed(egui::Key::Enter)));
-                    });
-                    let raw = pwm_raw(percent);
-                    ui.data_mut(|data| data.insert_temp(value_id, raw));
-                    if commit {
-                        let _ = app.engine_handle.sender.send(
-                            crate::four_d::engine::EngineMessage::ControllerCall {
-                                method: "controller.pwm.set".to_string(),
-                                params: serde_json::json!({"channel": channel.id, "value": raw}),
-                            },
-                        );
-                    }
+                    draw_pwm_card_editor(app, ui, capabilities, control, channel);
                 }
             }
 
@@ -1713,7 +1814,10 @@ fn draw_control_card(
                                     action,
                                     stop_action.expect("checked above"),
                                 );
-                            } else if response.clicked() {
+                            } else if (matches!(verb.as_str(), "on" | "off")
+                                && hardware_control_activated(app, ui, &response))
+                                || (!matches!(verb.as_str(), "on" | "off") && response.clicked())
+                            {
                                 crate::ui::hardware_control::invoke_action(app, control, action);
                             }
                         }
@@ -1742,13 +1846,12 @@ fn draw_control_card(
                                     egui::Color32::from_rgb(34, 197, 94),
                                 ));
                         }
-                        if uis[index]
+                        let response = uis[index]
                             .add_enabled_ui(!app.estop_active && !control.locked, |ui| {
                                 ui.add_sized([ui.available_width(), 28.0], button)
                             })
-                            .inner
-                            .clicked()
-                        {
+                            .inner;
+                        if hardware_control_activated(app, &uis[index], &response) {
                             let _ = app.engine_handle.sender.send(
                                 crate::four_d::engine::EngineMessage::ControllerCall {
                                     method: "controller.command.execute".to_string(),
@@ -2109,6 +2212,40 @@ mod timeline_row_tests {
         assert_eq!(pwm_raw(0.0), 0);
         assert_eq!(pwm_raw(100.0), 4095);
         assert_eq!(pwm_raw(12.5), 512);
+    }
+
+    #[test]
+    fn pwm_slider_and_input_fill_the_card_row_without_a_trailing_gap() {
+        let row_width = 420.0;
+        let gap = 8.0;
+        let (slider, input) = pwm_editor_widths(row_width, gap);
+        assert_eq!(slider + gap + input, row_width);
+        assert_eq!(input, 76.0);
+    }
+
+    #[test]
+    fn pwm_live_mode_transmits_changes_while_deferred_mode_waits_for_commit() {
+        let changing = PwmEditorResponse {
+            changed: true,
+            committed: false,
+        };
+        assert!(changing.should_transmit(true));
+        assert!(!changing.should_transmit(false));
+
+        let committed = PwmEditorResponse {
+            changed: false,
+            committed: true,
+        };
+        assert!(!committed.should_transmit(true));
+        assert!(committed.should_transmit(false));
+    }
+
+    #[test]
+    fn output_activation_selects_press_or_release_without_double_firing() {
+        assert!(hardware_control_activation(true, true, true, false));
+        assert!(!hardware_control_activation(true, false, false, true));
+        assert!(!hardware_control_activation(false, true, true, false));
+        assert!(hardware_control_activation(false, false, false, true));
     }
 
     #[test]
@@ -4467,7 +4604,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     .collect::<Vec<_>>();
                                 let title = format!(
                                     "{} ({})",
-                                    self.app.tr("PWM / MOSFET outputs"),
+                                    self.app.tr("PWM outputs"),
                                     pwm_controls.len()
                                 );
                                 hardware_section(

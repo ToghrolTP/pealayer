@@ -220,7 +220,7 @@ fn capability_list(
     ui.horizontal_wrapped(|ui| {
         for (available, label) in [
             (!capabilities.relays.is_empty(), "Relay outputs"),
-            (!capabilities.pwm_channels.is_empty(), "PWM / MOSFET"),
+            (!capabilities.pwm_channels.is_empty(), "PWM outputs"),
             (capabilities.supports_rf_transmit, "RF transmit"),
             (capabilities.supports_addressable_led, "Addressable strip"),
             (

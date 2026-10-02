@@ -341,6 +341,18 @@ pub fn preference_controls() -> Vec<PreferenceControl> {
             "Motion controls",
             "Prefix relay captions with their fixed R number",
         ),
+        PreferenceControl::boolean(
+            "live_pwm_updates",
+            "hardware",
+            "Output controls",
+            "Update PWM outputs while dragging",
+        ),
+        PreferenceControl::boolean(
+            "hardware_actions_on_press",
+            "hardware",
+            "Output controls",
+            "Activate output buttons when pressed",
+        ),
         PreferenceControl::select(
             "paused_drag_action",
             "input",

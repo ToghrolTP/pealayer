@@ -301,6 +301,8 @@ pub struct PealayerApp {
     pub(crate) compact_hardware_controls: bool,
     pub(crate) show_raw_motion_relays: bool,
     pub(crate) prefix_relay_numbers: bool,
+    pub(crate) live_pwm_updates: bool,
+    pub(crate) hardware_actions_on_press: bool,
     pub(crate) single_instance: bool,
     pub(crate) windows_mica_backdrop: bool,
     pub(crate) windows_dwm_theming: bool,
@@ -2612,6 +2614,8 @@ impl PealayerApp {
         cfg.compact_hardware_controls = self.compact_hardware_controls;
         cfg.show_raw_motion_relays = self.show_raw_motion_relays;
         cfg.prefix_relay_numbers = self.prefix_relay_numbers;
+        cfg.live_pwm_updates = self.live_pwm_updates;
+        cfg.hardware_actions_on_press = self.hardware_actions_on_press;
         cfg.single_instance = self.single_instance;
         cfg.windows_mica_backdrop = self.windows_mica_backdrop;
         cfg.windows_dwm_theming = self.windows_dwm_theming;
@@ -2695,6 +2699,8 @@ impl PealayerApp {
         self.compact_hardware_controls = config.compact_hardware_controls;
         self.show_raw_motion_relays = config.show_raw_motion_relays;
         self.prefix_relay_numbers = config.prefix_relay_numbers;
+        self.live_pwm_updates = config.live_pwm_updates;
+        self.hardware_actions_on_press = config.hardware_actions_on_press;
         self.single_instance = config.single_instance;
         self.windows_mica_backdrop = config.windows_mica_backdrop;
         self.windows_dwm_theming = config.windows_dwm_theming;
@@ -3204,6 +3210,8 @@ impl Default for PealayerApp {
             compact_hardware_controls: false,
             show_raw_motion_relays: true,
             prefix_relay_numbers: true,
+            live_pwm_updates: true,
+            hardware_actions_on_press: true,
             single_instance: true,
             windows_mica_backdrop: false,
             windows_dwm_theming: true,
