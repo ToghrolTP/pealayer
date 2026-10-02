@@ -335,6 +335,12 @@ pub fn preference_controls() -> Vec<PreferenceControl> {
             "Motion controls",
             "Show raw R1-R4 controls below seat controls",
         ),
+        PreferenceControl::boolean(
+            "prefix_relay_numbers",
+            "hardware",
+            "Motion controls",
+            "Prefix relay captions with their fixed R number",
+        ),
         PreferenceControl::select(
             "paused_drag_action",
             "input",

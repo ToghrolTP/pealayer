@@ -204,6 +204,8 @@ pub enum EngineMessage {
         name: Option<String>,
         icon: Option<String>,
         group: Option<String>,
+        hidden: Option<bool>,
+        locked: Option<bool>,
         expected_revision: Option<String>,
         fallback_names: std::collections::BTreeMap<String, String>,
     },
@@ -779,6 +781,8 @@ pub fn spawn_engine() -> EngineHandle {
                         name,
                         icon,
                         group,
+                        hidden,
+                        locked,
                         expected_revision,
                         fallback_names,
                     } => {
@@ -804,6 +808,18 @@ pub fn spawn_engine() -> EngineHandle {
                                         serde_json::Value::String(group),
                                     );
                                 }
+                                if let Some(hidden) = hidden {
+                                    params.insert(
+                                        "hidden".to_string(),
+                                        serde_json::Value::Bool(hidden),
+                                    );
+                                }
+                                if let Some(locked) = locked {
+                                    params.insert(
+                                        "locked".to_string(),
+                                        serde_json::Value::Bool(locked),
+                                    );
+                                }
                                 if let Some(revision) = expected_revision {
                                     params.insert(
                                         "expected_revision".to_string(),
@@ -814,8 +830,12 @@ pub fn spawn_engine() -> EngineHandle {
                                     "controller.peripheral.presentation.update",
                                     serde_json::Value::Object(params),
                                 );
+                                let presentation_has_policy = hidden.is_some() || locked.is_some();
                                 let update = match update {
-                                    Err(error) if controller_method_is_unavailable(&error) => {
+                                    Err(error)
+                                        if !presentation_has_policy
+                                            && controller_method_is_unavailable(&error) =>
+                                    {
                                         transport.call_controller(
                                             "controller.peripherals.set",
                                             serde_json::json!({"peripheral_names": fallback_names}),

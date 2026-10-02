@@ -54,6 +54,10 @@ fn effects_panel_content_width(available_width: f32) -> f32 {
     (available_width - EFFECTS_PANEL_RIGHT_GUTTER).max(EFFECT_CARD_MIN_WIDTH)
 }
 
+fn effects_frame_content_width(outer_width: f32) -> f32 {
+    (outer_width - f32::from(EFFECT_CARD_HORIZONTAL_MARGIN) * 2.0).max(1.0)
+}
+
 fn effect_card<R>(
     ui: &mut egui::Ui,
     outer_width: f32,
@@ -67,8 +71,7 @@ fn effect_card<R>(
         .inner_margin(egui::Margin::symmetric(EFFECT_CARD_HORIZONTAL_MARGIN, 7))
         .corner_radius(8.0)
         .show(ui, |ui| {
-            let content_width =
-                (outer_width - f32::from(EFFECT_CARD_HORIZONTAL_MARGIN) * 2.0).max(1.0);
+            let content_width = effects_frame_content_width(outer_width);
             ui.set_width(content_width);
             add_contents(ui)
         })
@@ -454,6 +457,8 @@ pub(crate) fn update_control_name(
             }),
             icon: None,
             group: None,
+            hidden: None,
+            locked: None,
             expected_revision,
             fallback_names,
         },
@@ -477,10 +482,44 @@ pub(crate) fn update_control_group(
             name: None,
             icon: None,
             group: Some(requested_group.trim().to_string()),
+            hidden: None,
+            locked: None,
             expected_revision,
             fallback_names: capabilities.peripheral_names.clone(),
         },
     );
+}
+
+pub(crate) fn update_control_presentation_flags(
+    app: &PealayerApp,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+    hidden: Option<bool>,
+    locked: Option<bool>,
+) {
+    let expected_revision = capabilities
+        .board_profile
+        .as_ref()
+        .map(|profile| profile.revision.clone())
+        .filter(|revision| !revision.is_empty());
+    let _ = app.engine_handle.sender.send(
+        crate::four_d::engine::EngineMessage::UpdatePeripheralPresentation {
+            key: control.key.clone(),
+            name: None,
+            icon: None,
+            group: None,
+            hidden,
+            locked,
+            expected_revision,
+            fallback_names: capabilities.peripheral_names.clone(),
+        },
+    );
+}
+
+fn control_supports_presentation_policy(
+    control: &crate::four_d::controller::HardwareControl,
+) -> bool {
+    relay_id_from_control_key(&control.key).is_some() || is_pwm_control(control)
 }
 
 fn is_motion_control(control: &crate::four_d::controller::HardwareControl) -> bool {
@@ -492,6 +531,33 @@ fn is_motion_control(control: &crate::four_d::controller::HardwareControl) -> bo
                 "up" | "down" | "stop"
             )
         })
+}
+
+fn card_control_actions<'a>(
+    control: &'a crate::four_d::controller::HardwareControl,
+) -> Vec<&'a crate::four_d::controller::HardwareAction> {
+    if !is_motion_control(control) {
+        return control.actions.iter().collect();
+    }
+    control
+        .actions
+        .iter()
+        .filter(|action| !action.verb.eq_ignore_ascii_case("stop"))
+        .collect()
+}
+
+pub(crate) fn contextual_stop_action<'a>(
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &'a crate::four_d::controller::HardwareControl,
+) -> Option<&'a crate::four_d::controller::HardwareAction> {
+    (is_motion_control(control) && motion_control_is_active(capabilities, control))
+        .then(|| {
+            control
+                .actions
+                .iter()
+                .find(|action| action.verb.eq_ignore_ascii_case("stop"))
+        })
+        .flatten()
 }
 
 fn invoke_advertised_action(app: &PealayerApp, action_id: &str) {
@@ -577,7 +643,7 @@ fn hold_motion_transition(
     }
 }
 
-fn motion_control_is_active(
+pub(crate) fn motion_control_is_active(
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
 ) -> bool {
@@ -664,7 +730,7 @@ fn draw_control_context_menu(
                 for action in &control.actions {
                     if ui
                         .add_enabled(
-                            !app.estop_active,
+                            !app.estop_active && !control.locked,
                             egui::Button::new(format!(
                                 "{} {}",
                                 crate::ui::icons::action(&action.verb),
@@ -686,7 +752,7 @@ fn draw_control_context_menu(
         ] {
             if ui
                 .add_enabled(
-                    !app.estop_active,
+                    !app.estop_active && !control.locked,
                     egui::Button::new(format!("{icon} {label}")),
                 )
                 .clicked()
@@ -705,6 +771,33 @@ fn draw_control_context_menu(
     }
 
     ui.separator();
+    if control_supports_presentation_policy(control) {
+        let mut locked = control.locked;
+        if ui
+            .checkbox(
+                &mut locked,
+                format!("{} {}", crate::ui::icons::LOCK, app.tr("Lock channel")),
+            )
+            .on_hover_text(app.tr("Prevent control changes until this channel is unlocked"))
+            .changed()
+        {
+            update_control_presentation_flags(app, capabilities, control, None, Some(locked));
+            ui.close();
+        }
+        if ui
+            .button(format!(
+                "{} {}",
+                crate::ui::icons::EYE_SLASH,
+                app.tr("Hide channel")
+            ))
+            .on_hover_text(app.tr("Hide this channel from the Hardware Monitor"))
+            .clicked()
+        {
+            update_control_presentation_flags(app, capabilities, control, Some(true), None);
+            ui.close();
+        }
+        ui.separator();
+    }
     if ui
         .button(format!(
             "{} {}",
@@ -1074,8 +1167,13 @@ fn draw_compact_control_card(
                     egui::RichText::new(crate::ui::icons::control(&control.kind, &control.icon))
                         .size(17.0),
                 );
-                let indicator = draw_control_indicator(app, ui, indicator_state, relay_id.is_some());
-                if indicator.clicked() && let Some(id) = relay_id {
+                let indicator = draw_control_indicator(
+                    app,
+                    ui,
+                    indicator_state,
+                    relay_id.is_some() && !control.locked,
+                );
+                if indicator.clicked() && !control.locked && let Some(id) = relay_id {
                     let turn_on = indicator_state != ControlIndicatorState::Active;
                     let _ = app.engine_handle.sender.send(
                         crate::four_d::engine::EngineMessage::ControllerCall {
@@ -1085,6 +1183,13 @@ fn draw_compact_control_card(
                             }),
                         },
                     );
+                }
+                if app.prefix_relay_numbers && let Some(id) = relay_id {
+                    ui.label(egui::RichText::new(format!("R{id}")).monospace().weak());
+                }
+                if control.locked {
+                    ui.label(egui::RichText::new(crate::ui::icons::LOCK).weak())
+                        .on_hover_text(app.tr("Channel is locked in PCController"));
                 }
 
                 let editing = ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
@@ -1145,10 +1250,15 @@ fn draw_compact_control_card(
                     }
                 } else {
                     let title = crate::ui::i18n::visual_text(app.language, &control.name);
+                    let is_motion = is_motion_control(control);
+                    let stop_visible = contextual_stop_action(capabilities, control).is_some();
                     let reserved = if is_pwm_control(control) {
                         150.0
                     } else if !control.actions.is_empty() {
-                        (control.actions.len().min(3) as f32 * 34.0) + 8.0
+                        (card_control_actions(control).len().min(3) as f32 * 34.0)
+                            + if is_motion { 34.0 } else { 0.0 }
+                            + if stop_visible { 34.0 } else { 0.0 }
+                            + 8.0
                     } else if relay_id.is_some() {
                         76.0
                     } else {
@@ -1168,6 +1278,34 @@ fn draw_compact_control_card(
                         });
                     }
                     response.on_hover_text(format!("{} — {}", title, app.tr("Rename")));
+                    if is_motion {
+                        if let Some(stop) = contextual_stop_action(capabilities, control)
+                            && ui
+                                .add_enabled(
+                                    !app.estop_active && !control.locked,
+                                    egui::Button::new(crate::ui::icons::action(&stop.verb))
+                                        .min_size(egui::vec2(28.0, 26.0)),
+                                )
+                                .on_hover_text(crate::ui::i18n::visual_text(
+                                    app.language,
+                                    &stop.name,
+                                ))
+                                .clicked()
+                        {
+                            crate::ui::hardware_control::invoke_action(app, control, stop);
+                        }
+                        if ui
+                            .button(crate::ui::icons::PENCIL_SIMPLE)
+                            .on_hover_text(app.tr("Rename"))
+                            .clicked()
+                        {
+                            ui.data_mut(|data| {
+                                data.insert_temp(draft_id, control.name.clone());
+                                data.insert_temp(edit_id, true);
+                                data.insert_temp(focus_pending_id, true);
+                            });
+                        }
+                    }
                 }
 
                 if is_pwm_control(control) {
@@ -1188,12 +1326,16 @@ fn draw_compact_control_card(
                         });
                         let mut percent = pwm_percent(raw);
                         let width = ui.available_width().max(96.0);
-                        let response = ui.add_sized(
-                            [width, 24.0],
-                            egui::Slider::new(&mut percent, 0.0..=100.0)
-                                .fixed_decimals(1)
-                                .suffix("%"),
-                        );
+                        let response = ui
+                            .add_enabled_ui(!control.locked, |ui| {
+                                ui.add_sized(
+                                    [width, 24.0],
+                                    egui::Slider::new(&mut percent, 0.0..=100.0)
+                                        .fixed_decimals(1)
+                                        .suffix("%"),
+                                )
+                            })
+                            .inner;
                         let raw = pwm_raw(percent);
                         ui.data_mut(|data| data.insert_temp(value_id, raw));
                         if response.drag_stopped() || response.lost_focus() {
@@ -1211,19 +1353,12 @@ fn draw_compact_control_card(
                         .actions
                         .iter()
                         .find(|action| action.verb.eq_ignore_ascii_case("stop"));
-                    let show_stop = stop.is_some()
-                        && (app.motion_control_mode == crate::config::MotionControlMode::Hold
-                            || motion_control_is_active(capabilities, control));
-                    let ordered = control
-                        .actions
-                        .iter()
-                        .filter(|action| !action.verb.eq_ignore_ascii_case("stop"))
-                        .collect::<Vec<_>>();
+                    let ordered = card_control_actions(control);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         for action in ordered.into_iter().rev() {
                             let response = ui
                                 .add_enabled(
-                                    !app.estop_active,
+                                    !app.estop_active && !control.locked,
                                     egui::Button::new(crate::ui::icons::action(&action.verb))
                                         .min_size(egui::vec2(28.0, 26.0)),
                                 )
@@ -1248,21 +1383,6 @@ fn draw_compact_control_card(
                                 crate::ui::hardware_control::invoke_action(app, control, action);
                             }
                         }
-                        if is_motion && let Some(stop) = stop {
-                            let response = ui.allocate_ui_with_layout(
-                                egui::vec2(28.0, 26.0),
-                                egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                                |ui| show_stop.then(|| ui.add_enabled(
-                                    !app.estop_active,
-                                    egui::Button::new(crate::ui::icons::action(&stop.verb))
-                                        .min_size(egui::vec2(28.0, 26.0)),
-                                )
-                                .on_hover_text(crate::ui::i18n::visual_text(app.language, &stop.name))),
-                            );
-                            if response.inner.is_some_and(|response| response.clicked()) {
-                                crate::ui::hardware_control::invoke_action(app, control, stop);
-                            }
-                        }
                     });
                 } else if let Some(id) = relay_id {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1272,7 +1392,7 @@ fn draw_compact_control_card(
                         ] {
                             if ui
                                 .add_enabled(
-                                    !app.estop_active,
+                                    !app.estop_active && !control.locked,
                                     egui::Button::new(icon).min_size(egui::vec2(28.0, 26.0)),
                                 )
                                 .on_hover_text(label)
@@ -1339,8 +1459,13 @@ fn draw_control_card(
                     egui::RichText::new(crate::ui::icons::control(&control.kind, &control.icon))
                         .size(18.0),
                 );
-                let indicator = draw_control_indicator(app, ui, indicator_state, relay_id.is_some());
-                if indicator.clicked() && let Some(id) = relay_id {
+                let indicator = draw_control_indicator(
+                    app,
+                    ui,
+                    indicator_state,
+                    relay_id.is_some() && !control.locked,
+                );
+                if indicator.clicked() && !control.locked && let Some(id) = relay_id {
                     let turn_on = indicator_state != ControlIndicatorState::Active;
                     let _ = app.engine_handle.sender.send(
                         crate::four_d::engine::EngineMessage::ControllerCall {
@@ -1350,6 +1475,13 @@ fn draw_control_card(
                             }),
                         },
                     );
+                }
+                if app.prefix_relay_numbers && let Some(id) = relay_id {
+                    ui.label(egui::RichText::new(format!("R{id}")).monospace().weak());
+                }
+                if control.locked {
+                    ui.label(egui::RichText::new(crate::ui::icons::LOCK).weak())
+                        .on_hover_text(app.tr("Channel is locked in PCController"));
                 }
 
                 if editing {
@@ -1413,6 +1545,20 @@ fn draw_control_card(
                                 data.insert_temp(edit_id, true);
                                 data.insert_temp(focus_pending_id, true);
                             });
+                        }
+                        if let Some(stop) = contextual_stop_action(capabilities, control)
+                            && ui
+                                .add_enabled(
+                                    !app.estop_active && !control.locked,
+                                    egui::Button::new(crate::ui::icons::action(&stop.verb)),
+                                )
+                                .on_hover_text(crate::ui::i18n::visual_text(
+                                    app.language,
+                                    &stop.name,
+                                ))
+                                .clicked()
+                        {
+                            crate::ui::hardware_control::invoke_action(app, control, stop);
                         }
                         let title = ui.add_sized(
                             [ui.available_width().max(52.0), 24.0],
@@ -1484,18 +1630,27 @@ fn draw_control_card(
                     ui.horizontal(|ui| {
                         let number_width = 66.0;
                         let slider_width = (ui.available_width() - number_width - 8.0).max(72.0);
-                        let slider = ui.add_sized(
-                            [slider_width, 24.0],
-                            egui::Slider::new(&mut percent, 0.0..=100.0).show_value(false),
-                        );
-                        let value = ui.add_sized(
-                            [number_width, 24.0],
-                            egui::DragValue::new(&mut percent)
-                                .range(0.0..=100.0)
-                                .speed(0.1)
-                                .fixed_decimals(1)
-                                .suffix("%"),
-                        );
+                        let slider = ui
+                            .add_enabled_ui(!control.locked, |ui| {
+                                ui.add_sized(
+                                    [slider_width, 24.0],
+                                    egui::Slider::new(&mut percent, 0.0..=100.0)
+                                        .show_value(false),
+                                )
+                            })
+                            .inner;
+                        let value = ui
+                            .add_enabled_ui(!control.locked, |ui| {
+                                ui.add_sized(
+                                    [number_width, 24.0],
+                                    egui::DragValue::new(&mut percent)
+                                        .range(0.0..=100.0)
+                                        .speed(0.1)
+                                        .fixed_decimals(1)
+                                        .suffix("%"),
+                                )
+                            })
+                            .inner;
                         commit = slider.drag_stopped()
                             || value.lost_focus()
                             || (value.changed()
@@ -1521,15 +1676,8 @@ fn draw_control_card(
                     .actions
                     .iter()
                     .find(|action| action.verb.eq_ignore_ascii_case("stop"));
-                let directional = control
-                    .actions
-                    .iter()
-                    .filter(|action| !action.verb.eq_ignore_ascii_case("stop"))
-                    .collect::<Vec<_>>();
-                let show_stop = stop_action.is_some()
-                    && (app.motion_control_mode == crate::config::MotionControlMode::Hold
-                        || motion_control_is_active(capabilities, control));
-                let action_rows = if is_motion { vec![directional] } else { vec![control.actions.iter().collect()] };
+                let actions = card_control_actions(control);
+                let action_rows = vec![actions];
                 for action_row in action_rows {
                     let columns = action_grid_columns(ui.available_width(), action_row.len());
                     ui.columns(columns, |uis| {
@@ -1549,7 +1697,7 @@ fn draw_control_card(
                                     .fill(egui::Color32::from_rgb(22, 163, 74))
                                     .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(34, 197, 94)));
                             }
-                            let response = ui.add_enabled_ui(!app.estop_active, |ui| {
+                            let response = ui.add_enabled_ui(!app.estop_active && !control.locked, |ui| {
                                 ui.add_sized([ui.available_width(), 28.0], button)
                             }).inner.on_hover_text(visual_name);
                             if is_motion
@@ -1567,25 +1715,6 @@ fn draw_control_card(
                             } else if response.clicked() {
                                 crate::ui::hardware_control::invoke_action(app, control, action);
                             }
-                        }
-                    });
-                }
-                if is_motion && stop_action.is_some() {
-                    ui.add_space(5.0);
-                    ui.horizontal_centered(|ui| {
-                        let width = ui.available_width().clamp(86.0, 160.0);
-                        let stop = stop_action.expect("checked above");
-                        let label = responsive_action_label(stop, width);
-                        let response = ui.allocate_ui_with_layout(
-                            egui::vec2(width, 28.0),
-                            egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                            |ui| show_stop.then(|| ui.add_enabled(
-                                    !app.estop_active,
-                                    egui::Button::new(label).min_size(egui::vec2(width, 28.0)),
-                                ).on_hover_text(crate::ui::i18n::visual_text(app.language, &stop.name))),
-                        );
-                        if response.inner.is_some_and(|response| response.clicked()) {
-                            crate::ui::hardware_control::invoke_action(app, control, stop);
                         }
                     });
                 }
@@ -1612,7 +1741,7 @@ fn draw_control_card(
                                 ));
                         }
                         if uis[index]
-                            .add_enabled_ui(!app.estop_active, |ui| {
+                            .add_enabled_ui(!app.estop_active && !control.locked, |ui| {
                                 ui.add_sized([ui.available_width(), 28.0], button)
                             })
                             .inner
@@ -1688,17 +1817,22 @@ fn draw_compact_relay_group(
                                 egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(34, 197, 94)),
                             );
                         }
-                        let response =
-                            ui.add_enabled(!app.estop_active, button)
-                                .on_hover_text(format!(
-                                    "{} · {}",
-                                    crate::ui::i18n::visual_text(app.language, &control.name),
-                                    app.tr(if active {
-                                        "Board reports ON"
-                                    } else {
-                                        "Board reports OFF"
-                                    })
-                                ));
+                        let response = ui
+                            .add_enabled(!app.estop_active && !control.locked, button)
+                            .on_hover_text(format!(
+                                "{} · {}{}",
+                                crate::ui::i18n::visual_text(app.language, &control.name),
+                                app.tr(if active {
+                                    "Board reports ON"
+                                } else {
+                                    "Board reports OFF"
+                                }),
+                                if control.locked {
+                                    format!(" · {}", app.tr("Channel is locked in PCController"))
+                                } else {
+                                    String::new()
+                                }
+                            ));
                         if response.clicked() {
                             let _ = app.engine_handle.sender.send(
                                 crate::four_d::engine::EngineMessage::ControllerCall {
@@ -1736,6 +1870,44 @@ fn draw_compact_relay_group(
                                 .clicked()
                             {
                                 open_control_dialog(app, capabilities, control);
+                                ui.close();
+                            }
+                            let mut locked = control.locked;
+                            if ui
+                                .checkbox(
+                                    &mut locked,
+                                    format!(
+                                        "{} {}",
+                                        crate::ui::icons::LOCK,
+                                        app.tr("Lock channel")
+                                    ),
+                                )
+                                .changed()
+                            {
+                                update_control_presentation_flags(
+                                    app,
+                                    capabilities,
+                                    control,
+                                    None,
+                                    Some(locked),
+                                );
+                                ui.close();
+                            }
+                            if ui
+                                .button(format!(
+                                    "{} {}",
+                                    crate::ui::icons::EYE_SLASH,
+                                    app.tr("Hide channel")
+                                ))
+                                .clicked()
+                            {
+                                update_control_presentation_flags(
+                                    app,
+                                    capabilities,
+                                    control,
+                                    Some(true),
+                                    None,
+                                );
                                 ui.close();
                             }
                             if ui
@@ -1787,14 +1959,59 @@ fn draw_control_card_grid(
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     controls: &[crate::four_d::controller::HardwareControl],
 ) {
+    let hidden = controls
+        .iter()
+        .filter(|control| control.hidden && control_supports_presentation_policy(control))
+        .collect::<Vec<_>>();
+    if !hidden.is_empty() {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.menu_button(
+                format!(
+                    "{} {} {}",
+                    crate::ui::icons::EYE_SLASH,
+                    hidden.len(),
+                    app.tr("hidden")
+                ),
+                |ui| {
+                    ui.label(egui::RichText::new(app.tr("Hidden channels")).strong());
+                    ui.separator();
+                    for control in &hidden {
+                        if ui
+                            .button(format!(
+                                "{} {}",
+                                crate::ui::icons::EYE,
+                                crate::ui::i18n::visual_text(app.language, &control.name)
+                            ))
+                            .on_hover_text(app.tr("Show channel"))
+                            .clicked()
+                        {
+                            update_control_presentation_flags(
+                                app,
+                                capabilities,
+                                control,
+                                Some(false),
+                                None,
+                            );
+                            ui.close();
+                        }
+                    }
+                },
+            );
+        });
+        ui.add_space(4.0);
+    }
     let mut groups: Vec<(String, Vec<&crate::four_d::controller::HardwareControl>)> = Vec::new();
-    for control in controls {
+    for control in controls.iter().filter(|control| !control.hidden) {
         let group = control.group.trim();
         if let Some((_, members)) = groups.iter_mut().find(|(name, _)| name == group) {
             members.push(control);
         } else {
             groups.push((group.to_string(), vec![control]));
         }
+    }
+    if groups.is_empty() {
+        ui.label(egui::RichText::new(app.tr("All channels are hidden")).weak());
+        return;
     }
     let show_group_headers = groups.iter().any(|(name, _)| !name.is_empty());
     for (group, members) in groups {
@@ -1949,6 +2166,47 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn seat_stop_is_inline_and_only_present_while_that_seat_is_active() {
+        let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
+        let control = crate::four_d::controller::HardwareControl {
+            key: "seat.left".into(),
+            kind: "motion".into(),
+            control: "raw-motion".into(),
+            actions: ["up", "down", "stop"]
+                .into_iter()
+                .map(|verb| crate::four_d::controller::HardwareAction {
+                    verb: verb.into(),
+                    name: verb.into(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            card_control_actions(&control)
+                .into_iter()
+                .map(|action| action.verb.as_str())
+                .collect::<Vec<_>>(),
+            ["up", "down"]
+        );
+        assert!(contextual_stop_action(&capabilities, &control).is_none());
+
+        capabilities.active_relays.insert(2);
+        assert_eq!(
+            card_control_actions(&control)
+                .into_iter()
+                .map(|action| action.verb.as_str())
+                .collect::<Vec<_>>(),
+            ["up", "down"]
+        );
+        assert_eq!(
+            contextual_stop_action(&capabilities, &control).map(|action| action.verb.as_str()),
+            Some("stop")
+        );
+    }
+
+    #[test]
     fn effect_drag_translation_preserves_the_pointer_grab_offset() {
         let source_min = egui::pos2(100.0, 80.0);
         let grab_offset = egui::vec2(17.0, 11.0);
@@ -2013,6 +2271,18 @@ mod timeline_row_tests {
             }
             previous.replace(Some(sizes));
         }
+    }
+
+    #[test]
+    fn effect_group_headers_and_cards_share_the_same_outer_width() {
+        let outer = effects_panel_content_width(327.0);
+        let content = effects_frame_content_width(outer);
+        assert_eq!(outer, 317.0);
+        assert_eq!(content, 299.0);
+        assert_eq!(
+            content + f32::from(EFFECT_CARD_HORIZONTAL_MARGIN) * 2.0,
+            outer
+        );
     }
 
     #[test]
@@ -3413,6 +3683,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             .corner_radius(7.0)
                                             .inner_margin(egui::Margin::symmetric(9, 6))
                                             .show(ui, |ui| {
+                                                let header_content_width =
+                                                    effects_frame_content_width(effects_width);
+                                                ui.set_min_width(header_content_width);
+                                                ui.set_max_width(header_content_width);
                                                 ui.horizontal(|ui| {
                                                     ui.label(if open {
                                                         crate::ui::icons::CARET_DOWN

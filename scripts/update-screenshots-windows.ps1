@@ -5,6 +5,7 @@ param(
     [string]$OutputDirectory,
     [string]$AppName,
     [string]$Branding,
+    [string]$HardwareEndpoint,
     [ValidateSet('dark', 'light')]
     [string]$Theme = 'dark',
     [ValidateSet('en', 'fa')]
@@ -272,7 +273,13 @@ for ($localeIndex = 0; $localeIndex -lt $Locale.Count; $localeIndex++) {
     $start.EnvironmentVariables['APP_THEME'] = $Theme
     $start.EnvironmentVariables['APP_NAME'] = $effectiveAppName
     $start.EnvironmentVariables['PEALAYER_INSTANCE_ID'] = "screenshot-$captureSession-$language"
-    $start.EnvironmentVariables['PEALAYER_CONFIG_FILE'] = Join-Path $captureProfile "$language-settings.json"
+    $captureConfig = Join-Path $captureProfile "$language-settings.json"
+    if ($HardwareEndpoint) {
+        @{ hardware_endpoint = $HardwareEndpoint.Trim() } |
+            ConvertTo-Json |
+            Set-Content -LiteralPath $captureConfig -Encoding utf8
+    }
+    $start.EnvironmentVariables['PEALAYER_CONFIG_FILE'] = $captureConfig
     $start.EnvironmentVariables['PEALAYER_PORT'] = (28080 + ($localeIndex * 10)).ToString()
     if ($Surface -eq 'preferences') {
         $start.ArgumentList.Add('--preferences-helper')
@@ -331,6 +338,7 @@ $manifest = [ordered]@{
     executable_sha256 = $executableHash
     application_name = $effectiveAppName
     surface = $Surface
+    hardware_endpoint = if ($HardwareEndpoint) { $HardwareEndpoint.Trim() } else { $null }
     isolated_profile = $true
     capture_method = 'per-capture'
     captures = $captures

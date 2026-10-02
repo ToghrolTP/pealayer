@@ -218,6 +218,40 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         .desired_width(ui.available_width().max(180.0)),
                 );
                 ui.end_row();
+                if relay_id(&control.key).is_some()
+                    || matches!(control.kind.as_str(), "mosfet" | "pwm")
+                {
+                    let mut locked = control.locked;
+                    ui.label(app.tr("Lock"));
+                    if ui
+                        .checkbox(&mut locked, app.tr("Prevent live control"))
+                        .changed()
+                    {
+                        crate::ui::layout::update_control_presentation_flags(
+                            app,
+                            &capabilities,
+                            &control,
+                            None,
+                            Some(locked),
+                        );
+                    }
+                    ui.end_row();
+                    let mut visible = !control.hidden;
+                    ui.label(app.tr("Visibility"));
+                    if ui
+                        .checkbox(&mut visible, app.tr("Show in Hardware Monitor"))
+                        .changed()
+                    {
+                        crate::ui::layout::update_control_presentation_flags(
+                            app,
+                            &capabilities,
+                            &control,
+                            Some(!visible),
+                            None,
+                        );
+                    }
+                    ui.end_row();
+                }
             });
         ui.horizontal_wrapped(|ui| {
             if ui
@@ -269,12 +303,21 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         if !control.actions.is_empty() {
             ui.add_space(6.0);
             let columns = if ui.available_width() >= 420.0 { 3 } else { 1 };
-            for row in control.actions.chunks(columns) {
+            let actions = control
+                .actions
+                .iter()
+                .filter(|action| {
+                    !action.verb.eq_ignore_ascii_case("stop")
+                        || crate::ui::layout::contextual_stop_action(&capabilities, &control)
+                            .is_some()
+                })
+                .collect::<Vec<_>>();
+            for row in actions.chunks(columns) {
                 ui.columns(columns, |uis| {
                     for (index, action) in row.iter().enumerate() {
                         if uis[index]
                             .add_enabled(
-                                !app.estop_active,
+                                !app.estop_active && !control.locked,
                                 egui::Button::new(format!(
                                     "{} {}",
                                     crate::ui::icons::action(&action.verb),
@@ -300,7 +343,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 {
                     if uis[index]
                         .add_enabled(
-                            !app.estop_active,
+                            !app.estop_active && !control.locked,
                             egui::Button::new(format!("{icon} {label}"))
                                 .min_size(egui::vec2(uis[index].available_width(), 34.0)),
                         )
@@ -313,7 +356,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         } else if let Some(channel) = pwm_channel(&capabilities, &control.key) {
             ui.add_space(6.0);
             let changed = ui
-                .add(
+                .add_enabled(
+                    !control.locked,
                     egui::Slider::new(&mut app.hardware_control_pwm_percent, 0.0..=100.0)
                         .fixed_decimals(1)
                         .suffix("%"),
@@ -324,7 +368,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             }
             ui.horizontal_wrapped(|ui| {
                 for percent in [0.0, 25.0, 50.0, 75.0, 100.0] {
-                    if ui.button(format!("{percent:.0}%")).clicked() {
+                    if ui
+                        .add_enabled(!control.locked, egui::Button::new(format!("{percent:.0}%")))
+                        .clicked()
+                    {
                         app.hardware_control_pwm_percent = percent;
                         set_pwm(app, channel, percent);
                     }

@@ -42,6 +42,8 @@ pub struct HardwareControl {
     pub control: String,
     pub icon: String,
     pub group: String,
+    pub hidden: bool,
+    pub locked: bool,
     pub actions: Vec<HardwareAction>,
 }
 
@@ -1043,6 +1045,14 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
+                hidden: entry
+                    .get("hidden")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                locked: entry
+                    .get("locked")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
                 actions,
                 key,
             })
@@ -1091,6 +1101,8 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
                     control: "raw-motion".to_string(),
                     icon: "seat".to_string(),
                     group: "Motion / seat".to_string(),
+                    hidden: false,
+                    locked: false,
                     actions: ["up", "down", "stop"]
                         .into_iter()
                         .map(|verb| HardwareAction {
@@ -1540,7 +1552,7 @@ mod tests {
             "controls": [{
                 "key": "seat.a", "kind": "side", "order": 1,
                 "name": "Left pair", "control": "motion", "icon": "seat",
-                "group": "auditorium-a",
+                "group": "auditorium-a", "hidden": true, "locked": true,
                 "actions": [
                     {"id": "seat.a.up", "verb": "up", "name": "Up", "icon": "arrow-up"},
                     "seat.a.stop"
@@ -1563,6 +1575,8 @@ mod tests {
         assert_eq!(control.default_name, "Side A motion");
         assert_eq!(control.icon, "seat");
         assert_eq!(control.group, "auditorium-a");
+        assert!(control.hidden);
+        assert!(control.locked);
         assert_eq!(control.actions[0].verb, "up");
         assert_eq!(
             control

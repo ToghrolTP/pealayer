@@ -263,6 +263,9 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Show raw R1-R4 controls below seat controls" => {
             "نمایش کنترل‌های خام R1 تا R4 زیر کنترل صندلی"
         }
+        "Prefix relay captions with their fixed R number" => {
+            "نمایش شمارهٔ ثابت رله پیش از نام کانال"
+        }
         "Motion wiring" => "سیم‌کشی حرکت",
         "Board controls" => "کنترل‌های برد",
         "Board tools" => "ابزارهای برد",
@@ -285,6 +288,21 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Video surface" => "سطح ویدئو",
         "Status bar" => "نوار وضعیت",
         "Hide" => "پنهان‌کردن",
+        "Hide channel" => "پنهان‌کردن کانال",
+        "Hide this channel from the Hardware Monitor" => "پنهان‌کردن این کانال از پایشگر سخت‌افزار",
+        "Hidden channels" => "کانال‌های پنهان",
+        "Show channel" => "نمایش کانال",
+        "All channels are hidden" => "همهٔ کانال‌ها پنهان هستند",
+        "hidden" => "پنهان",
+        "Lock channel" => "قفل‌کردن کانال",
+        "Channel is locked in PCController" => "کانال در PCController قفل است",
+        "Prevent control changes until this channel is unlocked" => {
+            "جلوگیری از تغییر کنترل تا زمانی که قفل کانال باز شود"
+        }
+        "Lock" => "قفل",
+        "Prevent live control" => "جلوگیری از کنترل زنده",
+        "Visibility" => "نمایانی",
+        "Show in Hardware Monitor" => "نمایش در پایشگر سخت‌افزار",
         "Hardware connection" => "اتصال سخت‌افزار",
         "Hardware telemetry" => "دورسنجی سخت‌افزار",
         "Physical status RGB" => "چراغ RGB فیزیکی",
