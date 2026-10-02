@@ -1,7 +1,7 @@
 use eframe::egui;
 
-const ACTION_BUTTON_SIZE: egui::Vec2 = egui::vec2(112.0, 36.0);
-const PRIMARY_ACTION_BUTTON_SIZE: egui::Vec2 = egui::vec2(124.0, 36.0);
+const ACTION_BUTTON_SIZE: egui::Vec2 = egui::vec2(96.0, 32.0);
+const PRIMARY_ACTION_BUTTON_SIZE: egui::Vec2 = egui::vec2(108.0, 32.0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogHost {
@@ -60,7 +60,7 @@ pub fn action_row(ui: &mut egui::Ui, rtl: bool, body: impl FnOnce(&mut egui::Ui)
     } else {
         egui::Layout::right_to_left(egui::Align::Center)
     };
-    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 36.0), layout, body);
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 32.0), layout, body);
 }
 
 /// A full-width footer with a utility action at the leading edge and primary /
@@ -81,9 +81,9 @@ pub fn action_bar(
     } else {
         egui::Layout::right_to_left(egui::Align::Center)
     };
-    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 36.0), outer, |ui| {
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 32.0), outer, |ui| {
         leading(ui);
-        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 36.0), inner, trailing);
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 32.0), inner, trailing);
     });
 }
 
@@ -122,7 +122,7 @@ mod tests {
     fn primary_actions_are_more_prominent_than_secondary_actions() {
         assert!(PRIMARY_ACTION_BUTTON_SIZE.x > ACTION_BUTTON_SIZE.x);
         assert_eq!(PRIMARY_ACTION_BUTTON_SIZE.y, ACTION_BUTTON_SIZE.y);
-        assert!(ACTION_BUTTON_SIZE.y >= 36.0);
+        assert!((31.0..=33.0).contains(&ACTION_BUTTON_SIZE.y));
     }
 
     #[test]

@@ -272,6 +272,7 @@ pub struct PealayerApp {
     pub(crate) about_icon: Option<egui::TextureHandle>,
     pub(crate) show_preferences_dialog: bool,
     pub(crate) preferences_tab: usize,
+    pub(crate) preferences_draft: Option<crate::ui::preferences::PreferencesDraft>,
     pub(crate) show_board_info_dialog: bool,
     pub(crate) board_info_tab: usize,
     pub(crate) board_name_draft: String,
@@ -2545,7 +2546,7 @@ impl PealayerApp {
         self.set_osd("Video Closed".to_string());
     }
 
-    fn runtime_config_snapshot(&self) -> crate::config::AppConfig {
+    pub(crate) fn runtime_config_snapshot(&self) -> crate::config::AppConfig {
         // Preserve deployment-owned branding while saving mutable player
         // preferences through one typed configuration contract.
         let mut cfg = crate::config::AppConfig::load();
@@ -2615,7 +2616,7 @@ impl PealayerApp {
         }
     }
 
-    fn apply_runtime_config(
+    pub(crate) fn apply_runtime_config(
         &mut self,
         ctx: &egui::Context,
         config: crate::config::AppConfig,
@@ -3140,6 +3141,7 @@ impl Default for PealayerApp {
             about_icon: None,
             show_preferences_dialog: false,
             preferences_tab: 0,
+            preferences_draft: None,
             show_board_info_dialog: false,
             board_info_tab: 0,
             board_name_draft: String::new(),

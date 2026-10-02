@@ -480,6 +480,14 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
             serde_json::to_string_pretty(&crate::platform::interop::get_live_config())
                 .unwrap_or_else(|_| "{}".to_string()),
         ),
+        ("GET", "/api/preferences") => HttpResponse::json(
+            200,
+            "OK",
+            serde_json::to_string_pretty(&crate::preferences_contract::preferences_contract(
+                &crate::platform::interop::get_live_config(),
+            ))
+            .unwrap_or_else(|_| "{}".to_string()),
+        ),
         ("POST", "/api/config") => config_update_response(&request.body, state),
         ("GET", "/api/player/status") => {
             match state

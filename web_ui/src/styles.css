@@ -11,6 +11,8 @@
   --subtle: #687382;
   --green: #38d27a;
   --green-soft: rgba(56, 210, 122, .14);
+  --accent: #0078d4;
+  --accent-soft: rgba(0, 120, 212, .16);
   --blue: #68a7ff;
   --red: #ff5c68;
   --amber: #f3b954;
@@ -102,10 +104,38 @@ body {
 .app-sider { background: var(--surface-0) !important; border-inline-end: 1px solid var(--line); }
 .app-menu { margin-top: 10px; background: transparent !important; border: 0 !important; padding: 0 8px; }
 .app-menu .ant-menu-item { color: var(--muted); border-radius: 8px; margin-block: 3px; }
-.app-menu .ant-menu-item-selected { color: var(--text) !important; background: var(--green-soft) !important; }
-.app-menu .ant-menu-item-selected::after { border-inline-end-color: var(--green) !important; }
+.app-menu .ant-menu-item-selected { color: var(--text) !important; background: var(--accent-soft) !important; }
+.app-menu .ant-menu-item-selected::after { border-inline-end-color: var(--accent) !important; }
 .app-content { width: 100%; max-width: 1240px; margin: 0 auto; padding: 24px; }
 .app-content--studio { max-width: none; padding: 14px; }
+
+.preferences-page { width: min(1020px, 100%); margin: 0 auto; display: grid; gap: 16px; }
+.preferences-page__header { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.preferences-page__header h2.ant-typography { margin: 0 !important; color: var(--text); font-size: 23px; letter-spacing: -.02em; }
+.preferences-page__header .ant-typography-secondary, .preferences-page__header span.ant-typography { color: var(--muted); }
+.preferences-page__loading { min-height: 320px; display: grid; place-items: center; }
+.preferences-layout { min-height: 560px; display: grid; grid-template-columns: 178px minmax(0, 1fr); gap: 14px; }
+.preferences-rail { align-self: start; position: sticky; top: 78px; display: grid; gap: 5px; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-1); box-shadow: 0 14px 34px color-mix(in srgb, var(--canvas) 28%, transparent); }
+.preferences-rail button { width: 100%; min-height: 36px; padding: 0 11px; display: grid; grid-template-columns: 20px 1fr; align-items: center; gap: 8px; border: 1px solid transparent; border-radius: 8px; color: var(--muted); background: transparent; font: 600 13px inherit; text-align: start; cursor: pointer; }
+.preferences-rail button:hover { color: var(--text); background: var(--surface-2); }
+.preferences-rail button.is-active { color: var(--text); border-color: color-mix(in srgb, var(--accent) 44%, var(--line)); background: var(--accent-soft); }
+.preferences-rail button.is-active .anticon { color: var(--accent); }
+.preferences-detail { min-width: 0; display: grid; align-content: start; gap: 12px; }
+.preferences-group.ant-card { border-radius: 12px !important; box-shadow: 0 12px 32px color-mix(in srgb, var(--canvas) 24%, transparent) !important; }
+.preferences-group .ant-card-head { min-height: 48px; padding-inline: 18px; border-bottom-color: var(--line); }
+.preferences-group .ant-card-head-title { color: var(--text); font-size: 14px; }
+.preferences-group .ant-card-body { padding: 8px 18px 12px; }
+.preferences-group__controls { display: grid; }
+.preference-control { min-width: 0; min-height: 52px; padding: 9px 0; display: grid; grid-template-columns: minmax(170px, .8fr) minmax(180px, 1.2fr); align-items: center; gap: 20px; border-bottom: 1px solid color-mix(in srgb, var(--line) 64%, transparent); color: var(--text); }
+.preference-control:last-child { border-bottom: 0; }
+.preference-control--boolean { grid-template-columns: minmax(0, 1fr) auto; }
+.preference-control__label { font-size: 13px; font-weight: 600; }
+.preference-control small { margin-top: 3px; display: block; color: var(--muted); font-size: 11px; font-weight: 400; }
+.preference-control__number { min-width: 0; display: grid; grid-template-columns: minmax(90px, 1fr) 90px; align-items: center; gap: 14px; }
+.preference-control__number .ant-slider { margin: 0; }
+.preference-control .ant-select, .preference-control .ant-input, .preference-control .ant-input-number { width: 100%; }
+.preferences-save-state { min-height: 32px; padding-inline: 4px; display: flex; justify-content: flex-end; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+.preferences-save-state .anticon { color: var(--accent); }
 
 .studio-suite {
   min-height: calc(100vh - 90px);
@@ -306,4 +336,10 @@ body {
   .studio-timecode, .studio-scrubber { grid-column: 1 / -1; }
   .studio-timecode--muted { display: none; }
   .timeline-toolbar { align-items: flex-start; flex-direction: column; }
+  .preferences-layout { grid-template-columns: 1fr; }
+  .preferences-rail { position: static; grid-template-columns: repeat(5, minmax(0, 1fr)); overflow-x: auto; }
+  .preferences-rail button { display: flex; justify-content: center; }
+  .preferences-rail button span:not(.anticon) { display: none; }
+  .preference-control { grid-template-columns: 1fr; gap: 7px; }
+  .preference-control--boolean { grid-template-columns: minmax(0, 1fr) auto; }
 }

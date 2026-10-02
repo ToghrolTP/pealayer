@@ -7,6 +7,7 @@ pub mod four_d;
 pub mod media;
 pub mod mpv;
 pub mod platform;
+pub mod preferences_contract;
 pub mod server;
 pub mod ui;
 
@@ -219,12 +220,7 @@ fn main() -> eframe::Result {
                 crate::config::AppTheme::Dark => egui::ThemePreference::Dark,
             };
             cc.egui_ctx.set_theme(theme_preference);
-            let mut dark_visuals = egui::Visuals::dark();
-            dark_visuals.panel_fill = egui::Color32::from_rgb(33, 33, 33);
-            dark_visuals.window_fill = egui::Color32::from_rgb(26, 26, 26);
-            cc.egui_ctx.set_visuals_of(egui::Theme::Dark, dark_visuals);
-            cc.egui_ctx
-                .set_visuals_of(egui::Theme::Light, egui::Visuals::light());
+            crate::ui::configure_native_visuals(&cc.egui_ctx);
             crate::platform::windows::set_window_theme(
                 cc.egui_ctx.global_style().visuals.dark_mode,
             );
@@ -235,7 +231,6 @@ fn main() -> eframe::Result {
                     font_id.size = 12.0;
                 }
             }
-            crate::ui::configure_interaction_style(&mut style);
             cc.egui_ctx.set_global_style(style);
 
             let get_proc = cc
@@ -509,6 +504,7 @@ fn main() -> eframe::Result {
                 about_icon: None,
                 show_preferences_dialog: false,
                 preferences_tab: 0,
+                preferences_draft: None,
                 show_board_info_dialog: false,
                 board_info_tab: 0,
                 board_name_draft: String::new(),

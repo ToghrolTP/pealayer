@@ -5,5 +5,6 @@ pub mod four_d;
 pub mod media;
 pub mod mpv;
 pub mod platform;
+pub mod preferences_contract;
 pub mod server;
 pub mod ui;

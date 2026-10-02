@@ -5,12 +5,14 @@ import {
   ControlOutlined,
   FolderOpenOutlined,
   InfoCircleOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
 import { HeaderBar } from './components/HeaderBar';
 import { RemoteControlTab, PlayerState } from './components/RemoteControlTab';
 import { MediaLibraryTab } from './components/MediaLibraryTab';
 import { PlayerInfoTab } from './components/PlayerInfoTab';
 import { StudioTab } from './components/StudioTab';
+import { PreferencesTab } from './components/PreferencesTab';
 import { tr } from './i18n';
 import './styles.css';
 
@@ -35,6 +37,8 @@ const App: React.FC = () => {
   const [runtime, setRuntime] = useState<RuntimeConfig | null>(null);
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('dark');
   const [quickSeekSeconds, setQuickSeekSeconds] = useState<number>(10);
+  const [appConfig, setAppConfig] = useState<Record<string, any> | null>(null);
+  const [accentColor, setAccentColor] = useState<string>('#0078d4');
   const [connectionTarget, setConnectionTarget] = useState<string>(() => {
     const query = new URLSearchParams(window.location.search).get('connect');
     return query ?? window.localStorage.getItem('pealayer.connectionTarget') ?? '';
@@ -49,16 +53,31 @@ const App: React.FC = () => {
     document.title = `${runtime.appName} — ${tr(runtime.locale, 'Web Studio')}`;
     const media = window.matchMedia('(prefers-color-scheme: light)');
     const applyTheme = () => {
-      const nextTheme = runtime.theme === 'system'
+      const preference = appConfig?.theme ?? runtime.theme;
+      const nextTheme = preference === 'system'
         ? (media.matches ? 'light' : 'dark')
-        : runtime.theme;
+        : preference;
       document.documentElement.dataset.theme = nextTheme;
       setResolvedTheme(nextTheme);
     };
     applyTheme();
     media.addEventListener('change', applyTheme);
     return () => media.removeEventListener('change', applyTheme);
-  }, [runtime]);
+  }, [runtime, appConfig?.theme]);
+
+  useEffect(() => {
+    const probe = document.createElement('span');
+    probe.style.color = 'AccentColor';
+    probe.style.position = 'absolute';
+    probe.style.visibility = 'hidden';
+    document.body.appendChild(probe);
+    const detected = getComputedStyle(probe).color;
+    probe.remove();
+    const accent = detected && detected !== 'rgba(0, 0, 0, 0)' ? detected : '#0078d4';
+    document.documentElement.style.setProperty('--accent', accent);
+    document.documentElement.style.setProperty('--accent-soft', `color-mix(in srgb, ${accent} 16%, transparent)`);
+    setAccentColor(accent);
+  }, []);
 
   const nextRequestId = useRef(1);
   const sendCmd = useCallback((command: string, payload: Record<string, any> = {}) => {
@@ -138,6 +157,7 @@ const App: React.FC = () => {
     fetch('/api/config')
       .then((response) => response.ok ? response.json() : Promise.reject())
       .then((value) => {
+        if (!disposed && value && typeof value === 'object') setAppConfig(value);
         const seconds = Number(value?.quick_seek_seconds);
         if (!disposed && Number.isFinite(seconds) && seconds > 0) {
           setQuickSeekSeconds(seconds);
@@ -250,6 +270,11 @@ const App: React.FC = () => {
       icon: <InfoCircleOutlined style={{ fontSize: 18 }} />,
       label: tr(runtime?.locale || 'en', 'System Info'),
     },
+    {
+      key: 'preferences',
+      icon: <SettingOutlined style={{ fontSize: 18 }} />,
+      label: tr(runtime?.locale || 'en', 'Preferences'),
+    },
   ];
 
   return (
@@ -257,7 +282,7 @@ const App: React.FC = () => {
       theme={{
         algorithm: resolvedTheme === 'light' ? theme.defaultAlgorithm : theme.darkAlgorithm,
         token: {
-          colorPrimary: '#38d27a',
+          colorPrimary: accentColor,
           colorInfo: '#68a7ff',
           colorSuccess: '#38d27a',
           colorWarning: '#f3b954',
@@ -335,6 +360,17 @@ const App: React.FC = () => {
             )}
             {activeTab === 'info' && (
               <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} websocketUrl={resolveWebSocketUrl()} />
+            )}
+            {activeTab === 'preferences' && (
+              <PreferencesTab
+                apiBaseUrl={apiBaseUrl}
+                locale={runtime?.locale || 'en'}
+                onConfigChange={(values) => {
+                  setAppConfig(values);
+                  const seconds = Number(values.quick_seek_seconds);
+                  if (Number.isFinite(seconds) && seconds > 0) setQuickSeekSeconds(seconds);
+                }}
+              />
             )}
           </Content>
         </Layout>
