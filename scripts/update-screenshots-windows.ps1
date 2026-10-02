@@ -15,6 +15,12 @@ param(
     [string]$Surface = 'main',
     [int]$WindowWidth = 0,
     [int]$WindowHeight = 0,
+    [int]$ScrollNotches = 0,
+    [ValidateRange(0.0, 1.0)]
+    [double]$ScrollXRatio = 0.15,
+    [ValidateRange(0.0, 1.0)]
+    [double]$ScrollYRatio = 0.5,
+    [string[]]$ClickClientPoint = @(),
     [ValidateRange(1, 30)]
     [int]$StartupTimeoutSeconds = 15
 )
@@ -74,6 +80,15 @@ public static class PealayerScreenshotNative {
     public static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
 
     [DllImport("user32.dll")]
+    public static extern bool GetCursorPos(out Point point);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32.dll")]
+    public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+
+    [DllImport("user32.dll")]
     public static extern bool LogicalToPhysicalPointForPerMonitorDPI(IntPtr hwnd, ref Point point);
 
     [DllImport("user32.dll")]
@@ -100,6 +115,9 @@ public static class PealayerScreenshotNative {
 
     [DllImport("user32.dll")]
     public static extern bool BringWindowToTop(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SendMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll")]
     public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
@@ -141,6 +159,34 @@ public static class PealayerScreenshotNative {
             return true;
         }, IntPtr.Zero);
         return best;
+    }
+
+    public static void SendMouseWheel(IntPtr hwnd, int clientX, int clientY, int notches) {
+        Point point = new Point { X = clientX, Y = clientY };
+        if (!ClientToScreen(hwnd, ref point)) {
+            throw new InvalidOperationException("ClientToScreen failed for mouse-wheel capture setup.");
+        }
+        long packedPoint = ((long)(point.Y & 0xffff) << 16) | (uint)(point.X & 0xffff);
+        int direction = Math.Sign(notches);
+        for (int index = 0; index < Math.Abs(notches); index++) {
+            int delta = direction * 120;
+            long packedDelta = (long)(delta & 0xffff) << 16;
+            SendMessage(hwnd, 0x020A, new IntPtr(packedDelta), new IntPtr(packedPoint));
+        }
+    }
+
+    public static void SendMouseClick(IntPtr hwnd, int clientX, int clientY) {
+        Point original;
+        GetCursorPos(out original);
+        Point point = new Point { X = clientX, Y = clientY };
+        if (!ClientToScreen(hwnd, ref point)) {
+            throw new InvalidOperationException("ClientToScreen failed for click capture setup.");
+        }
+        SetForegroundWindow(hwnd);
+        SetCursorPos(point.X, point.Y);
+        mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
+        mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
+        SetCursorPos(original.X, original.Y);
     }
 }
 '@
@@ -322,6 +368,32 @@ for ($localeIndex = 0; $localeIndex -lt $Locale.Count; $localeIndex++) {
             throw "Could not resize Pealayer to ${effectiveWindowWidth}x${effectiveWindowHeight}."
         }
         Start-Sleep -Milliseconds 500
+        foreach ($point in $ClickClientPoint) {
+            if ($point -notmatch '^\s*(\d+)\s*,\s*(\d+)\s*$') {
+                throw "ClickClientPoint must use the x,y format; received '$point'."
+            }
+            [PealayerScreenshotNative]::SendMouseClick(
+                $handle,
+                [int]$Matches[1],
+                [int]$Matches[2]
+            )
+            Start-Sleep -Milliseconds 250
+        }
+        if ($ScrollNotches -ne 0) {
+            $clientRect = New-Object PealayerScreenshotNative+Rect
+            if (-not [PealayerScreenshotNative]::GetClientRect($handle, [ref]$clientRect)) {
+                throw 'Could not read the Pealayer client bounds before scrolling.'
+            }
+            $clientWidth = $clientRect.Right - $clientRect.Left
+            $clientHeight = $clientRect.Bottom - $clientRect.Top
+            [PealayerScreenshotNative]::SendMouseWheel(
+                $handle,
+                [Math]::Round($clientWidth * $ScrollXRatio),
+                [Math]::Round($clientHeight * $ScrollYRatio),
+                $ScrollNotches
+            )
+            Start-Sleep -Milliseconds 500
+        }
         $surfaceSuffix = if ($Surface -eq 'main') { '' } else { "-$Surface" }
         $fileName = "pealayer$surfaceSuffix-$language-$Theme.png"
         $path = Join-Path $resolvedOutput $fileName
@@ -366,6 +438,8 @@ $manifest = [ordered]@{
     application_name = $effectiveAppName
     surface = $Surface
     requested_window_size = "${effectiveWindowWidth}x${effectiveWindowHeight}"
+    scroll_notches = $ScrollNotches
+    click_client_points = @($ClickClientPoint)
     hardware_endpoint = if ($HardwareEndpoint) { $HardwareEndpoint.Trim() } else { $null }
     isolated_profile = $true
     capture_method = 'per-capture'

@@ -141,7 +141,15 @@ pub(crate) fn draw_pwm_editor_row(
     percent: &mut f64,
     enabled: bool,
 ) -> PwmEditorResponse {
-    let row_width = ui.available_width();
+    draw_pwm_editor_row_sized(ui, percent, enabled, ui.available_width())
+}
+
+fn draw_pwm_editor_row_sized(
+    ui: &mut egui::Ui,
+    percent: &mut f64,
+    enabled: bool,
+    row_width: f32,
+) -> PwmEditorResponse {
     let mut outcome = PwmEditorResponse::default();
     ui.allocate_ui_with_layout(
         egui::vec2(row_width, 26.0),
@@ -150,9 +158,19 @@ pub(crate) fn draw_pwm_editor_row(
             let gap = ui.spacing().item_spacing.x;
             let (slider_width, number_width) = pwm_editor_widths(row_width, gap);
             let slider = ui
-                .add_enabled_ui(enabled, |ui| {
-                    ui.add_sized(
-                        [slider_width, 24.0],
+                .scope(|ui| {
+                    // `Slider` uses the style's slider width even when wrapped in
+                    // `add_sized`, so scope the computed card width here instead
+                    // of changing every slider in the application.
+                    ui.spacing_mut().slider_width = slider_width;
+                    if !ui.visuals().dark_mode {
+                        let visuals = ui.visuals_mut();
+                        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(209, 213, 219);
+                        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(191, 199, 210);
+                        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(167, 177, 191);
+                    }
+                    ui.add_enabled(
+                        enabled,
                         egui::Slider::new(percent, 0.0..=100.0)
                             .show_value(false)
                             .step_by(0.1),
@@ -232,6 +250,7 @@ fn draw_pwm_card_editor(
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
     channel: &crate::four_d::controller::HardwareOutput,
+    row_width: f32,
 ) {
     let value_id = ui.make_persistent_id(("pwm_value", channel.id));
     let sent_id = ui.make_persistent_id(("pwm_sent_value", channel.id));
@@ -247,7 +266,7 @@ fn draw_pwm_card_editor(
         .data_mut(|data| data.get_temp::<u16>(sent_id))
         .unwrap_or(telemetry_raw);
     let mut percent = pwm_percent(displayed_raw);
-    let response = draw_pwm_editor_row(ui, &mut percent, !control.locked);
+    let response = draw_pwm_editor_row_sized(ui, &mut percent, !control.locked, row_width);
     let raw = pwm_raw(percent);
     ui.data_mut(|data| data.insert_temp(value_id, raw));
     if response.should_transmit(app.live_pwm_updates) && raw != last_sent {
@@ -1327,12 +1346,14 @@ fn draw_compact_control_card(
     let group_draft_id = ui.make_persistent_id(("control-group-draft", control.key.as_str()));
     let relay_id = relay_id_from_control_key(&control.key);
     let indicator_state = control_indicator_state(capabilities, control);
+    let card_outer_width = ui.available_width();
+    let card_content_width = (card_outer_width - 18.0).max(1.0);
+    ui.set_width(card_outer_width);
     let card = egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::symmetric(9, 6))
         .corner_radius(7.0)
         .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.set_max_width(ui.available_width());
+            ui.set_width(card_content_width);
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(crate::ui::icons::control(&control.kind, &control.icon))
@@ -1488,7 +1509,14 @@ fn draw_compact_control_card(
                         .iter()
                         .find(|channel| channel.key == control.key)
                     {
-                        draw_pwm_card_editor(app, ui, capabilities, control, channel);
+                        draw_pwm_card_editor(
+                            app,
+                            ui,
+                            capabilities,
+                            control,
+                            channel,
+                            ui.available_width(),
+                        );
                     }
                 } else if !control.actions.is_empty() {
                     let is_motion = is_motion_control(control);
@@ -1592,13 +1620,14 @@ fn draw_control_card(
     let group_draft_id = ui.make_persistent_id(("control-group-draft", control.key.as_str()));
     let relay_id = relay_id_from_control_key(&control.key);
     let indicator_state = control_indicator_state(capabilities, control);
-
+    let card_outer_width = ui.available_width();
+    let card_content_width = (card_outer_width - 24.0).max(1.0);
+    ui.set_width(card_outer_width);
     let card = egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::symmetric(12, 10))
         .corner_radius(8.0)
         .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.set_max_width(ui.available_width());
+            ui.set_width(card_content_width);
             let mut editing = ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
             ui.horizontal(|ui| {
                 ui.label(
@@ -1766,7 +1795,14 @@ fn draw_control_card(
                     .find(|channel| channel.key == control.key)
                 {
                     ui.add_space(if app.compact_hardware_controls { 3.0 } else { 8.0 });
-                    draw_pwm_card_editor(app, ui, capabilities, control, channel);
+                    draw_pwm_card_editor(
+                        app,
+                        ui,
+                        capabilities,
+                        control,
+                        channel,
+                        card_content_width,
+                    );
                 }
             }
 
