@@ -327,6 +327,10 @@ body {
   .timeline-ruler { padding-inline: 144px 64px; }
   .timeline-row { grid-template-columns: 144px minmax(380px, 1fr) 64px; }
   .timeline-playhead-web { margin-inline-start: 144px; }
+  .preferences-layout { grid-template-columns: 1fr; }
+  .preferences-rail { position: static; grid-template-columns: repeat(5, minmax(0, 1fr)); overflow-x: auto; }
+  .preferences-rail button { display: flex; justify-content: center; }
+  .preferences-rail button span:not(.anticon) { display: none; }
 }
 
 @media (max-width: 560px) {
@@ -336,10 +340,6 @@ body {
   .studio-timecode, .studio-scrubber { grid-column: 1 / -1; }
   .studio-timecode--muted { display: none; }
   .timeline-toolbar { align-items: flex-start; flex-direction: column; }
-  .preferences-layout { grid-template-columns: 1fr; }
-  .preferences-rail { position: static; grid-template-columns: repeat(5, minmax(0, 1fr)); overflow-x: auto; }
-  .preferences-rail button { display: flex; justify-content: center; }
-  .preferences-rail button span:not(.anticon) { display: none; }
   .preference-control { grid-template-columns: 1fr; gap: 7px; }
   .preference-control--boolean { grid-template-columns: minmax(0, 1fr) auto; }
 }
