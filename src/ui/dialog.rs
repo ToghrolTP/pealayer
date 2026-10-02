@@ -167,7 +167,11 @@ fn navigation_control(
             egui::Align2::LEFT_CENTER,
             label,
             egui::FontId::proportional(CONTROL_TEXT_SIZE),
-            ui.visuals().text_color(),
+            if selected {
+                ui.visuals().widgets.hovered.fg_stroke.color
+            } else {
+                ui.visuals().text_color()
+            },
         );
         if let Some(metadata) = metadata {
             painter.text(
@@ -309,7 +313,7 @@ pub fn section(ui: &mut egui::Ui, icon: &str, title: &str, body: impl FnOnce(&mu
                 ui.label(
                     egui::RichText::new(format!("{icon}  {title}"))
                         .strong()
-                        .color(ui.visuals().text_color()),
+                        .color(ui.visuals().widgets.hovered.fg_stroke.color),
                 );
                 ui.add_space(6.0);
                 body(ui);
