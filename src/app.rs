@@ -3278,6 +3278,39 @@ fn hardware_connection_was_lost(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cue_drag_hit_testing_keeps_a_move_region_between_resize_handles() {
+        assert_eq!(
+            classify_clip_drag_mode(100.0, 200.0, 104.0),
+            DragMode::ResizeLeft
+        );
+        assert_eq!(classify_clip_drag_mode(100.0, 200.0, 150.0), DragMode::Move);
+        assert_eq!(
+            classify_clip_drag_mode(100.0, 200.0, 196.0),
+            DragMode::ResizeRight
+        );
+
+        // Even an eight-pixel minimum-width cue keeps a center move target.
+        assert_eq!(classify_clip_drag_mode(10.0, 18.0, 14.0), DragMode::Move);
+    }
+
+    #[test]
+    fn controller_owned_cues_can_be_resized_without_rewriting_their_program() {
+        let mut effect = crate::four_d::models::Effect::controller_macro(
+            "Seat motion".to_string(),
+            String::new(),
+            1_000,
+            7,
+            "host".to_string(),
+        );
+
+        update_effect_duration(&mut effect, 2_500);
+
+        assert_eq!(effect.duration_ms, 2_500);
+        assert!(effect.actions.is_empty());
+        assert_eq!(effect.controller_macro.as_ref().map(|cue| cue.id), Some(7));
+    }
     use super::{
         DroppedFileKind, contextual_window_title, controller_macro_effect_preset, dropped_file_kind,
     };
