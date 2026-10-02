@@ -3,10 +3,12 @@ use eframe::egui;
 
 fn secondary_click_inside(ctx: &egui::Context, rect: egui::Rect) -> bool {
     ctx.input(|input| {
-        input.pointer.button_clicked(egui::PointerButton::Secondary)
+        input
+            .pointer
+            .button_released(egui::PointerButton::Secondary)
             && input
                 .pointer
-                .interact_pos()
+                .latest_pos()
                 .is_some_and(|position| rect.contains(position))
     })
 }
@@ -20,7 +22,7 @@ fn show_saved_effect_context_menu(
     payload: &crate::app::EffectDragPayload,
     select: impl FnOnce(&mut PealayerApp),
 ) {
-    let open = secondary_click_inside(&response.ctx, response.rect);
+    let open = response.secondary_clicked() || secondary_click_inside(&response.ctx, response.rect);
     egui::Popup::menu(response)
         .id(popup_id)
         .at_pointer_fixed()

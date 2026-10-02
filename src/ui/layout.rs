@@ -71,12 +71,27 @@ fn take_effect_drop_on_rect(
     released_inside.then(|| egui::DragAndDrop::take_payload::<EffectDragPayload>(ctx))?
 }
 
+fn effect_preset_reference(preset: &crate::app::EffectPreset) -> Option<String> {
+    match preset.source {
+        crate::app::EffectPresetSource::ControllerMacro(id) => Some(format!("sequence:{id}")),
+        crate::app::EffectPresetSource::ControllerStrip => preset
+            .effect
+            .controller_strip_effect
+            .as_ref()
+            .map(|effect| effect.id.trim())
+            .filter(|id| !id.is_empty())
+            .map(|id| format!("strip:{id}")),
+    }
+}
+
 fn secondary_click_inside(ctx: &egui::Context, rect: egui::Rect) -> bool {
     ctx.input(|input| {
-        input.pointer.button_clicked(egui::PointerButton::Secondary)
+        input
+            .pointer
+            .button_released(egui::PointerButton::Secondary)
             && input
                 .pointer
-                .interact_pos()
+                .latest_pos()
                 .is_some_and(|position| rect.contains(position))
     })
 }
@@ -1266,6 +1281,42 @@ mod timeline_row_tests {
         assert_eq!(
             egui::DragAndDrop::payload::<EffectDragPayload>(&context).as_deref(),
             Some(&payload)
+        );
+    }
+
+    #[test]
+    fn controller_effect_reference_is_stable_when_view_models_are_rebuilt() {
+        let first = crate::app::EffectPreset {
+            category: "Cinema".to_string(),
+            source: crate::app::EffectPresetSource::ControllerMacro(7),
+            effect: crate::four_d::models::Effect::controller_macro(
+                "Seat rise".to_string(),
+                String::new(),
+                750,
+                7,
+                "mcu".to_string(),
+            ),
+        };
+        let second = crate::app::EffectPreset {
+            category: "Cinema".to_string(),
+            source: crate::app::EffectPresetSource::ControllerMacro(7),
+            effect: crate::four_d::models::Effect::controller_macro(
+                "Seat rise".to_string(),
+                String::new(),
+                750,
+                7,
+                "mcu".to_string(),
+            ),
+        };
+
+        assert_ne!(first.effect.id, second.effect.id);
+        assert_eq!(
+            effect_preset_reference(&first),
+            effect_preset_reference(&second)
+        );
+        assert_eq!(
+            effect_preset_reference(&first).as_deref(),
+            Some("sequence:7")
         );
     }
 
@@ -2497,9 +2548,19 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         if open {
                                             ui.add_space(5.0);
                                             for preset in presets {
+                                                let Some(reference) =
+                                                    effect_preset_reference(preset)
+                                                else {
+                                                    continue;
+                                                };
+                                                // `advertised_effect_presets` materializes fresh
+                                                // timeline Effect values every frame, including a
+                                                // fresh UUID. Interaction IDs must instead use the
+                                                // controller-owned durable reference or neither a
+                                                // drag nor a popup can survive into the next frame.
                                                 let item_id = ui.make_persistent_id((
                                                     "effect-card",
-                                                    preset.effect.id,
+                                                    &reference,
                                                 ));
                                                 let payload = EffectDragPayload {
                                                     name: preset.effect.name.clone(),
@@ -2603,10 +2664,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     .open_memory(open_effect_menu.then_some(egui::SetOpenCommand::Bool(true)))
                                                     .show(|ui| {
                                                     ui.strong(&displayed_effect_name);
-                                                    let reference = match source {
-                                                        crate::app::EffectPresetSource::ControllerMacro(id) => format!("sequence:{id}"),
-                                                        crate::app::EffectPresetSource::ControllerStrip => format!("strip:{}", preset.effect.controller_strip_effect.as_ref().map(|value| value.id.as_str()).unwrap_or_default()),
-                                                    };
                                                     ui.label(egui::RichText::new(&reference).monospace().weak().small());
                                                     ui.separator();
                                                     if ui.button(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, self.app.tr("Properties and edit"))).clicked() {
