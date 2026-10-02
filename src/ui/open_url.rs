@@ -391,6 +391,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         .changed()
                                     {
                                         app.url_inspector = UrlInspector::default();
+                                        if let Err(error) = app.synchronize_playback_proxy() {
+                                            app.show_error = Some(error);
+                                        }
                                         app.save_config();
                                     }
                                     if ui

@@ -43,13 +43,27 @@ pub fn apply_before_initialize(
     custom_proxy: &str,
 ) -> libmpv2::Result<()> {
     let proxy = playback_proxy(use_proxy, custom_proxy).unwrap_or_default();
-    initializer.set_option("http-proxy", proxy.as_str())
+    initializer.set_option("http-proxy", proxy.as_str())?;
+    initializer.set_option("stream-lavf-o", stream_lavf_proxy_override(use_proxy))
 }
 
 pub fn apply_runtime(mpv: &Mpv, use_proxy: bool, custom_proxy: &str) -> Result<(), String> {
     let proxy = playback_proxy(use_proxy, custom_proxy).unwrap_or_default();
     mpv.set_property("options/http-proxy", proxy.as_str())
-        .map_err(|error| format!("Could not apply the playback proxy: {error}"))
+        .map_err(|error| format!("Could not apply the playback proxy: {error}"))?;
+    mpv.set_property(
+        "options/stream-lavf-o",
+        stream_lavf_proxy_override(use_proxy),
+    )
+    .map_err(|error| format!("Could not apply the FFmpeg stream proxy policy: {error}"))
+}
+
+/// libavformat consults proxy environment variables when its per-stream
+/// `http_proxy` option is absent. An explicitly empty value is therefore
+/// required when the Pealayer checkbox is off; clearing mpv's `http-proxy`
+/// option alone still leaves environment proxying active.
+fn stream_lavf_proxy_override(use_proxy: bool) -> &'static str {
+    if use_proxy { "" } else { "http_proxy=" }
 }
 
 fn is_mpv_compatible(proxy: &str) -> bool {
@@ -70,5 +84,7 @@ mod tests {
         );
         assert_eq!(playback_proxy(true, "https://proxy.example"), None);
         assert_eq!(playback_proxy(false, "http://127.0.0.1:8080"), None);
+        assert_eq!(stream_lavf_proxy_override(true), "");
+        assert_eq!(stream_lavf_proxy_override(false), "http_proxy=");
     }
 }

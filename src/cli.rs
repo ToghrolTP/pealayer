@@ -521,4 +521,16 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn remote_media_url_is_a_first_class_positional_target() {
+        let target = "https://media.example.test/library/movie.mkv?token=abc";
+        let CliAction::RunGui(options) =
+            parse_cli_args(["Pealayer.exe".to_string(), target.to_string()]).unwrap()
+        else {
+            panic!("expected GUI options");
+        };
+        assert_eq!(options.target.as_deref(), Some(target));
+        assert_eq!(launch_request(&options).target.as_deref(), Some(target));
+    }
 }

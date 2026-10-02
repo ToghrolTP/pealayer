@@ -2566,6 +2566,14 @@ impl PealayerApp {
         }
     }
 
+    pub(crate) fn synchronize_playback_proxy(&self) -> Result<(), String> {
+        crate::mpv::proxy::apply_runtime(
+            self.mpv,
+            self.open_url_use_proxy,
+            &self.open_url_proxy_url,
+        )
+    }
+
     pub fn load_media_target(&mut self, target: &str) {
         if crate::media::is_remote_media_target(target) {
             self.load_url(target);
