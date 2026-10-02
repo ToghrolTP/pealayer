@@ -202,6 +202,21 @@ fn decoration_colors(dark: bool) -> (u32, u32) {
 
 #[cfg(target_os = "windows")]
 pub fn apply_windows_window_decorations(hwnd_raw: isize) {
+    apply_windows_window_decorations_with(
+        hwnd_raw,
+        WINDOW_DARK_THEME.load(Ordering::SeqCst),
+        WINDOW_DWM_THEMING.load(Ordering::SeqCst),
+        WINDOW_MICA_BACKDROP.load(Ordering::SeqCst),
+    );
+}
+
+#[cfg(target_os = "windows")]
+fn apply_windows_window_decorations_with(
+    hwnd_raw: isize,
+    dark: bool,
+    dwm_theming: bool,
+    mica_backdrop: bool,
+) {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE;
     use windows::Win32::Graphics::Dwm::{
@@ -214,9 +229,6 @@ pub fn apply_windows_window_decorations(hwnd_raw: isize) {
         return;
     }
     let hwnd = HWND(hwnd_raw as *mut _);
-    let dark = WINDOW_DARK_THEME.load(Ordering::SeqCst);
-    let dwm_theming = WINDOW_DWM_THEMING.load(Ordering::SeqCst);
-    let mica_backdrop = WINDOW_MICA_BACKDROP.load(Ordering::SeqCst);
     let (caption_color, text_color) = decoration_colors(dark);
 
     unsafe {
@@ -274,6 +286,70 @@ pub fn apply_windows_window_decorations(hwnd_raw: isize) {
             std::mem::size_of::<u32>() as u32,
         );
     }
+}
+
+/// Apply the same DWM/Mica treatment as the root window to a secondary
+/// Preferences viewport and make it an owned tool window. `with_taskbar(false)`
+/// handles this through winit on normal paths; the explicit extended style is
+/// a Windows backstop and also gives existing windows the correct non-app
+/// chrome without recreating them.
+#[cfg(target_os = "windows")]
+pub fn style_preferences_tool_window(
+    title: &str,
+    dark: bool,
+    dwm_theming: bool,
+    mica_backdrop: bool,
+) -> Result<bool, String> {
+    use windows::Win32::System::Threading::GetCurrentProcessId;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, GWL_EXSTYLE, GWLP_HWNDPARENT, GetWindowLongPtrW, GetWindowThreadProcessId,
+        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW,
+        SetWindowPos, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    };
+    use windows::core::PCWSTR;
+
+    let wide_title: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    let hwnd = match unsafe { FindWindowW(PCWSTR::null(), PCWSTR(wide_title.as_ptr())) } {
+        Ok(hwnd) => hwnd,
+        Err(_) => return Ok(false),
+    };
+    let mut process_id = 0_u32;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process_id)) };
+    if process_id != unsafe { GetCurrentProcessId() } {
+        return Ok(false);
+    }
+
+    let existing = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    let tool_style = (existing | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
+    unsafe {
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, tool_style);
+        let root = get_registered_hwnd();
+        if root != 0 {
+            SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, root);
+        }
+        SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+        )
+        .map_err(|error| format!("style Preferences tool window: {error}"))?;
+    }
+    apply_windows_window_decorations_with(hwnd.0 as isize, dark, dwm_theming, mica_backdrop);
+    Ok(true)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn style_preferences_tool_window(
+    _title: &str,
+    _dark: bool,
+    _dwm_theming: bool,
+    _mica_backdrop: bool,
+) -> Result<bool, String> {
+    Ok(true)
 }
 
 #[cfg(not(target_os = "windows"))]

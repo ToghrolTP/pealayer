@@ -302,6 +302,7 @@ pub struct PealayerApp {
     pub(crate) windows_dwm_theming: bool,
     pub(crate) opengl_vsync: bool,
     pub(crate) native_dialog_windows: bool,
+    pub(crate) native_preferences: Option<crate::ui::preferences::NativePreferencesController>,
     pub(crate) status_bar: crate::config::StatusBarConfig,
     pub(crate) config_fingerprint: Option<u64>,
     pub(crate) last_config_poll: std::time::Instant,
@@ -2913,6 +2914,7 @@ impl Default for PealayerApp {
             windows_dwm_theming: true,
             opengl_vsync: false,
             native_dialog_windows: false,
+            native_preferences: None,
             status_bar: crate::config::StatusBarConfig::default(),
             config_fingerprint: crate::config::AppConfig::fingerprint(
                 &crate::config::AppConfig::get_config_path(),

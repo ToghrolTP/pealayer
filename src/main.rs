@@ -532,6 +532,7 @@ fn main() -> eframe::Result {
                 windows_dwm_theming: loaded_config.windows_dwm_theming,
                 opengl_vsync: loaded_config.opengl_vsync,
                 native_dialog_windows: loaded_config.native_dialog_windows,
+                native_preferences: None,
                 status_bar: loaded_config.status_bar,
                 config_fingerprint: crate::config::AppConfig::fingerprint(
                     &crate::config::AppConfig::get_config_path(),
