@@ -58,6 +58,11 @@ fn accent_foreground(accent: eframe::egui::Color32) -> eframe::egui::Color32 {
     }
 }
 
+fn light_accent_fill(accent: eframe::egui::Color32) -> eframe::egui::Color32 {
+    let tint = |channel: u8| ((u16::from(channel) * 28 + 255 * 72) / 100) as u8;
+    eframe::egui::Color32::from_rgb(tint(accent.r()), tint(accent.g()), tint(accent.b()))
+}
+
 /// Install a restrained native desktop palette for both themes. The active
 /// theme can change later without reconstructing widget styling, and both the
 /// main window and independently hosted dialogs use this same function.
@@ -103,9 +108,14 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
     light.widgets.inactive.bg_fill = Color32::from_rgb(251, 251, 251);
     light.widgets.hovered.weak_bg_fill = Color32::from_rgb(242, 242, 242);
     light.widgets.hovered.bg_fill = Color32::from_rgb(242, 242, 242);
-    light.widgets.active.weak_bg_fill = accent.gamma_multiply(0.84);
-    light.widgets.active.bg_fill = accent;
-    light.widgets.active.fg_stroke = Stroke::new(1.0_f32, accent_text);
+    // egui also uses the active-widget foreground for `RichText::strong()`.
+    // White contrast text on a saturated accent therefore made every strong
+    // caption disappear on ordinary light surfaces. Keep the active surface a
+    // pale accent tint and its foreground dark; selected items retain the full
+    // accent plus `selection.stroke` contrast above.
+    light.widgets.active.weak_bg_fill = light_accent_fill(accent);
+    light.widgets.active.bg_fill = light_accent_fill(accent);
+    light.widgets.active.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(23, 29, 38));
     light.window_corner_radius = CornerRadius::same(10);
     light.menu_corner_radius = CornerRadius::same(8);
 
@@ -154,6 +164,12 @@ mod tests {
             super::accent_foreground(Color32::from_rgb(10, 132, 255)),
             Color32::WHITE
         );
+    }
+
+    #[test]
+    fn light_accent_surface_is_tinted_instead_of_saturated() {
+        let fill = super::light_accent_fill(Color32::from_rgb(0, 120, 212));
+        assert_eq!(fill, Color32::from_rgb(183, 217, 242));
     }
 
     #[test]

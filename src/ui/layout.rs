@@ -1680,8 +1680,9 @@ fn draw_control_card(
                 let action_rows = vec![actions];
                 for action_row in action_rows {
                     let columns = action_grid_columns(ui.available_width(), action_row.len());
-                    ui.columns(columns, |uis| {
-                        for (index, action) in action_row.into_iter().enumerate() {
+                    for row in action_row.chunks(columns) {
+                        ui.columns(columns, |uis| {
+                            for (index, action) in row.iter().enumerate() {
                             let ui = &mut uis[index];
                             let visual_name = crate::ui::i18n::visual_text(app.language, &action.name);
                             let label = responsive_action_label(action, ui.available_width());
@@ -1716,7 +1717,8 @@ fn draw_control_card(
                                 crate::ui::hardware_control::invoke_action(app, control, action);
                             }
                         }
-                    });
+                        });
+                    }
                 }
             } else if let Some(relay_id) = relay_id {
                 ui.add_space(8.0);

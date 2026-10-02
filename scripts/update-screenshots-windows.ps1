@@ -6,6 +6,7 @@ param(
     [string]$AppName,
     [string]$Branding,
     [string]$HardwareEndpoint,
+    [string]$WorkspaceDockLayout,
     [ValidateSet('dark', 'light')]
     [string]$Theme = 'dark',
     [ValidateSet('en', 'fa')]
@@ -274,8 +275,11 @@ for ($localeIndex = 0; $localeIndex -lt $Locale.Count; $localeIndex++) {
     $start.EnvironmentVariables['APP_NAME'] = $effectiveAppName
     $start.EnvironmentVariables['PEALAYER_INSTANCE_ID'] = "screenshot-$captureSession-$language"
     $captureConfig = Join-Path $captureProfile "$language-settings.json"
-    if ($HardwareEndpoint) {
-        @{ hardware_endpoint = $HardwareEndpoint.Trim() } |
+    if ($HardwareEndpoint -or $WorkspaceDockLayout) {
+        @{
+            hardware_endpoint = if ($HardwareEndpoint) { $HardwareEndpoint.Trim() } else { $null }
+            workspace_dock_layout = if ($WorkspaceDockLayout) { $WorkspaceDockLayout } else { $null }
+        } |
             ConvertTo-Json |
             Set-Content -LiteralPath $captureConfig -Encoding utf8
     }
