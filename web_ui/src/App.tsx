@@ -26,6 +26,19 @@ export interface RuntimeConfig {
   locale: 'en' | 'fa';
   direction: 'ltr' | 'rtl';
   theme: 'system' | 'light' | 'dark';
+  accentColor: string;
+}
+
+function resolvedAccent(runtime: RuntimeConfig | null, config: Record<string, any> | null): string {
+  switch (config?.accent_color) {
+    case 'pealayer_green': return '#38d27a';
+    case 'windows_blue': return '#0078d4';
+    case 'macos_blue': return '#0a84ff';
+    case 'custom': return /^#[0-9a-f]{6}$/i.test(config?.custom_accent_color ?? '')
+      ? config.custom_accent_color
+      : (runtime?.accentColor ?? '#0078d4');
+    default: return runtime?.accentColor ?? '#0078d4';
+  }
 }
 
 const App: React.FC = () => {
@@ -38,7 +51,6 @@ const App: React.FC = () => {
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('dark');
   const [quickSeekSeconds, setQuickSeekSeconds] = useState<number>(10);
   const [appConfig, setAppConfig] = useState<Record<string, any> | null>(null);
-  const [accentColor, setAccentColor] = useState<string>('#0078d4');
   const [connectionTarget, setConnectionTarget] = useState<string>(() => {
     const query = new URLSearchParams(window.location.search).get('connect');
     return query ?? window.localStorage.getItem('pealayer.connectionTarget') ?? '';
@@ -65,19 +77,13 @@ const App: React.FC = () => {
     return () => media.removeEventListener('change', applyTheme);
   }, [runtime, appConfig?.theme]);
 
+  const accentColor = resolvedAccent(runtime, appConfig);
+
   useEffect(() => {
-    const probe = document.createElement('span');
-    probe.style.color = 'AccentColor';
-    probe.style.position = 'absolute';
-    probe.style.visibility = 'hidden';
-    document.body.appendChild(probe);
-    const detected = getComputedStyle(probe).color;
-    probe.remove();
-    const accent = detected && detected !== 'rgba(0, 0, 0, 0)' ? detected : '#0078d4';
+    const accent = resolvedAccent(runtime, appConfig);
     document.documentElement.style.setProperty('--accent', accent);
     document.documentElement.style.setProperty('--accent-soft', `color-mix(in srgb, ${accent} 16%, transparent)`);
-    setAccentColor(accent);
-  }, []);
+  }, [runtime, appConfig?.accent_color, appConfig?.custom_accent_color]);
 
   const nextRequestId = useRef(1);
   const sendCmd = useCallback((command: string, payload: Record<string, any> = {}) => {

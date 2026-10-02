@@ -67,10 +67,17 @@ pub struct WebRuntimeConfig {
     pub locale: String,
     pub direction: String,
     pub theme: String,
+    pub accent_color: String,
 }
 
 impl WebRuntimeConfig {
-    pub fn production(app_name: String, locale: String, direction: String, theme: String) -> Self {
+    pub fn production(
+        app_name: String,
+        locale: String,
+        direction: String,
+        theme: String,
+        accent_rgb: [u8; 3],
+    ) -> Self {
         Self {
             app_name,
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -79,6 +86,10 @@ impl WebRuntimeConfig {
             locale,
             direction,
             theme,
+            accent_color: format!(
+                "#{:02x}{:02x}{:02x}",
+                accent_rgb[0], accent_rgb[1], accent_rgb[2]
+            ),
         }
     }
 }
@@ -135,6 +146,7 @@ pub fn spawn_web_server(
             "en".to_string(),
             "ltr".to_string(),
             "system".to_string(),
+            [0, 120, 212],
         ),
     )
 }
@@ -908,5 +920,18 @@ mod tests {
             mime_for_path(std::path::Path::new("brand.png")),
             "image/png"
         );
+    }
+
+    #[test]
+    fn runtime_contract_carries_the_resolved_desktop_accent() {
+        let runtime = WebRuntimeConfig::production(
+            "Pealayer".to_string(),
+            "en".to_string(),
+            "ltr".to_string(),
+            "system".to_string(),
+            [56, 210, 122],
+        );
+        let value = serde_json::to_value(runtime).unwrap();
+        assert_eq!(value["accentColor"], "#38d27a");
     }
 }

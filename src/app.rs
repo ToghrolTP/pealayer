@@ -2697,6 +2697,7 @@ impl PealayerApp {
             crate::config::AppTheme::Light => egui::ThemePreference::Light,
             crate::config::AppTheme::Dark => egui::ThemePreference::Dark,
         });
+        crate::ui::configure_native_visuals(ctx, &config);
         crate::platform::windows::set_window_theme(ctx.global_style().visuals.dark_mode);
 
         if endpoint_changed {

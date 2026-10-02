@@ -11,6 +11,17 @@ pub enum AppTheme {
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AccentColor {
+    #[default]
+    System,
+    PealayerGreen,
+    WindowsBlue,
+    MacosBlue,
+    Custom,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AppLanguage {
     #[serde(rename = "system")]
     #[default]
@@ -133,6 +144,8 @@ pub struct AppConfig {
     pub app_publisher: Option<String>,
     pub app_copyright: Option<String>,
     pub theme: AppTheme,
+    pub accent_color: AccentColor,
+    pub custom_accent_color: Option<String>,
     pub language: AppLanguage,
     pub direction: AppDirection,
     pub hardware_endpoint: Option<String>,
@@ -180,6 +193,8 @@ impl Default for AppConfig {
             app_publisher: None,
             app_copyright: None,
             theme: AppTheme::System,
+            accent_color: AccentColor::System,
+            custom_accent_color: None,
             language: AppLanguage::System,
             direction: AppDirection::Auto,
             hardware_endpoint: None,
@@ -696,6 +711,15 @@ impl AppConfig {
         {
             return Err("osd_timeout_seconds must be between 1 and 60".to_string());
         }
+        if self.accent_color == AccentColor::Custom
+            && self
+                .custom_accent_color
+                .as_deref()
+                .and_then(parse_rgb_hex)
+                .is_none()
+        {
+            return Err("custom_accent_color must be a color such as #0078d4".to_string());
+        }
         if self
             .hardware_endpoint
             .as_deref()
@@ -728,6 +752,16 @@ impl AppConfig {
         }
         Ok(())
     }
+}
+
+pub fn parse_rgb_hex(value: &str) -> Option<[u8; 3]> {
+    let value = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    (value.len() == 6).then_some(())?;
+    Some([
+        u8::from_str_radix(&value[0..2], 16).ok()?,
+        u8::from_str_radix(&value[2..4], 16).ok()?,
+        u8::from_str_radix(&value[4..6], 16).ok()?,
+    ])
 }
 
 static CONFIG_TEMP_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -903,6 +937,22 @@ mod tests {
     fn test_detect_executable_dir() {
         let exe_dir = detect_executable_dir();
         assert!(exe_dir.exists());
+    }
+
+    #[test]
+    fn accent_presets_and_custom_color_are_validated() {
+        assert_eq!(parse_rgb_hex("#38d27a"), Some([56, 210, 122]));
+        assert_eq!(parse_rgb_hex("0078D4"), Some([0, 120, 212]));
+        assert_eq!(parse_rgb_hex("not-a-color"), None);
+
+        let mut config = AppConfig {
+            accent_color: AccentColor::Custom,
+            custom_accent_color: Some("#0a84ff".to_string()),
+            ..AppConfig::default()
+        };
+        assert!(config.validate().is_ok());
+        config.custom_accent_color = Some("blue".to_string());
+        assert!(config.validate().is_err());
     }
 
     #[test]

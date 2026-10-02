@@ -173,6 +173,26 @@ pub fn preference_controls() -> Vec<PreferenceControl> {
             &[("system", "System"), ("light", "Light"), ("dark", "Dark")],
         ),
         PreferenceControl::select(
+            "accent_color",
+            "appearance",
+            "Interface",
+            "Accent color",
+            &[
+                ("system", "System accent"),
+                ("pealayer_green", "Pealayer green"),
+                ("windows_blue", "Windows blue"),
+                ("macos_blue", "macOS blue"),
+                ("custom", "Custom"),
+            ],
+        ),
+        PreferenceControl::text(
+            "custom_accent_color",
+            "appearance",
+            "Interface",
+            "Custom accent",
+            "#0078d4",
+        ),
+        PreferenceControl::select(
             "language",
             "appearance",
             "Interface",
@@ -400,8 +420,8 @@ pub fn preference_controls() -> Vec<PreferenceControl> {
             "Workspace mode",
         ),
     ];
-    controls[7].logarithmic = true;
     controls[9].logarithmic = true;
+    controls[11].logarithmic = true;
     let mut recent_click = PreferenceControl::boolean(
         "open_url_recent_click_edits",
         "playback",
@@ -409,7 +429,7 @@ pub fn preference_controls() -> Vec<PreferenceControl> {
         "Play when a recent location is clicked",
     );
     recent_click.inverted = true;
-    controls.insert(12, recent_click);
+    controls.insert(14, recent_click);
     controls
 }
 

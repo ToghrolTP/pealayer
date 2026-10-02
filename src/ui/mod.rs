@@ -27,25 +27,35 @@ pub fn configure_interaction_style(style: &mut eframe::egui::Style) {
     style.interaction.multi_widget_text_select = false;
 }
 
-pub fn platform_accent_color() -> eframe::egui::Color32 {
-    crate::platform::windows::system_accent_color()
-        .map(|[red, green, blue]| eframe::egui::Color32::from_rgb(red, green, blue))
-        .unwrap_or_else(|| {
-            if cfg!(target_os = "macos") {
-                eframe::egui::Color32::from_rgb(10, 132, 255)
-            } else {
-                eframe::egui::Color32::from_rgb(0, 120, 212)
-            }
-        })
+pub fn platform_accent_rgb(config: &crate::config::AppConfig) -> [u8; 3] {
+    match config.accent_color {
+        crate::config::AccentColor::PealayerGreen => [56, 210, 122],
+        crate::config::AccentColor::WindowsBlue => [0, 120, 212],
+        crate::config::AccentColor::MacosBlue => [10, 132, 255],
+        crate::config::AccentColor::Custom => config
+            .custom_accent_color
+            .as_deref()
+            .and_then(crate::config::parse_rgb_hex)
+            .unwrap_or([0, 120, 212]),
+        crate::config::AccentColor::System => crate::platform::windows::system_accent_color()
+            .unwrap_or_else(|| {
+                if cfg!(target_os = "macos") {
+                    [10, 132, 255]
+                } else {
+                    [0, 120, 212]
+                }
+            }),
+    }
 }
 
 /// Install a restrained native desktop palette for both themes. The active
 /// theme can change later without reconstructing widget styling, and both the
 /// main window and independently hosted dialogs use this same function.
-pub fn configure_native_visuals(ctx: &eframe::egui::Context) {
+pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::config::AppConfig) {
     use eframe::egui::{Color32, CornerRadius, Stroke, Theme, Visuals};
 
-    let accent = platform_accent_color();
+    let [red, green, blue] = platform_accent_rgb(config);
+    let accent = Color32::from_rgb(red, green, blue);
     let accent_text = if (u32::from(accent.r()) * 299
         + u32::from(accent.g()) * 587
         + u32::from(accent.b()) * 114)
@@ -94,9 +104,6 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context) {
     ctx.set_visuals_of(Theme::Light, light);
     let mut style = (*ctx.global_style()).clone();
     configure_interaction_style(&mut style);
-    style.spacing.item_spacing = eframe::egui::vec2(8.0, 7.0);
-    style.spacing.button_padding = eframe::egui::vec2(10.0, 5.0);
-    style.spacing.interact_size.y = 30.0;
     ctx.set_global_style(style);
 }
 
@@ -115,7 +122,10 @@ mod tests {
     }
 
     #[test]
-    fn platform_accent_is_visible_and_opaque() {
-        assert_eq!(super::platform_accent_color().a(), 255);
+    fn platform_accent_is_visible() {
+        assert_ne!(
+            super::platform_accent_rgb(&crate::config::AppConfig::default()),
+            [0, 0, 0]
+        );
     }
 }

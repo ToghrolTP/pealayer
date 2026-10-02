@@ -1208,6 +1208,7 @@ pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<Interop
             "en".to_string(),
             "ltr".to_string(),
             "system".to_string(),
+            [0, 120, 212],
         ),
         tx,
         application_identity,

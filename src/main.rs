@@ -220,7 +220,7 @@ fn main() -> eframe::Result {
                 crate::config::AppTheme::Dark => egui::ThemePreference::Dark,
             };
             cc.egui_ctx.set_theme(theme_preference);
-            crate::ui::configure_native_visuals(&cc.egui_ctx);
+            crate::ui::configure_native_visuals(&cc.egui_ctx, &loaded_config);
             crate::platform::windows::set_window_theme(
                 cc.egui_ctx.global_style().visuals.dark_mode,
             );
@@ -371,6 +371,7 @@ fn main() -> eframe::Result {
                     crate::config::AppTheme::System => "system",
                 }
                 .to_string(),
+                crate::ui::platform_accent_rgb(&loaded_config),
             );
             let web_state_tx = crate::server::spawn_control_server_configured(
                 control_port,
