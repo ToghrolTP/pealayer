@@ -159,6 +159,18 @@ const EMERGENCY_STOP_CONTROLLER_COMMANDS: [&str; 5] = [
 /// twice there as well.
 fn enforce_emergency_stop(transport: &mut HardwareTransport) -> Result<(), String> {
     let mut errors = Vec::new();
+    if matches!(transport, HardwareTransport::Controller(_)) {
+        if let Err(error) = transport.call_controller(
+            "controller.estop.set",
+            serde_json::json!({
+                "active": true,
+                "source": "pealayer",
+                "reason": "operator engaged E-STOP",
+            }),
+        ) {
+            errors.push(format!("engage PCController E-STOP contract: {error}"));
+        }
+    }
     if let Err(error) = transport.send(Command::AllOff) {
         errors.push(format!("initial output release: {error}"));
     }
@@ -183,6 +195,12 @@ fn enforce_emergency_stop(transport: &mut HardwareTransport) -> Result<(), Strin
 }
 
 fn controller_call_allowed_during_estop(method: &str, params: &serde_json::Value) -> bool {
+    if method == "controller.estop.set" {
+        return params
+            .get("active")
+            .and_then(serde_json::Value::as_bool)
+            .is_some();
+    }
     if method == "controller.pwm.off" {
         return true;
     }
@@ -302,6 +320,8 @@ pub struct EngineHandle {
 #[derive(Clone)]
 pub struct ControllerPushTarget {
     lifecycle: std::sync::Weak<()>,
+    estop_active: std::sync::Weak<AtomicBool>,
+    is_playing: std::sync::Weak<AtomicBool>,
     connection_requested: std::sync::Weak<AtomicBool>,
     serial_port: std::sync::Weak<Mutex<String>>,
     hardware_capabilities:
@@ -313,6 +333,8 @@ impl EngineHandle {
     pub fn controller_push_target(&self) -> ControllerPushTarget {
         ControllerPushTarget {
             lifecycle: Arc::downgrade(&self.lifecycle),
+            estop_active: Arc::downgrade(&self.estop_active),
+            is_playing: Arc::downgrade(&self.is_playing),
             connection_requested: Arc::downgrade(&self.connection_requested),
             serial_port: Arc::downgrade(&self.serial_port),
             hardware_capabilities: Arc::downgrade(&self.hardware_capabilities),
@@ -347,6 +369,18 @@ impl EngineHandle {
             // acknowledged hardware release on its next (5 ms) pass.
             self.is_playing.store(false, Ordering::SeqCst);
         }
+        let _ = self.sender.send(EngineMessage::ControllerCall {
+            method: "controller.estop.set".to_string(),
+            params: serde_json::json!({
+                "active": active,
+                "source": "pealayer",
+                "reason": if active {
+                    "operator engaged E-STOP"
+                } else {
+                    "operator released E-STOP"
+                },
+            }),
+        });
     }
 }
 
@@ -374,6 +408,24 @@ impl ControllerPushTarget {
     }
 
     pub(crate) fn apply_notification(&self, method: &str, params: &serde_json::Value) -> bool {
+        if matches!(method, "controller.state" | "controller.event")
+            && params.get("kind").and_then(serde_json::Value::as_str) == Some("emergency_stop")
+        {
+            let active = params.get("state").and_then(|state| {
+                state.as_bool().or_else(|| {
+                    state
+                        .as_str()
+                        .and_then(|state| state.trim().parse::<bool>().ok())
+                })
+            });
+            if let (Some(active), Some(estop)) = (active, self.estop_active.upgrade()) {
+                let changed = estop.swap(active, Ordering::SeqCst) != active;
+                if active && let Some(is_playing) = self.is_playing.upgrade() {
+                    is_playing.store(false, Ordering::SeqCst);
+                }
+                return changed;
+            }
+        }
         if matches!(method, "controller.state" | "controller.event")
             && params.get("kind").and_then(serde_json::Value::as_str) == Some("peripherals.changed")
         {
@@ -566,6 +618,44 @@ pub fn spawn_engine() -> EngineHandle {
                                 "controller.command.execute",
                                 serde_json::json!({"command": "effect stop"}),
                             );
+                            if matches!(transport, HardwareTransport::Controller(_)) {
+                                let local_active = engine_estop.load(Ordering::SeqCst);
+                                match transport
+                                    .call_controller("controller.estop.get", serde_json::json!({}))
+                                {
+                                    Ok(state)
+                                        if state
+                                            .get("active")
+                                            .and_then(serde_json::Value::as_bool)
+                                            == Some(true) =>
+                                    {
+                                        engine_estop.store(true, Ordering::SeqCst);
+                                        engine_playing.store(false, Ordering::SeqCst);
+                                    }
+                                    Ok(_) if local_active => {
+                                        if let Err(error) = transport.call_controller(
+                                            "controller.estop.set",
+                                            serde_json::json!({
+                                                "active": true,
+                                                "source": "pealayer",
+                                                "reason": "reassert local E-STOP after reconnect",
+                                            }),
+                                        ) && let Ok(mut guard) = engine_conn_error.lock()
+                                        {
+                                            *guard = Some(format!(
+                                                "synchronize PCController E-STOP: {error}"
+                                            ));
+                                        }
+                                    }
+                                    Ok(_) => {}
+                                    Err(error) => {
+                                        if let Ok(mut guard) = engine_conn_error.lock() {
+                                            *guard =
+                                                Some(format!("read PCController E-STOP: {error}"));
+                                        }
+                                    }
+                                }
+                            }
                             active_strip_effect = None;
                         }
                         engine_connected.store(true, Ordering::Relaxed);
@@ -1881,9 +1971,16 @@ mod tests {
                 serde_json::json!({"command": "keyboard stop"}),
             ),
             ("controller.pwm.off", serde_json::json!({})),
+            ("controller.estop.set", serde_json::json!({"active": true})),
+            ("controller.estop.set", serde_json::json!({"active": false})),
         ] {
             assert!(controller_call_allowed_during_estop(method, &params));
         }
+
+        assert!(!controller_call_allowed_during_estop(
+            "controller.estop.set",
+            &serde_json::json!({}),
+        ));
     }
 
     #[test]
@@ -1894,6 +1991,24 @@ mod tests {
         assert!(handle.estop_active.load(Ordering::SeqCst));
         assert!(!handle.is_playing.load(Ordering::SeqCst));
         handle.set_emergency_stop(false);
+        assert!(!handle.estop_active.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn controller_push_updates_the_shared_emergency_stop_latch() {
+        let handle = spawn_engine();
+        let target = handle.controller_push_target();
+        handle.is_playing.store(true, Ordering::SeqCst);
+        assert!(target.apply_notification(
+            "controller.event",
+            &serde_json::json!({"kind": "emergency_stop", "state": "true"}),
+        ));
+        assert!(handle.estop_active.load(Ordering::SeqCst));
+        assert!(!handle.is_playing.load(Ordering::SeqCst));
+        assert!(target.apply_notification(
+            "controller.event",
+            &serde_json::json!({"kind": "emergency_stop", "state": "false"}),
+        ));
         assert!(!handle.estop_active.load(Ordering::SeqCst));
     }
 

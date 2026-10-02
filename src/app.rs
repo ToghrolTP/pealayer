@@ -370,6 +370,22 @@ impl eframe::App for PealayerApp {
         self.process_controller_call_results();
         self.poll_external_config(ui.ctx());
 
+        // PCController owns the shared latch. A second client or the Web/TUI
+        // may engage or release it, so reflect the engine's push/reconnect
+        // observation without echoing another command back to the controller.
+        let authoritative_estop = self
+            .engine_handle
+            .estop_active
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if authoritative_estop != self.estop_active {
+            self.estop_active = authoritative_estop;
+            self.held_motion_action = None;
+            if authoritative_estop {
+                self.pause();
+                self.set_osd(self.tr("E-STOP ACTIVE"));
+            }
+        }
+
         // A held seat direction captures the pointer until the physical button
         // is released. This remains active even if a repaint moves the cursor
         // outside the original button or the panel is hidden mid-gesture.
