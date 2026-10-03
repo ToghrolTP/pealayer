@@ -133,9 +133,18 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "pccontroller://host:port, tcp://host:port, or direct:<device>" => {
             "pccontroller://میزبان:درگاه، tcp://میزبان:درگاه یا direct:<دستگاه>"
         }
-        "RESET E-STOP" => "بازنشانی توقف اضطراری",
         "E-STOP" => "توقف اضطراری",
         "E-STOP ACTIVE" => "توقف اضطراری فعال است",
+        "Emergency stop" => "توقف اضطراری",
+        "Hide E-STOP" => "پنهان‌کردن توقف اضطراری",
+        "Release E-STOP?" => "توقف اضطراری آزاد شود؟",
+        "Release E-STOP" => "آزادکردن توقف اضطراری",
+        "Hardware outputs and effects will be allowed again." => {
+            "خروجی‌های سخت‌افزار و جلوه‌ها دوباره مجاز خواهند شد."
+        }
+        "Do not ask again" => "دوباره پرسیده نشود",
+        "Show E-STOP in the application header" => "نمایش توقف اضطراری در سربرگ برنامه",
+        "Confirm before releasing E-STOP" => "تأیید پیش از آزادکردن توقف اضطراری",
         "Program Monitor" => "نمایش برنامه",
         "Effect Controls" => "کنترل جلوه‌ها",
         "Identity" => "هویت",

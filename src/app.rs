@@ -246,6 +246,10 @@ pub struct PealayerApp {
     pub(crate) track_locked: std::collections::BTreeSet<u8>,
     pub(crate) active_drag: Option<ActiveDragState>,
     pub(crate) estop_active: bool,
+    pub(crate) show_estop_control: bool,
+    pub(crate) confirm_estop_release: bool,
+    pub(crate) show_estop_release_dialog: bool,
+    pub(crate) skip_estop_release_confirmation_draft: bool,
     pub(crate) serial_port: String,
     pub(crate) is_connected: bool,
     pub(crate) lasso_origin: Option<egui::Pos2>,
@@ -1058,6 +1062,7 @@ impl eframe::App for PealayerApp {
                     crate::ui::four_d::draw_editor(self, ui);
                 }
                 crate::ui::error::draw(self, ui);
+                crate::ui::menu::draw_estop_release_dialog(self, ui);
                 crate::ui::subtitles::draw_settings_dialog(self, ui);
                 crate::ui::audio::draw_settings_dialog(self, ui);
                 crate::ui::preferences::draw(self, ui);
@@ -2164,6 +2169,23 @@ impl PealayerApp {
         }
     }
 
+    /// Request an E-STOP state change from an interactive GUI control.
+    ///
+    /// Engaging the latch is immediate. Releasing it can require a persisted
+    /// confirmation, while API/CLI commands continue to use
+    /// [`Self::set_emergency_stop`] directly for deterministic automation.
+    pub(crate) fn request_emergency_stop_change(&mut self, active: bool) {
+        if self.estop_active == active {
+            return;
+        }
+        if !active && self.confirm_estop_release {
+            self.skip_estop_release_confirmation_draft = false;
+            self.show_estop_release_dialog = true;
+        } else {
+            self.set_emergency_stop(active);
+        }
+    }
+
     /// Toggles play/pause, restarting if playback has reached the end.
     pub fn toggle_playback(&mut self) {
         if self.current_video_path.is_none() {
@@ -2673,6 +2695,8 @@ impl PealayerApp {
         cfg.prefix_relay_identifiers = self.prefix_relay_identifiers;
         cfg.live_pwm_updates = self.live_pwm_updates;
         cfg.hardware_actions_on_press = self.hardware_actions_on_press;
+        cfg.show_estop_control = self.show_estop_control;
+        cfg.confirm_estop_release = self.confirm_estop_release;
         cfg.single_instance = self.single_instance;
         cfg.windows_mica_backdrop = self.windows_mica_backdrop;
         cfg.windows_dwm_theming = self.windows_dwm_theming;
@@ -2760,6 +2784,8 @@ impl PealayerApp {
         self.prefix_relay_identifiers = config.prefix_relay_identifiers;
         self.live_pwm_updates = config.live_pwm_updates;
         self.hardware_actions_on_press = config.hardware_actions_on_press;
+        self.show_estop_control = config.show_estop_control;
+        self.confirm_estop_release = config.confirm_estop_release;
         self.single_instance = config.single_instance;
         self.windows_mica_backdrop = config.windows_mica_backdrop;
         self.windows_dwm_theming = config.windows_dwm_theming;
@@ -3223,6 +3249,10 @@ impl Default for PealayerApp {
             track_locked: std::collections::BTreeSet::new(),
             active_drag: None,
             estop_active: false,
+            show_estop_control: true,
+            confirm_estop_release: true,
+            show_estop_release_dialog: false,
+            skip_estop_release_confirmation_draft: false,
             serial_port: String::new(),
             is_connected: false,
             lasso_origin: None,
@@ -3689,5 +3719,30 @@ mod tests {
         let preset = controller_macro_effect_preset(&hardware_macro);
         assert_eq!(preset.effect.controller_macro.as_ref().unwrap().id, 7);
         assert!(preset.effect.actions.is_empty());
+    }
+
+    #[test]
+    fn interactive_estop_release_is_guarded_until_user_confirms() {
+        let mut app = PealayerApp::default();
+        app.estop_active = true;
+        app.confirm_estop_release = true;
+
+        app.request_emergency_stop_change(false);
+
+        assert!(app.estop_active);
+        assert!(app.show_estop_release_dialog);
+        assert!(!app.skip_estop_release_confirmation_draft);
+    }
+
+    #[test]
+    fn interactive_estop_release_can_use_persisted_no_confirm_preference() {
+        let mut app = PealayerApp::default();
+        app.estop_active = true;
+        app.confirm_estop_release = false;
+
+        app.request_emergency_stop_change(false);
+
+        assert!(!app.estop_active);
+        assert!(!app.show_estop_release_dialog);
     }
 }

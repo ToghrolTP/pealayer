@@ -477,6 +477,10 @@ fn main() -> eframe::Result {
                 track_locked: std::collections::BTreeSet::new(),
                 active_drag: None,
                 estop_active: false,
+                show_estop_control: loaded_config.show_estop_control,
+                confirm_estop_release: loaded_config.confirm_estop_release,
+                show_estop_release_dialog: false,
+                skip_estop_release_confirmation_draft: false,
                 serial_port: loaded_config
                     .hardware_endpoint
                     .clone()

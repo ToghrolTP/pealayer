@@ -971,7 +971,7 @@ fn draw_board_card_context_menu(
         )
         .changed()
     {
-        app.set_emergency_stop(estop);
+        app.request_emergency_stop_change(estop);
         ui.close();
     }
 }

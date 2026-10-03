@@ -407,6 +407,18 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Output controls",
             "Activate output buttons when pressed",
         ),
+        PreferenceControl::boolean(
+            "show_estop_control",
+            "hardware",
+            "Emergency stop",
+            "Show E-STOP in the application header",
+        ),
+        PreferenceControl::boolean(
+            "confirm_estop_release",
+            "hardware",
+            "Emergency stop",
+            "Confirm before releasing E-STOP",
+        ),
         PreferenceControl::select(
             "paused_drag_action",
             "input",
@@ -626,5 +638,18 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["hidden", "dimmed", "shown"]
         );
+    }
+
+    #[test]
+    fn emergency_stop_visibility_and_release_guard_are_shared_preferences() {
+        let controls = preference_controls(&crate::config::AppConfig::default());
+        for key in ["show_estop_control", "confirm_estop_release"] {
+            let control = controls
+                .iter()
+                .find(|control| control.key == key)
+                .unwrap_or_else(|| panic!("missing {key} preference"));
+            assert!(matches!(control.kind, PreferenceControlKind::Boolean));
+            assert_eq!(control.section, "hardware");
+        }
     }
 }

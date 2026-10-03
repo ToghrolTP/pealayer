@@ -6,16 +6,17 @@ fn estop_button(
     active: bool,
     language: crate::config::AppLanguage,
 ) -> egui::Response {
-    let (label, fill, help) = if active {
+    let label = crate::ui::i18n::tr(language, "E-STOP");
+    let (fill, stroke, help) = if active {
         (
-            crate::ui::i18n::tr(language, "RESET E-STOP"),
-            egui::Color32::from_rgb(231, 76, 60),
-            "Reset the active emergency stop",
+            egui::Color32::from_rgb(127, 29, 29),
+            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(69, 10, 10)),
+            "E-STOP is active; click to release",
         )
     } else {
         (
-            crate::ui::i18n::tr(language, "E-STOP"),
             egui::Color32::from_rgb(192, 57, 43),
+            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(110, 20, 20)),
             "Emergency stop: pause playback and stop hardware output",
         )
     };
@@ -23,14 +24,16 @@ fn estop_button(
     // The stop mark is painted as a vector octagon instead of relying on an
     // emoji glyph, whose appearance and availability vary by platform/font.
     let response = ui.add_sized(
-        egui::vec2(if active { 132.0 } else { 104.0 }, 26.0),
+        egui::vec2(104.0, 26.0),
         egui::Button::new(
             egui::RichText::new(format!("      {label}"))
                 .color(egui::Color32::WHITE)
                 .strong()
                 .size(11.0),
         )
-        .fill(fill),
+        .fill(fill)
+        .stroke(stroke)
+        .selected(active),
     );
     let center = egui::pos2(response.rect.left() + 15.0, response.rect.center().y);
     let radius = 8.0;
@@ -53,6 +56,84 @@ fn estop_button(
         fill,
     );
     response.on_hover_text(help)
+}
+
+pub(crate) fn draw_estop_release_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    if !app.show_estop_release_dialog {
+        return;
+    }
+
+    // If another interface already released the shared PCController latch,
+    // the local confirmation is no longer actionable.
+    if !app.estop_active {
+        app.show_estop_release_dialog = false;
+        return;
+    }
+
+    let title = app.tr("Release E-STOP?");
+    let message = app.tr("Hardware outputs and effects will be allowed again.");
+    let skip_label = app.tr("Do not ask again");
+    let cancel_label = app.tr("Cancel");
+    let release_label = app.tr("Release E-STOP");
+    let rtl = app.rtl;
+
+    let modal = egui::Modal::new(egui::Id::new("estop_release_confirmation_v1"))
+        .frame(
+            egui::Frame::popup(ui.style())
+                .inner_margin(egui::Margin::same(18))
+                .corner_radius(10),
+        )
+        .show(ui.ctx(), |ui| {
+            ui.set_min_width(360.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(crate::ui::icons::WARNING)
+                        .size(24.0)
+                        .color(egui::Color32::from_rgb(220, 74, 62)),
+                );
+                ui.heading(title);
+            });
+            ui.add_space(6.0);
+            ui.label(message);
+            ui.add_space(10.0);
+            ui.checkbox(&mut app.skip_estop_release_confirmation_draft, skip_label);
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(6.0);
+
+            let mut release = false;
+            let mut cancel = false;
+            crate::ui::dialog::action_row(ui, rtl, |ui| {
+                if crate::ui::dialog::primary_action_button(
+                    ui,
+                    crate::ui::icons::POWER,
+                    &release_label,
+                )
+                .clicked()
+                {
+                    release = true;
+                }
+                if crate::ui::dialog::action_button(ui, crate::ui::icons::X, &cancel_label)
+                    .clicked()
+                {
+                    cancel = true;
+                }
+            });
+            (release, cancel)
+        });
+
+    let (release, cancel) = modal.inner;
+    if release {
+        app.show_estop_release_dialog = false;
+        if app.skip_estop_release_confirmation_draft {
+            app.confirm_estop_release = false;
+            app.save_config();
+        }
+        app.set_emergency_stop(false);
+    } else if cancel || modal.should_close() {
+        app.show_estop_release_dialog = false;
+        app.skip_estop_release_confirmation_draft = false;
+    }
 }
 
 /// Switch sibling menus on hover while the menubar is active, matching the
@@ -417,22 +498,42 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(8.0);
 
-                    // 1. E-STOP Kill Switch Button
-                    let board_ready = app
-                        .advertised_hardware()
-                        .is_some_and(|capabilities| capabilities.board_connected);
-                    let btn = ui
-                        .add_enabled_ui(board_ready, |ui| {
-                            estop_button(ui, app.estop_active, language)
-                        })
-                        .inner
-                        .on_disabled_hover_text(app.tr("E-STOP is available when a live board is connected"));
+                    // 1. E-STOP toggle and its divider are one visibility
+                    // cluster so hiding the control leaves no orphaned rule.
+                    if app.show_estop_control {
+                        let board_ready = app
+                            .advertised_hardware()
+                            .is_some_and(|capabilities| capabilities.board_connected);
+                        let btn = ui
+                            .add_enabled_ui(board_ready || app.estop_active, |ui| {
+                                estop_button(ui, app.estop_active, language)
+                            })
+                            .inner
+                            .on_disabled_hover_text(
+                                app.tr("E-STOP is available when a live board is connected"),
+                            );
 
-                    if btn.clicked() {
-                        app.set_emergency_stop(!app.estop_active);
+                        btn.context_menu(|ui| {
+                            if ui
+                                .button(format!(
+                                    "{} {}",
+                                    crate::ui::icons::EYE_SLASH,
+                                    app.tr("Hide E-STOP")
+                                ))
+                                .clicked()
+                            {
+                                app.show_estop_control = false;
+                                app.save_config();
+                                ui.close();
+                            }
+                        });
+
+                        if btn.clicked() {
+                            app.request_emergency_stop_change(!app.estop_active);
+                        }
+
+                        ui.separator();
                     }
-
-                    ui.separator();
 
                     // 2. Coordinator/direct-diagnostic connection toggle & dropdown
                     let connection_requested = app

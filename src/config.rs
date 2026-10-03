@@ -179,6 +179,8 @@ pub struct AppConfig {
     pub prefix_relay_identifiers: bool,
     pub live_pwm_updates: bool,
     pub hardware_actions_on_press: bool,
+    pub show_estop_control: bool,
+    pub confirm_estop_release: bool,
     pub single_instance: bool,
     pub windows_mica_backdrop: bool,
     pub windows_dwm_theming: bool,
@@ -234,6 +236,8 @@ impl Default for AppConfig {
             prefix_relay_identifiers: true,
             live_pwm_updates: true,
             hardware_actions_on_press: true,
+            show_estop_control: true,
+            confirm_estop_release: true,
             single_instance: true,
             windows_mica_backdrop: false,
             windows_dwm_theming: true,
@@ -1027,6 +1031,8 @@ mod tests {
                 "compact_hardware_controls": true,
                 "non_user_control_visibility": "hidden",
                 "prefix_relay_identifiers": false,
+                "show_estop_control": false,
+                "confirm_estop_release": false,
                 "status_bar": {
                     "media_rate": false,
                     "hardware": true,
@@ -1050,6 +1056,8 @@ mod tests {
             NonUserControlVisibility::Hidden
         );
         assert!(!updated.prefix_relay_identifiers);
+        assert!(!updated.show_estop_control);
+        assert!(!updated.confirm_estop_release);
         assert!(!updated.status_bar.media_rate);
         assert!(!updated.status_bar.workspace);
         assert!(
@@ -1071,6 +1079,13 @@ mod tests {
             .count();
         assert_eq!(leftovers, 0);
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn emergency_stop_ui_is_visible_and_release_is_guarded_by_default() {
+        let config = AppConfig::default();
+        assert!(config.show_estop_control);
+        assert!(config.confirm_estop_release);
     }
 
     #[test]
