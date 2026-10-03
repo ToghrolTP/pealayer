@@ -1947,7 +1947,9 @@ impl PealayerApp {
                     let output = value
                         .get("output")
                         .and_then(serde_json::Value::as_str)
-                        .unwrap_or(if is_presentation_operation {
+                        .unwrap_or(if result.operation.starts_with("presentation-order:") {
+                            "Channel order saved"
+                        } else if is_presentation_operation {
                             "Channel presentation saved"
                         } else {
                             "PCController accepted the operation"
@@ -2018,6 +2020,9 @@ impl PealayerApp {
                         self.board_operation_status = error.clone();
                     } else if !is_presentation_operation {
                         self.hardware_effect_authoring.status = error.clone();
+                    }
+                    if is_presentation_operation {
+                        self.engine_handle.request_catalog_refresh();
                     }
                     self.set_osd(error);
                 }

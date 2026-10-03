@@ -179,6 +179,28 @@ impl HardwareCapabilities {
         {
             output.name.clone_from(&name);
         }
+        if let Some(controls) = result.get("controls").and_then(Value::as_array) {
+            for entry in controls {
+                let Some(entry_key) = entry.get("key").and_then(Value::as_str) else {
+                    continue;
+                };
+                let Some(order) = entry
+                    .get("order")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u16::try_from(value).ok())
+                else {
+                    continue;
+                };
+                if let Some(control) = self.controls.iter_mut().find(|item| item.key == entry_key) {
+                    control.order = order;
+                }
+            }
+            self.controls.sort_by(|left, right| {
+                left.order
+                    .cmp(&right.order)
+                    .then_with(|| left.key.cmp(&right.key))
+            });
+        }
         if let Some(revision) = result
             .pointer("/board_profile/revision")
             .and_then(Value::as_str)
@@ -188,6 +210,52 @@ impl HardwareCapabilities {
             }
         }
         Ok(key)
+    }
+
+    /// Applies a local optimistic channel move while PCController persists the
+    /// same kind-local rank. The authoritative response replaces these ranks;
+    /// a rejected request schedules a catalog refresh and therefore rolls back.
+    pub(crate) fn apply_control_reorder(
+        &mut self,
+        key: &str,
+        requested_order: u16,
+    ) -> Result<(), String> {
+        let kind = self
+            .controls
+            .iter()
+            .find(|control| control.key == key)
+            .map(|control| control.kind.clone())
+            .ok_or_else(|| format!("unknown channel {key:?}"))?;
+        let mut peers = self
+            .controls
+            .iter()
+            .filter(|control| control.kind == kind)
+            .map(|control| control.key.clone())
+            .collect::<Vec<_>>();
+        if usize::from(requested_order) >= peers.len() {
+            return Err(format!(
+                "channel order {} is outside 0..{}",
+                requested_order,
+                peers.len().saturating_sub(1)
+            ));
+        }
+        let current = peers
+            .iter()
+            .position(|item| item == key)
+            .ok_or_else(|| format!("channel {key:?} disappeared during reorder"))?;
+        let moved = peers.remove(current);
+        peers.insert(usize::from(requested_order), moved);
+        for (rank, peer_key) in peers.iter().enumerate() {
+            if let Some(control) = self.controls.iter_mut().find(|item| item.key == *peer_key) {
+                control.order = u16::try_from(rank).unwrap_or(u16::MAX);
+            }
+        }
+        self.controls.sort_by(|left, right| {
+            left.order
+                .cmp(&right.order)
+                .then_with(|| left.key.cmp(&right.key))
+        });
+        Ok(())
     }
 }
 
@@ -1998,6 +2066,44 @@ mod tests {
             capabilities.board_profile.as_ref().unwrap().revision,
             "restored-revision"
         );
+    }
+
+    #[test]
+    fn presentation_update_applies_authoritative_channel_order() {
+        let mut capabilities = HardwareCapabilities {
+            controls: vec![
+                HardwareControl {
+                    key: "relay.5".to_string(),
+                    kind: "relay".to_string(),
+                    order: 0,
+                    name: "Five".to_string(),
+                    default_name: "Five".to_string(),
+                    ..Default::default()
+                },
+                HardwareControl {
+                    key: "relay.6".to_string(),
+                    kind: "relay".to_string(),
+                    order: 1,
+                    name: "Six".to_string(),
+                    default_name: "Six".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let update = serde_json::json!({
+            "peripheral": {"key": "relay.6", "name": "Six", "default_name": "Six"},
+            "control": {"key": "relay.6", "name": "Six", "order": 0},
+            "controls": [
+                {"key": "relay.6", "order": 0},
+                {"key": "relay.5", "order": 1}
+            ]
+        });
+        capabilities.apply_presentation_update(&update).unwrap();
+        assert_eq!(capabilities.controls[0].key, "relay.6");
+        assert_eq!(capabilities.controls[0].order, 0);
+        assert_eq!(capabilities.controls[1].key, "relay.5");
+        assert_eq!(capabilities.controls[1].order, 1);
     }
 
     #[test]

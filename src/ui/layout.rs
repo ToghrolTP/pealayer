@@ -65,6 +65,92 @@ struct InlineEffectIdentityEdit {
     icon: String,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct HardwareChannelDrag {
+    key: String,
+    kind: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HardwareChannelDrop {
+    source_key: String,
+    target_key: String,
+    before: bool,
+}
+
+fn hardware_channel_drag_id() -> egui::Id {
+    egui::Id::new("hardware-channel-drag")
+}
+
+fn hardware_channel_drag_handle(
+    app: &PealayerApp,
+    ui: &mut egui::Ui,
+    control: &crate::four_d::controller::HardwareControl,
+) -> egui::Response {
+    let response = ui
+        .add(
+            egui::Label::new(
+                egui::RichText::new(crate::ui::icons::DOTS_SIX_VERTICAL)
+                    .weak()
+                    .size(15.0),
+            )
+            .sense(egui::Sense::drag()),
+        )
+        .on_hover_text(app.tr("Drag to reorder channel"));
+    if response.drag_started() {
+        ui.data_mut(|data| {
+            data.insert_temp(
+                hardware_channel_drag_id(),
+                HardwareChannelDrag {
+                    key: control.key.clone(),
+                    kind: control.kind.clone(),
+                },
+            );
+        });
+    }
+    if response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+    response
+}
+
+fn hardware_channel_drop_target(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    control: &crate::four_d::controller::HardwareControl,
+) -> Option<HardwareChannelDrop> {
+    let drag =
+        ui.data_mut(|data| data.get_temp::<HardwareChannelDrag>(hardware_channel_drag_id()))?;
+    if drag.key == control.key || drag.kind != control.kind {
+        return None;
+    }
+    let pointer = ui.ctx().pointer_hover_pos()?;
+    if !rect.contains(pointer) {
+        return None;
+    }
+    let before = pointer.y < rect.center().y;
+    let y = if before { rect.top() } else { rect.bottom() };
+    ui.painter().line_segment(
+        [
+            egui::pos2(rect.left() + 5.0, y),
+            egui::pos2(rect.right() - 5.0, y),
+        ],
+        egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
+    );
+    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    if ui.input(|input| input.pointer.any_released()) {
+        ui.data_mut(|data| {
+            data.remove_temp::<HardwareChannelDrag>(hardware_channel_drag_id());
+        });
+        return Some(HardwareChannelDrop {
+            source_key: drag.key,
+            target_key: control.key.clone(),
+            before,
+        });
+    }
+    None
+}
+
 pub(crate) fn timeline_keyboard_focus_id() -> egui::Id {
     egui::Id::new("timeline-keyboard-focus")
 }
@@ -1411,6 +1497,89 @@ pub(crate) fn update_control_presentation(
     }
 }
 
+fn reordered_channel_rank(
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    drop: &HardwareChannelDrop,
+) -> Option<u16> {
+    let source = capabilities
+        .controls
+        .iter()
+        .find(|control| control.key == drop.source_key)?;
+    let target = capabilities
+        .controls
+        .iter()
+        .find(|control| control.key == drop.target_key)?;
+    if source.kind != target.kind {
+        return None;
+    }
+    let mut peers = capabilities
+        .controls
+        .iter()
+        .filter(|control| control.kind == source.kind)
+        .collect::<Vec<_>>();
+    peers.sort_by(|left, right| {
+        left.order
+            .cmp(&right.order)
+            .then_with(|| left.key.cmp(&right.key))
+    });
+    let source_index = peers
+        .iter()
+        .position(|control| control.key == drop.source_key)?;
+    peers.remove(source_index);
+    let target_index = peers
+        .iter()
+        .position(|control| control.key == drop.target_key)?;
+    let insertion = target_index + usize::from(!drop.before);
+    u16::try_from(insertion).ok()
+}
+
+fn persist_channel_drop(
+    app: &mut PealayerApp,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    drop: HardwareChannelDrop,
+) {
+    let Some(order) = reordered_channel_rank(capabilities, &drop) else {
+        app.set_osd(app.tr("Unable to reorder these channels"));
+        return;
+    };
+    let Some(control) = capabilities
+        .controls
+        .iter()
+        .find(|control| control.key == drop.source_key)
+    else {
+        return;
+    };
+    let params = control_presentation_update_params(
+        capabilities,
+        control,
+        serde_json::json!({"order": order}),
+    );
+    if let Err(error) = app.engine_handle.request_controller_call(
+        format!("presentation-order:{}", control.key),
+        "controller.peripheral.presentation.update",
+        params,
+    ) {
+        app.set_osd(error);
+        return;
+    }
+    let optimistic_error = app
+        .engine_handle
+        .hardware_capabilities
+        .lock()
+        .ok()
+        .and_then(|mut current| {
+            current
+                .as_mut()
+                .and_then(|current| current.apply_control_reorder(&control.key, order).err())
+        });
+    if let Some(error) = optimistic_error {
+        app.set_osd(error);
+        app.engine_handle.request_catalog_refresh();
+        return;
+    }
+    app.set_osd(app.tr("Saving channel order..."));
+}
+
 fn control_presentation_update_params(
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
@@ -2551,7 +2720,7 @@ fn draw_compact_control_card(
     ui: &mut egui::Ui,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
-) {
+) -> Option<HardwareChannelDrop> {
     let edit_id = ui.make_persistent_id(("control-name-editing", control.key.as_str()));
     let draft_id = ui.make_persistent_id(("control-name-draft", control.key.as_str()));
     let focus_pending_id = ui.make_persistent_id(("control-name-focus", control.key.as_str()));
@@ -2621,6 +2790,7 @@ fn draw_compact_control_card(
                     ui.label(egui::RichText::new(crate::ui::icons::LOCK).weak())
                         .on_hover_text(app.tr("Channel is locked in PCController"));
                 }
+				hardware_channel_drag_handle(app, ui, control);
 
                 let editing = ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
                 let editing_group = ui
@@ -2827,6 +2997,7 @@ fn draw_compact_control_card(
             });
         });
 
+    let drop = hardware_channel_drop_target(ui, card.response.rect, control);
     control_context_popup(
         app,
         ui,
@@ -2839,6 +3010,7 @@ fn draw_compact_control_card(
         group_edit_id,
         group_draft_id,
     );
+    drop
 }
 
 fn draw_control_card(
@@ -2846,10 +3018,9 @@ fn draw_control_card(
     ui: &mut egui::Ui,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
-) {
+) -> Option<HardwareChannelDrop> {
     if app.compact_hardware_controls {
-        draw_compact_control_card(app, ui, capabilities, control);
-        return;
+        return draw_compact_control_card(app, ui, capabilities, control);
     }
     let edit_id = ui.make_persistent_id(("control-name-editing", control.key.as_str()));
     let draft_id = ui.make_persistent_id(("control-name-draft", control.key.as_str()));
@@ -2924,6 +3095,7 @@ fn draw_control_card(
                     ui.label(egui::RichText::new(crate::ui::icons::LOCK).weak())
                         .on_hover_text(app.tr("Channel is locked in PCController"));
                 }
+                hardware_channel_drag_handle(app, ui, control);
 
                 if editing {
                     let mut draft = ui.data_mut(|data| {
@@ -3194,6 +3366,7 @@ fn draw_control_card(
             }
         });
 
+    let drop = hardware_channel_drop_target(ui, card.response.rect, control);
     control_context_popup(
         app,
         ui,
@@ -3206,6 +3379,7 @@ fn draw_control_card(
         group_edit_id,
         group_draft_id,
     );
+    drop
 }
 
 fn draw_compact_relay_group(
@@ -3214,7 +3388,8 @@ fn draw_compact_relay_group(
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     group: &str,
     controls: &[&crate::four_d::controller::HardwareControl],
-) {
+) -> Option<HardwareChannelDrop> {
+    let mut pending_drop = None;
     let outer_width = ui.available_width();
     ui.set_width(outer_width);
     egui::Frame::group(ui.style())
@@ -3234,7 +3409,7 @@ fn draw_compact_relay_group(
                 } else {
                     humanize_machine_label(group)
                 };
-                let controls_width = controls.len() as f32 * 48.0;
+                let controls_width = controls.len() as f32 * 64.0;
                 ui.add_sized(
                     [(ui.available_width() - controls_width).max(52.0), 26.0],
                     egui::Label::new(egui::RichText::new(title).strong()).truncate(),
@@ -3253,6 +3428,7 @@ fn draw_compact_relay_group(
                                 egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(34, 197, 94)),
                             );
                         }
+                        let handle = hardware_channel_drag_handle(app, ui, control);
                         let response = ui
                             .add_enabled(!app.estop_active && !control.locked, button)
                             .on_hover_text(format!(
@@ -3269,6 +3445,13 @@ fn draw_compact_relay_group(
                                     String::new()
                                 }
                             ));
+                        if let Some(drop) = hardware_channel_drop_target(
+                            ui,
+                            handle.rect.union(response.rect),
+                            control,
+                        ) {
+                            pending_drop = Some(drop);
+                        }
                         if response.clicked() {
                             let _ = app.engine_handle.sender.send(
                                 crate::four_d::engine::EngineMessage::ControllerCall {
@@ -3391,6 +3574,7 @@ fn draw_compact_relay_group(
                 });
             });
         });
+    pending_drop
 }
 
 fn draw_control_card_grid(
@@ -3399,6 +3583,7 @@ fn draw_control_card_grid(
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     controls: &[crate::four_d::controller::HardwareControl],
 ) {
+    let mut pending_drop = None;
     let hidden = controls
         .iter()
         .filter(|control| control.hidden && control_supports_presentation_policy(control))
@@ -3440,9 +3625,15 @@ fn draw_control_card_grid(
         });
         ui.add_space(4.0);
     }
+    let mut ordered_controls = controls.iter().collect::<Vec<_>>();
+    ordered_controls.sort_by(|left, right| {
+        left.order
+            .cmp(&right.order)
+            .then_with(|| left.key.cmp(&right.key))
+    });
     let mut groups: Vec<(String, Vec<&crate::four_d::controller::HardwareControl>)> = Vec::new();
-    for control in controls
-        .iter()
+    for control in ordered_controls
+        .into_iter()
         .filter(|control| !control.hidden)
         .filter(|control| global_control_is_visible(app, capabilities, control))
     {
@@ -3474,7 +3665,11 @@ fn draw_control_card_grid(
                 if dimmed {
                     ui.set_opacity(0.58);
                 }
-                draw_compact_relay_group(app, ui, capabilities, &group, &members);
+                if let Some(drop) =
+                    draw_compact_relay_group(app, ui, capabilities, &group, &members)
+                {
+                    pending_drop = Some(drop);
+                }
             });
             ui.add_space(6.0);
             continue;
@@ -3502,7 +3697,9 @@ fn draw_control_card_grid(
                         if dimmed {
                             ui.set_opacity(0.58);
                         }
-                        draw_control_card(app, ui, capabilities, control);
+                        if let Some(drop) = draw_control_card(app, ui, capabilities, control) {
+                            pending_drop = Some(drop);
+                        }
                     });
                 }
             });
@@ -3512,6 +3709,13 @@ fn draw_control_card_grid(
             ui.add_space(3.0);
         }
     }
+    if let Some(drop) = pending_drop {
+        persist_channel_drop(app, capabilities, drop);
+    } else if ui.input(|input| input.pointer.any_released()) {
+        ui.data_mut(|data| {
+            data.remove_temp::<HardwareChannelDrag>(hardware_channel_drag_id());
+        });
+    }
 }
 
 #[cfg(test)]
@@ -3520,6 +3724,59 @@ mod timeline_row_tests {
 
     fn discard_ui_output(mut output: egui::FullOutput) {
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn channel_drop_computes_a_kind_local_rank() {
+        let control =
+            |key: &str, kind: &str, order: u16| crate::four_d::controller::HardwareControl {
+                key: key.to_string(),
+                kind: kind.to_string(),
+                order,
+                ..Default::default()
+            };
+        let capabilities = crate::four_d::controller::HardwareCapabilities {
+            controls: vec![
+                control("relay.5", "relay", 0),
+                control("relay.6", "relay", 1),
+                control("relay.7", "relay", 2),
+                control("pwm.0", "mosfet", 0),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            reordered_channel_rank(
+                &capabilities,
+                &HardwareChannelDrop {
+                    source_key: "relay.7".to_string(),
+                    target_key: "relay.5".to_string(),
+                    before: true,
+                },
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            reordered_channel_rank(
+                &capabilities,
+                &HardwareChannelDrop {
+                    source_key: "relay.5".to_string(),
+                    target_key: "relay.6".to_string(),
+                    before: false,
+                },
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            reordered_channel_rank(
+                &capabilities,
+                &HardwareChannelDrop {
+                    source_key: "relay.5".to_string(),
+                    target_key: "pwm.0".to_string(),
+                    before: true,
+                },
+            ),
+            None
+        );
     }
 
     #[test]
