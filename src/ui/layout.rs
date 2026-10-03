@@ -665,6 +665,222 @@ fn humanize_machine_label(value: &str) -> String {
         .join(" ")
 }
 
+fn board_card_labels(
+    language: crate::config::AppLanguage,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    fallback: String,
+) -> (String, Option<String>) {
+    let profile = capabilities
+        .board_profile
+        .as_ref()
+        .map(|profile| humanize_machine_label(&profile.key))
+        .filter(|name| !name.trim().is_empty());
+    let advertised = crate::ui::i18n::visual_text(language, &capabilities.board_name);
+    let title = if advertised.trim().is_empty() {
+        profile.clone().unwrap_or(fallback)
+    } else {
+        advertised
+    };
+    let subtitle = profile.filter(|profile| !profile.trim().eq_ignore_ascii_case(title.trim()));
+    (title, subtitle)
+}
+
+fn open_board_information(
+    app: &mut PealayerApp,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    tab: usize,
+) {
+    app.board_name_draft = capabilities.board_name.clone();
+    app.board_info_tab = tab;
+    app.show_board_info_dialog = true;
+}
+
+fn reconfigure_hardware_connection(app: &mut PealayerApp, connect: bool) -> Result<(), String> {
+    let endpoint = app.serial_port.trim().to_owned();
+    if connect && endpoint.is_empty() {
+        return Err(app.tr("Enter a hardware endpoint before connecting."));
+    }
+    app.connection_notice = None;
+    app.engine_handle
+        .sender
+        .send(crate::four_d::engine::EngineMessage::ReconfigureEndpoint { endpoint, connect })
+        .map_err(|_| "hardware engine is unavailable".to_string())
+}
+
+fn draw_board_card_context_menu(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    title: &str,
+    subtitle: Option<&str>,
+) {
+    ui.strong(title);
+    if let Some(subtitle) = subtitle {
+        ui.label(egui::RichText::new(subtitle).small().weak());
+    }
+    ui.separator();
+
+    for (tab, icon, label) in [
+        (0, crate::ui::icons::INFO, "Board information"),
+        (1, crate::ui::icons::CIRCUITRY, "Capabilities"),
+        (2, crate::ui::icons::APP_WINDOW, "Front panel"),
+        (3, crate::ui::icons::SLIDERS_HORIZONTAL, "Board settings"),
+    ] {
+        if ui.button(format!("{icon} {}", app.tr(label))).clicked() {
+            open_board_information(app, capabilities, tab);
+            ui.close();
+        }
+    }
+    if ui
+        .button(format!(
+            "{} {}",
+            crate::ui::icons::PENCIL_SIMPLE,
+            app.tr("Rename board")
+        ))
+        .clicked()
+    {
+        open_board_information(app, capabilities, 0);
+        ui.close();
+    }
+    if ui
+        .button(format!(
+            "{} {}",
+            crate::ui::icons::ARROW_CLOCKWISE,
+            app.tr("Refresh live status")
+        ))
+        .clicked()
+    {
+        app.engine_handle.request_catalog_refresh();
+        ui.close();
+    }
+
+    ui.separator();
+    crate::ui::icons::submenu(
+        ui,
+        format!("{} {}", crate::ui::icons::PLUG, app.tr("Connection")),
+        |ui| {
+            ui.label(
+                egui::RichText::new(crate::media::redact_media_target(&app.serial_port))
+                    .small()
+                    .weak(),
+            );
+            ui.separator();
+            if ui
+                .button(format!(
+                    "{} {}",
+                    crate::ui::icons::ARROW_CLOCKWISE,
+                    app.tr("Reconnect")
+                ))
+                .clicked()
+            {
+                if let Err(error) = reconfigure_hardware_connection(app, true) {
+                    app.set_osd(error);
+                }
+                ui.close();
+            }
+            if ui
+                .button(format!("{} {}", crate::ui::icons::X, app.tr("Disconnect")))
+                .clicked()
+            {
+                if let Err(error) = reconfigure_hardware_connection(app, false) {
+                    app.set_osd(error);
+                }
+                ui.close();
+            }
+        },
+    );
+    crate::ui::icons::submenu(
+        ui,
+        format!("{} {}", crate::ui::icons::COPY, app.tr("Copy")),
+        |ui| {
+            for (label, value) in [
+                (app.tr("Board name"), capabilities.board_name.as_str()),
+                (
+                    app.tr("Profile"),
+                    capabilities
+                        .board_profile
+                        .as_ref()
+                        .map(|profile| profile.key.as_str())
+                        .unwrap_or_default(),
+                ),
+                (app.tr("Hardware endpoint"), app.serial_port.as_str()),
+            ] {
+                if ui
+                    .add_enabled(
+                        !value.trim().is_empty(),
+                        egui::Button::new(format!("{} {label}", crate::ui::icons::COPY)),
+                    )
+                    .clicked()
+                {
+                    ui.ctx().copy_text(value.to_string());
+                    ui.close();
+                }
+            }
+        },
+    );
+
+    crate::ui::icons::submenu(
+        ui,
+        format!("{} {}", crate::ui::icons::EYE, app.tr("View options")),
+        |ui| {
+            let compact_label = app.tr("Compact controls");
+            let raw_relays_label = app.tr("Show raw relays");
+            let relay_prefix_label = app.tr("Prefix relay identifiers");
+            let mut changed = false;
+            changed |= ui
+                .checkbox(&mut app.compact_hardware_controls, compact_label)
+                .changed();
+            changed |= ui
+                .checkbox(&mut app.show_raw_relays, raw_relays_label)
+                .changed();
+            changed |= ui
+                .checkbox(&mut app.prefix_relay_identifiers, relay_prefix_label)
+                .changed();
+            if changed {
+                app.save_config();
+            }
+        },
+    );
+    crate::ui::icons::submenu(
+        ui,
+        format!(
+            "{} {}",
+            crate::ui::icons::GEAR,
+            app.tr("Connection behavior")
+        ),
+        |ui| {
+            let auto_connect_label = app.tr("Connect automatically");
+            let pause_disconnect_label = app.tr("Pause playback on disconnect");
+            let mut changed = false;
+            changed |= ui
+                .checkbox(&mut app.auto_connect_hardware, auto_connect_label)
+                .changed();
+            changed |= ui
+                .checkbox(
+                    &mut app.pause_on_hardware_disconnect,
+                    pause_disconnect_label,
+                )
+                .changed();
+            if changed {
+                app.save_config();
+            }
+        },
+    );
+
+    ui.separator();
+    let mut estop = app.estop_active;
+    if ui
+        .checkbox(
+            &mut estop,
+            format!("{} {}", crate::ui::icons::WARNING, app.tr("E-STOP")),
+        )
+        .changed()
+    {
+        app.set_emergency_stop(estop);
+        ui.close();
+    }
+}
+
 pub(crate) fn update_control_name(
     app: &PealayerApp,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
@@ -2337,6 +2553,54 @@ mod timeline_row_tests {
         assert_eq!(control_grid_columns(720.0), 2);
         assert_eq!(action_grid_columns(280.0, 2), 2);
         assert_eq!(action_grid_columns(420.0, 3), 3);
+    }
+
+    #[test]
+    fn board_card_uses_one_centered_line_when_profile_is_the_only_identity() {
+        let capabilities = crate::four_d::controller::HardwareCapabilities {
+            board_profile: Some(crate::four_d::controller::HardwareBoardProfile {
+                key: "cafe-cinema".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let (title, subtitle) = board_card_labels(
+            crate::config::AppLanguage::English,
+            &capabilities,
+            "Connected board".to_string(),
+        );
+
+        assert_eq!(title, "Cafe Cinema");
+        assert_eq!(subtitle, None);
+    }
+
+    #[test]
+    fn board_card_uses_distinct_profile_as_a_muted_second_line() {
+        let mut capabilities = crate::four_d::controller::HardwareCapabilities {
+            board_name: "Cinema controller".to_string(),
+            board_profile: Some(crate::four_d::controller::HardwareBoardProfile {
+                key: "cafe-cinema".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let (title, subtitle) = board_card_labels(
+            crate::config::AppLanguage::English,
+            &capabilities,
+            "Connected board".to_string(),
+        );
+        assert_eq!(title, "Cinema controller");
+        assert_eq!(subtitle.as_deref(), Some("Cafe Cinema"));
+
+        capabilities.board_name = "Cafe Cinema".to_string();
+        let (_, duplicate_subtitle) = board_card_labels(
+            crate::config::AppLanguage::English,
+            &capabilities,
+            "Connected board".to_string(),
+        );
+        assert_eq!(duplicate_subtitle, None);
     }
 
     #[test]
@@ -4468,103 +4732,138 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         if let Some(capabilities) = capabilities
                             .filter(|capabilities| capabilities.board_connected)
                         {
+                            let (board_card_title, board_card_subtitle) = board_card_labels(
+                                display_language,
+                                &capabilities,
+                                self.app.tr("Connected board"),
+                            );
                             let board_card = egui::Frame::group(ui.style())
                                 .inner_margin(egui::Margin::symmetric(14, 12))
                                 .corner_radius(10.0)
                                 .show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.label(
-                                            egui::RichText::new(crate::ui::icons::PLUG)
-                                                .size(22.0),
-                                        );
-                                        ui.vertical(|ui| {
-                                            let profile_name = capabilities
-                                                .board_profile
-                                                .as_ref()
-                                                .map(|profile| humanize_machine_label(&profile.key))
-                                                .filter(|name| !name.is_empty());
-                                            let board_name = crate::ui::i18n::visual_text(
-                                                display_language,
-                                                &capabilities.board_name,
-                                            );
-                                            let name_response = ui.add(
+                                    let row_height = if board_card_subtitle.is_some() {
+                                        42.0
+                                    } else {
+                                        28.0
+                                    };
+                                    let status_width = 138.0_f32.min(ui.available_width() * 0.42);
+                                    let icon_width = 28.0;
+                                    let spacing = ui.spacing().item_spacing.x;
+                                    let identity_width = (ui.available_width()
+                                        - icon_width
+                                        - status_width
+                                        - spacing * 2.0)
+                                        .max(72.0);
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(ui.available_width(), row_height),
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        |ui| {
+                                            ui.add_sized(
+                                                [icon_width, row_height],
                                                 egui::Label::new(
-                                                egui::RichText::new(if board_name.trim().is_empty() {
-                                                    profile_name.clone().unwrap_or_else(|| self.app.tr("Connected board"))
-                                                } else {
-                                                    board_name
-                                                })
-                                                    .heading()
-                                                    .strong(),
-                                                )
-                                                .sense(egui::Sense::click()),
+                                                    egui::RichText::new(crate::ui::icons::PLUG)
+                                                        .size(22.0),
+                                                ),
                                             );
+                                            let name_response = ui
+                                                .allocate_ui_with_layout(
+                                                    egui::vec2(identity_width, row_height),
+                                                    egui::Layout::top_down(egui::Align::Min),
+                                                    |ui| {
+                                                        ui.spacing_mut().item_spacing.y = 1.0;
+                                                        let title_height = if board_card_subtitle
+                                                            .is_some()
+                                                        {
+                                                            23.0
+                                                        } else {
+                                                            row_height
+                                                        };
+                                                        let response = ui.add_sized(
+                                                            [identity_width, title_height],
+                                                            egui::Label::new(
+                                                                egui::RichText::new(
+                                                                    &board_card_title,
+                                                                )
+                                                                .heading()
+                                                                .strong(),
+                                                            )
+                                                            .halign(egui::Align::Min)
+                                                            .truncate()
+                                                            .sense(egui::Sense::click()),
+                                                        );
+                                                        if let Some(subtitle) =
+                                                            board_card_subtitle.as_deref()
+                                                        {
+                                                            ui.add_sized(
+                                                                [identity_width, 18.0],
+                                                                egui::Label::new(
+                                                                    egui::RichText::new(subtitle)
+                                                                        .small()
+                                                                        .weak(),
+                                                                )
+                                                                .halign(egui::Align::Min)
+                                                                .truncate(),
+                                                            );
+                                                        }
+                                                        response
+                                                    },
+                                                )
+                                                .inner;
                                             if name_response
                                                 .on_hover_text(self.app.tr("Rename board"))
                                                 .clicked()
                                             {
-                                                self.app.board_name_draft = capabilities.board_name.clone();
-                                                self.app.board_info_tab = 0;
-                                                self.app.show_board_info_dialog = true;
-                                            }
-                                            if let Some(profile_name) = profile_name {
-                                                ui.label(
-                                                    egui::RichText::new(profile_name)
-                                                    .weak(),
+                                                open_board_information(
+                                                    self.app,
+                                                    &capabilities,
+                                                    0,
                                                 );
                                             }
-                                        });
-                                        ui.with_layout(
-                                            egui::Layout::right_to_left(egui::Align::Center),
-                                            |ui| {
-                                                if ui
-                                                    .button(crate::ui::icons::INFO)
-                                                    .on_hover_text(self.app.tr("Board information"))
-                                                    .clicked()
-                                                {
-                                                    self.app.board_name_draft = capabilities.board_name.clone();
-                                                    self.app.show_board_info_dialog = true;
-                                                }
-                                                let (rect, _) = ui.allocate_exact_size(
-                                                    egui::vec2(14.0, 14.0),
-                                                    egui::Sense::hover(),
-                                                );
-                                                ui.painter().circle_filled(
-                                                    rect.center(),
-                                                    5.0,
-                                                    egui::Color32::from_rgb(52, 211, 153),
-                                                );
-                                                ui.label(self.app.tr("Connected"));
-                                            },
-                                        );
-                                    });
+                                            ui.allocate_ui_with_layout(
+                                                egui::vec2(status_width, row_height),
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    if ui
+                                                        .button(crate::ui::icons::INFO)
+                                                        .on_hover_text(
+                                                            self.app.tr("Board information"),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        open_board_information(
+                                                            self.app,
+                                                            &capabilities,
+                                                            0,
+                                                        );
+                                                    }
+                                                    let (rect, _) = ui.allocate_exact_size(
+                                                        egui::vec2(14.0, 14.0),
+                                                        egui::Sense::hover(),
+                                                    );
+                                                    ui.painter().circle_filled(
+                                                        rect.center(),
+                                                        5.0,
+                                                        egui::Color32::from_rgb(52, 211, 153),
+                                                    );
+                                                    ui.add(
+                                                        egui::Label::new(
+                                                            self.app.tr("Connected"),
+                                                        )
+                                                        .truncate(),
+                                                    );
+                                                },
+                                            );
+                                        },
+                                    );
                                 });
                             board_card.response.context_menu(|ui| {
-                                if ui
-                                    .button(format!(
-                                        "{} {}",
-                                        crate::ui::icons::INFO,
-                                        self.app.tr("Board information")
-                                    ))
-                                    .clicked()
-                                {
-                                    self.app.board_name_draft = capabilities.board_name.clone();
-                                    self.app.show_board_info_dialog = true;
-                                    ui.close();
-                                }
-                                if ui
-                                    .button(format!(
-                                        "{} {}",
-                                        crate::ui::icons::PENCIL_SIMPLE,
-                                        self.app.tr("Rename board")
-                                    ))
-                                    .clicked()
-                                {
-                                    self.app.board_name_draft = capabilities.board_name.clone();
-                                    self.app.board_info_tab = 0;
-                                    self.app.show_board_info_dialog = true;
-                                    ui.close();
-                                }
+                                draw_board_card_context_menu(
+                                    self.app,
+                                    ui,
+                                    &capabilities,
+                                    &board_card_title,
+                                    board_card_subtitle.as_deref(),
+                                );
                             });
 
                             let can_record = capabilities.board_profile.as_ref().is_some_and(|profile| {
