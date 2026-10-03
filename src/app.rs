@@ -2776,6 +2776,7 @@ impl PealayerApp {
             &self.open_url_proxy_url,
         )?;
         crate::platform::windows::sync_windows_jump_list(&self.recent_media);
+        self.prune_recent_remote_thumbnail_cache();
         crate::ui::i18n::configure_ui_fonts(
             ctx,
             self.language == crate::config::AppLanguage::Persian,
@@ -2892,12 +2893,14 @@ impl PealayerApp {
             self.recent_media.truncate(10);
         }
         crate::platform::windows::sync_windows_jump_list(&self.recent_media);
+        self.prune_recent_remote_thumbnail_cache();
         self.save_config();
     }
 
     pub fn clear_recent_media(&mut self) {
         self.recent_media.clear();
         crate::platform::windows::sync_windows_jump_list(&[]);
+        self.prune_recent_remote_thumbnail_cache();
         self.save_config();
     }
 
@@ -2905,6 +2908,7 @@ impl PealayerApp {
         self.recent_media
             .retain(|path| path.to_string_lossy() != target);
         crate::platform::windows::sync_windows_jump_list(&self.recent_media);
+        self.prune_recent_remote_thumbnail_cache();
         self.save_config();
     }
 
@@ -2912,7 +2916,18 @@ impl PealayerApp {
         self.recent_media
             .retain(|path| !crate::media::is_remote_media_target(&path.to_string_lossy()));
         crate::platform::windows::sync_windows_jump_list(&self.recent_media);
+        self.prune_recent_remote_thumbnail_cache();
         self.save_config();
+    }
+
+    fn prune_recent_remote_thumbnail_cache(&self) {
+        let remote = self
+            .recent_media
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .filter(|target| crate::media::is_remote_media_target(target))
+            .collect::<Vec<_>>();
+        crate::server::thumbnails::prune_remote_thumbnail_cache(remote.iter().map(String::as_str));
     }
 
     pub fn set_osd(&mut self, msg: String) {

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -19,6 +20,13 @@ pub fn get_thumbnail_cache_dir() -> PathBuf {
         PathBuf::from(cache)
             .join("Pealayer")
             .join("cache")
+            .join("thumbnails")
+    } else if cfg!(target_os = "macos") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home)
+            .join("Library")
+            .join("Caches")
+            .join("Pealayer")
             .join("thumbnails")
     } else {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
@@ -113,7 +121,6 @@ pub fn get_or_generate_thumbnail(video_path: &Path) -> Option<PathBuf> {
 /// duration-less streams fall back to their initial decodable frame.
 pub fn get_or_generate_remote_thumbnail(
     media_url: &str,
-    cache_identity: &str,
     use_proxy: bool,
     proxy_url: Option<&str>,
 ) -> Result<RemoteThumbnailFile, String> {
@@ -124,7 +131,7 @@ pub fn get_or_generate_remote_thumbnail(
     let position_seconds = probe_remote_duration(media_url, use_proxy, proxy_url)
         .filter(|duration| duration.is_finite() && *duration > 0.0)
         .map(|duration| duration * 0.20);
-    let cache_key = remote_thumbnail_cache_key(media_url, cache_identity);
+    let cache_key = remote_thumbnail_cache_key(media_url);
     let thumb_path = cache_dir.join(format!("{cache_key}.jpg"));
     if thumb_path.exists() {
         return Ok(RemoteThumbnailFile {
@@ -256,12 +263,61 @@ fn configure_remote_proxy(command: &mut Command, use_proxy: bool, proxy_url: Opt
     }
 }
 
-fn remote_thumbnail_cache_key(media_url: &str, cache_identity: &str) -> String {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    REMOTE_THUMBNAIL_PIPELINE_REVISION.hash(&mut hasher);
-    media_url.hash(&mut hasher);
-    cache_identity.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+/// Canonicalize a remote target before it is used as a persistent cache key.
+/// Fragments do not affect the fetched media and are deliberately discarded.
+pub fn normalize_remote_thumbnail_url(media_url: &str) -> String {
+    let trimmed = media_url.trim();
+    let Ok(mut parsed) = url::Url::parse(trimmed) else {
+        return trimmed.to_string();
+    };
+    parsed.set_fragment(None);
+    parsed.to_string()
+}
+
+fn remote_thumbnail_cache_key(media_url: &str) -> String {
+    // FNV-1a is intentionally used instead of DefaultHasher: its output is
+    // stable across processes and Rust versions, which is required for an
+    // OS-native persistent cache.
+    let normalized = normalize_remote_thumbnail_url(media_url);
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in REMOTE_THUMBNAIL_PIPELINE_REVISION
+        .bytes()
+        .chain(std::iter::once(0))
+        .chain(normalized.bytes())
+    {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// Remove every remote thumbnail that no longer belongs to recent history.
+/// The retained set is keyed by normalized URL, so aliases that differ only
+/// by a fragment share one cache entry.
+pub fn prune_remote_thumbnail_cache<'a>(recent_urls: impl IntoIterator<Item = &'a str>) {
+    let cache_dir = get_thumbnail_cache_dir().join("remote");
+    prune_remote_thumbnail_cache_dir(&cache_dir, recent_urls);
+}
+
+fn prune_remote_thumbnail_cache_dir<'a>(
+    cache_dir: &Path,
+    recent_urls: impl IntoIterator<Item = &'a str>,
+) {
+    let retained = recent_urls
+        .into_iter()
+        .flat_map(|url| {
+            let key = remote_thumbnail_cache_key(url);
+            [format!("{key}.jpg"), format!("{key}.tmp.jpg")]
+        })
+        .collect::<HashSet<_>>();
+    let Ok(entries) = std::fs::read_dir(cache_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !retained.contains(&entry.file_name().to_string_lossy().to_string()) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn silent_command(program: &str) -> Command {
@@ -317,15 +373,42 @@ mod tests {
     }
 
     #[test]
-    fn remote_cache_identity_is_stable_and_sensitive_to_metadata() {
-        let first = remote_thumbnail_cache_key("https://example.test/movie.mp4", "etag-one");
+    fn remote_cache_identity_is_stable_and_uses_normalized_url() {
+        let first = remote_thumbnail_cache_key("https://EXAMPLE.test/movie.mp4#chapter");
         assert_eq!(
             first,
-            remote_thumbnail_cache_key("https://example.test/movie.mp4", "etag-one")
+            remote_thumbnail_cache_key("https://example.test/movie.mp4")
         );
         assert_ne!(
             first,
-            remote_thumbnail_cache_key("https://example.test/movie.mp4", "etag-two")
+            remote_thumbnail_cache_key("https://example.test/movie.mp4?edition=two")
         );
+    }
+
+    #[test]
+    fn pruning_keeps_only_current_recent_urls() {
+        let cache_dir = std::env::temp_dir().join(format!(
+            "pealayer-thumbnail-prune-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let keep_url = "https://example.test/keep.mp4";
+        let keep = cache_dir.join(format!("{}.jpg", remote_thumbnail_cache_key(keep_url)));
+        let remove = cache_dir.join(format!(
+            "{}.jpg",
+            remote_thumbnail_cache_key("https://example.test/remove.mp4")
+        ));
+        std::fs::write(&keep, b"keep").unwrap();
+        std::fs::write(&remove, b"remove").unwrap();
+
+        prune_remote_thumbnail_cache_dir(&cache_dir, [keep_url]);
+
+        assert!(keep.exists());
+        assert!(!remove.exists());
+        let _ = std::fs::remove_dir_all(cache_dir);
     }
 }

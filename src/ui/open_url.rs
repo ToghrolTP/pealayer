@@ -4,6 +4,7 @@ use reqwest::header::{
     ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG,
     LAST_MODIFIED, SERVER,
 };
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -111,6 +112,12 @@ struct RemoteThumbnailPixels {
     position_seconds: Option<f64>,
 }
 
+#[derive(Debug)]
+struct RecentThumbnailResult {
+    key: String,
+    result: Result<RemoteThumbnailPixels, String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct ProbeNetworkSettings {
     use_proxy: bool,
@@ -129,13 +136,20 @@ pub struct UrlInspector {
     last_auto_fetch: bool,
     pub status: ProbeStatus,
     thumbnail_texture: Option<egui::TextureHandle>,
+    thumbnail_ready_at: Option<Instant>,
     thumbnail_position_seconds: Option<f64>,
     thumbnail_error: Option<String>,
+    recent_tx: Sender<RecentThumbnailResult>,
+    recent_rx: Receiver<RecentThumbnailResult>,
+    recent_thumbnail_textures: HashMap<String, egui::TextureHandle>,
+    recent_thumbnail_pending: HashSet<String>,
+    recent_thumbnail_failed: HashSet<String>,
 }
 
 impl Default for UrlInspector {
     fn default() -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
+        let (recent_tx, recent_rx) = std::sync::mpsc::channel();
         Self {
             tx,
             rx,
@@ -147,8 +161,14 @@ impl Default for UrlInspector {
             last_auto_fetch: true,
             status: ProbeStatus::Idle,
             thumbnail_texture: None,
+            thumbnail_ready_at: None,
             thumbnail_position_seconds: None,
             thumbnail_error: None,
+            recent_tx,
+            recent_rx,
+            recent_thumbnail_textures: HashMap::new(),
+            recent_thumbnail_pending: HashSet::new(),
+            recent_thumbnail_failed: HashSet::new(),
         }
     }
 }
@@ -177,6 +197,8 @@ impl UrlInspector {
                             egui::TextureOptions::LINEAR,
                         )
                     });
+                    self.thumbnail_ready_at =
+                        self.thumbnail_texture.as_ref().map(|_| Instant::now());
                     self.thumbnail_position_seconds = payload
                         .thumbnail
                         .as_ref()
@@ -204,6 +226,7 @@ impl UrlInspector {
             self.requested_input = None;
             self.status = ProbeStatus::Idle;
             self.thumbnail_texture = None;
+            self.thumbnail_ready_at = None;
             self.thumbnail_position_seconds = None;
             self.thumbnail_error = None;
         }
@@ -262,6 +285,7 @@ impl UrlInspector {
         self.requested_input = Some(self.last_input.clone());
         self.status = ProbeStatus::Checking(url.clone());
         self.thumbnail_texture = None;
+        self.thumbnail_ready_at = None;
         self.thumbnail_position_seconds = None;
         self.thumbnail_error = None;
         let tx = self.tx.clone();
@@ -270,6 +294,82 @@ impl UrlInspector {
             let _ = tx.send(ProbeResult { generation, result });
             ctx.request_repaint();
         });
+    }
+
+    fn update_recent_thumbnails(
+        &mut self,
+        targets: &[String],
+        ctx: &egui::Context,
+        network: &ProbeNetworkSettings,
+    ) {
+        let retained = targets
+            .iter()
+            .map(|target| crate::server::thumbnails::normalize_remote_thumbnail_url(target))
+            .collect::<HashSet<_>>();
+        self.recent_thumbnail_textures
+            .retain(|key, _| retained.contains(key));
+        self.recent_thumbnail_pending
+            .retain(|key| retained.contains(key));
+        self.recent_thumbnail_failed
+            .retain(|key| retained.contains(key));
+
+        while let Ok(thumbnail) = self.recent_rx.try_recv() {
+            self.recent_thumbnail_pending.remove(&thumbnail.key);
+            match thumbnail.result {
+                Ok(pixels) => {
+                    let texture = ctx.load_texture(
+                        format!("recent-remote-thumbnail-{}", thumbnail.key),
+                        egui::ColorImage::from_rgba_unmultiplied(
+                            [pixels.width, pixels.height],
+                            &pixels.rgba,
+                        ),
+                        egui::TextureOptions::LINEAR,
+                    );
+                    self.recent_thumbnail_textures
+                        .insert(thumbnail.key, texture);
+                }
+                Err(_) => {
+                    self.recent_thumbnail_failed.insert(thumbnail.key);
+                }
+            }
+        }
+
+        if !network.fetch_thumbnail {
+            return;
+        }
+        for target in targets {
+            if self.recent_thumbnail_pending.len() >= 2 {
+                break;
+            }
+            let key = crate::server::thumbnails::normalize_remote_thumbnail_url(target);
+            if self.recent_thumbnail_textures.contains_key(&key)
+                || self.recent_thumbnail_pending.contains(&key)
+                || self.recent_thumbnail_failed.contains(&key)
+            {
+                continue;
+            }
+            self.recent_thumbnail_pending.insert(key.clone());
+            let tx = self.recent_tx.clone();
+            let target = target.clone();
+            let proxy_url = network.proxy_url.clone();
+            let use_proxy = network.use_proxy;
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let result = crate::server::thumbnails::get_or_generate_remote_thumbnail(
+                    &target,
+                    use_proxy,
+                    proxy_url.as_deref(),
+                )
+                .and_then(|thumbnail| decode_remote_thumbnail(&thumbnail));
+                let _ = tx.send(RecentThumbnailResult { key, result });
+                ctx.request_repaint();
+            });
+        }
+    }
+
+    fn recent_thumbnail(&self, target: &str) -> Option<&egui::TextureHandle> {
+        let key = crate::server::thumbnails::normalize_remote_thumbnail_url(target);
+        self.recent_thumbnail_textures.get(&key)
     }
 }
 
@@ -314,6 +414,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .map(|path| path.to_string_lossy().to_string())
         .filter(|target| crate::media::is_remote_media_target(target))
         .collect::<Vec<_>>();
+    app.url_inspector
+        .update_recent_thumbnails(&remote_history, ui.ctx(), &network);
     let open_shortcut = if app.open_url_multiline {
         "Ctrl+Enter"
     } else {
@@ -509,11 +611,16 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         .auto_shrink([false, true])
                                         .show(ui, |ui| {
                                             for target in &remote_history {
+                                                let thumbnail = app
+                                                    .url_inspector
+                                                    .recent_thumbnail(target)
+                                                    .cloned();
                                                 match draw_recent_location(
                                                     ui,
                                                     app.language,
                                                     app.open_url_recent_click_edits,
                                                     target,
+                                                    thumbnail.as_ref(),
                                                 ) {
                                                     Some(RecentLocationAction::Play) => {
                                                         history_play_requested =
@@ -968,6 +1075,7 @@ fn draw_location_and_remote_details(
             } else {
                 ui.visuals().error_fg_color
             };
+            draw_remote_thumbnail(ui, app);
             egui::Grid::new("open_url_remote_metadata")
                 .num_columns(2)
                 .max_col_width((ui.available_width() * 0.68).max(180.0))
@@ -1047,7 +1155,6 @@ fn draw_location_and_remote_details(
                         &format!("{} ms", info.elapsed_ms),
                     );
                 });
-            draw_remote_thumbnail(ui, app);
         }
         ProbeStatus::Failed { url, message } => {
             ui.label(
@@ -1121,8 +1228,9 @@ fn draw_recent_location(
     language: crate::config::AppLanguage,
     default_click_edits: bool,
     target: &str,
+    thumbnail: Option<&egui::TextureHandle>,
 ) -> Option<RecentLocationAction> {
-    let row_height = 30.0;
+    let row_height = 36.0;
     let row_rect = egui::Rect::from_min_size(
         ui.next_widget_position(),
         egui::vec2(ui.available_width(), row_height),
@@ -1143,6 +1251,24 @@ fn draw_recent_location(
             |ui| {
                 ui.set_min_size(row_rect.size());
                 let actions_width = if hovered { 176.0 } else { 0.0 };
+                if let Some(thumbnail) = thumbnail {
+                    ui.add(
+                        egui::Image::new(thumbnail)
+                            .fit_to_exact_size(egui::vec2(42.0, 24.0))
+                            .corner_radius(4.0),
+                    );
+                } else {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(42.0, 24.0),
+                        egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                        |ui| {
+                            ui.label(
+                                egui::RichText::new(crate::ui::icons::FILE_VIDEO)
+                                    .color(ui.visuals().weak_text_color()),
+                            );
+                        },
+                    );
+                }
                 let label_width = (ui.available_width() - actions_width).max(80.0);
                 // `truncate()` already supplies the full text on hover. Adding an
                 // explicit hover tooltip here would render the same tooltip twice.
@@ -1326,15 +1452,27 @@ fn draw_remote_thumbnail(ui: &mut egui::Ui, app: &PealayerApp) {
         return;
     }
     if let Some(texture) = app.url_inspector.thumbnail_texture.as_ref() {
-        ui.add_space(10.0);
+        let progress = app
+            .url_inspector
+            .thumbnail_ready_at
+            .map(|ready| (ready.elapsed().as_secs_f32() / 0.22).clamp(0.0, 1.0))
+            .unwrap_or(1.0);
+        if progress < 1.0 {
+            ui.ctx().request_repaint();
+        }
+        ui.add_space(6.0 * progress);
         let source_size = texture.size_vec2();
-        let width = ui.available_width().min(480.0);
-        let height = (width * source_size.y / source_size.x.max(1.0)).min(270.0);
+        let width = ui.available_width().min(228.0) * (0.94 + 0.06 * progress);
+        let height = (width * source_size.y / source_size.x.max(1.0)).min(128.0);
         egui::Frame::group(ui.style())
             .corner_radius(8.0)
             .inner_margin(egui::Margin::same(6))
             .show(ui, |ui| {
-                ui.add(egui::Image::new(texture).fit_to_exact_size(egui::vec2(width, height)));
+                ui.add(
+                    egui::Image::new(texture)
+                        .fit_to_exact_size(egui::vec2(width, height))
+                        .tint(egui::Color32::WHITE.gamma_multiply(progress)),
+                );
             });
         let caption = app
             .url_inspector
@@ -1500,15 +1638,8 @@ fn probe_remote_media(
     };
 
     let (thumbnail, thumbnail_error) = if network.fetch_thumbnail {
-        let cache_identity = format!(
-            "{}|{}|{}",
-            info.etag.as_deref().unwrap_or_default(),
-            info.last_modified.as_deref().unwrap_or_default(),
-            info.content_length.unwrap_or_default()
-        );
         match crate::server::thumbnails::get_or_generate_remote_thumbnail(
             &final_url,
-            &cache_identity,
             network.use_proxy,
             network.proxy_url.as_deref(),
         ) {

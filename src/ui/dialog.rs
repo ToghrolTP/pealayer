@@ -8,8 +8,7 @@ use eframe::egui;
 pub const NAVIGATION_HEIGHT: f32 = 32.0;
 pub const ACTION_HEIGHT: f32 = 28.0;
 pub const NAVIGATION_DETAIL_HEIGHT: f32 = 44.0;
-const ACTION_BUTTON_MIN_WIDTH: f32 = 96.0;
-const PRIMARY_ACTION_BUTTON_MIN_WIDTH: f32 = 108.0;
+const ACTION_BUTTON_WIDTH: f32 = 104.0;
 const CONTROL_CORNER_RADIUS: f32 = 7.0;
 const CONTROL_TEXT_SIZE: f32 = 13.0;
 
@@ -56,11 +55,10 @@ fn action_button_with_kind(
     primary: bool,
 ) -> egui::Response {
     let selection = ui.visuals().selection;
-    let minimum_width = if primary {
-        PRIMARY_ACTION_BUTTON_MIN_WIDTH
-    } else {
-        ACTION_BUTTON_MIN_WIDTH
-    };
+    // Primary actions are distinguished by color and stroke, not by changing
+    // their geometry. Equal widths keep paired actions such as Open / Cancel
+    // visually balanced in every dialog host.
+    let minimum_width = ACTION_BUTTON_WIDTH;
     let mut text = egui::RichText::new(format!("{icon}  {label}")).size(CONTROL_TEXT_SIZE);
     let mut button = egui::Button::new(text.clone())
         .min_size(egui::vec2(minimum_width, ACTION_HEIGHT))
@@ -266,8 +264,8 @@ mod tests {
     }
 
     #[test]
-    fn primary_actions_are_more_prominent_than_secondary_actions() {
-        assert!(PRIMARY_ACTION_BUTTON_MIN_WIDTH > ACTION_BUTTON_MIN_WIDTH);
+    fn primary_actions_are_emphasized_without_changing_geometry() {
+        assert_eq!(ACTION_BUTTON_WIDTH, 104.0);
         assert!((27.0..=29.0).contains(&ACTION_HEIGHT));
         assert!(NAVIGATION_HEIGHT > ACTION_HEIGHT);
         assert_eq!(NAVIGATION_DETAIL_HEIGHT, 44.0);
