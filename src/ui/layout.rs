@@ -667,7 +667,8 @@ fn effect_drag_source_with_action_gutter<R>(
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum TimelineTrackKind {
     Video,
-    Audio,
+    Audio(i64),
+    Subtitle(i64),
     ControllerMacros,
     Relay(u8),
 }
@@ -675,7 +676,33 @@ enum TimelineTrackKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TimelineTrackRow {
     name: String,
+    detail: Option<String>,
+    active: bool,
+    enabled: bool,
     kind: TimelineTrackKind,
+}
+
+fn media_timeline_track_label(
+    app: &PealayerApp,
+    kind: &'static str,
+    ordinal: usize,
+    title: Option<&str>,
+    language: Option<&str>,
+) -> (String, Option<String>) {
+    let title = title.map(str::trim).filter(|value| !value.is_empty());
+    let language = language.map(str::trim).filter(|value| !value.is_empty());
+    let name = title
+        .map(|value| app.display_text(value))
+        .unwrap_or_else(|| format!("{} {}", app.tr(kind), ordinal + 1));
+    let detail = if title.is_some() {
+        Some(match language {
+            Some(value) => format!("{} · {}", app.tr(kind), app.display_text(value)),
+            None => app.tr(kind),
+        })
+    } else {
+        language.map(|value| app.display_text(value))
+    };
+    (name, detail)
 }
 
 fn timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
@@ -683,20 +710,43 @@ fn timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
     if app.current_video_path.is_some() {
         rows.push(TimelineTrackRow {
             name: app.tr("Video"),
+            detail: None,
+            active: true,
+            enabled: true,
             kind: TimelineTrackKind::Video,
         });
-        if !app.audio_tracks.is_empty() && app.current_aid != "no" {
-            let selected = app
-                .current_aid
-                .parse::<i64>()
-                .ok()
-                .and_then(|id| app.audio_tracks.iter().find(|track| track.id == id));
-            let name = selected
-                .and_then(|track| track.title.clone().or_else(|| track.lang.clone()))
-                .unwrap_or_else(|| app.tr("Audio"));
+        for (ordinal, track) in app.audio_tracks.iter().enumerate() {
+            let active = app.current_aid == track.id.to_string();
+            let (name, detail) = media_timeline_track_label(
+                app,
+                "Audio",
+                ordinal,
+                track.title.as_deref(),
+                track.lang.as_deref(),
+            );
             rows.push(TimelineTrackRow {
-                name: app.display_text(&name),
-                kind: TimelineTrackKind::Audio,
+                name,
+                detail,
+                active,
+                enabled: active,
+                kind: TimelineTrackKind::Audio(track.id),
+            });
+        }
+        for (ordinal, track) in app.sub_tracks.iter().enumerate() {
+            let active = app.current_sid == track.id.to_string();
+            let (name, detail) = media_timeline_track_label(
+                app,
+                "Subtitles",
+                ordinal,
+                track.title.as_deref(),
+                track.lang.as_deref(),
+            );
+            rows.push(TimelineTrackRow {
+                name,
+                detail,
+                active,
+                enabled: active && app.sub_visibility,
+                kind: TimelineTrackKind::Subtitle(track.id),
             });
         }
     }
@@ -707,6 +757,9 @@ fn timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
         if !capabilities.macros.is_empty() || !capabilities.strip_effects.is_empty() {
             rows.push(TimelineTrackRow {
                 name: app.tr("Controller effects"),
+                detail: None,
+                active: true,
+                enabled: true,
                 kind: TimelineTrackKind::ControllerMacros,
             });
         }
@@ -716,6 +769,9 @@ fn timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
                 .into_iter()
                 .map(|relay| TimelineTrackRow {
                     name: app.display_text(&relay.name),
+                    detail: None,
+                    active: capabilities.active_relays.contains(&relay.id),
+                    enabled: true,
                     kind: TimelineTrackKind::Relay(relay.id),
                 }),
         );
@@ -3463,17 +3519,86 @@ mod timeline_row_tests {
         let rows = vec![
             TimelineTrackRow {
                 name: "Video".to_string(),
+                detail: None,
+                active: true,
+                enabled: true,
                 kind: TimelineTrackKind::Video,
             },
             TimelineTrackRow {
+                name: "English".to_string(),
+                detail: Some("Audio".to_string()),
+                active: true,
+                enabled: true,
+                kind: TimelineTrackKind::Audio(1),
+            },
+            TimelineTrackRow {
+                name: "Farsi".to_string(),
+                detail: Some("Subtitles".to_string()),
+                active: false,
+                enabled: false,
+                kind: TimelineTrackKind::Subtitle(2),
+            },
+            TimelineTrackRow {
                 name: "Seat left".to_string(),
+                detail: None,
+                active: false,
+                enabled: true,
                 kind: TimelineTrackKind::Relay(6),
             },
         ];
         assert_eq!(relay_for_timeline_row(&rows, 0), None);
-        assert_eq!(relay_for_timeline_row(&rows, 1), Some(6));
-        assert_eq!(timeline_row_for_relay(&rows, 6), Some(1));
+        assert_eq!(relay_for_timeline_row(&rows, 1), None);
+        assert_eq!(relay_for_timeline_row(&rows, 2), None);
+        assert_eq!(relay_for_timeline_row(&rows, 3), Some(6));
+        assert_eq!(timeline_row_for_relay(&rows, 6), Some(3));
         assert_eq!(timeline_row_for_relay(&rows, 1), None);
+    }
+
+    #[test]
+    fn timeline_lists_every_real_audio_and_subtitle_track_in_media_order() {
+        let mut app = PealayerApp::default();
+        app.current_video_path = Some(std::path::PathBuf::from("feature.mkv"));
+        app.current_aid = "7".to_string();
+        app.current_sid = "12".to_string();
+        app.sub_visibility = true;
+        app.audio_tracks = vec![
+            crate::app::AudioTrack {
+                id: 7,
+                title: Some("Main mix".to_string()),
+                lang: Some("en".to_string()),
+            },
+            crate::app::AudioTrack {
+                id: 8,
+                title: Some("Commentary".to_string()),
+                lang: None,
+            },
+        ];
+        app.sub_tracks = vec![
+            crate::app::SubtitleTrack {
+                id: 11,
+                title: Some("English SDH".to_string()),
+                lang: Some("en".to_string()),
+            },
+            crate::app::SubtitleTrack {
+                id: 12,
+                title: Some("فارسی".to_string()),
+                lang: Some("fa".to_string()),
+            },
+        ];
+
+        let rows = timeline_track_rows(&app);
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows[0].kind, TimelineTrackKind::Video);
+        assert_eq!(rows[1].kind, TimelineTrackKind::Audio(7));
+        assert_eq!(rows[2].kind, TimelineTrackKind::Audio(8));
+        assert_eq!(rows[3].kind, TimelineTrackKind::Subtitle(11));
+        assert_eq!(rows[4].kind, TimelineTrackKind::Subtitle(12));
+        assert!(rows[1].active);
+        assert!(!rows[2].active);
+        assert!(!rows[3].active);
+        assert!(rows[4].active && rows[4].enabled);
+        assert_eq!(rows[1].detail.as_deref(), Some("Audio · en"));
+        assert_eq!(rows[4].detail.as_deref(), Some("Subtitles · fa"));
     }
 
     #[test]
@@ -6913,21 +7038,129 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 }
 
                                 for track_row in &timeline_rows {
-                                    let (rect, _response) = ui.allocate_exact_size(egui::vec2(250.0, 32.0), egui::Sense::hover());
-                                    // Draw background with dark Premiere aesthetics
-                                    ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
+                                    let interactive = matches!(
+                                        track_row.kind,
+                                        TimelineTrackKind::Audio(_) | TimelineTrackKind::Subtitle(_)
+                                    );
+                                    let (rect, response) = ui.allocate_exact_size(
+                                        egui::vec2(250.0, 32.0),
+                                        if interactive {
+                                            egui::Sense::click()
+                                        } else {
+                                            egui::Sense::hover()
+                                        },
+                                    );
+                                    let row_fill = if track_row.active {
+                                        ui.visuals().selection.bg_fill.gamma_multiply(
+                                            if ui.visuals().dark_mode { 0.16 } else { 0.08 },
+                                        )
+                                    } else {
+                                        ui.visuals().faint_bg_color
+                                    };
+                                    ui.painter().rect_filled(rect, 0.0, row_fill);
                                     ui.painter().rect_stroke(rect, 0.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
 
                                     // Create a nested UI at this rect to place buttons
                                     let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+                                    let mut media_control_clicked = false;
                                     child_ui.horizontal(|ui| {
                                         ui.add_space(6.0);
-                                        // Limit the track name label width
-                                        ui.allocate_ui(egui::vec2(85.0, 20.0), |ui| {
-                                            ui.label(egui::RichText::new(&track_row.name).size(11.0).strong());
+                                        let icon = match track_row.kind {
+                                            TimelineTrackKind::Video => crate::ui::icons::FILE_VIDEO,
+                                            TimelineTrackKind::Audio(_) => crate::ui::icons::SPEAKER_HIGH,
+                                            TimelineTrackKind::Subtitle(_) => crate::ui::icons::SUBTITLES,
+                                            TimelineTrackKind::ControllerMacros => crate::ui::icons::WAVEFORM,
+                                            TimelineTrackKind::Relay(_) => crate::ui::icons::PLUG,
+                                        };
+                                        let icon_color = if track_row.active && track_row.enabled {
+                                            ui.visuals().selection.bg_fill
+                                        } else {
+                                            ui.visuals().weak_text_color()
+                                        };
+                                        ui.label(egui::RichText::new(icon).color(icon_color));
+                                        let label_width = if matches!(track_row.kind, TimelineTrackKind::Relay(_)) {
+                                            78.0
+                                        } else {
+                                            158.0
+                                        };
+                                        ui.allocate_ui(egui::vec2(label_width, 28.0), |ui| {
+                                            let title = egui::RichText::new(&track_row.name)
+                                                .size(11.0)
+                                                .strong();
+                                            if let Some(detail) = track_row.detail.as_deref() {
+                                                ui.spacing_mut().item_spacing.y = 0.0;
+                                                ui.vertical(|ui| {
+                                                    ui.add(egui::Label::new(title).truncate());
+                                                    ui.add(
+                                                        egui::Label::new(
+                                                            egui::RichText::new(detail).size(9.0).weak(),
+                                                        )
+                                                        .truncate(),
+                                                    );
+                                                });
+                                            } else {
+                                                ui.with_layout(
+                                                    egui::Layout::left_to_right(
+                                                        egui::Align::Center,
+                                                    ),
+                                                    |ui| {
+                                                        ui.add(
+                                                            egui::Label::new(title).truncate(),
+                                                        );
+                                                    },
+                                                );
+                                            }
                                         });
 
-                                        if let TimelineTrackKind::Relay(relay_id) = track_row.kind {
+                                        if let TimelineTrackKind::Subtitle(_) = track_row.kind {
+                                            let visible = track_row.active && track_row.enabled;
+                                            let visibility = ui
+                                                .selectable_label(
+                                                    visible,
+                                                    if visible {
+                                                        crate::ui::icons::EYE
+                                                    } else {
+                                                        crate::ui::icons::EYE_SLASH
+                                                    },
+                                                )
+                                                .on_hover_text(if visible {
+                                                    self.app.tr("Hide subtitles")
+                                                } else {
+                                                    self.app.tr("Show subtitles")
+                                                });
+                                            if visibility.clicked() {
+                                                media_control_clicked = true;
+                                                if track_row.active {
+                                                    self.app.sub_visibility = !visible;
+                                                    let _ = self
+                                                        .app
+                                                        .mpv
+                                                        .set_property("sub-visibility", !visible);
+                                                } else if let TimelineTrackKind::Subtitle(track_id) =
+                                                    track_row.kind
+                                                {
+                                                    let track_id = track_id.to_string();
+                                                    self.app.current_sid = track_id.clone();
+                                                    self.app.sub_visibility = true;
+                                                    let _ = self
+                                                        .app
+                                                        .mpv
+                                                        .set_property("sid", track_id);
+                                                    let _ = self
+                                                        .app
+                                                        .mpv
+                                                        .set_property("sub-visibility", true);
+                                                }
+                                            }
+                                        } else if track_row.active
+                                            && matches!(track_row.kind, TimelineTrackKind::Audio(_))
+                                        {
+                                            ui.colored_label(
+                                                egui::Color32::from_rgb(34, 197, 94),
+                                                crate::ui::icons::DOT_OUTLINE,
+                                            )
+                                            .on_hover_text(self.app.tr("Active track"));
+                                        } else if let TimelineTrackKind::Relay(relay_id) = track_row.kind {
                                             // Mute button (M)
                                             let muted = self.app.track_muted.contains(&relay_id);
                                             let m_btn = ui.selectable_label(muted, egui::RichText::new("M").strong().size(10.0))
@@ -6969,6 +7202,26 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
                                         }
                                     });
+                                    if response.clicked() && !media_control_clicked {
+                                        match track_row.kind {
+                                            TimelineTrackKind::Audio(track_id) => {
+                                                let track_id = track_id.to_string();
+                                                self.app.current_aid = track_id.clone();
+                                                let _ = self.app.mpv.set_property("aid", track_id);
+                                            }
+                                            TimelineTrackKind::Subtitle(track_id) => {
+                                                let track_id = track_id.to_string();
+                                                self.app.current_sid = track_id.clone();
+                                                self.app.sub_visibility = true;
+                                                let _ = self.app.mpv.set_property("sid", track_id);
+                                                let _ = self
+                                                    .app
+                                                    .mpv
+                                                    .set_property("sub-visibility", true);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
                                 }
 
                                 // Analog Curve Track Headers
@@ -7359,11 +7612,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         if self.app.duration > 0.0 {
                                             for (row_index, track_row) in timeline_rows.iter().enumerate() {
-                                                let (label, color) = match track_row.kind {
-                                                    TimelineTrackKind::Video => (&track_row.name, egui::Color32::from_rgb(41, 128, 185)),
-                                                    TimelineTrackKind::Audio => (&track_row.name, egui::Color32::from_rgb(39, 174, 96)),
+                                                let (icon, color) = match track_row.kind {
+                                                    TimelineTrackKind::Video => (crate::ui::icons::FILE_VIDEO, egui::Color32::from_rgb(41, 128, 185)),
+                                                    TimelineTrackKind::Audio(_) => (crate::ui::icons::SPEAKER_HIGH, egui::Color32::from_rgb(39, 174, 96)),
+                                                    TimelineTrackKind::Subtitle(_) => (crate::ui::icons::SUBTITLES, egui::Color32::from_rgb(124, 92, 190)),
                                                     TimelineTrackKind::ControllerMacros | TimelineTrackKind::Relay(_) => continue,
                                                 };
+                                                let color = color.gamma_multiply(
+                                                    if track_row.active && track_row.enabled { 1.0 } else { 0.52 },
+                                                );
                                                 let row_y = tracks_top + row_index as f32 * 32.0;
                                                 let clip_rect = egui::Rect::from_min_max(
                                                     egui::pos2(rect.min.x, row_y + 4.0),
@@ -7374,9 +7631,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 painter.text(
                                                     clip_rect.left_center() + egui::vec2(10.0, 0.0),
                                                     egui::Align2::LEFT_CENTER,
-                                                    label,
+                                                    format!("{icon}  {}", track_row.name),
                                                     egui::FontId::proportional(11.0),
-                                                    egui::Color32::WHITE,
+                                                    egui::Color32::WHITE.gamma_multiply(
+                                                        if track_row.enabled { 1.0 } else { 0.68 },
+                                                    ),
                                                 );
                                             }
                                         }

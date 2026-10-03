@@ -66,6 +66,9 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Edit" => "ویرایش",
         "Audio" => "صدا",
         "Subtitles" => "زیرنویس",
+        "Active track" => "ترک فعال",
+        "Hide subtitles" => "پنهان‌کردن زیرنویس",
+        "Show subtitles" => "نمایش زیرنویس",
         "Workspace" => "فضای کاری",
         "Workspace tabs" => "زبانه‌های فضای کاری",
         "Right-click to show or hide workspace tabs" => {
