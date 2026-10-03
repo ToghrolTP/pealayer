@@ -107,6 +107,19 @@ fn hardware_channel_drag_id() -> egui::Id {
     egui::Id::new("hardware-channel-drag")
 }
 
+fn hardware_channel_handle_hovered(
+    pointer: Option<egui::Pos2>,
+    card_rect: Option<egui::Rect>,
+    current_row_rect: egui::Rect,
+    active: bool,
+) -> bool {
+    active
+        || pointer.is_some_and(|pointer| {
+            card_rect.is_some_and(|rect| rect.contains(pointer))
+                || current_row_rect.contains(pointer)
+        })
+}
+
 pub(crate) fn hardware_channel_is_dragging(ui: &mut egui::Ui, key: &str) -> bool {
     ui.data_mut(|data| data.get_temp::<HardwareChannelDrag>(hardware_channel_drag_id()))
         .is_some_and(|drag| drag.key == key)
@@ -121,14 +134,24 @@ pub(crate) fn hardware_channel_drag_handle(
     let active = ui
         .data_mut(|data| data.get_temp::<HardwareChannelDrag>(hardware_channel_drag_id()))
         .is_some_and(|drag| drag.key == control.key);
-    let hovered = ui.rect_contains_pointer(ui.max_rect()) || active;
-    let alpha = ui.ctx().animate_bool(
+    // `ui.max_rect()` inside a horizontal row begins at the current cursor and
+    // therefore excludes the icon/indicator area that users naturally hover.
+    // Use the complete card/row rectangle recorded on the preceding frame so
+    // the affordance reacts anywhere over the channel, with the current row as
+    // a first-frame fallback.
+    let source_rect = ui.data_mut(|data| data.get_temp::<egui::Rect>(source_rect_id));
+    let pointer = ui.ctx().pointer_hover_pos();
+    let hovered =
+        hardware_channel_handle_hovered(pointer, source_rect, ui.max_rect(), active);
+    let alpha = ui.ctx().animate_bool_with_time(
         egui::Id::new(("hardware-channel-handle-visible", control.key.as_str())),
         hovered,
+        0.12,
     );
     let color = ui.visuals().weak_text_color().gamma_multiply(alpha);
     let response = ui
-        .add(
+        .add_sized(
+            [18.0, 24.0],
             egui::Label::new(
                 egui::RichText::new(crate::ui::icons::DOTS_SIX_VERTICAL)
                     .color(color)
@@ -138,9 +161,7 @@ pub(crate) fn hardware_channel_drag_handle(
         )
         .on_hover_text(app.tr("Drag to reorder channel"));
     if response.drag_started() {
-        let source_rect = ui
-            .data_mut(|data| data.get_temp::<egui::Rect>(source_rect_id))
-            .unwrap_or(response.rect);
+        let source_rect = source_rect.unwrap_or(response.rect);
         let grab_offset = ui
             .ctx()
             .pointer_interact_pos()
@@ -3949,6 +3970,33 @@ mod timeline_row_tests {
 
     fn discard_ui_output(mut output: egui::FullOutput) {
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn hardware_drag_indicator_uses_the_whole_card_hover_area() {
+        let card = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(320.0, 72.0));
+        // The current horizontal row starts after the leading icon/indicator.
+        let remaining_row =
+            egui::Rect::from_min_size(egui::pos2(92.0, 20.0), egui::vec2(238.0, 32.0));
+
+        assert!(hardware_channel_handle_hovered(
+            Some(egui::pos2(28.0, 42.0)),
+            Some(card),
+            remaining_row,
+            false,
+        ));
+        assert!(!hardware_channel_handle_hovered(
+            Some(egui::pos2(400.0, 42.0)),
+            Some(card),
+            remaining_row,
+            false,
+        ));
+        assert!(hardware_channel_handle_hovered(
+            None,
+            Some(card),
+            remaining_row,
+            true,
+        ));
     }
 
     #[test]
