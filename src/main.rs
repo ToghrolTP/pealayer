@@ -557,6 +557,10 @@ fn main() -> eframe::Result {
                     .dialogs
                     .hardware_control_key
                     .clone(),
+                hardware_channel_detail_active: loaded_config
+                    .workspace_session
+                    .dialogs
+                    .hardware_channel_detail_active,
                 hardware_control_name_draft: String::new(),
                 hardware_control_group_draft: String::new(),
                 hardware_control_icon_draft: String::new(),

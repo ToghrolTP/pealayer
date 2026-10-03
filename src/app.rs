@@ -319,6 +319,7 @@ pub struct PealayerApp {
         std::collections::BTreeMap<String, crate::config::WorkspaceProfile>,
     pub(crate) active_workspace_profile: Option<String>,
     pub(crate) hardware_control_dialog_key: Option<String>,
+    pub(crate) hardware_channel_detail_active: bool,
     pub(crate) hardware_control_name_draft: String,
     pub(crate) hardware_control_group_draft: String,
     pub(crate) hardware_control_icon_draft: String,
@@ -2824,6 +2825,7 @@ impl PealayerApp {
                 board_information_tab: self.board_info_tab,
                 channel_manager: self.show_hardware_channels_dialog,
                 hardware_control_key: self.hardware_control_dialog_key.clone(),
+                hardware_channel_detail_active: self.hardware_channel_detail_active,
                 effects_manager: self.show_effect_library_editor,
                 effects_selection: self.effect_library_selection.clone(),
                 workspace_profiles: self.show_workspace_profiles_dialog,
@@ -2872,6 +2874,7 @@ impl PealayerApp {
         self.board_info_tab = dialogs.board_information_tab;
         self.show_hardware_channels_dialog = dialogs.channel_manager;
         self.hardware_control_dialog_key = dialogs.hardware_control_key.clone();
+        self.hardware_channel_detail_active = dialogs.hardware_channel_detail_active;
         self.show_effect_library_editor = dialogs.effects_manager;
         self.effect_library_selection = dialogs.effects_selection.clone();
         // Keep this manager open while switching profiles so the user can
@@ -3365,6 +3368,7 @@ impl PealayerApp {
                 board_information_tab: self.board_info_tab,
                 channel_manager: self.show_hardware_channels_dialog,
                 hardware_control_key: self.hardware_control_dialog_key.clone(),
+                hardware_channel_detail_active: self.hardware_channel_detail_active,
                 effects_manager: self.show_effect_library_editor,
                 effects_selection: self.effect_library_selection.clone(),
                 workspace_profiles: self.show_workspace_profiles_dialog,
@@ -4227,6 +4231,7 @@ impl Default for PealayerApp {
             workspace_profiles: std::collections::BTreeMap::new(),
             active_workspace_profile: None,
             hardware_control_dialog_key: None,
+            hardware_channel_detail_active: false,
             hardware_control_name_draft: String::new(),
             hardware_control_group_draft: String::new(),
             hardware_control_icon_draft: String::new(),

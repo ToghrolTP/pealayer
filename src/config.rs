@@ -156,6 +156,7 @@ pub struct WorkspaceDialogs {
     pub board_information_tab: usize,
     pub channel_manager: bool,
     pub hardware_control_key: Option<String>,
+    pub hardware_channel_detail_active: bool,
     pub effects_manager: bool,
     pub effects_selection: Option<String>,
     pub workspace_profiles: bool,
@@ -1068,6 +1069,9 @@ mod tests {
             dialogs: WorkspaceDialogs {
                 board_information: true,
                 board_information_tab: 2,
+                channel_manager: true,
+                hardware_control_key: Some("relay.5".to_string()),
+                hardware_channel_detail_active: true,
                 ..Default::default()
             },
             egui_memory: None,
@@ -1101,6 +1105,21 @@ mod tests {
         );
         assert!(loaded.workspace_session.dialogs.board_information);
         assert_eq!(loaded.workspace_session.dialogs.board_information_tab, 2);
+        assert!(loaded.workspace_session.dialogs.channel_manager);
+        assert_eq!(
+            loaded
+                .workspace_session
+                .dialogs
+                .hardware_control_key
+                .as_deref(),
+            Some("relay.5")
+        );
+        assert!(
+            loaded
+                .workspace_session
+                .dialogs
+                .hardware_channel_detail_active
+        );
         assert!(loaded.workspace_profiles.contains_key("Hardware review"));
         assert_eq!(
             loaded.active_workspace_profile.as_deref(),

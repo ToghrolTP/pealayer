@@ -187,6 +187,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Manage channels" => "مدیریت کانال‌ها",
         "All board channels" => "همهٔ کانال‌های برد",
         "Order" => "ترتیب",
+        "Order must be between" => "ترتیب باید بین این مقادیر باشد:",
         "Move up" => "انتقال به بالا",
         "Move down" => "انتقال به پایین",
         "Other controls" => "کنترل‌های دیگر",

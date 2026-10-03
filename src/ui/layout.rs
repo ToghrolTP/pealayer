@@ -141,8 +141,7 @@ pub(crate) fn hardware_channel_drag_handle(
     // a first-frame fallback.
     let source_rect = ui.data_mut(|data| data.get_temp::<egui::Rect>(source_rect_id));
     let pointer = ui.ctx().pointer_hover_pos();
-    let hovered =
-        hardware_channel_handle_hovered(pointer, source_rect, ui.max_rect(), active);
+    let hovered = hardware_channel_handle_hovered(pointer, source_rect, ui.max_rect(), active);
     let alpha = ui.ctx().animate_bool_with_time(
         egui::Id::new(("hardware-channel-handle-visible", control.key.as_str())),
         hovered,
@@ -1944,6 +1943,8 @@ fn open_control_dialog(
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
 ) {
+    app.show_hardware_channels_dialog = true;
+    app.hardware_channel_detail_active = true;
     app.hardware_control_dialog_key = Some(control.key.clone());
     app.hardware_control_name_draft = control.name.clone();
     app.hardware_control_group_draft = control.group.clone();
@@ -7499,6 +7500,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         .clicked()
                                     {
                                         self.app.show_hardware_channels_dialog = true;
+                                        self.app.hardware_channel_detail_active = false;
                                     }
                                 },
                             );
