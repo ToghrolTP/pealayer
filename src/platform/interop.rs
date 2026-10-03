@@ -534,6 +534,12 @@ pub struct PlayerStatusResponse {
     #[serde(default)]
     pub controller_connected: bool,
     #[serde(default)]
+    pub hardware_connection_requested: bool,
+    #[serde(default)]
+    pub hardware_endpoint: String,
+    #[serde(default)]
+    pub hardware_transport: Option<String>,
+    #[serde(default)]
     pub hardware_connected: bool,
     /// Last coordinator/board transport error. Local authenticated clients use
     /// this to present an actionable reconnecting state instead of a generic
@@ -707,6 +713,9 @@ impl Default for PlayerStatusResponse {
             active_workspace_profile: None,
             workspace_profiles: Vec::new(),
             controller_connected: false,
+            hardware_connection_requested: false,
+            hardware_endpoint: String::new(),
+            hardware_transport: None,
             hardware_connected: false,
             hardware_error: None,
             estop_active: false,

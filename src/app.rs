@@ -594,6 +594,10 @@ impl eframe::App for PealayerApp {
                 .engine_handle
                 .is_connected
                 .load(std::sync::atomic::Ordering::Relaxed);
+            let hardware_connection_requested = self
+                .engine_handle
+                .connection_requested
+                .load(std::sync::atomic::Ordering::Relaxed);
             let hardware_connected = hardware
                 .as_ref()
                 .is_some_and(|capabilities| capabilities.board_connected);
@@ -642,6 +646,14 @@ impl eframe::App for PealayerApp {
                     )
                     .collect(),
                 controller_connected,
+                hardware_connection_requested,
+                hardware_endpoint: self.serial_port.clone(),
+                hardware_transport: self
+                    .engine_handle
+                    .active_transport
+                    .try_lock()
+                    .ok()
+                    .and_then(|transport| transport.clone()),
                 hardware_connected,
                 hardware_error: self
                     .engine_handle
@@ -803,9 +815,11 @@ impl eframe::App for PealayerApp {
 
         // Connection loss and retry are normal runtime states. Surface them in
         // the status chrome instead of interrupting playback with a modal.
-        if let Ok(mut err_guard) = self.engine_handle.connection_error.try_lock() {
-            if let Some(err) = err_guard.take() {
-                self.connection_notice = Some(err);
+        if let Ok(err_guard) = self.engine_handle.connection_error.try_lock() {
+            if let Some(err) = err_guard.as_ref()
+                && self.connection_notice.as_deref() != Some(err)
+            {
+                self.connection_notice = Some(err.clone());
             }
         }
         let connected_now = self
@@ -852,6 +866,12 @@ impl eframe::App for PealayerApp {
             .engine_handle
             .connection_requested
             .load(std::sync::atomic::Ordering::Relaxed);
+        if connection_requested && (!connected_now || !board_connected_now) {
+            // Connection transitions happen on the engine thread. Keep the
+            // UI, title, and local status API truthful during recovery without
+            // returning to a permanent repaint loop that burns GPU while idle.
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
         let window_title = contextual_window_title(
             &self.app_name,
             self.current_video_path.as_deref(),
