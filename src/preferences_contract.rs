@@ -302,6 +302,21 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             0.1,
         ),
         PreferenceControl::boolean(
+            "remember_playback_position",
+            "playback",
+            "Playback history",
+            "Remember the last position of local and remote media",
+        ),
+        PreferenceControl::number(
+            "playback_position_history_limit",
+            "playback",
+            "Playback history",
+            "Maximum remembered videos",
+            1.0,
+            crate::config::MAX_PLAYBACK_POSITION_HISTORY_LIMIT as f64,
+            1.0,
+        ),
+        PreferenceControl::boolean(
             "open_url_multiline",
             "playback",
             "Open Location / URL",

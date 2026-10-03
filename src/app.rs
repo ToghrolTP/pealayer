@@ -287,6 +287,11 @@ pub struct PealayerApp {
     pub(crate) elapsed_edit_focus_requested: bool,
     pub(crate) osd_message: Option<(String, std::time::Instant)>,
     pub(crate) recent_media: Vec<std::path::PathBuf>,
+    pub(crate) remember_playback_position: bool,
+    pub(crate) playback_position_history_limit: u32,
+    pub(crate) playback_positions: Vec<crate::config::PlaybackPositionEntry>,
+    pub(crate) pending_resume_position: Option<f64>,
+    pub(crate) last_playback_position_checkpoint: std::time::Instant,
     pub(crate) show_open_url_dialog: bool,
     pub(crate) url_input_buffer: String,
     pub(crate) open_url_multiline: bool,
@@ -2662,11 +2667,43 @@ impl PealayerApp {
                     if let Ok(seekable) = self.mpv.get_property::<bool>("seekable") {
                         self.is_seekable = seekable;
                     }
+                    if let Some(position) = self.pending_resume_position.take() {
+                        if self.is_seekable {
+                            let target = if self.duration > 0.0 {
+                                position.min((self.duration - 0.25).max(0.0))
+                            } else {
+                                position
+                            };
+                            if target >= 1.0
+                                && self
+                                    .mpv
+                                    .command("seek", &[&target.to_string(), "absolute+exact"])
+                                    .is_ok()
+                            {
+                                self.playback_time = target;
+                                self.set_osd(format!(
+                                    "{} {}",
+                                    self.tr("Resumed at"),
+                                    crate::ui::controls::format_player_time(
+                                        target,
+                                        self.duration >= 3600.0,
+                                        true,
+                                    )
+                                ));
+                            }
+                        }
+                    }
                     self.refresh_sub_tracks();
                     self.refresh_audio_tracks();
                 }
                 Some(Ok(_)) => {}
                 _ => break,
+            }
+        }
+        if self.last_playback_position_checkpoint.elapsed() >= std::time::Duration::from_secs(5) {
+            self.last_playback_position_checkpoint = std::time::Instant::now();
+            if self.capture_current_playback_position() {
+                self.save_config();
             }
         }
         self.update_shell_state();
@@ -3303,6 +3340,8 @@ impl PealayerApp {
     pub fn load_video_file(&mut self, path: std::path::PathBuf) {
         let path_str = path.to_str().unwrap_or("");
         if !path_str.is_empty() {
+            self.capture_current_playback_position();
+            self.pending_resume_position = self.resume_position_for(path_str);
             let _ = self.mpv.set_property("keep-open", "always");
             let _ = self.mpv.command("loadfile", &[path_str, "replace"]);
             self.current_video_path = Some(path.clone());
@@ -3408,6 +3447,8 @@ impl PealayerApp {
     pub fn load_url(&mut self, url: &str) {
         let trimmed = url.trim();
         if !trimmed.is_empty() {
+            self.capture_current_playback_position();
+            self.pending_resume_position = self.resume_position_for(trimmed);
             let _ = self.mpv.set_property("keep-open", "always");
             let _ = if crate::media::prefers_rtsp_tcp(trimmed) {
                 // TCP interleaving is materially more reliable for surveillance
@@ -3483,6 +3524,9 @@ impl PealayerApp {
     }
 
     pub fn close_video(&mut self) {
+        if self.capture_current_playback_position() {
+            self.save_config();
+        }
         let _ = self.mpv.command("stop", &[]);
         self.current_video_path = None;
         self.playback_time = 0.0;
@@ -3518,6 +3562,9 @@ impl PealayerApp {
         cfg.open_url_proxy_url = (!self.open_url_proxy_url.trim().is_empty())
             .then(|| self.open_url_proxy_url.trim().to_string());
         cfg.recent_media = self.recent_media.clone();
+        cfg.remember_playback_position = self.remember_playback_position;
+        cfg.playback_position_history_limit = self.playback_position_history_limit;
+        cfg.playback_positions = self.playback_positions.clone();
         cfg.language = self.language_preference;
         cfg.direction = self.direction_preference;
         cfg.theme = self.theme_preference;
@@ -3590,6 +3637,7 @@ impl PealayerApp {
     }
 
     pub fn save_config(&mut self) {
+        self.capture_current_playback_position();
         let cfg = self.runtime_config_snapshot();
         match cfg.save() {
             Ok(()) => {
@@ -3638,6 +3686,10 @@ impl PealayerApp {
         self.open_url_use_proxy = config.open_url_use_proxy;
         self.open_url_proxy_url = config.open_url_proxy_url.clone().unwrap_or_default();
         self.recent_media = config.recent_media.clone();
+        self.remember_playback_position = config.remember_playback_position;
+        self.playback_position_history_limit = config.playback_position_history_limit;
+        self.playback_positions = config.playback_positions.clone();
+        self.trim_playback_positions();
         self.language_preference = crate::config::resolved_language_preference(&config);
         self.language = crate::config::resolve_language(self.language_preference);
         self.direction_preference = crate::config::resolved_direction_preference(&config);
@@ -3884,6 +3936,77 @@ impl PealayerApp {
             .filter(|target| crate::media::is_remote_media_target(target))
             .collect::<Vec<_>>();
         crate::server::thumbnails::prune_remote_thumbnail_cache(remote.iter().map(String::as_str));
+    }
+
+    fn resume_position_for(&self, target: &str) -> Option<f64> {
+        if !self.remember_playback_position {
+            return None;
+        }
+        let key = crate::media::playback_history_key(target);
+        self.playback_positions
+            .iter()
+            .find(|entry| crate::media::playback_history_key(&entry.target) == key)
+            .map(|entry| entry.position_seconds)
+            .filter(|position| position.is_finite() && *position >= 1.0)
+    }
+
+    fn capture_current_playback_position(&mut self) -> bool {
+        if !self.remember_playback_position {
+            return false;
+        }
+        let Some(target) = self
+            .current_video_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+        else {
+            return false;
+        };
+        let key = crate::media::playback_history_key(&target);
+        if key.is_empty() {
+            return false;
+        }
+
+        let finished = self.is_eof
+            || (self.duration > 0.0
+                && self.playback_time >= (self.duration - 2.0).max(self.duration * 0.98));
+        if finished {
+            let old_len = self.playback_positions.len();
+            self.playback_positions
+                .retain(|entry| crate::media::playback_history_key(&entry.target) != key);
+            return old_len != self.playback_positions.len();
+        }
+        if !self.playback_time.is_finite() || self.playback_time < 1.0 {
+            return false;
+        }
+        if self.playback_positions.first().is_some_and(|entry| {
+            crate::media::playback_history_key(&entry.target) == key
+                && (entry.position_seconds - self.playback_time).abs() < 1.0
+        }) {
+            return false;
+        }
+
+        self.playback_positions
+            .retain(|entry| crate::media::playback_history_key(&entry.target) != key);
+        self.playback_positions.insert(
+            0,
+            crate::config::PlaybackPositionEntry {
+                target,
+                position_seconds: self.playback_time,
+                updated_at_unix_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+            },
+        );
+        self.trim_playback_positions();
+        true
+    }
+
+    fn trim_playback_positions(&mut self) {
+        let limit =
+            self.playback_position_history_limit
+                .clamp(1, crate::config::MAX_PLAYBACK_POSITION_HISTORY_LIMIT) as usize;
+        self.playback_positions.truncate(limit);
     }
 
     pub fn set_osd(&mut self, msg: String) {
@@ -4493,6 +4616,11 @@ impl Default for PealayerApp {
             elapsed_edit_focus_requested: false,
             osd_message: None,
             recent_media: Vec::new(),
+            remember_playback_position: true,
+            playback_position_history_limit: crate::config::DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT,
+            playback_positions: Vec::new(),
+            pending_resume_position: None,
+            last_playback_position_checkpoint: std::time::Instant::now(),
             show_open_url_dialog: false,
             url_input_buffer: String::new(),
             open_url_multiline: true,
@@ -4741,6 +4869,38 @@ mod tests {
         add(&mut list, std::path::PathBuf::from("/video5.mp4"));
         assert_eq!(list.len(), 10);
         assert_eq!(list[0], std::path::PathBuf::from("/video5.mp4"));
+    }
+
+    #[test]
+    fn playback_position_history_is_bounded_and_deduplicated_by_media_identity() {
+        let mut app = PealayerApp::default();
+        app.playback_position_history_limit = 2;
+        for (target, position) in [
+            ("https://example.invalid/a.mp4#first", 10.0),
+            ("https://example.invalid/b.mp4", 20.0),
+            ("https://example.invalid/a.mp4#second", 30.0),
+            ("https://example.invalid/c.mp4", 40.0),
+        ] {
+            app.current_video_path = Some(std::path::PathBuf::from(target));
+            app.playback_time = position;
+            app.duration = 120.0;
+            app.is_eof = false;
+            assert!(app.capture_current_playback_position());
+        }
+
+        assert_eq!(app.playback_positions.len(), 2);
+        assert_eq!(
+            app.resume_position_for("https://example.invalid/c.mp4"),
+            Some(40.0)
+        );
+        assert_eq!(
+            app.resume_position_for("https://example.invalid/a.mp4"),
+            Some(30.0)
+        );
+        assert_eq!(
+            app.resume_position_for("https://example.invalid/b.mp4"),
+            None
+        );
     }
 
     #[test]

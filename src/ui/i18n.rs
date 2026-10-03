@@ -556,6 +556,13 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
             "پیکربندی روی دیسک تغییر کرده است؛ آن را بازخوانی یا پیش‌نویس را ذخیره کنید"
         }
         "Open Location / URL" => "باز کردن نشانی یا پیوند",
+        "Playback history" => "تاریخچهٔ پخش",
+        "Remember the last position of local and remote media" => {
+            "به‌خاطر سپردن آخرین موقعیت رسانه‌های محلی و راه‌دور"
+        }
+        "Maximum remembered videos" => "بیشترین تعداد ویدئوهای به‌خاطر سپرده‌شده",
+        "Clear remembered positions" => "پاک‌کردن موقعیت‌های به‌خاطر سپرده‌شده",
+        "Resumed at" => "ادامه از",
         "Enter a remote media location" => "نشانی رسانهٔ راه‌دور را وارد کنید",
         "Enter a media URL (HTTP/HTTPS, HLS, RTSP, RTMP, SRT, UDP, or TCP):" => {
             "نشانی رسانه (HTTP/HTTPS،‏ HLS،‏ RTSP،‏ RTMP،‏ SRT،‏ UDP یا TCP) را وارد کنید:"

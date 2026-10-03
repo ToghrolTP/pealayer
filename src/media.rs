@@ -100,6 +100,29 @@ pub fn media_target_label(target: &str) -> String {
     }
 }
 
+/// Stable identity for bounded playback-position history. URL fragments do
+/// not change the underlying media. Existing local files are canonicalized so
+/// aliases share a resume point; non-existing paths remain usable as entered.
+pub fn playback_history_key(target: &str) -> String {
+    let trimmed = target.trim();
+    if is_remote_media_target(trimmed) {
+        let Ok(mut parsed) = url::Url::parse(trimmed) else {
+            return trimmed.to_string();
+        };
+        parsed.set_fragment(None);
+        return parsed.to_string();
+    }
+
+    let path = std::path::Path::new(trimmed);
+    let normalized = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let key = normalized.to_string_lossy().into_owned();
+    if cfg!(target_os = "windows") {
+        key.to_lowercase()
+    } else {
+        key
+    }
+}
+
 pub fn buffered_until(
     duration: f64,
     playback_time: f64,
@@ -169,6 +192,14 @@ mod tests {
                 duration: 125.0,
                 seekable: true,
             }
+        );
+    }
+
+    #[test]
+    fn playback_history_identity_ignores_remote_fragments() {
+        assert_eq!(
+            playback_history_key("https://example.invalid/movie.mp4#chapter"),
+            "https://example.invalid/movie.mp4"
         );
     }
 }

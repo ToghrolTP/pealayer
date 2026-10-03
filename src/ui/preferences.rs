@@ -584,6 +584,7 @@ fn draw_contract_section(
     let mut values = serde_json::to_value(&draft.config).unwrap_or_else(|_| serde_json::json!({}));
     let mut changed = false;
     let mut clear_remote_history = false;
+    let mut clear_playback_positions = false;
     let mut groups = Vec::new();
     for control in controls
         .iter()
@@ -630,11 +631,31 @@ fn draw_contract_section(
                     changed = true;
                 }
             }
+            if section.id == "playback" && group == "Playback history" {
+                let remembered_count = draft.config.playback_positions.len();
+                if ui
+                    .add_enabled(
+                        remembered_count > 0,
+                        egui::Button::new(format!(
+                            "{}  {} ({remembered_count})",
+                            crate::ui::icons::TRASH,
+                            tr("Clear remembered positions")
+                        )),
+                    )
+                    .clicked()
+                {
+                    clear_playback_positions = true;
+                    changed = true;
+                }
+            }
         });
     }
     if changed {
         match serde_json::from_value::<AppConfig>(values) {
-            Ok(config) => draft.config = config,
+            Ok(mut config) => {
+                config.normalize_playback_positions();
+                draft.config = config;
+            }
             Err(error) => {
                 draft.status = format!("Invalid preference value: {error}");
                 return false;
@@ -646,6 +667,9 @@ fn draw_contract_section(
             .config
             .recent_media
             .retain(|path| !crate::media::is_remote_media_target(&path.to_string_lossy()));
+    }
+    if clear_playback_positions {
+        draft.config.playback_positions.clear();
     }
     if section.id == "advanced" {
         draw_advanced_actions(draft, ui, tr);
@@ -1189,6 +1213,7 @@ fn group_icon(group: &str) -> &'static str {
         "Interface" => crate::ui::icons::SPARKLE,
         "On-screen display" => crate::ui::icons::MONITOR_PLAY,
         "Player controls" => crate::ui::icons::PLAY,
+        "Playback history" => crate::ui::icons::CLOCK_COUNTER_CLOCKWISE,
         "Open Location / URL" => crate::ui::icons::LINK_SIMPLE,
         "Connection" => crate::ui::icons::PLUG,
         "Motion controls" => crate::ui::icons::SEAT,

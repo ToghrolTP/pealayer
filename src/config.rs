@@ -3,6 +3,18 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, channel};
 
+pub const DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 50;
+pub const MAX_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 500;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PlaybackPositionEntry {
+    /// Original playable local path or remote URL. Matching uses a normalized
+    /// identity at runtime, while this value remains suitable for inspection.
+    pub target: String,
+    pub position_seconds: f64,
+    pub updated_at_unix_ms: u64,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AppTheme {
@@ -213,6 +225,9 @@ pub struct AppConfig {
     pub open_url_use_proxy: bool,
     pub open_url_proxy_url: Option<String>,
     pub recent_media: Vec<PathBuf>,
+    pub remember_playback_position: bool,
+    pub playback_position_history_limit: u32,
+    pub playback_positions: Vec<PlaybackPositionEntry>,
     pub app_name: Option<String>,
     pub app_icon: Option<PathBuf>,
     pub app_publisher: Option<String>,
@@ -279,6 +294,9 @@ impl Default for AppConfig {
             open_url_use_proxy: true,
             open_url_proxy_url: None,
             recent_media: Vec::new(),
+            remember_playback_position: true,
+            playback_position_history_limit: DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT,
+            playback_positions: Vec::new(),
             app_name: None,
             app_icon: None,
             app_publisher: None,
@@ -686,7 +704,16 @@ pub fn control_port() -> u16 {
 }
 
 impl AppConfig {
+    pub(crate) fn normalize_playback_positions(&mut self) {
+        self.playback_position_history_limit = self
+            .playback_position_history_limit
+            .clamp(1, MAX_PLAYBACK_POSITION_HISTORY_LIMIT);
+        self.playback_positions
+            .truncate(self.playback_position_history_limit as usize);
+    }
+
     fn normalize_workspace_profiles(&mut self) {
+        self.normalize_playback_positions();
         let migrating_profile_metadata = self.workspace_profiles_revision < 1;
         if !self.workspace_profiles_initialized || migrating_profile_metadata {
             for (id, profile) in default_workspace_profiles() {
@@ -1030,6 +1057,24 @@ impl AppConfig {
         if self.recent_media.len() > 100 {
             return Err("recent_media contains too many entries".to_string());
         }
+        if !(1..=MAX_PLAYBACK_POSITION_HISTORY_LIMIT)
+            .contains(&self.playback_position_history_limit)
+        {
+            return Err(format!(
+                "playback_position_history_limit must be between 1 and {MAX_PLAYBACK_POSITION_HISTORY_LIMIT}"
+            ));
+        }
+        if self.playback_positions.len() > self.playback_position_history_limit as usize {
+            return Err("playback_positions exceeds playback_position_history_limit".to_string());
+        }
+        for entry in &self.playback_positions {
+            if entry.target.trim().is_empty() || entry.target.len() > 8_192 {
+                return Err("playback_positions contains an invalid target".to_string());
+            }
+            if !entry.position_seconds.is_finite() || entry.position_seconds < 0.0 {
+                return Err("playback_positions contains an invalid position".to_string());
+            }
+        }
         if self
             .window_geometry
             .is_some_and(|geometry| !geometry.is_valid())
@@ -1165,6 +1210,12 @@ mod tests {
         assert!(!cfg.pin_controls);
         assert!(!cfg.show_remaining_time);
         assert!(cfg.recent_media.is_empty());
+        assert!(cfg.remember_playback_position);
+        assert_eq!(
+            cfg.playback_position_history_limit,
+            DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT
+        );
+        assert!(cfg.playback_positions.is_empty());
         assert!(cfg.app_name.is_none());
         assert!(cfg.app_icon.is_none());
         assert!(cfg.app_publisher.is_none());
@@ -1210,6 +1261,24 @@ mod tests {
         reloaded.normalize_workspace_profiles();
         assert!(!reloaded.workspace_profiles.contains_key("simple"));
         assert!(reloaded.workspace_profiles.contains_key("nle"));
+    }
+
+    #[test]
+    fn playback_position_history_is_trimmed_to_the_configured_limit() {
+        let mut config = AppConfig::default();
+        config.playback_position_history_limit = 2;
+        config.playback_positions = (0..4)
+            .map(|index| PlaybackPositionEntry {
+                target: format!("/media/{index}.mp4"),
+                position_seconds: f64::from(index),
+                updated_at_unix_ms: index as u64,
+            })
+            .collect();
+
+        config.normalize_playback_positions();
+
+        assert_eq!(config.playback_positions.len(), 2);
+        assert!(config.validate().is_ok());
     }
 
     #[test]
