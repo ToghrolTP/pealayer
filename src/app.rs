@@ -313,6 +313,11 @@ pub struct PealayerApp {
     pub(crate) board_info_tab: usize,
     pub(crate) board_name_draft: String,
     pub(crate) show_hardware_channels_dialog: bool,
+    pub(crate) show_workspace_profiles_dialog: bool,
+    pub(crate) workspace_profile_name_draft: String,
+    pub(crate) workspace_profiles:
+        std::collections::BTreeMap<String, crate::config::WorkspaceProfile>,
+    pub(crate) active_workspace_profile: Option<String>,
     pub(crate) hardware_control_dialog_key: Option<String>,
     pub(crate) hardware_control_name_draft: String,
     pub(crate) hardware_control_group_draft: String,
@@ -1118,6 +1123,7 @@ impl eframe::App for PealayerApp {
                 crate::ui::effects_library::draw_editor(self, ui);
                 crate::ui::board_info::draw(self, ui);
                 crate::ui::hardware_control::draw(self, ui);
+                crate::ui::workspace_profiles::draw(self, ui);
 
                 crate::ui::open_url::draw(self, ui);
 
@@ -2791,6 +2797,145 @@ impl PealayerApp {
         self.save_config();
     }
 
+    /// Capture every durable part of the current desktop workspace. egui's
+    /// memory contributes movable dialog rectangles, active widgets, and
+    /// stable ScrollArea offsets; application fields supply the surfaces that
+    /// are currently open and their selected pages.
+    pub(crate) fn capture_workspace_profile(
+        &self,
+        ctx: &egui::Context,
+    ) -> crate::config::WorkspaceProfile {
+        let mut dock_state = self.dock_state.clone();
+        crate::ui::layout::sanitize_dock_rects(&mut dock_state);
+        crate::config::WorkspaceProfile {
+            nle: self.show_four_d_editor,
+            window_geometry: self.window_geometry,
+            dock_layout: serde_json::to_string(&dock_state).ok(),
+            dialogs: crate::config::WorkspaceDialogs {
+                subtitles: self.show_sub_settings,
+                audio: self.show_audio_settings,
+                open_location: self.show_open_url_dialog,
+                shortcuts: self.show_shortcuts_dialog,
+                about: self.show_about_dialog,
+                about_tab: self.about_tab,
+                preferences: self.show_preferences_dialog,
+                preferences_tab: self.preferences_tab,
+                board_information: self.show_board_info_dialog,
+                board_information_tab: self.board_info_tab,
+                channel_manager: self.show_hardware_channels_dialog,
+                hardware_control_key: self.hardware_control_dialog_key.clone(),
+                effects_manager: self.show_effect_library_editor,
+                effects_selection: self.effect_library_selection.clone(),
+                workspace_profiles: self.show_workspace_profiles_dialog,
+            },
+            egui_memory: ctx.memory(|memory| serde_json::to_string(memory).ok()),
+        }
+    }
+
+    pub(crate) fn apply_workspace_profile(
+        &mut self,
+        ctx: &egui::Context,
+        profile: &crate::config::WorkspaceProfile,
+    ) -> Result<(), String> {
+        let dock_state = profile
+            .dock_layout
+            .as_deref()
+            .map(|json| {
+                serde_json::from_str::<egui_dock::DockState<crate::ui::layout::PealayerTab>>(json)
+                    .map_err(|error| format!("Could not restore workspace layout: {error}"))
+            })
+            .transpose()?;
+        let memory = profile
+            .egui_memory
+            .as_deref()
+            .map(|json| {
+                serde_json::from_str::<egui::Memory>(json)
+                    .map_err(|error| format!("Could not restore workspace positions: {error}"))
+            })
+            .transpose()?;
+
+        self.show_four_d_editor = profile.nle;
+        if let Some(mut dock_state) = dock_state {
+            crate::ui::layout::sanitize_dock_rects(&mut dock_state);
+            self.dock_state = dock_state;
+        }
+        let dialogs = &profile.dialogs;
+        self.show_sub_settings = dialogs.subtitles;
+        self.show_audio_settings = dialogs.audio;
+        self.show_open_url_dialog = dialogs.open_location;
+        self.show_shortcuts_dialog = dialogs.shortcuts;
+        self.show_about_dialog = dialogs.about;
+        self.about_tab = dialogs.about_tab;
+        self.show_preferences_dialog = dialogs.preferences;
+        self.preferences_tab = dialogs.preferences_tab;
+        self.show_board_info_dialog = dialogs.board_information;
+        self.board_info_tab = dialogs.board_information_tab;
+        self.show_hardware_channels_dialog = dialogs.channel_manager;
+        self.hardware_control_dialog_key = dialogs.hardware_control_key.clone();
+        self.show_effect_library_editor = dialogs.effects_manager;
+        self.effect_library_selection = dialogs.effects_selection.clone();
+        // Keep this manager open while switching profiles so the user can
+        // immediately compare or return to another saved arrangement.
+        self.show_workspace_profiles_dialog = true;
+
+        if let Some(geometry) = profile.window_geometry.filter(|value| value.is_valid()) {
+            self.window_geometry = Some(geometry);
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                geometry.x, geometry.y,
+            )));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                geometry.width,
+                geometry.height,
+            )));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(geometry.maximized));
+        }
+        if let Some(memory) = memory {
+            ctx.memory_mut(|current| *current = memory);
+        }
+        ctx.request_repaint();
+        Ok(())
+    }
+
+    pub(crate) fn save_workspace_profile(&mut self, ctx: &egui::Context, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            self.config_status = self.tr("Enter a workspace profile name");
+            return;
+        }
+        let profile = self.capture_workspace_profile(ctx);
+        self.workspace_profiles.insert(name.to_string(), profile);
+        self.active_workspace_profile = Some(name.to_string());
+        self.workspace_profile_name_draft = name.to_string();
+        self.config_status = format!("{}: {name}", self.tr("Workspace profile saved"));
+        self.save_config();
+    }
+
+    pub(crate) fn restore_workspace_profile(&mut self, ctx: &egui::Context, name: &str) {
+        let Some(profile) = self.workspace_profiles.get(name).cloned() else {
+            self.config_status = format!("{}: {name}", self.tr("Workspace profile not found"));
+            return;
+        };
+        match self.apply_workspace_profile(ctx, &profile) {
+            Ok(()) => {
+                self.active_workspace_profile = Some(name.to_string());
+                self.workspace_profile_name_draft = name.to_string();
+                self.config_status = format!("{}: {name}", self.tr("Workspace profile restored"));
+                self.save_config();
+            }
+            Err(error) => self.config_status = error,
+        }
+    }
+
+    pub(crate) fn delete_workspace_profile(&mut self, name: &str) {
+        if self.workspace_profiles.remove(name).is_some() {
+            if self.active_workspace_profile.as_deref() == Some(name) {
+                self.active_workspace_profile = None;
+            }
+            self.config_status = format!("{}: {name}", self.tr("Workspace profile deleted"));
+            self.save_config();
+        }
+    }
+
     /// Performs an exact relative seek by the given number of seconds.
     pub fn seek_relative(&mut self, seconds: f64) {
         if self.current_video_path.is_none() || !self.is_seekable {
@@ -3203,6 +3348,33 @@ impl PealayerApp {
         if let Ok(json) = serde_json::to_string(&dock_state) {
             cfg.workspace_dock_layout = Some(json);
         }
+        cfg.workspace_session = crate::config::WorkspaceProfile {
+            nle: self.show_four_d_editor,
+            window_geometry: self.window_geometry,
+            dock_layout: cfg.workspace_dock_layout.clone(),
+            dialogs: crate::config::WorkspaceDialogs {
+                subtitles: self.show_sub_settings,
+                audio: self.show_audio_settings,
+                open_location: self.show_open_url_dialog,
+                shortcuts: self.show_shortcuts_dialog,
+                about: self.show_about_dialog,
+                about_tab: self.about_tab,
+                preferences: self.show_preferences_dialog,
+                preferences_tab: self.preferences_tab,
+                board_information: self.show_board_info_dialog,
+                board_information_tab: self.board_info_tab,
+                channel_manager: self.show_hardware_channels_dialog,
+                hardware_control_key: self.hardware_control_dialog_key.clone(),
+                effects_manager: self.show_effect_library_editor,
+                effects_selection: self.effect_library_selection.clone(),
+                workspace_profiles: self.show_workspace_profiles_dialog,
+            },
+            // The automatic last-session memory is owned by eframe's native
+            // persistence store. Named profiles carry their own snapshots.
+            egui_memory: None,
+        };
+        cfg.workspace_profiles = self.workspace_profiles.clone();
+        cfg.active_workspace_profile = self.active_workspace_profile.clone();
         cfg
     }
 
@@ -3286,6 +3458,8 @@ impl PealayerApp {
         self.opengl_vsync = config.opengl_vsync;
         self.native_dialog_windows = config.native_dialog_windows;
         self.status_bar = config.status_bar;
+        self.workspace_profiles = config.workspace_profiles.clone();
+        self.active_workspace_profile = config.active_workspace_profile.clone();
         crate::platform::windows::configure_window_composition(
             self.windows_dwm_theming,
             self.windows_mica_backdrop,
@@ -4048,6 +4222,10 @@ impl Default for PealayerApp {
             board_info_tab: 0,
             board_name_draft: String::new(),
             show_hardware_channels_dialog: false,
+            show_workspace_profiles_dialog: false,
+            workspace_profile_name_draft: String::new(),
+            workspace_profiles: std::collections::BTreeMap::new(),
+            active_workspace_profile: None,
             hardware_control_dialog_key: None,
             hardware_control_name_draft: String::new(),
             hardware_control_group_draft: String::new(),

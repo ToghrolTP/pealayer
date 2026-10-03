@@ -438,6 +438,18 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         format!("{} {}", crate::ui::icons::TABS, app.tr("Panels")),
                         |ui| crate::ui::layout::draw_workspace_tab_menu(app, ui),
                     );
+                    ui.separator();
+                    if ui
+                        .button(format!(
+                            "{}  {}",
+                            crate::ui::icons::FLOPPY_DISK,
+                            app.tr("Workspace profiles...")
+                        ))
+                        .clicked()
+                    {
+                        app.show_workspace_profiles_dialog = true;
+                        ui.close();
+                    }
                 });
 
                 top_menu_button(ui, app.tr("Window"), |ui| {

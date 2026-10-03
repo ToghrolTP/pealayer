@@ -70,6 +70,21 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Hide subtitles" => "پنهان‌کردن زیرنویس",
         "Show subtitles" => "نمایش زیرنویس",
         "Workspace" => "فضای کاری",
+        "Workspace profiles" => "نمایه‌های فضای کاری",
+        "Workspace profiles..." => "نمایه‌های فضای کاری…",
+        "Save this window, panel, dialog, and scroll arrangement as a reusable workspace." => {
+            "این چیدمان پنجره، پنل‌ها، گفتگوها و پیمایش را به‌عنوان فضای کاری قابل استفادهٔ مجدد ذخیره کنید."
+        }
+        "Workspace name" => "نام فضای کاری",
+        "No saved workspace profiles" => "نمایهٔ فضای کاری ذخیره‌شده‌ای وجود ندارد",
+        "Workspace profile saved" => "نمایهٔ فضای کاری ذخیره شد",
+        "Workspace profile restored" => "نمایهٔ فضای کاری بازیابی شد",
+        "Workspace profile deleted" => "نمایهٔ فضای کاری حذف شد",
+        "Workspace profile not found" => "نمایهٔ فضای کاری پیدا نشد",
+        "Enter a workspace profile name" => "نامی برای نمایهٔ فضای کاری وارد کنید",
+        "Delete workspace profile" => "حذف نمایهٔ فضای کاری",
+        "Restore" => "بازیابی",
+        "Active" => "فعال",
         "Workspace tabs" => "زبانه‌های فضای کاری",
         "Right-click to show or hide workspace tabs" => {
             "برای نمایش یا پنهان‌کردن زبانه‌ها کلیک راست کنید"

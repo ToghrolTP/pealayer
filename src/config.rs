@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, channel};
 
@@ -136,6 +137,56 @@ impl WindowGeometry {
     }
 }
 
+/// User-facing workspace state that is meaningful independently of egui's
+/// internal widget memory. Window/dialog positions and scroll offsets live in
+/// the serialized egui memory; these fields restore which surfaces were open
+/// and which tabs were active inside them.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct WorkspaceDialogs {
+    pub subtitles: bool,
+    pub audio: bool,
+    pub open_location: bool,
+    pub shortcuts: bool,
+    pub about: bool,
+    pub about_tab: usize,
+    pub preferences: bool,
+    pub preferences_tab: usize,
+    pub board_information: bool,
+    pub board_information_tab: usize,
+    pub channel_manager: bool,
+    pub hardware_control_key: Option<String>,
+    pub effects_manager: bool,
+    pub effects_selection: Option<String>,
+    pub workspace_profiles: bool,
+}
+
+/// A complete reusable workspace snapshot. The same structure backs the
+/// automatic last-session restore and user-named profiles.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct WorkspaceProfile {
+    pub nle: bool,
+    pub window_geometry: Option<WindowGeometry>,
+    pub dock_layout: Option<String>,
+    pub dialogs: WorkspaceDialogs,
+    /// Serialized egui memory contains movable window rectangles, active dock
+    /// leaves, and every stable ScrollArea offset.
+    pub egui_memory: Option<String>,
+}
+
+impl Default for WorkspaceProfile {
+    fn default() -> Self {
+        Self {
+            nle: true,
+            window_geometry: None,
+            dock_layout: None,
+            dialogs: WorkspaceDialogs::default(),
+            egui_memory: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AppConfig {
@@ -192,6 +243,10 @@ pub struct AppConfig {
     pub window_geometry: Option<WindowGeometry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_dock_layout: Option<String>,
+    pub workspace_session: WorkspaceProfile,
+    pub workspace_profiles: BTreeMap<String, WorkspaceProfile>,
+    #[serde(default)]
+    pub active_workspace_profile: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -253,6 +308,9 @@ impl Default for AppConfig {
             status_bar: StatusBarConfig::default(),
             window_geometry: None,
             workspace_dock_layout: None,
+            workspace_session: WorkspaceProfile::default(),
+            workspace_profiles: BTreeMap::new(),
+            active_workspace_profile: None,
         }
     }
 }
@@ -997,6 +1055,26 @@ mod tests {
         cfg.open_url_proxy_url = Some("http://127.0.0.1:8080".to_string());
         cfg.native_dialog_windows = true;
         cfg.recent_media.push(PathBuf::from("/test/file.mp4"));
+        cfg.workspace_session = WorkspaceProfile {
+            nle: false,
+            window_geometry: Some(WindowGeometry {
+                x: 20.0,
+                y: 30.0,
+                width: 960.0,
+                height: 640.0,
+                maximized: false,
+            }),
+            dock_layout: Some("{\"surface\":\"hardware\"}".to_string()),
+            dialogs: WorkspaceDialogs {
+                board_information: true,
+                board_information_tab: 2,
+                ..Default::default()
+            },
+            egui_memory: None,
+        };
+        cfg.workspace_profiles
+            .insert("Hardware review".to_string(), cfg.workspace_session.clone());
+        cfg.active_workspace_profile = Some("Hardware review".to_string());
 
         let json = serde_json::to_string(&cfg).unwrap();
         let loaded: AppConfig = serde_json::from_str(&json).unwrap();
@@ -1016,6 +1094,18 @@ mod tests {
         assert_eq!(loaded.recent_media.len(), 1);
         assert_eq!(loaded.recent_media[0], PathBuf::from("/test/file.mp4"));
         assert!(loaded.native_dialog_windows);
+        assert!(!loaded.workspace_session.nle);
+        assert_eq!(
+            loaded.workspace_session.window_geometry.unwrap().width,
+            960.0
+        );
+        assert!(loaded.workspace_session.dialogs.board_information);
+        assert_eq!(loaded.workspace_session.dialogs.board_information_tab, 2);
+        assert!(loaded.workspace_profiles.contains_key("Hardware review"));
+        assert_eq!(
+            loaded.active_workspace_profile.as_deref(),
+            Some("Hardware review")
+        );
     }
 
     #[test]

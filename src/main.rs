@@ -184,7 +184,9 @@ fn main() -> eframe::Result {
         .with_inner_size([800.0, 600.0])
         .with_clamp_size_to_monitor_size(true);
     if let Some(geometry) = launch_config
+        .workspace_session
         .window_geometry
+        .or(launch_config.window_geometry)
         .filter(|geometry| geometry.is_valid())
     {
         viewport = viewport
@@ -202,6 +204,9 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Glow,
+        persistence_path: Some(
+            crate::config::AppConfig::get_config_path().with_file_name("workspace-state.ron"),
+        ),
         glow_options: eframe::egui_glow::GlowConfiguration {
             vsync: launch_config.opengl_vsync,
             ..Default::default()
@@ -392,8 +397,10 @@ fn main() -> eframe::Result {
             );
 
             let dock_state = loaded_config
-                .workspace_dock_layout
+                .workspace_session
+                .dock_layout
                 .as_deref()
+                .or(loaded_config.workspace_dock_layout.as_deref())
                 .and_then(|json| {
                     let mut ds = serde_json::from_str::<
                         egui_dock::DockState<crate::ui::layout::PealayerTab>,
@@ -409,7 +416,10 @@ fn main() -> eframe::Result {
                 app_publisher: crate::config::resolved_app_publisher(&loaded_config),
                 app_copyright: crate::config::resolved_app_copyright(&loaded_config),
                 last_window_title: String::new(),
-                window_geometry: loaded_config.window_geometry,
+                window_geometry: loaded_config
+                    .workspace_session
+                    .window_geometry
+                    .or(loaded_config.window_geometry),
                 language_preference,
                 language,
                 direction_preference,
@@ -430,13 +440,13 @@ fn main() -> eframe::Result {
                 volume: initial_volume,
                 is_muted: loaded_config.is_muted,
                 playback_rate: 1.0,
-                show_sub_settings: false,
+                show_sub_settings: loaded_config.workspace_session.dialogs.subtitles,
                 sub_visibility: true,
                 sub_font_size: 55.0,
                 sub_delay: 0.0,
                 current_sid: "no".to_string(),
                 sub_tracks: Vec::new(),
-                show_audio_settings: false,
+                show_audio_settings: loaded_config.workspace_session.dialogs.audio,
                 audio_delay: 0.0,
                 current_aid: "no".to_string(),
                 audio_tracks: Vec::new(),
@@ -449,7 +459,7 @@ fn main() -> eframe::Result {
                 last_mouse_activity: std::time::Instant::now(),
                 pin_controls: loaded_config.pin_controls,
                 show_error: None,
-                show_four_d_editor: true,
+                show_four_d_editor: loaded_config.workspace_session.nle,
 
                 timeline: crate::four_d::models::Timeline::new(),
                 engine_handle,
@@ -473,8 +483,12 @@ fn main() -> eframe::Result {
                 timeline_zoom: 100.0,
                 undo_stack: crate::four_d::history::UndoStack::default(),
                 effects_search_query: String::new(),
-                show_effect_library_editor: false,
-                effect_library_selection: None,
+                show_effect_library_editor: loaded_config.workspace_session.dialogs.effects_manager,
+                effect_library_selection: loaded_config
+                    .workspace_session
+                    .dialogs
+                    .effects_selection
+                    .clone(),
                 effect_library_draft: crate::app::ControllerEffectDraft::default(),
                 effect_group_draft: None,
                 track_muted: std::collections::BTreeSet::new(),
@@ -500,7 +514,7 @@ fn main() -> eframe::Result {
                 elapsed_edit_focus_requested: false,
                 osd_message: None,
                 recent_media: loaded_config.recent_media.clone(),
-                show_open_url_dialog: false,
+                show_open_url_dialog: loaded_config.workspace_session.dialogs.open_location,
                 url_input_buffer: String::new(),
                 open_url_multiline: loaded_config.open_url_multiline,
                 open_url_history_expanded: loaded_config.open_url_history_expanded,
@@ -511,18 +525,38 @@ fn main() -> eframe::Result {
                 open_url_proxy_url: loaded_config.open_url_proxy_url.clone().unwrap_or_default(),
                 url_inspector: crate::ui::open_url::UrlInspector::default(),
                 is_window_operating: false,
-                show_shortcuts_dialog: false,
-                show_about_dialog: false,
-                about_tab: 0,
+                show_shortcuts_dialog: loaded_config.workspace_session.dialogs.shortcuts,
+                show_about_dialog: loaded_config.workspace_session.dialogs.about,
+                about_tab: loaded_config.workspace_session.dialogs.about_tab,
                 about_icon: None,
-                show_preferences_dialog: false,
-                preferences_tab: 0,
+                show_preferences_dialog: loaded_config.workspace_session.dialogs.preferences,
+                preferences_tab: loaded_config.workspace_session.dialogs.preferences_tab,
                 preferences_draft: None,
-                show_board_info_dialog: false,
-                board_info_tab: 0,
+                show_board_info_dialog: loaded_config.workspace_session.dialogs.board_information,
+                board_info_tab: loaded_config
+                    .workspace_session
+                    .dialogs
+                    .board_information_tab,
                 board_name_draft: String::new(),
-                show_hardware_channels_dialog: false,
-                hardware_control_dialog_key: None,
+                show_hardware_channels_dialog: loaded_config
+                    .workspace_session
+                    .dialogs
+                    .channel_manager,
+                show_workspace_profiles_dialog: loaded_config
+                    .workspace_session
+                    .dialogs
+                    .workspace_profiles,
+                workspace_profile_name_draft: loaded_config
+                    .active_workspace_profile
+                    .clone()
+                    .unwrap_or_default(),
+                workspace_profiles: loaded_config.workspace_profiles.clone(),
+                active_workspace_profile: loaded_config.active_workspace_profile.clone(),
+                hardware_control_dialog_key: loaded_config
+                    .workspace_session
+                    .dialogs
+                    .hardware_control_key
+                    .clone(),
                 hardware_control_name_draft: String::new(),
                 hardware_control_group_draft: String::new(),
                 hardware_control_icon_draft: String::new(),

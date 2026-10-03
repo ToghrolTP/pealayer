@@ -7,7 +7,7 @@ repository = "https://github.com/ToghrolTP/pealayer"
 license = "MIT"
 
 [dependencies]
-eframe = { version = "0.36.2", features = ["glow"] }
+eframe = { version = "0.36.2", features = ["glow", "persistence"] }
 env_logger = "0.11.11"
 libmpv2 = { version = "6.0.0", features = ["render"] }
 log = "0.4.31"

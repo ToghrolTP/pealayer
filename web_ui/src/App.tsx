@@ -62,7 +62,7 @@ function accentForeground(accent: string): string {
 }
 
 const App: React.FC = () => {
-  const [collapsed, setCollapsed] = useState<boolean>(false);
+  const [collapsed, setCollapsed] = useState<boolean>(() => window.localStorage.getItem('pealayer.sidebarCollapsed') === 'true');
   const [activeTab, setActiveTabState] = useState<SurfaceId>(surfaceFromLocation);
   const [connected, setConnected] = useState<boolean>(false);
   const [connectionMode, setConnectionMode] = useState<'ws' | 'http'>('http');
@@ -77,6 +77,32 @@ const App: React.FC = () => {
   });
 
   const wsRef = useRef<WebSocket | null>(null);
+  const siderRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    window.localStorage.setItem('pealayer.sidebarCollapsed', String(collapsed));
+  }, [collapsed]);
+
+  useEffect(() => {
+    const restoreScroll = () => {
+      const sider = siderRef.current;
+      const content = contentRef.current;
+      if (sider) {
+        sider.scrollTop = Number(window.localStorage.getItem('pealayer.scroll.sider') || 0);
+      }
+      if (content) {
+        content.scrollTop = Number(window.localStorage.getItem(`pealayer.scroll.${activeTab}.top`) || 0);
+        content.scrollLeft = Number(window.localStorage.getItem(`pealayer.scroll.${activeTab}.left`) || 0);
+      }
+    };
+    const frame = window.requestAnimationFrame(() => window.requestAnimationFrame(restoreScroll));
+    const afterLazySurface = window.setTimeout(restoreScroll, 100);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(afterLazySurface);
+    };
+  }, [activeTab]);
 
   const setActiveTab = useCallback((requested: string) => {
     const tab = SURFACE_IDS.includes(requested as SurfaceId) ? requested as SurfaceId : 'player';
@@ -392,6 +418,7 @@ const App: React.FC = () => {
 
         <Layout className="app-body">
           <Sider
+            ref={siderRef}
             trigger={null}
             collapsible
             collapsed={collapsed}
@@ -399,6 +426,7 @@ const App: React.FC = () => {
             onBreakpoint={(broken) => setCollapsed(broken)}
             className="app-sider"
             width={220}
+            onScroll={(event) => window.localStorage.setItem('pealayer.scroll.sider', String(event.currentTarget.scrollTop))}
           >
             <Menu
               mode="inline"
@@ -409,7 +437,14 @@ const App: React.FC = () => {
             />
           </Sider>
 
-          <Content className={`app-content ${activeTab === 'timeline' ? 'app-content--studio' : ''}`}>
+          <Content
+            ref={contentRef}
+            className={`app-content ${activeTab === 'timeline' ? 'app-content--studio' : ''}`}
+            onScroll={(event) => {
+              window.localStorage.setItem(`pealayer.scroll.${activeTab}.top`, String(event.currentTarget.scrollTop));
+              window.localStorage.setItem(`pealayer.scroll.${activeTab}.left`, String(event.currentTarget.scrollLeft));
+            }}
+          >
             <React.Suspense fallback={<div className="surface-loading"><Spin size="large" /></div>}>
             {activeTab === 'timeline' && (
               <StudioTab

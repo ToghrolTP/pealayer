@@ -323,6 +323,9 @@ pub(crate) fn run_native_preferences(owner_hwnd: isize) -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: native_preferences_viewport(title.clone()),
         renderer: eframe::Renderer::Glow,
+        persistence_path: Some(
+            AppConfig::get_config_path().with_file_name("preferences-window-state.ron"),
+        ),
         glow_options: eframe::egui_glow::GlowConfiguration {
             vsync: config.opengl_vsync,
             ..Default::default()

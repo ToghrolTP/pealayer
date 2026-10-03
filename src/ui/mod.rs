@@ -16,6 +16,7 @@ pub mod preferences;
 pub mod status_bar;
 pub mod subtitles;
 pub mod video;
+pub mod workspace_profiles;
 
 /// Configure desktop-style interaction defaults. Static captions are not
 /// documents, so they should not expose a text-selection cursor or highlight
