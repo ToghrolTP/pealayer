@@ -11,7 +11,7 @@ fn install_advertised_relay(app: &PealayerApp, id: u8, name: &str) {
         active_relays: Default::default(),
         relays: vec![HardwareOutput {
             id,
-            key: "fixture.output".to_string(),
+            key: format!("relay.{id}"),
             name: name.to_string(),
             role: "fixture".to_string(),
             control: "relay".to_string(),

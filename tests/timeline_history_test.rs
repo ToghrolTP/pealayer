@@ -14,12 +14,14 @@ fn test_undo_redo_stack_basic_flow() {
         analog_tracks: vec![AnalogTrack::new("Wind", 0)],
         templates: vec![],
         keyframes: vec![],
+        track_states: Default::default(),
     };
     let state1 = TimelineSnapshot {
         instances: vec![],
         analog_tracks: vec![AnalogTrack::new("Wind", 0), AnalogTrack::new("Water", 1)],
         templates: vec![],
         keyframes: vec![],
+        track_states: Default::default(),
     };
     let state2 = TimelineSnapshot {
         instances: vec![],
@@ -30,6 +32,7 @@ fn test_undo_redo_stack_basic_flow() {
         ],
         templates: vec![],
         keyframes: vec![],
+        track_states: Default::default(),
     };
 
     stack.push(state0.clone());
@@ -62,6 +65,7 @@ fn test_undo_stack_max_depth_cap() {
             analog_tracks: vec![AnalogTrack::new(&format!("Track{}", i), i as u8)],
             templates: vec![],
             keyframes: vec![],
+            track_states: Default::default(),
         });
     }
 
@@ -70,6 +74,7 @@ fn test_undo_stack_max_depth_cap() {
         analog_tracks: vec![],
         templates: vec![],
         keyframes: vec![],
+        track_states: Default::default(),
     };
     // Should be capped to 2 undos
     let u1 = stack.undo(cur).unwrap();
@@ -90,12 +95,14 @@ fn test_undo_redo_with_effect_instances() {
         analog_tracks: vec![],
         templates: vec![],
         keyframes: vec![],
+        track_states: Default::default(),
     };
     let state1 = TimelineSnapshot {
         instances: vec![instance.clone()],
         analog_tracks: vec![],
         templates: vec![],
         keyframes: vec![],
+        track_states: Default::default(),
     };
 
     stack.push(state0.clone());
@@ -117,18 +124,21 @@ fn test_undo_stack_clear_and_redo_invalidation() {
         analog_tracks: vec![],
         templates: vec![],
         keyframes: vec![],
+        track_states: Default::default(),
     };
     let state1 = TimelineSnapshot {
         instances: vec![],
         analog_tracks: vec![AnalogTrack::new("TrackA", 0)],
         templates: vec![],
         keyframes: vec![],
+        track_states: Default::default(),
     };
     let state2 = TimelineSnapshot {
         instances: vec![],
         analog_tracks: vec![AnalogTrack::new("TrackB", 1)],
         templates: vec![],
         keyframes: vec![],
+        track_states: Default::default(),
     };
 
     stack.push(state0.clone());
