@@ -525,6 +525,8 @@ fn main() -> eframe::Result {
                 hardware_control_pwm_percent: 0.0,
                 board_operation: None,
                 board_operation_status: String::new(),
+                board_settings_draft: None,
+                board_settings_dirty: false,
                 board_reboot_armed: false,
                 pause_on_hardware_disconnect: loaded_config.pause_on_hardware_disconnect,
                 auto_connect_hardware: loaded_config.auto_connect_hardware,

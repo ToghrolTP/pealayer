@@ -19,6 +19,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if app.board_name_draft.is_empty() {
         app.board_name_draft = capabilities.board_identity.stored_name.clone();
     }
+    if app.board_settings_draft.is_none() {
+        app.board_settings_draft = capabilities.settings.clone();
+        app.board_settings_dirty = false;
+    }
 
     let mut open = true;
     let bounds = ui.ctx().content_rect().shrink(20.0);
@@ -111,6 +115,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     app.show_board_info_dialog = open;
     if !open {
         app.board_name_draft.clear();
+        app.board_settings_draft = None;
+        app.board_settings_dirty = false;
         app.board_reboot_armed = false;
     }
 }
@@ -452,74 +458,373 @@ fn settings(
     ui: &mut egui::Ui,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
 ) {
-    let Some(settings) = &capabilities.settings else {
+    let Some(authoritative) = &capabilities.settings else {
         unavailable(
             ui,
             &app.tr("The attached board does not advertise settings."),
         );
         return;
     };
+    let mut settings = app
+        .board_settings_draft
+        .clone()
+        .unwrap_or_else(|| authoritative.clone());
+    let before = settings.clone();
+
     ui.heading(app.tr("Board settings"));
-    let mut silent = settings.silent;
-    if ui
-        .add_enabled(
-            app.board_operation.is_none(),
-            egui::Checkbox::new(&mut silent, app.tr("Silent mode")),
-        )
-        .changed()
-    {
-        if let Err(error) = app.set_board_silent(silent) {
-            app.set_osd(error);
+    ui.label(
+        egui::RichText::new(app.tr("Only settings advertised by the connected board are shown."))
+            .weak(),
+    );
+    ui.add_space(8.0);
+
+    section(ui, &app.tr("General"), |ui| {
+        settings_grid(ui, "board_settings_general", |ui| {
+            checkbox_setting(ui, &app.tr("Silent mode"), &mut settings.silent);
+            checkbox_setting(
+                ui,
+                &app.tr("Door sound cues"),
+                &mut settings.door_audio_enabled,
+            );
+            checkbox_setting(
+                ui,
+                &app.tr("Relay sound cues"),
+                &mut settings.relay_audio_enabled,
+            );
+            setting_control(ui, &app.tr("Telemetry period"), |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut settings.stream_period_ms)
+                        .range(0..=u16::MAX as u64)
+                        .speed(10.0)
+                        .suffix(" ms"),
+                )
+                .on_hover_text(app.tr("Use 0 to disable periodic telemetry"));
+            });
+        });
+    });
+
+    if capabilities.supports_temperature_sensors {
+        section(ui, &app.tr("Temperature sensors"), |ui| {
+            checkbox_setting(
+                ui,
+                &app.tr("Swap temperature roles"),
+                &mut settings.swap_temperature_roles,
+            );
+        });
+    }
+
+    if !capabilities.pwm_channels.is_empty() {
+        section(ui, &app.tr("Enclosure lighting"), |ui| {
+            settings_grid(ui, "board_settings_lighting", |ui| {
+                setting_control(ui, &app.tr("Light mode"), |ui| {
+                    enum_combo(
+                        ui,
+                        "board_light_mode",
+                        &mut settings.light_mode,
+                        &[
+                            (0, app.tr("Off")),
+                            (1, app.tr("Automatic (door)")),
+                            (2, app.tr("On")),
+                        ],
+                    );
+                });
+                slider_setting(
+                    ui,
+                    &app.tr("On brightness"),
+                    &mut settings.on_brightness,
+                    0..=255,
+                );
+                slider_setting(
+                    ui,
+                    &app.tr("Off brightness"),
+                    &mut settings.off_brightness,
+                    0..=255,
+                );
+            });
+        });
+    }
+
+    if capabilities.supports_segment_display {
+        section(ui, &app.tr("Front-panel display"), |ui| {
+            settings_grid(ui, "board_settings_display", |ui| {
+                slider_setting(
+                    ui,
+                    &app.tr("Open brightness"),
+                    &mut settings.display_brightness,
+                    0..=7,
+                );
+                slider_setting(
+                    ui,
+                    &app.tr("Closed brightness"),
+                    &mut settings.display_closed_brightness,
+                    0..=7,
+                );
+                setting_control(ui, &app.tr("Default page"), |ui| {
+                    ui.add(egui::DragValue::new(&mut settings.default_page).range(0..=13));
+                });
+                checkbox_setting(
+                    ui,
+                    &app.tr("Remember last page"),
+                    &mut settings.save_last_page,
+                );
+            });
+        });
+    }
+
+    if capabilities.supports_status_led_settings {
+        section(ui, &app.tr("Status light"), |ui| {
+            settings_grid(ui, "board_settings_status", |ui| {
+                slider_setting(
+                    ui,
+                    &app.tr("Status brightness"),
+                    &mut settings.status_brightness,
+                    0..=255,
+                );
+                setting_control(ui, &app.tr("Fallback color"), |ui| {
+                    enum_combo(
+                        ui,
+                        "board_status_color",
+                        &mut settings.status_color,
+                        &[
+                            (0, app.tr("Red")),
+                            (1, app.tr("Blue")),
+                            (2, app.tr("Violet")),
+                            (3, app.tr("Green")),
+                            (4, app.tr("White")),
+                        ],
+                    );
+                });
+            });
+        });
+    }
+
+    if !capabilities.relays.is_empty() {
+        section(ui, &app.tr("Motion and relays"), |ui| {
+            settings_grid(ui, "board_settings_motion", |ui| {
+                setting_control(ui, &app.tr("Door policy"), |ui| {
+                    enum_combo(
+                        ui,
+                        "board_motion_policy",
+                        &mut settings.motion_door_policy,
+                        &[
+                            (0, app.tr("Always allow motion")),
+                            (1, app.tr("Only while door is closed")),
+                            (2, app.tr("Only while door is open")),
+                            (3, app.tr("Never allow motion")),
+                        ],
+                    );
+                });
+                setting_control(ui, &app.tr("Exit hold"), |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut settings.motion_exit_hold_seconds, 1..=31)
+                            .suffix(" s"),
+                    );
+                });
+                if capabilities.supports_motion_break_setting {
+                    setting_control(ui, &app.tr("Motion break"), |ui| {
+                        ui.add(
+                            egui::Slider::new(&mut settings.motion_break_ms, 1..=255).suffix(" ms"),
+                        );
+                    });
+                }
+            });
+            ui.add_space(5.0);
+            ui.label(egui::RichText::new(app.tr("Relays restored after restart")).weak());
+            relay_mask_editor(ui, app, &mut settings.relay_restore_mask);
+        });
+    }
+
+    if !capabilities.relays.is_empty() || !capabilities.pwm_channels.is_empty() {
+        section(ui, &app.tr("Output persistence"), |ui| {
+            bit_checkbox(
+                ui,
+                &mut settings.output_persistence,
+                0x01,
+                &app.tr("Remember motion defaults"),
+                !capabilities.relays.is_empty(),
+            );
+            bit_checkbox(
+                ui,
+                &mut settings.output_persistence,
+                0x02,
+                &app.tr("Remember user relays"),
+                !capabilities.relays.is_empty(),
+            );
+            bit_checkbox(
+                ui,
+                &mut settings.output_persistence,
+                0x04,
+                &app.tr("Remember PWM outputs"),
+                !capabilities.pwm_channels.is_empty(),
+            );
+            bit_checkbox(
+                ui,
+                &mut settings.output_persistence,
+                0x08,
+                &app.tr("Retain motion direction when stopped"),
+                !capabilities.relays.is_empty(),
+            );
+        });
+    }
+
+    if capabilities.supports_measurements {
+        section(ui, &app.tr("Measurements"), |ui| {
+            settings_grid(ui, "board_settings_measurements", |ui| {
+                setting_control(ui, &app.tr("Voltage decimals"), |ui| {
+                    ui.add(egui::Slider::new(&mut settings.voltage_decimals, 0..=2));
+                });
+                setting_control(ui, &app.tr("Current decimals"), |ui| {
+                    ui.add(egui::Slider::new(&mut settings.current_decimals, 0..=2));
+                });
+            });
+        });
+    }
+
+    section(ui, &app.tr("Advanced"), |ui| {
+        checkbox_setting(
+            ui,
+            &app.tr("Programming latch"),
+            &mut settings.programming_latch,
+        );
+        if settings.programming_latch {
+            ui.label(
+                egui::RichText::new(app.tr(
+                    "Programming latch blocks motion, relays, PWM, and lighting until disabled.",
+                ))
+                .color(ui.visuals().warn_fg_color),
+            );
+        }
+    });
+
+    if settings != before {
+        app.board_settings_dirty = settings != *authoritative;
+        app.board_settings_draft = Some(settings.clone());
+    }
+
+    ui.horizontal(|ui| {
+        let busy = app.board_operation.is_some();
+        if ui
+            .add_enabled_ui(!busy && app.board_settings_dirty, |ui| {
+                crate::ui::dialog::action_button(
+                    ui,
+                    crate::ui::icons::FLOPPY_DISK,
+                    &app.tr("Save to board"),
+                )
+            })
+            .inner
+            .clicked()
+        {
+            if let Err(error) = app.save_board_settings() {
+                app.set_osd(error);
+            }
+        }
+        if ui
+            .add_enabled_ui(!busy && app.board_settings_dirty, |ui| {
+                crate::ui::dialog::action_button(
+                    ui,
+                    crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                    &app.tr("Revert"),
+                )
+            })
+            .inner
+            .clicked()
+        {
+            app.board_settings_draft = Some(authoritative.clone());
+            app.board_settings_dirty = false;
+        }
+        let storage = if capabilities.supports_persistent_settings && authoritative.persisted {
+            app.tr("EEPROM (persisted)")
+        } else if capabilities.supports_persistent_settings {
+            app.tr("Not persisted")
+        } else {
+            app.tr("Live settings")
+        };
+        ui.label(egui::RichText::new(storage).weak());
+    });
+    if !app.board_operation_status.is_empty() {
+        ui.label(egui::RichText::new(&app.board_operation_status).weak());
+    }
+}
+
+fn settings_grid(ui: &mut egui::Ui, id: &'static str, body: impl FnOnce(&mut egui::Ui)) {
+    egui::Grid::new(id)
+        .num_columns(2)
+        .spacing([18.0, 8.0])
+        .min_col_width(150.0)
+        .show(ui, body);
+}
+
+fn setting_control(ui: &mut egui::Ui, label: &str, control: impl FnOnce(&mut egui::Ui)) {
+    ui.label(egui::RichText::new(label).weak());
+    ui.horizontal(|ui| {
+        ui.set_min_width((ui.available_width() - 4.0).max(150.0));
+        control(ui);
+    });
+    ui.end_row();
+}
+
+fn checkbox_setting(ui: &mut egui::Ui, label: &str, value: &mut bool) {
+    setting_control(ui, label, |ui| {
+        ui.checkbox(value, "");
+    });
+}
+
+fn slider_setting(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut u8,
+    range: std::ops::RangeInclusive<u8>,
+) {
+    setting_control(ui, label, |ui| {
+        ui.add_sized(
+            [ui.available_width().max(180.0), 22.0],
+            egui::Slider::new(value, range),
+        );
+    });
+}
+
+fn enum_combo(ui: &mut egui::Ui, id: &'static str, value: &mut u8, options: &[(u8, String)]) {
+    let selected = options
+        .iter()
+        .find(|(candidate, _)| candidate == value)
+        .map(|(_, label)| label.clone())
+        .unwrap_or_else(|| value.to_string());
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(selected)
+        .width(ui.available_width().max(180.0))
+        .show_ui(ui, |ui| {
+            for (candidate, label) in options {
+                ui.selectable_value(value, *candidate, label);
+            }
+        });
+}
+
+fn bit_checkbox(ui: &mut egui::Ui, value: &mut u8, bit: u8, label: &str, available: bool) {
+    if !available {
+        return;
+    }
+    let mut enabled = *value & bit != 0;
+    if ui.checkbox(&mut enabled, label).changed() {
+        if enabled {
+            *value |= bit;
+        } else {
+            *value &= !bit;
         }
     }
-    ui.add_space(8.0);
-    egui::Grid::new("board_settings_grid")
-        .num_columns(2)
-        .spacing([20.0, 8.0])
-        .show(ui, |ui| {
-            row(ui, &app.tr("Light mode"), &settings.light_mode.to_string());
-            row(
+}
+
+fn relay_mask_editor(ui: &mut egui::Ui, app: &PealayerApp, mask: &mut u8) {
+    ui.horizontal_wrapped(|ui| {
+        for index in 0..8 {
+            bit_checkbox(
                 ui,
-                &app.tr("On brightness"),
-                &settings.on_brightness.to_string(),
+                mask,
+                1 << index,
+                &format!("{} {}", app.tr("Relay"), index + 1),
+                true,
             );
-            row(
-                ui,
-                &app.tr("Off brightness"),
-                &settings.off_brightness.to_string(),
-            );
-            row(
-                ui,
-                &app.tr("Display brightness"),
-                &settings.display_brightness.to_string(),
-            );
-            row(
-                ui,
-                &app.tr("Status brightness"),
-                &settings.status_brightness.to_string(),
-            );
-            row(
-                ui,
-                &app.tr("Output persistence"),
-                &settings.output_persistence.to_string(),
-            );
-            row(
-                ui,
-                &app.tr("Stream period"),
-                &format!("{} ms", settings.stream_period_ms),
-            );
-            row(
-                ui,
-                &app.tr("Default page"),
-                &settings.default_page.to_string(),
-            );
-            row(
-                ui,
-                &app.tr("Motion break"),
-                &format!("{} ms", settings.motion_break_ms),
-            );
-            row(ui, &app.tr("Persisted"), &yes_no(app, settings.persisted));
-        });
+        }
+    });
 }
 
 fn section(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {

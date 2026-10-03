@@ -8,12 +8,18 @@ use crate::four_d::embedded_host::EmbeddedHost;
 use crate::four_d::protocol::Command;
 
 pub const DEFAULT_ENDPOINT: &str = "pccontroller://127.0.0.1:8787";
+const CAPABILITY_INA219: u32 = 1 << 0;
+const CAPABILITY_TEMPERATURES: u32 = 1 << 1;
 const CAPABILITY_PWM: u32 = 1 << 2;
 const CAPABILITY_RELAY_MOTION: u32 = 1 << 3;
 const CAPABILITY_RF: u32 = 1 << 4;
 const CAPABILITY_SEGMENTS: u32 = 1 << 5;
 const CAPABILITY_LCD: u32 = 1 << 6;
 const CAPABILITY_ADDRESSABLE_LED: u32 = 1 << 7;
+const CAPABILITY_PERSISTENT_SETTINGS: u32 = 1 << 8;
+const CAPABILITY_MOTION_BREAK: u32 = 1 << 21;
+const CAPABILITY_STATUS_EFFECTS: u32 = 1 << 28;
+const CAPABILITY_STATUS_LED_PUSH: u32 = 1 << 29;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HardwareOutput {
@@ -80,6 +86,11 @@ pub struct HardwareCapabilities {
     pub supports_segment_display: bool,
     pub supports_lcd_display: bool,
     pub supports_addressable_led: bool,
+    pub supports_persistent_settings: bool,
+    pub supports_measurements: bool,
+    pub supports_temperature_sensors: bool,
+    pub supports_motion_break_setting: bool,
+    pub supports_status_led_settings: bool,
     pub status_led: Option<HardwareStatusLed>,
     pub status_led_revision: u64,
     pub settings: Option<HardwareBoardSettings>,
@@ -117,16 +128,30 @@ pub struct HardwarePort {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HardwareBoardSettings {
+    pub flags: u8,
     pub silent: bool,
+    pub programming_latch: bool,
+    pub swap_temperature_roles: bool,
+    pub motion_door_policy: u8,
+    pub door_audio_enabled: bool,
+    pub relay_audio_enabled: bool,
     pub light_mode: u8,
     pub on_brightness: u8,
     pub off_brightness: u8,
     pub display_brightness: u8,
+    pub display_closed_brightness: u8,
     pub status_brightness: u8,
     pub output_persistence: u8,
     pub stream_period_ms: u64,
     pub default_page: u8,
+    pub extended_flags: u8,
+    pub save_last_page: bool,
+    pub status_color: u8,
+    pub voltage_decimals: u8,
+    pub current_decimals: u8,
+    pub motion_exit_hold_seconds: u8,
     pub motion_break_ms: u64,
+    pub relay_restore_mask: u8,
     pub persisted: bool,
 }
 
@@ -1273,16 +1298,31 @@ fn parse_hardware_capabilities_with_front_panel(
         .get("status_led_revision")
         .and_then(value_as_u64)
         .unwrap_or(0);
+    let settings_flags = snapshot
+        .pointer("/settings/flags")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as u8;
+    let extended_flags = snapshot
+        .pointer("/settings/extended_flags")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as u8;
+    let decimal_setting = |shift: u8| {
+        let encoded = (extended_flags >> shift) & 0x03;
+        if encoded == 0 { 2 } else { encoded - 1 }
+    };
     let settings = (board_connected
         && snapshot
             .get("have_settings")
             .and_then(Value::as_bool)
             .unwrap_or(false))
     .then(|| HardwareBoardSettings {
-        silent: snapshot
-            .pointer("/settings/flags")
-            .and_then(Value::as_u64)
-            .is_some_and(|flags| flags & 1 != 0),
+        flags: settings_flags,
+        silent: settings_flags & 0x01 != 0,
+        programming_latch: settings_flags & 0x02 != 0,
+        swap_temperature_roles: settings_flags & 0x04 != 0,
+        motion_door_policy: (settings_flags >> 3) & 0x03,
+        door_audio_enabled: settings_flags & 0x20 == 0,
+        relay_audio_enabled: settings_flags & 0x40 == 0,
         light_mode: snapshot
             .pointer("/settings/light_mode")
             .and_then(Value::as_u64)
@@ -1297,6 +1337,10 @@ fn parse_hardware_capabilities_with_front_panel(
             .unwrap_or(0) as u8,
         display_brightness: snapshot
             .pointer("/settings/display_brightness")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
+        display_closed_brightness: snapshot
+            .pointer("/settings/display_closed_brightness")
             .and_then(Value::as_u64)
             .unwrap_or(0) as u8,
         status_brightness: snapshot
@@ -1315,10 +1359,23 @@ fn parse_hardware_capabilities_with_front_panel(
             .pointer("/settings/default_page")
             .and_then(Value::as_u64)
             .unwrap_or(0) as u8,
+        extended_flags,
+        save_last_page: extended_flags & 0x01 != 0,
+        status_color: (extended_flags >> 1) & 0x07,
+        voltage_decimals: decimal_setting(4),
+        current_decimals: decimal_setting(6),
+        motion_exit_hold_seconds: snapshot
+            .pointer("/settings/motion_exit_hold_seconds")
+            .and_then(Value::as_u64)
+            .unwrap_or(1) as u8,
         motion_break_ms: snapshot
             .pointer("/settings/motion_break_ms")
             .and_then(Value::as_u64)
             .unwrap_or(0),
+        relay_restore_mask: snapshot
+            .pointer("/settings/relay_restore_mask")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u8,
         persisted: snapshot
             .pointer("/settings/persisted")
             .and_then(Value::as_bool)
@@ -1513,6 +1570,15 @@ fn parse_hardware_capabilities_with_front_panel(
         supports_lcd_display: board_connected && capability_bits & CAPABILITY_LCD != 0,
         supports_addressable_led: board_connected
             && capability_bits & CAPABILITY_ADDRESSABLE_LED != 0,
+        supports_persistent_settings: board_connected
+            && capability_bits & CAPABILITY_PERSISTENT_SETTINGS != 0,
+        supports_measurements: board_connected && capability_bits & CAPABILITY_INA219 != 0,
+        supports_temperature_sensors: board_connected
+            && capability_bits & CAPABILITY_TEMPERATURES != 0,
+        supports_motion_break_setting: board_connected
+            && capability_bits & CAPABILITY_MOTION_BREAK != 0,
+        supports_status_led_settings: board_connected
+            && capability_bits & (CAPABILITY_STATUS_EFFECTS | CAPABILITY_STATUS_LED_PUSH) != 0,
         status_led,
         status_led_revision,
         settings,
@@ -1954,22 +2020,31 @@ mod tests {
                 "build_hash": 0xA97EC116_u64,
                 "build_timestamp": "260929223718",
                 "capabilities": CAPABILITY_SEGMENTS
+                    | CAPABILITY_PERSISTENT_SETTINGS
+                    | CAPABILITY_INA219
+                    | CAPABILITY_TEMPERATURES
+                    | CAPABILITY_MOTION_BREAK
+                    | CAPABILITY_STATUS_EFFECTS
             },
             "board_name": {"name":"CAFE-01", "persisted":true},
             "have_board_name": true,
             "port": {"name":"COM3", "display_name":"USB-SERIAL CH340", "friendly_name":"USB-SERIAL CH340", "product":"USB-SERIAL CH340", "manufacturer":"QinHeng", "vid":"1A86", "pid":"7523", "serial_number":"BOARD-3", "instance_id":"USB\\VID_1A86&PID_7523\\BOARD-3"},
             "have_settings": true,
             "settings": {
-                "flags": 1,
+                "flags": 0x55,
                 "light_mode": 2,
                 "on_brightness": 210,
                 "off_brightness": 12,
                 "display_brightness": 5,
+                "display_closed_brightness": 2,
                 "status_brightness": 128,
                 "output_persistence": 3,
                 "stream_period_ms": 25,
                 "default_page": 4,
+                "extended_flags": 0x69,
+                "motion_exit_hold_seconds": 7,
                 "motion_break_ms": 180,
+                "relay_restore_mask": 0xA5,
                 "persisted": true
             },
             "have_front_panel": false,
@@ -2002,7 +2077,24 @@ mod tests {
         assert_eq!(parsed.port.serial_number, "BOARD-3");
         let settings = parsed.settings.expect("settings must be advertised");
         assert!(settings.silent);
+        assert!(!settings.programming_latch);
+        assert!(settings.swap_temperature_roles);
+        assert_eq!(settings.motion_door_policy, 2);
+        assert!(settings.door_audio_enabled);
+        assert!(!settings.relay_audio_enabled);
         assert_eq!(settings.stream_period_ms, 25);
+        assert_eq!(settings.display_closed_brightness, 2);
+        assert!(settings.save_last_page);
+        assert_eq!(settings.status_color, 4);
+        assert_eq!(settings.voltage_decimals, 1);
+        assert_eq!(settings.current_decimals, 0);
+        assert_eq!(settings.motion_exit_hold_seconds, 7);
+        assert_eq!(settings.relay_restore_mask, 0xA5);
+        assert!(parsed.supports_persistent_settings);
+        assert!(parsed.supports_measurements);
+        assert!(parsed.supports_temperature_sensors);
+        assert!(parsed.supports_motion_break_setting);
+        assert!(parsed.supports_status_led_settings);
         let front_panel = parsed.front_panel.expect("front panel must be advertised");
         assert_eq!(front_panel.raw_segments, [63, 6, 91, 79]);
         assert!(front_panel.segments_active);

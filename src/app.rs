@@ -292,6 +292,8 @@ pub struct PealayerApp {
     pub(crate) hardware_control_pwm_percent: f64,
     pub(crate) board_operation: Option<String>,
     pub(crate) board_operation_status: String,
+    pub(crate) board_settings_draft: Option<crate::four_d::controller::HardwareBoardSettings>,
+    pub(crate) board_settings_dirty: bool,
     pub(crate) board_reboot_armed: bool,
     pub(crate) pause_on_hardware_disconnect: bool,
     pub(crate) auto_connect_hardware: bool,
@@ -1158,6 +1160,78 @@ impl eframe::App for PealayerApp {
     }
 }
 
+fn board_settings_command(
+    settings: &crate::four_d::controller::HardwareBoardSettings,
+) -> Result<String, String> {
+    if settings.light_mode > 2 {
+        return Err("Light mode must be Off, Automatic, or On".to_string());
+    }
+    if settings.display_brightness > 7 || settings.display_closed_brightness > 7 {
+        return Err("Display brightness must be between 0 and 7".to_string());
+    }
+    if settings.output_persistence & !0x0F != 0 {
+        return Err("Output persistence contains unsupported flags".to_string());
+    }
+    if settings.stream_period_ms > u16::MAX as u64 {
+        return Err("Telemetry period must fit in 0..65535 ms".to_string());
+    }
+    if settings.default_page > 13 {
+        return Err("Default front-panel page must be between 0 and 13".to_string());
+    }
+    if settings.status_color > 4 {
+        return Err("Status color is not supported by the connected board".to_string());
+    }
+    if settings.voltage_decimals > 2 || settings.current_decimals > 2 {
+        return Err("Measurement decimals must be between 0 and 2".to_string());
+    }
+    if !(1..=31).contains(&settings.motion_exit_hold_seconds) {
+        return Err("Motion exit hold must be between 1 and 31 seconds".to_string());
+    }
+    if !(1..=255).contains(&settings.motion_break_ms) {
+        return Err("Motion break must be between 1 and 255 ms".to_string());
+    }
+
+    // Preserve the unassigned high bit while regenerating every documented
+    // settings flag from the editor's semantic controls.
+    let mut flags = settings.flags & 0x80;
+    if settings.silent {
+        flags |= 0x01;
+    }
+    if settings.programming_latch {
+        flags |= 0x02;
+    }
+    if settings.swap_temperature_roles {
+        flags |= 0x04;
+    }
+    flags |= (settings.motion_door_policy & 0x03) << 3;
+    if !settings.door_audio_enabled {
+        flags |= 0x20;
+    }
+    if !settings.relay_audio_enabled {
+        flags |= 0x40;
+    }
+
+    Ok(format!(
+        "settings set {flags} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
+        settings.light_mode,
+        settings.on_brightness,
+        settings.off_brightness,
+        settings.display_brightness,
+        settings.display_closed_brightness,
+        settings.status_brightness,
+        settings.output_persistence,
+        settings.stream_period_ms,
+        settings.default_page,
+        u8::from(settings.save_last_page),
+        settings.status_color,
+        settings.voltage_decimals,
+        settings.current_decimals,
+        settings.motion_exit_hold_seconds,
+        settings.motion_break_ms,
+        settings.relay_restore_mask,
+    ))
+}
+
 impl PealayerApp {
     /// Ensures Windows Shell components (thumbnail toolbar and system tray icon)
     /// are initialized once a valid window handle is registered.
@@ -1560,11 +1634,16 @@ impl PealayerApp {
         )
     }
 
-    pub(crate) fn set_board_silent(&mut self, silent: bool) -> Result<(), String> {
+    pub(crate) fn save_board_settings(&mut self) -> Result<(), String> {
+        let settings = self
+            .board_settings_draft
+            .as_ref()
+            .ok_or_else(|| "No board settings are available to save".to_string())?;
+        let command = board_settings_command(settings)?;
         self.request_board_operation(
-            "board-silent",
+            "board-settings",
             "controller.command.execute",
-            serde_json::json!({"command": format!("silent board {}", if silent { "on" } else { "off" })}),
+            serde_json::json!({"command": command}),
         )
     }
 
@@ -1637,9 +1716,12 @@ impl PealayerApp {
                             self.hardware_effect_authoring.preview_active = false;
                         }
                         "board-name"
-                        | "board-silent"
+                        | "board-settings"
                         | "board-reboot"
                         | "board-front-panel-key" => {
+                            if result.operation == "board-settings" {
+                                self.board_settings_dirty = false;
+                            }
                             self.engine_handle.request_catalog_refresh();
                         }
                         "effect-save" | "effect-delete" => {
@@ -3315,6 +3397,8 @@ impl Default for PealayerApp {
             hardware_control_pwm_percent: 0.0,
             board_operation: None,
             board_operation_status: String::new(),
+            board_settings_draft: None,
+            board_settings_dirty: false,
             board_reboot_armed: false,
             pause_on_hardware_disconnect: true,
             auto_connect_hardware: true,
@@ -3401,6 +3485,55 @@ fn hardware_connection_was_lost(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn board_settings_command_serializes_every_live_setting_in_contract_order() {
+        let settings = crate::four_d::controller::HardwareBoardSettings {
+            flags: 0x80,
+            silent: true,
+            programming_latch: true,
+            swap_temperature_roles: false,
+            motion_door_policy: 2,
+            door_audio_enabled: false,
+            relay_audio_enabled: true,
+            light_mode: 2,
+            on_brightness: 210,
+            off_brightness: 12,
+            display_brightness: 5,
+            display_closed_brightness: 2,
+            status_brightness: 128,
+            output_persistence: 15,
+            stream_period_ms: 250,
+            default_page: 4,
+            save_last_page: true,
+            status_color: 3,
+            voltage_decimals: 2,
+            current_decimals: 1,
+            motion_exit_hold_seconds: 7,
+            motion_break_ms: 180,
+            relay_restore_mask: 0xA5,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            board_settings_command(&settings).unwrap(),
+            "settings set 179 2 210 12 5 2 128 15 250 4 1 3 2 1 7 180 165"
+        );
+    }
+
+    #[test]
+    fn board_settings_command_rejects_an_invalid_motion_break() {
+        let settings = crate::four_d::controller::HardwareBoardSettings {
+            motion_exit_hold_seconds: 2,
+            motion_break_ms: 0,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            board_settings_command(&settings).unwrap_err(),
+            "Motion break must be between 1 and 255 ms"
+        );
+    }
 
     #[test]
     fn cue_drag_hit_testing_keeps_a_move_region_between_resize_handles() {
