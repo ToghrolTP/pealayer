@@ -3310,6 +3310,42 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn cue_manage_reveals_expands_and_focuses_effect_controls() {
+        let mut dock_state = create_initial_layout();
+        let controls_path = dock_state
+            .find_tab(&PealayerTab::EffectControls)
+            .expect("effect controls starts in the canonical workspace");
+        dock_state
+            .leaf_mut(controls_path.node_path())
+            .expect("effect controls belongs to a leaf")
+            .collapsed = true;
+
+        let timeline_path = dock_state
+            .find_tab(&PealayerTab::Timeline)
+            .expect("timeline starts in the canonical workspace");
+        dock_state.set_focused_node_and_surface(timeline_path.node_path());
+
+        assert!(reveal_and_focus_tab(
+            &mut dock_state,
+            PealayerTab::EffectControls
+        ));
+        let revealed_path = dock_state
+            .find_tab(&PealayerTab::EffectControls)
+            .expect("effect controls remains open");
+        let leaf = dock_state
+            .leaf(revealed_path.node_path())
+            .expect("revealed tab belongs to a leaf");
+        assert!(!leaf.collapsed);
+        assert_eq!(leaf.active, revealed_path.tab);
+        assert_eq!(dock_state.focused_leaf(), Some(revealed_path.node_path()));
+
+        assert!(!reveal_and_focus_tab(
+            &mut dock_state,
+            PealayerTab::EffectControls
+        ));
+    }
+
+    #[test]
     fn display_text_prefers_segments_when_both_displays_are_available() {
         assert_eq!(default_display_text_target(true, true), "segments");
         assert_eq!(default_display_text_target(true, false), "segments");
@@ -7087,6 +7123,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         if let Some(cue_id) = manage_cue_id {
                                             self.app.selected_instance_ids.clear();
                                             self.app.selected_instance_ids.insert(cue_id);
+                                            self.app.selected_keyframes.clear();
+                                            self.app.selected_timeline_keyframe = None;
                                             self.app.open_or_focus_tab(PealayerTab::EffectControls);
                                             ui.ctx().request_repaint();
                                         }
@@ -8661,6 +8699,48 @@ pub fn restore_tab_to_canonical_slot(
 
     dock_state.push_to_first_leaf(tab);
     sanitize_dock_rects(dock_state);
+}
+
+/// Makes a workspace tab visibly active and keyboard-focused, restoring it
+/// first when the user previously closed it. Activating a tab alone is not
+/// enough: its leaf (or one of its split ancestors) may still be collapsed,
+/// which made cue "Manage..." actions appear to do nothing.
+pub fn reveal_and_focus_tab(
+    dock_state: &mut egui_dock::DockState<PealayerTab>,
+    tab: PealayerTab,
+) -> bool {
+    let was_open = dock_state.find_tab(&tab).is_some();
+    if !was_open {
+        restore_tab_to_canonical_slot(dock_state, tab);
+    }
+
+    let Some(path) = dock_state.find_tab(&tab) else {
+        return false;
+    };
+
+    let node_path = path.node_path();
+    let mut layout_changed = !was_open;
+    let mut node = Some(node_path.node);
+    while let Some(node_index) = node {
+        let ancestor = egui_dock::NodePath::new(node_path.surface, node_index);
+        if let Ok(dock_node) = dock_state.node_mut(ancestor) {
+            if dock_node.is_collapsed() {
+                dock_node.set_collapsed(false);
+                layout_changed = true;
+            }
+        }
+        node = node_index.parent();
+    }
+
+    if dock_state
+        .leaf(node_path)
+        .is_ok_and(|leaf| leaf.active != path.tab)
+    {
+        layout_changed = true;
+    }
+    let _ = dock_state.set_active_tab(path);
+    dock_state.set_focused_node_and_surface(node_path);
+    layout_changed
 }
 
 fn format_timecode(t: f64) -> String {

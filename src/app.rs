@@ -2596,13 +2596,7 @@ impl PealayerApp {
 
     pub fn open_or_focus_tab(&mut self, tab: crate::ui::layout::PealayerTab) {
         self.show_four_d_editor = true;
-        if let Some(path) = self.dock_state.find_tab(&tab) {
-            let _ = self.dock_state.set_active_tab(path);
-        } else {
-            crate::ui::layout::restore_tab_to_canonical_slot(&mut self.dock_state, tab);
-            if let Some(path) = self.dock_state.find_tab(&tab) {
-                let _ = self.dock_state.set_active_tab(path);
-            }
+        if crate::ui::layout::reveal_and_focus_tab(&mut self.dock_state, tab) {
             self.save_dock_layout();
         }
     }
