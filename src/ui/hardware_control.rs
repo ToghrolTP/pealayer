@@ -548,11 +548,16 @@ fn draw_channel_manager_page(
                     egui::Id::new(("manager-order-visible", &control.key)),
                     row_hovered || order_focused,
                 );
+                let dragging = crate::ui::layout::hardware_channel_is_dragging(ui, &control.key);
+                // Keep ordinary rows in the same interaction order as the
+                // containing window. A permanently-Foreground child layer
+                // sits above the window resize grip and menu popups, which
+                // made the row look correct while swallowing its controls.
+                // The row is still transformed as one unit while dragging.
                 let layer_id = egui::LayerId::new(
-                    egui::Order::Foreground,
+                    egui::Order::Middle,
                     egui::Id::new(("hardware-channel-manager-row", &control.key)),
                 );
-                let dragging = crate::ui::layout::hardware_channel_is_dragging(ui, &control.key);
                 let row = ui.scope_builder(egui::UiBuilder::new().layer_id(layer_id), |ui| {
                     if dragging {
                         ui.set_opacity(0.58);
@@ -897,6 +902,11 @@ fn draw_channel_manager_page(
                 ui.add(egui::Separator::default().spacing(0.0));
             }
         });
+    // A release over the source row, outside the window, or over an
+    // incompatible channel is not a drop. Clear the transient drag in all of
+    // those cases so a cancelled drag cannot leave a transformed layer above
+    // the row controls and make subsequent actions appear dead.
+    crate::ui::layout::clear_released_hardware_channel_drag(ui);
 }
 
 fn draw_channel_detail_page(
@@ -1351,8 +1361,13 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     app.show_hardware_channels_dialog = true;
 
     let mut close_requested = false;
-    let bounds = ui.ctx().content_rect().shrink(24.0);
-    let default_size = egui::vec2(bounds.width().min(860.0), bounds.height().min(720.0));
+    let geometry = crate::ui::dialog::bounded_geometry(
+        ui.ctx().content_rect(),
+        24.0,
+        egui::vec2(860.0, 720.0),
+        egui::vec2(600.0, 420.0),
+        egui::vec2(1_100.0, 820.0),
+    );
     let window_fill = ui.visuals().window_fill();
     let opaque_window_fill =
         egui::Color32::from_rgb(window_fill.r(), window_fill.g(), window_fill.b());
@@ -1362,14 +1377,16 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         app.tr("Manage channels")
     ))
     .id(egui::Id::new("hardware_channels_dialog_v2"))
-    .fixed_size(default_size)
+    .default_rect(geometry.default_rect)
+    .min_size(geometry.min_size)
+    .max_size(geometry.max_size)
+    .resizable(true)
     .order(egui::Order::Foreground)
     .frame(egui::Frame::window(ui.style()).fill(opaque_window_fill))
-    .constrain_to(bounds)
+    .constrain_to(geometry.bounds)
     .title_bar(false)
     .collapsible(false)
     .show(ui.ctx(), |ui| {
-        ui.set_width((default_size.x - 20.0).max(600.0));
         ui.horizontal(|ui| {
             ui.strong(format!(
                 "{} {}",

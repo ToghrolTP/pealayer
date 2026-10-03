@@ -36,6 +36,59 @@ pub fn centered_default_rect(bounds: egui::Rect, desired_size: egui::Vec2) -> eg
     egui::Rect::from_center_size(bounds.center(), desired_size.min(bounds.size()))
 }
 
+/// Finite, internally consistent geometry for a resizable in-app dialog.
+///
+/// `egui::Window` persists its last requested size. During an interactive
+/// resize it also runs a sizing pass, so feeding it an inverted constraint or
+/// a minimum larger than its current viewport can poison the remembered
+/// rectangle and terminate the render loop. Derive every constraint from the
+/// same clamped bounds instead of recomputing unrelated min/max values in each
+/// dialog.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DialogGeometry {
+    pub bounds: egui::Rect,
+    pub default_rect: egui::Rect,
+    pub min_size: egui::Vec2,
+    pub max_size: egui::Vec2,
+}
+
+pub fn bounded_geometry(
+    content_rect: egui::Rect,
+    margin: f32,
+    desired_size: egui::Vec2,
+    requested_min: egui::Vec2,
+    requested_max: egui::Vec2,
+) -> DialogGeometry {
+    let content_rect =
+        if content_rect.is_finite() && content_rect.width() > 0.0 && content_rect.height() > 0.0 {
+            content_rect
+        } else {
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::splat(1.0))
+        };
+    let maximum_inset = ((content_rect.width().min(content_rect.height()) - 1.0) * 0.5).max(0.0);
+    let safe_margin = margin.max(0.0).min(maximum_inset);
+    let bounds = content_rect.shrink(safe_margin);
+    let available = egui::vec2(bounds.width().max(1.0), bounds.height().max(1.0));
+    let max_size = egui::vec2(
+        requested_max.x.max(1.0).min(available.x),
+        requested_max.y.max(1.0).min(available.y),
+    );
+    let min_size = egui::vec2(
+        requested_min.x.max(1.0).min(max_size.x),
+        requested_min.y.max(1.0).min(max_size.y),
+    );
+    let default_size = egui::vec2(
+        desired_size.x.clamp(min_size.x, max_size.x),
+        desired_size.y.clamp(min_size.y, max_size.y),
+    );
+    DialogGeometry {
+        bounds,
+        default_rect: centered_default_rect(bounds, default_size),
+        min_size,
+        max_size,
+    }
+}
+
 /// A consistent, keyboard-focusable dialog action with a Phosphor icon.
 pub fn action_button(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Response {
     action_button_with_kind(ui, icon, label, false)
@@ -246,6 +299,44 @@ mod tests {
         let rect = centered_default_rect(bounds, egui::vec2(600.0, 200.0));
         assert_eq!(rect.center(), bounds.center());
         assert_eq!(rect.size(), egui::vec2(400.0, 200.0));
+    }
+
+    #[test]
+    fn resizable_dialog_geometry_stays_finite_and_ordered_at_every_viewport_size() {
+        for size in [
+            egui::vec2(0.0, 0.0),
+            egui::vec2(1.0, 1.0),
+            egui::vec2(32.0, 24.0),
+            egui::vec2(420.0, 280.0),
+            egui::vec2(1_920.0, 1_080.0),
+        ] {
+            let geometry = bounded_geometry(
+                egui::Rect::from_min_size(egui::Pos2::ZERO, size),
+                24.0,
+                egui::vec2(860.0, 720.0),
+                egui::vec2(600.0, 420.0),
+                egui::vec2(1_100.0, 820.0),
+            );
+            assert!(geometry.bounds.is_finite());
+            assert!(geometry.default_rect.is_finite());
+            assert!(geometry.min_size.x > 0.0 && geometry.min_size.y > 0.0);
+            assert!(geometry.min_size.x <= geometry.default_rect.width());
+            assert!(geometry.min_size.y <= geometry.default_rect.height());
+            assert!(geometry.default_rect.width() <= geometry.max_size.x);
+            assert!(geometry.default_rect.height() <= geometry.max_size.y);
+            assert!(geometry.max_size.x <= geometry.bounds.width().max(1.0));
+            assert!(geometry.max_size.y <= geometry.bounds.height().max(1.0));
+        }
+
+        let geometry = bounded_geometry(
+            egui::Rect::from_min_max(egui::pos2(f32::NAN, 0.0), egui::pos2(10.0, f32::NAN)),
+            24.0,
+            egui::vec2(860.0, 720.0),
+            egui::vec2(600.0, 420.0),
+            egui::vec2(1_100.0, 820.0),
+        );
+        assert!(geometry.bounds.is_finite());
+        assert!(geometry.default_rect.is_finite());
     }
 
     #[test]

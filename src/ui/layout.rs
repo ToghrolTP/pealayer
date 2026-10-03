@@ -105,6 +105,14 @@ fn hardware_channel_drag_id() -> egui::Id {
     egui::Id::new("hardware-channel-drag")
 }
 
+pub(crate) fn clear_released_hardware_channel_drag(ui: &mut egui::Ui) {
+    if ui.input(|input| input.pointer.any_released()) {
+        ui.data_mut(|data| {
+            data.remove_temp::<HardwareChannelDrag>(hardware_channel_drag_id());
+        });
+    }
+}
+
 fn hardware_channel_handle_hovered(
     pointer: Option<egui::Pos2>,
     card_rect: Option<egui::Rect>,
@@ -4175,10 +4183,8 @@ fn draw_control_card_grid(
     }
     if let Some(drop) = pending_drop {
         persist_channel_drop(app, capabilities, drop);
-    } else if ui.input(|input| input.pointer.any_released()) {
-        ui.data_mut(|data| {
-            data.remove_temp::<HardwareChannelDrag>(hardware_channel_drag_id());
-        });
+    } else {
+        clear_released_hardware_channel_drag(ui);
     }
 }
 
