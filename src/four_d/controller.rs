@@ -296,15 +296,48 @@ pub struct HardwareWarning {
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareMacroStep {
+    #[serde(default)]
     pub at_us: u64,
     pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<u8>,
-    pub value: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frequency_hz: Option<u16>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub destination: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bits: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pulse_us: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub green: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blue: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brightness: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opcode: Option<u8>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub payload_hex: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub action_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HardwareMacro {
     pub id: u64,
     pub name: String,
@@ -314,6 +347,13 @@ pub struct HardwareMacro {
     pub mode: String,
     pub duration_ms: u64,
     pub steps: Vec<HardwareMacroStep>,
+    pub color: String,
+    pub label: String,
+    pub lcd_message: String,
+    pub timing_tolerance_us: u32,
+    pub keep_outputs_on_cancel: bool,
+    pub board_profile_key: String,
+    pub board_profile_mode: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1700,20 +1740,7 @@ fn parse_hardware_capabilities_with_front_panel(
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
-                .filter_map(|step| {
-                    Some(HardwareMacroStep {
-                        at_us: step.get("at_us").and_then(Value::as_u64).unwrap_or(0),
-                        kind: step.get("kind")?.as_str()?.to_string(),
-                        target: step
-                            .get("target")
-                            .and_then(Value::as_u64)
-                            .and_then(|target| u8::try_from(target).ok()),
-                        value: step
-                            .get("value")
-                            .and_then(Value::as_u64)
-                            .and_then(|value| u8::try_from(value).ok()),
-                    })
-                })
+                .filter_map(|step| serde_json::from_value(step.clone()).ok())
                 .collect();
             let mode = entry
                 .get("engine")
@@ -1733,7 +1760,10 @@ fn parse_hardware_capabilities_with_front_panel(
                 .unwrap_or_else(|| {
                     steps
                         .iter()
-                        .map(|step: &HardwareMacroStep| step.at_us.div_ceil(1_000))
+                        .map(|step: &HardwareMacroStep| {
+                            step.at_us.div_ceil(1_000)
+                                + u64::from(step.duration_ms.unwrap_or_default())
+                        })
                         .max()
                         .unwrap_or(1)
                 })
@@ -1755,6 +1785,40 @@ fn parse_hardware_capabilities_with_front_panel(
                 mode,
                 duration_ms,
                 steps,
+                color: entry
+                    .pointer("/properties/color")
+                    .and_then(Value::as_str)
+                    .unwrap_or("green")
+                    .to_string(),
+                label: entry
+                    .pointer("/properties/label")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                lcd_message: entry
+                    .pointer("/properties/lcd_message")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                timing_tolerance_us: entry
+                    .pointer("/properties/timing_tolerance_us")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u32::try_from(value).ok())
+                    .unwrap_or(0),
+                keep_outputs_on_cancel: entry
+                    .pointer("/properties/keep_outputs_on_cancel")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                board_profile_key: entry
+                    .pointer("/properties/board_profile_key")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                board_profile_mode: entry
+                    .pointer("/properties/board_profile_mode")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
             })
         })
         .collect();
@@ -2195,7 +2259,28 @@ mod tests {
                 "instance_id": "USB\\VID_1A86&PID_7523\\BOARD-1"
             },
             "status": {"active_relays": 16},
-            "macros": {"library": [{"id": 3, "name": "Thunder", "mode": "mcu", "steps": [{"at_us": 250000, "kind": "relay-mask"}]}]}
+            "macros": {"library": [{
+                "id": 3,
+                "name": "Thunder",
+                "mode": "mcu",
+                "steps": [{
+                    "at_us": 250000,
+                    "kind": "display",
+                    "text": "GO",
+                    "destination": "segments",
+                    "duration_ms": 200,
+                    "action_ids": ["seat.a.up"]
+                }],
+                "properties": {
+                    "color": "amber",
+                    "label": "Seat rise",
+                    "lcd_message": "Motion",
+                    "timing_tolerance_us": 25000,
+                    "keep_outputs_on_cancel": true,
+                    "board_profile_key": "cafe-cinema",
+                    "board_profile_mode": "motion"
+                }
+            }]}
         });
         let catalog = json!({
             "peripheral_names": {"relay.5": "Left Air"},
@@ -2221,7 +2306,18 @@ mod tests {
         assert!(parsed.pwm_channels.iter().any(|channel| channel.id == 15));
         assert_eq!(parsed.macros[0].name, "Thunder");
         assert_eq!(parsed.macros[0].id, 3);
-        assert_eq!(parsed.macros[0].duration_ms, 250);
+        assert_eq!(parsed.macros[0].duration_ms, 450);
+        assert_eq!(parsed.macros[0].steps[0].text, "GO");
+        assert_eq!(parsed.macros[0].steps[0].destination, "segments");
+        assert_eq!(parsed.macros[0].steps[0].duration_ms, Some(200));
+        assert_eq!(parsed.macros[0].steps[0].action_ids, ["seat.a.up"]);
+        assert_eq!(parsed.macros[0].color, "amber");
+        assert_eq!(parsed.macros[0].label, "Seat rise");
+        assert_eq!(parsed.macros[0].lcd_message, "Motion");
+        assert_eq!(parsed.macros[0].timing_tolerance_us, 25_000);
+        assert!(parsed.macros[0].keep_outputs_on_cancel);
+        assert_eq!(parsed.macros[0].board_profile_key, "cafe-cinema");
+        assert_eq!(parsed.macros[0].board_profile_mode, "motion");
     }
 
     #[test]

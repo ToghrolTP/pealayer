@@ -79,6 +79,14 @@ pub struct ControllerEffectDraft {
     pub default_fps: u8,
     pub duration_ms: u64,
     pub default_pixels: u16,
+    pub engine: String,
+    pub steps: Vec<crate::four_d::controller::HardwareMacroStep>,
+    pub label: String,
+    pub lcd_message: String,
+    pub timing_tolerance_us: u32,
+    pub keep_outputs_on_cancel: bool,
+    pub board_profile_key: String,
+    pub board_profile_mode: String,
     pub is_new: bool,
 }
 
@@ -104,6 +112,14 @@ impl Default for ControllerEffectDraft {
             default_fps: 20,
             duration_ms: 5_000,
             default_pixels: 100,
+            engine: "host".to_string(),
+            steps: Vec::new(),
+            label: String::new(),
+            lcd_message: String::new(),
+            timing_tolerance_us: 100_000,
+            keep_outputs_on_cancel: false,
+            board_profile_key: String::new(),
+            board_profile_mode: String::new(),
             is_new: true,
         }
     }
@@ -118,6 +134,7 @@ pub struct EffectDragPayload {
     pub actions: Vec<crate::four_d::models::AtomicAction>,
     pub controller_macro: Option<crate::four_d::models::ControllerMacroCue>,
     pub controller_strip_effect: Option<crate::four_d::models::ControllerStripEffectCue>,
+    pub controller_lane: Option<crate::four_d::models::ControllerEffectLane>,
 }
 
 #[derive(Debug, Default)]
@@ -1678,62 +1695,77 @@ impl PealayerApp {
 
     pub(crate) fn save_controller_effect(&mut self) -> Result<(), String> {
         let draft = self.effect_library_draft.clone();
-        let name = Self::controller_command_argument(&draft.name).ok_or_else(|| {
-            "Effect name must use 1–64 letters, numbers, spaces, dashes, or underscores".to_string()
-        })?;
-        let category = Self::controller_command_argument(&draft.category).ok_or_else(|| {
-            "Effect category must use 1–64 letters, numbers, spaces, dashes, or underscores"
-                .to_string()
-        })?;
-        let icon = if draft.icon.trim().is_empty() {
-            "-".to_string()
-        } else {
-            Self::controller_command_argument(&draft.icon).ok_or_else(|| {
-                "Effect icon must use 1–64 letters, numbers, spaces, dashes, or underscores"
-                    .to_string()
-            })?
-        };
-        let command = if draft.kind == "sequence" {
-            if draft.is_new {
-                let id = draft
-                    .id
-                    .parse::<u8>()
-                    .map_err(|_| "Sequence ID must be 0–255".to_string())?;
-                format!(
-                    "effect create sequence {id} {name} {category} {} {icon}",
-                    draft.color,
-                )
-            } else {
-                format!(
-                    "effect update {} {name} {category} {} {icon}",
-                    draft.id, draft.color,
-                )
+        let checked_text = |value: &str, field: &str, required: bool| -> Result<String, String> {
+            let value = value.trim();
+            if (required && value.is_empty())
+                || value.chars().count() > 64
+                || value.chars().any(char::is_control)
+            {
+                return Err(format!("{field} must contain 1–64 printable characters"));
             }
+            Ok(value.to_string())
+        };
+        let name = checked_text(&draft.name, "Effect name", true)?;
+        let category = checked_text(&draft.category, "Effect category", true)?;
+        let icon = checked_text(&draft.icon, "Effect icon", false)?;
+        let descriptor = if draft.kind == "sequence" {
+            let id = draft
+                .id
+                .parse::<u8>()
+                .map_err(|_| "Sequence ID must be 0–255".to_string())?;
+            if !matches!(draft.engine.as_str(), "host" | "mcu") {
+                return Err("Sequence engine must be host or mcu".to_string());
+            }
+            serde_json::json!({
+                "reference": format!("effect:{id}"),
+                "id": id.to_string(),
+                "name": name,
+                "category": category,
+                "icon": icon,
+                "kind": "sequence",
+                "engine": draft.engine,
+                "editable": true,
+                "duration_ms": draft.duration_ms,
+                "steps": draft.steps,
+                "properties": {
+                    "color": draft.color,
+                    "label": draft.label,
+                    "lcd_message": draft.lcd_message,
+                    "timing_tolerance_us": draft.timing_tolerance_us,
+                    "keep_outputs_on_cancel": draft.keep_outputs_on_cancel,
+                    "board_profile_key": draft.board_profile_key,
+                    "board_profile_mode": draft.board_profile_mode,
+                }
+            })
         } else {
             let id = draft.id.trim();
             if !crate::four_d::controller::valid_strip_effect_id(id) {
                 return Err("Strip effect ID must use 1–64 lowercase letters, digits, dots, dashes, or underscores".to_string());
             }
-            let (_primitive, program_hex) =
-                Self::controller_effect_program_hex(&draft.program_json)?;
-            let description = if draft.description.trim().is_empty() {
-                "-".to_string()
-            } else {
-                Self::controller_command_argument(&draft.description)
-                    .ok_or_else(|| "Description must use no more than 64 letters, numbers, spaces, dashes, or underscores".to_string())?
-            };
-            if draft.is_new {
-                format!(
-                    "effect create strip-json {id} {name} {category} {description} {program_hex} {} {} {} {icon}",
-                    draft.default_fps, draft.duration_ms, draft.default_pixels,
-                )
-            } else {
-                format!(
-                    "effect update-json {id} {name} {category} {description} {program_hex} {} {} {} {icon}",
-                    draft.default_fps, draft.duration_ms, draft.default_pixels,
-                )
-            }
+            let program: serde_json::Value = serde_json::from_str(&draft.program_json)
+                .map_err(|error| format!("Invalid lighting program JSON: {error}"))?;
+            serde_json::json!({
+                "reference": format!("effect:{id}"),
+                "id": id,
+                "name": name,
+                "category": category,
+                "icon": icon,
+                "description": draft.description.trim(),
+                "kind": "strip-stream",
+                "engine": "host",
+                "editable": true,
+                "duration_ms": draft.duration_ms,
+                "default_fps": draft.default_fps,
+                "default_pixels": draft.default_pixels,
+                "program": program,
+            })
         };
+        let encoded = serde_json::to_vec(&descriptor)
+            .map_err(|error| format!("Encode effect definition: {error}"))?
+            .into_iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let command = format!("effect upsert-json {encoded}");
         self.request_hardware_effect_command("effect-save", command)
     }
 
@@ -2243,6 +2275,14 @@ impl PealayerApp {
                     default_fps: effect.default_fps,
                     duration_ms: effect.duration_ms,
                     default_pixels: effect.default_pixels,
+                    engine: "host".to_string(),
+                    steps: Vec::new(),
+                    label: String::new(),
+                    lcd_message: String::new(),
+                    timing_tolerance_us: 0,
+                    keep_outputs_on_cancel: false,
+                    board_profile_key: String::new(),
+                    board_profile_mode: String::new(),
                     is_new: effect.is_new,
                 };
                 if let Err(error) = self.save_controller_effect() {
@@ -3426,11 +3466,46 @@ fn controller_macro_effect_preset(
     effect.icon = crate::ui::icons::named_control_icon(&hardware_macro.icon)
         .unwrap_or(crate::ui::icons::SPARKLE)
         .to_string();
+    effect.controller_lane = Some(controller_macro_lane(hardware_macro));
     EffectPreset {
         category: hardware_macro.category.clone(),
         group_icon: hardware_macro.group_icon.clone(),
         source: EffectPresetSource::ControllerMacro(hardware_macro.id),
         effect,
+    }
+}
+
+pub(crate) fn controller_macro_lane(
+    hardware_macro: &crate::four_d::controller::HardwareMacro,
+) -> crate::four_d::models::ControllerEffectLane {
+    use crate::four_d::models::ControllerEffectLane;
+
+    let mut lanes = std::collections::BTreeSet::new();
+    for step in &hardware_macro.steps {
+        let kind = step.kind.trim().to_ascii_lowercase();
+        let lane = if step
+            .action_ids
+            .iter()
+            .any(|action| action.starts_with("seat.") || action.starts_with("motion."))
+        {
+            ControllerEffectLane::Motion
+        } else {
+            match kind.as_str() {
+                "relay" | "relay-mask" | "relays-off" => ControllerEffectLane::Relay,
+                "pwm" | "mosfet" => ControllerEffectLane::Pwm,
+                "display" | "message" => ControllerEffectLane::Display,
+                "rf" | "rf-transmit" => ControllerEffectLane::Rf,
+                "beep" | "tone" | "buzzer" => ControllerEffectLane::Audio,
+                "rgb" | "strip" | "strip-frame" | "pixel" => ControllerEffectLane::Lighting,
+                _ => ControllerEffectLane::Sequence,
+            }
+        };
+        lanes.insert(lane);
+    }
+    match lanes.len() {
+        0 => ControllerEffectLane::Sequence,
+        1 => *lanes.iter().next().expect("one classified effect lane"),
+        _ => ControllerEffectLane::Composite,
     }
 }
 
@@ -4066,14 +4141,17 @@ mod tests {
                     kind: "relay".to_string(),
                     target: Some(6),
                     value: Some(1),
+                    ..Default::default()
                 },
                 crate::four_d::controller::HardwareMacroStep {
                     at_us: 250_000,
                     kind: "relays-off".to_string(),
                     target: None,
                     value: None,
+                    ..Default::default()
                 },
             ],
+            ..Default::default()
         };
         let preset = controller_macro_effect_preset(&hardware_macro);
         assert_eq!(preset.effect.name, "Live Air Burst");
@@ -4101,11 +4179,48 @@ mod tests {
                 kind: "display".to_string(),
                 target: None,
                 value: None,
+                ..Default::default()
             }],
+            ..Default::default()
         };
         let preset = controller_macro_effect_preset(&hardware_macro);
         assert_eq!(preset.effect.controller_macro.as_ref().unwrap().id, 7);
         assert!(preset.effect.actions.is_empty());
+    }
+
+    #[test]
+    fn controller_effect_lane_is_derived_from_the_sequence_commands() {
+        use crate::four_d::controller::{HardwareMacro, HardwareMacroStep};
+        use crate::four_d::models::ControllerEffectLane;
+
+        let macro_with = |steps| HardwareMacro {
+            steps,
+            ..Default::default()
+        };
+        let step = |kind: &str| HardwareMacroStep {
+            kind: kind.to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            controller_macro_lane(&macro_with(vec![step("pwm")])),
+            ControllerEffectLane::Pwm
+        );
+        assert_eq!(
+            controller_macro_lane(&macro_with(vec![step("display")])),
+            ControllerEffectLane::Display
+        );
+        assert_eq!(
+            controller_macro_lane(&macro_with(vec![step("pwm"), step("display")])),
+            ControllerEffectLane::Composite
+        );
+
+        let mut motion = step("relay-mask");
+        motion.action_ids.push("seat.a.up".to_string());
+        assert_eq!(
+            controller_macro_lane(&macro_with(vec![motion])),
+            ControllerEffectLane::Motion
+        );
     }
 
     #[test]

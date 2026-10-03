@@ -65,6 +65,29 @@ pub struct ControllerStripEffectCue {
     pub id: String,
 }
 
+/// Capability-derived timeline lane for a PCController-owned effect.
+///
+/// This is presentation metadata, not a second effect definition: the living
+/// sequence remains owned by PCController and Pealayer stores only its stable
+/// reference plus the lane needed to keep an authored timeline readable while
+/// the controller is temporarily offline.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum ControllerEffectLane {
+    Motion,
+    Relay,
+    Pwm,
+    Lighting,
+    Display,
+    Rf,
+    Audio,
+    #[default]
+    Sequence,
+    Composite,
+}
+
 pub fn default_hardware_target() -> HardwareTarget {
     HardwareTarget::Any
 }
@@ -91,6 +114,8 @@ pub struct Effect {
     /// Opaque PCController strip-effect ID advertised by the active board.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controller_strip_effect: Option<ControllerStripEffectCue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_lane: Option<ControllerEffectLane>,
 }
 
 impl Effect {
@@ -104,6 +129,7 @@ impl Effect {
             actions,
             controller_macro: None,
             controller_strip_effect: None,
+            controller_lane: None,
         }
     }
 
@@ -123,6 +149,7 @@ impl Effect {
             actions,
             controller_macro: None,
             controller_strip_effect: None,
+            controller_lane: None,
         }
     }
 
@@ -142,6 +169,7 @@ impl Effect {
             actions: Vec::new(),
             controller_macro: Some(ControllerMacroCue { id: macro_id, mode }),
             controller_strip_effect: None,
+            controller_lane: Some(ControllerEffectLane::Sequence),
         }
     }
 
@@ -155,6 +183,7 @@ impl Effect {
             actions: Vec::new(),
             controller_macro: None,
             controller_strip_effect: Some(ControllerStripEffectCue { id: effect_id }),
+            controller_lane: Some(ControllerEffectLane::Lighting),
         }
     }
 }
