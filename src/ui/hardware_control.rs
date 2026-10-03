@@ -154,7 +154,7 @@ fn set_pwm(app: &PealayerApp, channel: u8, percent: f64) {
         });
 }
 
-fn managed_controls(capabilities: &HardwareCapabilities) -> Vec<HardwareControl> {
+pub(crate) fn managed_controls(capabilities: &HardwareCapabilities) -> Vec<HardwareControl> {
     let mut controls = capabilities.controls.clone();
     for output in &capabilities.relays {
         if !controls.iter().any(|control| control.key == output.key) {
@@ -237,7 +237,10 @@ fn channel_identity(capabilities: &HardwareCapabilities, control: &HardwareContr
     }
 }
 
-fn channel_is_active(capabilities: &HardwareCapabilities, control: &HardwareControl) -> bool {
+pub(crate) fn channel_is_active(
+    capabilities: &HardwareCapabilities,
+    control: &HardwareControl,
+) -> bool {
     if let Some(relay) = relay_id(&control.key) {
         return capabilities.active_relays.contains(&relay);
     }
@@ -490,6 +493,8 @@ fn draw_channel_manager_page(
                 let order_draft_id = ui.make_persistent_id(("manager-channel-order", &control.key));
                 let order_edit_id =
                     ui.make_persistent_id(("manager-channel-order-input", &control.key));
+                let timeline_track_key =
+                    crate::four_d::models::hardware_timeline_track_key(&control.key);
                 let editing = ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
                 let row_height = 32.0;
                 let row_width = ui.available_width();
@@ -734,6 +739,50 @@ fn draw_channel_manager_page(
                                     );
                                     ui.close();
                                 }
+                                let track_state = app.timeline.track_state(&timeline_track_key);
+                                if ui
+                                    .button(format!(
+                                        "{} {}",
+                                        crate::ui::icons::LINK,
+                                        if track_state.linked {
+                                            app.tr("Unlink from timeline")
+                                        } else {
+                                            app.tr("Link to timeline")
+                                        }
+                                    ))
+                                    .clicked()
+                                {
+                                    app.set_timeline_track_linked(
+                                        &timeline_track_key,
+                                        !track_state.linked,
+                                    );
+                                    ui.close();
+                                }
+                                if ui
+                                    .add_enabled(
+                                        track_state.linked,
+                                        egui::Button::new(format!(
+                                            "{} {}",
+                                            if track_state.visible {
+                                                crate::ui::icons::EYE_SLASH
+                                            } else {
+                                                crate::ui::icons::EYE
+                                            },
+                                            if track_state.visible {
+                                                app.tr("Hide timeline track")
+                                            } else {
+                                                app.tr("Show timeline track")
+                                            }
+                                        )),
+                                    )
+                                    .clicked()
+                                {
+                                    app.set_timeline_track_visible(
+                                        &timeline_track_key,
+                                        !track_state.visible,
+                                    );
+                                    ui.close();
+                                }
                                 ui.separator();
                                 if ui
                                     .button(format!(
@@ -853,6 +902,8 @@ fn draw_channel_detail_page(
 
             ui.add_space(10.0);
             ui.strong(app.tr("Presentation"));
+            let timeline_track_key =
+                crate::four_d::models::hardware_timeline_track_key(&control.key);
             egui::Grid::new("hardware_control_presentation")
                 .num_columns(2)
                 .spacing([12.0, 8.0])
@@ -978,6 +1029,31 @@ fn draw_channel_detail_page(
                         }
                         ui.end_row();
                     }
+                    let track_state = app.timeline.track_state(&timeline_track_key);
+                    let mut linked = track_state.linked;
+                    ui.label(app.tr("Timeline"));
+                    if ui
+                        .checkbox(&mut linked, app.tr("Link channel to timeline"))
+                        .changed()
+                    {
+                        app.set_timeline_track_linked(&timeline_track_key, linked);
+                    }
+                    ui.end_row();
+                    let mut timeline_visible = track_state.visible;
+                    ui.label(app.tr("Timeline visibility"));
+                    if ui
+                        .add_enabled_ui(linked, |ui| {
+                            ui.checkbox(
+                                &mut timeline_visible,
+                                app.tr("Show channel timeline track"),
+                            )
+                        })
+                        .inner
+                        .changed()
+                    {
+                        app.set_timeline_track_visible(&timeline_track_key, timeline_visible);
+                    }
+                    ui.end_row();
                 });
             ui.horizontal_wrapped(|ui| {
                 if ui

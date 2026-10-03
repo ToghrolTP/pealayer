@@ -210,6 +210,47 @@ pub struct TimelineKeyframe {
     pub label: String,
 }
 
+/// Per-project presentation and routing state for one discovered timeline
+/// track. The map key is the stable media or PCController channel identity;
+/// captions may be renamed without breaking the association.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TimelineTrackState {
+    /// Linked tracks participate in this project's timeline. Unlinking keeps
+    /// authored data intact but removes the live association until re-linked.
+    pub linked: bool,
+    /// Hidden tracks remain linked and operational but do not consume a row.
+    pub visible: bool,
+}
+
+impl Default for TimelineTrackState {
+    fn default() -> Self {
+        Self {
+            linked: true,
+            visible: true,
+        }
+    }
+}
+
+pub fn hardware_timeline_track_key(channel_key: &str) -> String {
+    format!("hardware:{}", channel_key.trim())
+}
+
+pub fn controller_effect_timeline_track_key(lane: ControllerEffectLane) -> String {
+    let suffix = match lane {
+        ControllerEffectLane::Motion => "motion",
+        ControllerEffectLane::Relay => "relay",
+        ControllerEffectLane::Pwm => "pwm",
+        ControllerEffectLane::Lighting => "lighting",
+        ControllerEffectLane::Display => "display",
+        ControllerEffectLane::Rf => "rf",
+        ControllerEffectLane::Audio => "audio",
+        ControllerEffectLane::Sequence => "sequence",
+        ControllerEffectLane::Composite => "composite",
+    };
+    format!("controller-effect:{suffix}")
+}
+
 impl TimelineKeyframe {
     pub fn new(time_ms: u64) -> Self {
         Self {
@@ -243,6 +284,11 @@ pub struct Timeline {
     /// Timeline-wide exact timing guides used by cue snapping.
     #[serde(default)]
     pub keyframes: Vec<TimelineKeyframe>,
+    /// Stable link/visibility policy for media, controller-effect, and hardware
+    /// tracks. Missing entries deliberately mean linked and visible so older
+    /// project files retain their previous appearance.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub track_states: std::collections::BTreeMap<String, TimelineTrackState>,
 }
 
 impl Default for Timeline {
@@ -256,6 +302,7 @@ impl Default for Timeline {
             // appear as if they were connected equipment.
             analog_tracks: Vec::new(),
             keyframes: Vec::new(),
+            track_states: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -271,6 +318,7 @@ mod tests {
         assert!(timeline.templates.is_empty());
         assert!(timeline.analog_tracks.is_empty());
         assert!(timeline.keyframes.is_empty());
+        assert!(timeline.track_states.is_empty());
     }
 
     #[test]
@@ -292,11 +340,62 @@ mod tests {
         assert!(timeline.remove_keyframe(earlier));
         assert_eq!(timeline.keyframes[0].time_ms, 1_250);
     }
+
+    #[test]
+    fn missing_track_preferences_remain_linked_and_visible() {
+        let timeline: Timeline = serde_json::from_str(
+            r#"{"instances":[],"templates":[],"analog_tracks":[],"keyframes":[]}"#,
+        )
+        .expect("older timeline JSON should remain readable");
+        assert_eq!(
+            timeline.track_state("hardware:relay.5"),
+            TimelineTrackState::default()
+        );
+    }
+
+    #[test]
+    fn per_track_link_and_visibility_round_trip() {
+        let mut timeline = Timeline::default();
+        assert!(timeline.set_track_linked("hardware:relay.5", false));
+        assert!(timeline.set_track_visible("media:subtitle:7", false));
+        let encoded = serde_json::to_string(&timeline).expect("timeline should serialize");
+        let decoded: Timeline =
+            serde_json::from_str(&encoded).expect("timeline should deserialize");
+        assert!(!decoded.track_state("hardware:relay.5").linked);
+        assert!(!decoded.track_state("media:subtitle:7").visible);
+        assert_eq!(hardware_timeline_track_key("pwm.12"), "hardware:pwm.12");
+    }
 }
 
 impl Timeline {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn track_state(&self, key: &str) -> TimelineTrackState {
+        self.track_states.get(key).copied().unwrap_or_default()
+    }
+
+    pub fn set_track_linked(&mut self, key: impl Into<String>, linked: bool) -> bool {
+        let key = key.into();
+        let mut next = self.track_state(&key);
+        if next.linked == linked {
+            return false;
+        }
+        next.linked = linked;
+        self.track_states.insert(key, next);
+        true
+    }
+
+    pub fn set_track_visible(&mut self, key: impl Into<String>, visible: bool) -> bool {
+        let key = key.into();
+        let mut next = self.track_state(&key);
+        if next.visible == visible {
+            return false;
+        }
+        next.visible = visible;
+        self.track_states.insert(key, next);
+        true
     }
 
     /// Adds one exact timeline guide, deduplicating by millisecond and keeping

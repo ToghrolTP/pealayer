@@ -1469,6 +1469,15 @@ pub fn compile_controller_macros(timeline: &Timeline) -> Vec<CompiledControllerM
                 .templates
                 .iter()
                 .find(|template| template.id == instance.effect_id)?;
+            let lane = effect
+                .controller_lane
+                .unwrap_or(crate::four_d::models::ControllerEffectLane::Sequence);
+            if !timeline
+                .track_state(&crate::four_d::models::controller_effect_timeline_track_key(lane))
+                .linked
+            {
+                return None;
+            }
             let controller_macro = effect.controller_macro.as_ref()?;
             Some(CompiledControllerMacro {
                 time_ms: instance.start_time_ms,
@@ -1494,6 +1503,16 @@ pub fn compile_controller_strip_effects(timeline: &Timeline) -> Vec<CompiledCont
         let Some(strip) = effect.controller_strip_effect.as_ref() else {
             continue;
         };
+        if !timeline
+            .track_state(
+                &crate::four_d::models::controller_effect_timeline_track_key(
+                    crate::four_d::models::ControllerEffectLane::Lighting,
+                ),
+            )
+            .linked
+        {
+            continue;
+        }
         if !crate::four_d::controller::valid_strip_effect_id(&strip.id) {
             continue;
         }
@@ -1613,6 +1632,13 @@ mod tests {
             }]
         );
         assert!(compile_timeline(&timeline, &Default::default(), &Default::default()).is_empty());
+        timeline.set_track_linked(
+            crate::four_d::models::controller_effect_timeline_track_key(
+                crate::four_d::models::ControllerEffectLane::Sequence,
+            ),
+            false,
+        );
+        assert!(compile_controller_macros(&timeline).is_empty());
     }
 
     #[test]
@@ -1647,6 +1673,19 @@ mod tests {
                     start: false,
                 },
             ]
+        );
+        timeline.set_track_linked(
+            crate::four_d::models::controller_effect_timeline_track_key(
+                crate::four_d::models::ControllerEffectLane::Lighting,
+            ),
+            false,
+        );
+        assert!(compile_controller_strip_effects(&timeline).is_empty());
+        timeline.set_track_linked(
+            crate::four_d::models::controller_effect_timeline_track_key(
+                crate::four_d::models::ControllerEffectLane::Lighting,
+            ),
+            true,
         );
         let compiled = compile_controller_strip_effects(&timeline);
         assert_eq!(active_controller_strip_effect_at(&compiled, 2_249), None);

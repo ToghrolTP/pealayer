@@ -3903,11 +3903,26 @@ impl PealayerApp {
         if changed {
             let _ = self.engine_handle.sender.send(
                 crate::four_d::engine::EngineMessage::UpdateAnalogTracks(
-                    self.timeline.analog_tracks.clone(),
+                    self.linked_analog_tracks(),
                 ),
             );
         }
         changed
+    }
+
+    pub(crate) fn linked_analog_tracks(&self) -> Vec<crate::four_d::curve::AnalogTrack> {
+        self.timeline
+            .analog_tracks
+            .iter()
+            .filter(|track| {
+                self.timeline
+                    .track_state(&crate::four_d::models::hardware_timeline_track_key(
+                        &format!("pwm.{}", track.channel),
+                    ))
+                    .linked
+            })
+            .cloned()
+            .collect()
     }
 
     pub fn snapshot_timeline(&self) -> crate::four_d::history::TimelineSnapshot {
@@ -3916,16 +3931,71 @@ impl PealayerApp {
             analog_tracks: self.timeline.analog_tracks.clone(),
             templates: self.timeline.templates.clone(),
             keyframes: self.timeline.keyframes.clone(),
+            track_states: self.timeline.track_states.clone(),
         }
+    }
+
+    fn persist_timeline_track_preferences(&mut self) {
+        let Some(video_path) = self.current_video_path.as_ref() else {
+            return;
+        };
+        if crate::media::is_remote_media_target(&video_path.to_string_lossy()) {
+            return;
+        }
+        let mut sidecar = video_path.clone();
+        sidecar.set_extension("4d.json");
+        if !sidecar.exists() {
+            let mut json_sidecar = video_path.clone();
+            json_sidecar.set_extension("json");
+            if json_sidecar.exists() {
+                sidecar = json_sidecar;
+            }
+        }
+        if let Err(error) = self.timeline.save_to_file(&sidecar) {
+            self.set_osd(format!(
+                "{}: {error}",
+                self.tr("Could not save timeline settings")
+            ));
+        }
+    }
+
+    pub(crate) fn set_timeline_track_linked(&mut self, key: &str, linked: bool) {
+        if self.timeline.track_state(key).linked == linked {
+            return;
+        }
+        self.undo_stack.push(self.snapshot_timeline());
+        self.timeline.set_track_linked(key.to_string(), linked);
+        self.persist_timeline_track_preferences();
+        self.sync_timeline_engine();
+    }
+
+    pub(crate) fn set_timeline_track_visible(&mut self, key: &str, visible: bool) {
+        if self.timeline.track_state(key).visible == visible {
+            return;
+        }
+        self.undo_stack.push(self.snapshot_timeline());
+        self.timeline.set_track_visible(key.to_string(), visible);
+        self.persist_timeline_track_preferences();
     }
 
     /// Rebuilds every hardware lane from the authoritative project timeline.
     /// Keeping relay edges and controller-owned macro cues together prevents
     /// load, undo, delete, and drag operations from updating only one lane.
     pub fn sync_timeline_engine(&self) {
+        let mut muted_tracks = self.track_muted.clone();
+        for (key, state) in &self.timeline.track_states {
+            if !state.linked {
+                if let Some(relay) = key
+                    .strip_prefix("hardware:relay.")
+                    .and_then(|value| value.parse::<u8>().ok())
+                {
+                    muted_tracks.insert(relay);
+                }
+            }
+        }
         let relays = crate::four_d::engine::compile_timeline(
             &self.timeline,
-            &self.track_muted,
+            &muted_tracks,
             &self.track_soloed,
         );
         let macros = crate::four_d::engine::compile_controller_macros(&self.timeline);
@@ -3941,6 +4011,9 @@ impl PealayerApp {
         let _ = self.engine_handle.sender.send(
             crate::four_d::engine::EngineMessage::UpdateControllerStripEffects(strip_effects),
         );
+        let _ = self.engine_handle.sender.send(
+            crate::four_d::engine::EngineMessage::UpdateAnalogTracks(self.linked_analog_tracks()),
+        );
     }
 
     pub fn restore_timeline_snapshot(
@@ -3951,11 +4024,8 @@ impl PealayerApp {
         self.timeline.analog_tracks = snapshot.analog_tracks;
         self.timeline.templates = snapshot.templates;
         self.timeline.keyframes = snapshot.keyframes;
-        let _ = self.engine_handle.sender.send(
-            crate::four_d::engine::EngineMessage::UpdateAnalogTracks(
-                self.timeline.analog_tracks.clone(),
-            ),
-        );
+        self.timeline.track_states = snapshot.track_states;
+        self.persist_timeline_track_preferences();
         self.sync_timeline_engine();
     }
 
