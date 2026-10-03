@@ -22,6 +22,7 @@ fn web_workspace_exposes_the_same_primary_surfaces_as_the_native_app() {
     assert!(app.contains("<EffectsTab state={state}"));
     assert!(app.contains("<HardwareTab state={state}"));
     assert!(app.contains("surface=\"timeline\""));
+    assert!(app.contains("target.pathname = '/api/player/command'"));
 }
 
 #[test]

@@ -151,9 +151,23 @@ const App: React.FC = () => {
         method: methodAliases[command] || command,
         params,
       }));
-    } else if (!connectionTarget) {
+    } else {
       const body = JSON.stringify({ command, ...payload });
-      fetch('/api/player/command', {
+      let endpoint = '/api/player/command';
+      if (connectionTarget) {
+        try {
+          const target = new URL(connectionTarget.includes('://') ? connectionTarget : `http://${connectionTarget}`);
+          if (target.protocol === 'ws:') target.protocol = 'http:';
+          if (target.protocol === 'wss:') target.protocol = 'https:';
+          target.pathname = '/api/player/command';
+          target.search = '';
+          target.hash = '';
+          endpoint = target.toString();
+        } catch {
+          return;
+        }
+      }
+      fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,
