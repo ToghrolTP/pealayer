@@ -306,17 +306,44 @@ fn effect_navigation_button(
     )
 }
 
-const SEQUENCE_STEP_KINDS: &[&str] = &[
-    "relay-mask",
-    "relay",
-    "pwm",
-    "display",
-    "rf",
-    "beep",
-    "rgb",
-    "relays-off",
-    "opcode",
-];
+fn sequence_step_kinds(
+    capabilities: Option<&crate::four_d::controller::HardwareCapabilities>,
+) -> Vec<&'static str> {
+    let Some(capabilities) = capabilities.filter(|value| value.board_connected) else {
+        return Vec::new();
+    };
+    let mut kinds = Vec::new();
+    if !capabilities.relays.is_empty() {
+        kinds.extend(["motion", "relay", "relay-mask", "relays-off"]);
+    }
+    if !capabilities.pwm_channels.is_empty() {
+        kinds.extend(["pwm", "pwm-off"]);
+    }
+    if capabilities.supports_segment_display || capabilities.supports_lcd_display {
+        kinds.push("display");
+    }
+    if capabilities.supports_rf_transmit {
+        kinds.push("rf");
+    }
+    // Buzzer and status-RGB push support are advertised independently of the
+    // peripheral channel list.
+    if capabilities.capability_bits & (1 << 27) != 0 {
+        kinds.push("beep");
+    }
+    if capabilities.supports_status_led_settings {
+        kinds.push("rgb");
+    }
+    if capabilities.supports_addressable_led {
+        kinds.push("addressable");
+    }
+    if capabilities.front_panel.is_some() {
+        kinds.extend(["menu", "menu-action"]);
+    }
+    // Raw acknowledged commands remain available for expert diagnostics, but
+    // are intentionally last and never stand in for missing capability data.
+    kinds.push("opcode");
+    kinds
+}
 
 fn reset_step_kind(step: &mut crate::four_d::controller::HardwareMacroStep, kind: String) {
     let at_us = step.at_us;
@@ -326,8 +353,13 @@ fn reset_step_kind(step: &mut crate::four_d::controller::HardwareMacroStep, kind
         ..Default::default()
     };
     match step.kind.as_str() {
+        "motion" => {
+            step.target = Some(0);
+            step.value = Some(0);
+            step.action_ids = vec!["seat.a.stop".to_string()];
+        }
         "relay" => {
-            step.target = Some(1);
+            step.target = Some(0);
             step.value = Some(1);
         }
         "relay-mask" => step.value = Some(0),
@@ -354,7 +386,47 @@ fn reset_step_kind(step: &mut crate::four_d::controller::HardwareMacroStep, kind
             step.blue = Some(255);
             step.brightness = Some(255);
         }
+        "addressable" => {
+            step.target = Some(0);
+            step.red = Some(255);
+            step.green = Some(255);
+            step.blue = Some(255);
+            step.brightness = Some(255);
+        }
+        "menu" | "menu-action" => step.target = Some(0),
         _ => {}
+    }
+}
+
+fn refresh_semantic_action(step: &mut crate::four_d::controller::HardwareMacroStep) {
+    let action = match step.kind.as_str() {
+        "motion" => {
+            let side = if step.target.unwrap_or_default() == 0 {
+                "a"
+            } else {
+                "b"
+            };
+            let verb = match step.value.unwrap_or_default() {
+                1 => "up",
+                2 => "down",
+                _ => "stop",
+            };
+            Some(format!("seat.{side}.{verb}"))
+        }
+        "relay" => {
+            let target = step.target.unwrap_or_default().saturating_add(1);
+            let verb = if step.value.unwrap_or_default() == 0 {
+                "off"
+            } else {
+                "on"
+            };
+            Some(format!("relay.{target}.{verb}"))
+        }
+        _ => None,
+    };
+    if let Some(action) = action {
+        step.action_ids.clear();
+        step.action_ids.push(action);
     }
 }
 
@@ -367,7 +439,12 @@ fn sequence_duration_ms(steps: &[crate::four_d::controller::HardwareMacroStep]) 
         .max(1)
 }
 
-fn draw_sequence_step_editor(ui: &mut egui::Ui, draft: &mut ControllerEffectDraft, rtl_ui: bool) {
+fn draw_sequence_step_editor(
+    ui: &mut egui::Ui,
+    draft: &mut ControllerEffectDraft,
+    rtl_ui: bool,
+    capabilities: Option<&crate::four_d::controller::HardwareCapabilities>,
+) {
     draft.duration_ms = sequence_duration_ms(&draft.steps);
     ui.horizontal(|ui| {
         ui.heading("Sequence steps");
@@ -385,7 +462,11 @@ fn draw_sequence_step_editor(ui: &mut egui::Ui, draft: &mut ControllerEffectDraf
                     at_us,
                     ..Default::default()
                 };
-                reset_step_kind(&mut step, "relay-mask".to_string());
+                let kind = sequence_step_kinds(capabilities)
+                    .into_iter()
+                    .next()
+                    .unwrap_or("opcode");
+                reset_step_kind(&mut step, kind.to_string());
                 draft.steps.push(step);
             }
             ui.label(
@@ -471,8 +552,19 @@ fn draw_sequence_step_editor(ui: &mut egui::Ui, draft: &mut ControllerEffectDraf
                                 &step.kind
                             })
                             .show_ui(ui, |ui| {
-                                for kind in SEQUENCE_STEP_KINDS {
-                                    ui.selectable_value(&mut step.kind, (*kind).to_string(), *kind);
+                                let kinds = sequence_step_kinds(capabilities);
+                                if !step.kind.is_empty()
+                                    && !kinds.iter().any(|kind| *kind == step.kind)
+                                {
+                                    let unavailable = step.kind.clone();
+                                    ui.selectable_value(
+                                        &mut step.kind,
+                                        unavailable.clone(),
+                                        format!("{unavailable} (unavailable)"),
+                                    );
+                                }
+                                for kind in kinds {
+                                    ui.selectable_value(&mut step.kind, kind.to_string(), kind);
                                 }
                             });
                         if step.kind != previous_kind {
@@ -496,12 +588,57 @@ fn draw_sequence_step_editor(ui: &mut egui::Ui, draft: &mut ControllerEffectDraf
                         ui.end_row();
 
                         match step.kind.as_str() {
+                            "motion" => {
+                                ui.label("Seat");
+                                let target = step.target.get_or_insert(0);
+                                egui::ComboBox::from_id_salt(("motion-side", index))
+                                    .selected_text(if *target == 0 { "Seat A" } else { "Seat B" })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(target, 0, "Seat A");
+                                        ui.selectable_value(target, 1, "Seat B");
+                                    });
+                                ui.end_row();
+                                ui.label("Action");
+                                let value = step.value.get_or_insert(0);
+                                egui::ComboBox::from_id_salt(("motion-action", index))
+                                    .selected_text(match *value {
+                                        1 => "Up",
+                                        2 => "Down",
+                                        _ => "Stop",
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(value, 0, "Stop");
+                                        ui.selectable_value(value, 1, "Up");
+                                        ui.selectable_value(value, 2, "Down");
+                                    });
+                                refresh_semantic_action(step);
+                                ui.end_row();
+                            }
                             "relay" => {
                                 ui.label("Relay");
-                                ui.add(
-                                    egui::DragValue::new(step.target.get_or_insert(1))
-                                        .range(1..=255),
-                                );
+                                let target = step.target.get_or_insert(0);
+                                let selected = capabilities
+                                    .and_then(|value| {
+                                        value
+                                            .relays
+                                            .iter()
+                                            .find(|output| output.id.saturating_sub(1) == *target)
+                                    })
+                                    .map(|output| format!("R{} · {}", output.id, output.name))
+                                    .unwrap_or_else(|| format!("R{}", target.saturating_add(1)));
+                                egui::ComboBox::from_id_salt(("relay-target", index))
+                                    .selected_text(selected)
+                                    .show_ui(ui, |ui| {
+                                        if let Some(capabilities) = capabilities {
+                                            for output in &capabilities.relays {
+                                                ui.selectable_value(
+                                                    target,
+                                                    output.id.saturating_sub(1),
+                                                    format!("R{} · {}", output.id, output.name),
+                                                );
+                                            }
+                                        }
+                                    });
                                 ui.end_row();
                                 ui.label("State");
                                 let value = step.value.get_or_insert(0);
@@ -511,6 +648,7 @@ fn draw_sequence_step_editor(ui: &mut egui::Ui, draft: &mut ControllerEffectDraf
                                         ui.selectable_value(value, 0, "Off");
                                         ui.selectable_value(value, 1, "On");
                                     });
+                                refresh_semantic_action(step);
                                 ui.end_row();
                             }
                             "relay-mask" => {
@@ -523,16 +661,44 @@ fn draw_sequence_step_editor(ui: &mut egui::Ui, draft: &mut ControllerEffectDraf
                             }
                             "pwm" => {
                                 ui.label("PWM channel");
-                                ui.add(
-                                    egui::DragValue::new(step.target.get_or_insert(0))
-                                        .range(0..=255),
-                                );
+                                let target = step.target.get_or_insert(0);
+                                let selected = capabilities
+                                    .and_then(|value| {
+                                        value
+                                            .pwm_channels
+                                            .iter()
+                                            .find(|output| output.id == *target)
+                                    })
+                                    .map(|output| format!("CH{} · {}", output.id, output.name))
+                                    .unwrap_or_else(|| format!("CH{target}"));
+                                egui::ComboBox::from_id_salt(("pwm-target", index))
+                                    .selected_text(selected)
+                                    .show_ui(ui, |ui| {
+                                        if let Some(capabilities) = capabilities {
+                                            for output in &capabilities.pwm_channels {
+                                                ui.selectable_value(
+                                                    target,
+                                                    output.id,
+                                                    format!("CH{} · {}", output.id, output.name),
+                                                );
+                                            }
+                                        }
+                                    });
                                 ui.end_row();
                                 ui.label("Value");
                                 ui.add(
                                     egui::DragValue::new(step.value.get_or_insert(0))
                                         .range(0..=4095),
                                 );
+                                ui.end_row();
+                            }
+                            "pwm-off" | "relays-off" => {
+                                ui.label("Action");
+                                ui.label(if step.kind == "pwm-off" {
+                                    "Turn every PWM output off"
+                                } else {
+                                    "Turn every relay off"
+                                });
                                 ui.end_row();
                             }
                             "display" => {
@@ -633,6 +799,71 @@ fn draw_sequence_step_editor(ui: &mut egui::Ui, draft: &mut ControllerEffectDraf
                                     egui::DragValue::new(step.brightness.get_or_insert(255))
                                         .range(0..=255),
                                 );
+                                ui.end_row();
+                            }
+                            "addressable" => {
+                                ui.label("Pixel");
+                                let target = step.target.get_or_insert(0);
+                                let maximum = capabilities
+                                    .and_then(|value| value.strip_control.as_ref())
+                                    .map(|strip| strip.maximum_pixels.min(u16::from(u8::MAX)))
+                                    .unwrap_or(100)
+                                    as u8;
+                                egui::ComboBox::from_id_salt(("addressable-pixel", index))
+                                    .selected_text(format!("Pixel {}", target.saturating_add(1)))
+                                    .show_ui(ui, |ui| {
+                                        for pixel in 0..maximum {
+                                            ui.selectable_value(
+                                                target,
+                                                pixel,
+                                                format!("Pixel {}", pixel + 1),
+                                            );
+                                        }
+                                    });
+                                ui.end_row();
+                                ui.label("Color");
+                                let mut color = egui::Color32::from_rgb(
+                                    step.red.unwrap_or_default(),
+                                    step.green.unwrap_or_default(),
+                                    step.blue.unwrap_or_default(),
+                                );
+                                if ui.color_edit_button_srgba(&mut color).changed() {
+                                    step.red = Some(color.r());
+                                    step.green = Some(color.g());
+                                    step.blue = Some(color.b());
+                                }
+                                ui.end_row();
+                                ui.label("Brightness");
+                                ui.add(
+                                    egui::DragValue::new(step.brightness.get_or_insert(255))
+                                        .range(0..=255),
+                                );
+                                ui.end_row();
+                            }
+                            "menu" => {
+                                ui.label("Page ID");
+                                ui.add(
+                                    egui::DragValue::new(step.target.get_or_insert(0))
+                                        .range(0..=255),
+                                );
+                                ui.end_row();
+                            }
+                            "menu-action" => {
+                                ui.label("Front-panel action");
+                                let target = step.target.get_or_insert(0);
+                                egui::ComboBox::from_id_salt(("menu-action", index))
+                                    .selected_text(match *target {
+                                        0 => "Back",
+                                        1 => "Enter",
+                                        2 => "Decrease",
+                                        _ => "Increase",
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(target, 0, "Back");
+                                        ui.selectable_value(target, 1, "Enter");
+                                        ui.selectable_value(target, 2, "Decrease");
+                                        ui.selectable_value(target, 3, "Increase");
+                                    });
                                 ui.end_row();
                             }
                             "opcode" => {
@@ -988,21 +1219,26 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     if draft.kind == "sequence" {
                                         ui.label(&labels.10);
                                         egui::ComboBox::from_id_salt("effect_sequence_engine")
-                                            .selected_text(if draft.engine == "mcu" {
-                                                "Board clock"
-                                            } else {
-                                                "Host scheduler"
+                                            .selected_text(match draft.engine.as_str() {
+                                                "mcu" => "Device clock (forced)",
+                                                "host" => "Host clock (forced)",
+                                                _ => "Automatic (recommended)",
                                             })
                                             .show_ui(ui, |ui| {
                                                 ui.selectable_value(
                                                     &mut draft.engine,
+                                                    "auto".to_string(),
+                                                    "Automatic (recommended)",
+                                                );
+                                                ui.selectable_value(
+                                                    &mut draft.engine,
                                                     "host".to_string(),
-                                                    "Host scheduler",
+                                                    "Host clock (forced)",
                                                 );
                                                 ui.selectable_value(
                                                     &mut draft.engine,
                                                     "mcu".to_string(),
-                                                    "Board clock",
+                                                    "Device clock (forced)",
                                                 );
                                             });
                                         ui.end_row();
@@ -1014,6 +1250,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     ui,
                                     &mut app.effect_library_draft,
                                     rtl_ui,
+                                    capabilities.as_ref(),
                                 );
                                 ui.add_space(8.0);
                                 if crate::ui::icons::disclosure_header(
@@ -1208,7 +1445,7 @@ mod tests {
         assert_eq!(app.effect_library_draft.kind, "sequence");
         assert_eq!(app.effect_library_draft.category, "Motion");
         assert!(app.effect_library_draft.steps.is_empty());
-        assert_eq!(app.effect_library_draft.engine, "host");
+        assert_eq!(app.effect_library_draft.engine, "auto");
     }
 
     #[test]
@@ -1227,5 +1464,49 @@ mod tests {
         ];
 
         assert_eq!(sequence_duration_ms(&steps), 1_001);
+    }
+
+    #[test]
+    fn step_catalog_is_derived_from_the_live_board() {
+        let mut capabilities = crate::four_d::controller::HardwareCapabilities {
+            board_connected: true,
+            supports_segment_display: true,
+            supports_addressable_led: true,
+            ..Default::default()
+        };
+        capabilities
+            .relays
+            .push(crate::four_d::controller::HardwareOutput {
+                id: 1,
+                key: "relay.1".to_string(),
+                name: "Seat direction".to_string(),
+                role: "motion-direction".to_string(),
+                control: "seat-internal".to_string(),
+            });
+        let kinds = sequence_step_kinds(Some(&capabilities));
+        assert!(kinds.contains(&"motion"));
+        assert!(kinds.contains(&"relay"));
+        assert!(kinds.contains(&"display"));
+        assert!(kinds.contains(&"addressable"));
+        assert!(!kinds.contains(&"rf"));
+        assert!(sequence_step_kinds(None).is_empty());
+    }
+
+    #[test]
+    fn semantic_actions_follow_the_edited_physical_command() {
+        let mut step = crate::four_d::controller::HardwareMacroStep {
+            kind: "motion".to_string(),
+            target: Some(1),
+            value: Some(2),
+            ..Default::default()
+        };
+        refresh_semantic_action(&mut step);
+        assert_eq!(step.action_ids, ["seat.b.down"]);
+
+        step.kind = "relay".to_string();
+        step.target = Some(4);
+        step.value = Some(1);
+        refresh_semantic_action(&mut step);
+        assert_eq!(step.action_ids, ["relay.5.on"]);
     }
 }

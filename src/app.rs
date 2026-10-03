@@ -112,11 +112,11 @@ impl Default for ControllerEffectDraft {
             default_fps: 20,
             duration_ms: 5_000,
             default_pixels: 100,
-            engine: "host".to_string(),
+            engine: "auto".to_string(),
             steps: Vec::new(),
             label: String::new(),
             lcd_message: String::new(),
-            timing_tolerance_us: 100_000,
+            timing_tolerance_us: 0,
             keep_outputs_on_cancel: false,
             board_profile_key: String::new(),
             board_profile_mode: String::new(),
@@ -146,10 +146,6 @@ pub struct HardwareEffectAuthoringState {
     pub pending_operation: Option<String>,
     pub pending_saved_macro_id: Option<u64>,
     pub status: String,
-    /// False records every PCController-dispatched peripheral action on the
-    /// host. True uses the board's bounded RAM capture and transfers it back
-    /// into the same PCController effect library when saved.
-    pub record_on_board: bool,
 }
 
 pub struct RttState {
@@ -1553,11 +1549,7 @@ impl PealayerApp {
             })?;
         self.hardware_effect_authoring.anchor_ms =
             (self.seek_pos.unwrap_or(self.playback_time).max(0.0) * 1_000.0) as u64;
-        let command = if self.hardware_effect_authoring.record_on_board {
-            format!("effect record start-board {name} Pealayer violet")
-        } else {
-            format!("effect record start {name} Pealayer violet")
-        };
+        let command = format!("effect record start {name} Pealayer violet");
         self.request_hardware_effect_command("macro-start", command)
     }
 
@@ -1763,8 +1755,10 @@ impl PealayerApp {
                 .id
                 .parse::<u8>()
                 .map_err(|_| "Sequence ID must be 0–255".to_string())?;
-            if !matches!(draft.engine.as_str(), "host" | "mcu") {
-                return Err("Sequence engine must be host or mcu".to_string());
+            if !matches!(draft.engine.as_str(), "auto" | "host" | "mcu") {
+                return Err(
+                    "Sequence execution must be automatic, host, or device clock".to_string(),
+                );
             }
             serde_json::json!({
                 "reference": format!("effect:{id}"),
@@ -4034,7 +4028,8 @@ pub(crate) fn controller_macro_lane(
                 "display" | "message" => ControllerEffectLane::Display,
                 "rf" | "rf-transmit" => ControllerEffectLane::Rf,
                 "beep" | "tone" | "buzzer" => ControllerEffectLane::Audio,
-                "rgb" | "strip" | "strip-frame" | "pixel" => ControllerEffectLane::Lighting,
+                "rgb" | "status-led" | "addressable" | "ws2812" | "strip" | "strip-frame"
+                | "pixel" => ControllerEffectLane::Lighting,
                 _ => ControllerEffectLane::Sequence,
             }
         };

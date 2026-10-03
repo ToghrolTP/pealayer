@@ -7777,11 +7777,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let save_label = self.app.tr("Save and place");
                                 let discard_label = self.app.tr("Discard");
                                 let anchor_label = self.app.tr("Timeline anchor:");
-                                let capture_engine_label = self.app.tr("Capture engine");
-                                let host_engine_label = self.app.tr("PCController host");
-                                let board_engine_label = self.app.tr("Board RAM");
-                                let host_engine_help = self.app.tr("All applied hardware actions");
-                                let board_engine_help = self.app.tr("Relay snapshots in board RAM");
                                 let record_open = self.app.hardware_effect_authoring.active
                                     || self.app.hardware_effect_authoring.pending_operation.is_some();
                                 ui.add_space(8.0);
@@ -7809,20 +7804,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         .desired_width(ui.available_width().min(280.0))
                                                         .hint_text(&name_hint),
                                                 );
-                                                ui.end_row();
-                                                ui.label(&capture_engine_label);
-                                                ui.horizontal(|ui| {
-                                                    ui.selectable_value(
-                                                        &mut self.app.hardware_effect_authoring.record_on_board,
-                                                        false,
-                                                        &host_engine_label,
-                                                    ).on_hover_text(&host_engine_help);
-                                                    ui.selectable_value(
-                                                        &mut self.app.hardware_effect_authoring.record_on_board,
-                                                        true,
-                                                        &board_engine_label,
-                                                    ).on_hover_text(&board_engine_help);
-                                                });
                                                 ui.end_row();
                                             });
                                         let pending = self.app.hardware_effect_authoring.pending_operation.is_some();
