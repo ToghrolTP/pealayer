@@ -643,6 +643,12 @@ impl eframe::App for PealayerApp {
                     .collect(),
                 controller_connected,
                 hardware_connected,
+                hardware_error: self
+                    .engine_handle
+                    .connection_error
+                    .try_lock()
+                    .ok()
+                    .and_then(|error| error.clone()),
                 estop_active: self.estop_active,
                 hardware: hardware.as_ref().map(|capabilities| {
                     crate::platform::interop::HardwareStatusSummary {
@@ -3593,6 +3599,7 @@ impl PealayerApp {
             .clone()
             .unwrap_or_else(|| crate::four_d::controller::DEFAULT_ENDPOINT.to_string());
         let endpoint_changed = endpoint != self.serial_port;
+        let connection_policy_changed = config.auto_connect_hardware != self.auto_connect_hardware;
 
         self.app_name = crate::config::resolved_app_name(&config);
         self.app_publisher = crate::config::resolved_app_publisher(&config);
@@ -3677,7 +3684,7 @@ impl PealayerApp {
         crate::ui::configure_native_visuals(ctx, &config);
         crate::platform::windows::set_window_theme(ctx.global_style().visuals.dark_mode);
 
-        if endpoint_changed {
+        if endpoint_changed || connection_policy_changed {
             let _ = self.engine_handle.sender.send(
                 crate::four_d::engine::EngineMessage::ReconfigureEndpoint {
                     endpoint,

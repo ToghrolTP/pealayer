@@ -535,6 +535,11 @@ pub struct PlayerStatusResponse {
     pub controller_connected: bool,
     #[serde(default)]
     pub hardware_connected: bool,
+    /// Last coordinator/board transport error. Local authenticated clients use
+    /// this to present an actionable reconnecting state instead of a generic
+    /// offline label.
+    #[serde(default)]
+    pub hardware_error: Option<String>,
     #[serde(default)]
     pub estop_active: bool,
     #[serde(default)]
@@ -703,6 +708,7 @@ impl Default for PlayerStatusResponse {
             workspace_profiles: Vec::new(),
             controller_connected: false,
             hardware_connected: false,
+            hardware_error: None,
             estop_active: false,
             hardware: None,
             recording: false,

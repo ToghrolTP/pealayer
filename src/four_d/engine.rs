@@ -447,7 +447,17 @@ impl ControllerPushTarget {
             "controller.state" | "controller.event" => {
                 capabilities.apply_state_notification(params)
             }
-            "controller.error" => capabilities.mark_board_disconnected(),
+            "controller.error" => {
+                // The coordinator transport can remain healthy while its board
+                // disappears (USB reset, cable fault, firmware reboot). Mark
+                // the cached board state unavailable immediately, but also
+                // request an authoritative refresh so recovery is discovered
+                // without restarting Pealayer or waiting for the slow baseline.
+                if let Some(refresh) = self.catalog_refresh_requested.upgrade() {
+                    refresh.store(true, Ordering::Relaxed);
+                }
+                capabilities.mark_board_disconnected()
+            }
             _ => false,
         }
     }
@@ -593,6 +603,9 @@ pub fn spawn_engine() -> EngineHandle {
                                 Ok(capabilities) => {
                                     if let Ok(mut guard) = engine_capabilities.lock() {
                                         *guard = capabilities;
+                                    }
+                                    if let Ok(mut guard) = engine_conn_error.lock() {
+                                        *guard = None;
                                     }
                                 }
                                 Err(error) => {
@@ -1040,11 +1053,23 @@ pub fn spawn_engine() -> EngineHandle {
             // stale controller catalog.
             let catalog_refresh_requested =
                 connected && engine_catalog_refresh_requested.swap(false, Ordering::Relaxed);
+            let board_recovery_due = connected
+                && engine_capabilities
+                    .lock()
+                    .ok()
+                    .and_then(|capabilities| {
+                        capabilities
+                            .as_ref()
+                            .map(|capabilities| !capabilities.board_connected)
+                    })
+                    .unwrap_or(false)
+                && last_capability_refresh.elapsed() >= Duration::from_secs(2);
             if connected
                 // Live relay, telemetry, and status-LED changes arrive on the
                 // controller WebSocket. This slow refresh is only a recovery
                 // baseline for catalog/config changes or a missed push epoch.
                 && (catalog_refresh_requested
+                    || board_recovery_due
                     || last_capability_refresh.elapsed() >= Duration::from_secs(30))
                 && active_transport
                     .as_ref()
@@ -1054,6 +1079,9 @@ pub fn spawn_engine() -> EngineHandle {
                 if let Some(ref mut transport) = active_transport {
                     match transport.refresh_capabilities() {
                         Ok(capabilities) => {
+                            let board_connected = capabilities
+                                .as_ref()
+                                .is_some_and(|capabilities| capabilities.board_connected);
                             if let Ok(mut guard) = engine_capabilities.lock() {
                                 let mut capabilities = capabilities;
                                 if let (Some(current), Some(ref mut refreshed)) =
@@ -1062,6 +1090,11 @@ pub fn spawn_engine() -> EngineHandle {
                                     refreshed.preserve_newer_live_led_from(current);
                                 }
                                 *guard = capabilities;
+                            }
+                            if board_connected {
+                                if let Ok(mut guard) = engine_conn_error.lock() {
+                                    *guard = None;
+                                }
                             }
                         }
                         Err(error) => {
@@ -1982,6 +2015,7 @@ mod tests {
                 ..Default::default()
             });
         let target = handle.controller_push_target();
+        assert!(!handle.catalog_refresh_requested.load(Ordering::Relaxed));
         assert!(target.apply_notification(
             "controller.error",
             &serde_json::json!({"message": "board disconnected"}),
@@ -1990,6 +2024,7 @@ mod tests {
         let capabilities = capabilities.as_ref().unwrap();
         assert!(!capabilities.board_connected);
         assert!(capabilities.status_led.is_none());
+        assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
     }
 
     #[test]
