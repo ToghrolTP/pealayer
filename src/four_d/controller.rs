@@ -897,21 +897,15 @@ impl ControllerClient {
     pub fn hardware_capabilities(&mut self) -> Result<HardwareCapabilities, String> {
         let snapshot = self.call("controller.snapshot", json!({}))?;
         let peripherals = self.call("controller.peripherals.get", json!({}))?;
-        let has_live_segments = snapshot
-            .get("connected")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-            && snapshot
-                .pointer("/hello/capabilities")
-                .and_then(Value::as_u64)
-                .is_some_and(|bits| bits & u64::from(CAPABILITY_SEGMENTS) != 0);
-        let exact_front_panel = has_live_segments
-            .then(|| self.call("controller.front_panel", json!({})).ok())
-            .flatten();
+        // controller.snapshot already carries the latest authoritative
+        // front-panel state. A synchronous controller.front_panel call waits
+        // for another board transaction and can exceed the RPC timeout on a
+        // busy serial link, poisoning an otherwise healthy persistent stream.
+        // Live updates continue over the controller WebSocket.
         Ok(parse_hardware_capabilities_with_front_panel(
             &snapshot,
             &peripherals,
-            exact_front_panel.as_ref(),
+            None,
         ))
     }
 }
@@ -2317,7 +2311,7 @@ mod tests {
     }
 
     #[test]
-    fn split_strip_catalog_is_not_queried_when_unified_effects_are_absent() {
+    fn capability_snapshot_avoids_redundant_front_panel_and_split_catalog_calls() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
@@ -2331,7 +2325,12 @@ mod tests {
                     0 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"ok":true}}),
                     1 => json!({"jsonrpc":"2.0","id":request["id"],"result":{
                         "connected": true,
-                        "hello": {"capabilities": CAPABILITY_ADDRESSABLE_LED}
+                        "hello": {"capabilities": CAPABILITY_ADDRESSABLE_LED | CAPABILITY_SEGMENTS},
+                        "have_front_panel": true,
+                        "front_panel": {
+                            "raw_segments": [63, 6, 91, 79],
+                            "segments_active": true
+                        }
                     }}),
                     2 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"peripherals":[]}}),
                     _ => unreachable!(),
@@ -2343,6 +2342,10 @@ mod tests {
         let mut client = ControllerClient::connect(&format!("pccontroller://{address}")).unwrap();
         let capabilities = client.hardware_capabilities().unwrap();
         assert!(capabilities.strip_effects.is_empty());
+        assert_eq!(
+            capabilities.front_panel.unwrap().raw_segments,
+            vec![63, 6, 91, 79]
+        );
         server.join().unwrap();
     }
 

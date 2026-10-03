@@ -1076,6 +1076,7 @@ pub fn spawn_engine() -> EngineHandle {
                     .is_some_and(|transport| !transport.is_direct_serial())
             {
                 last_capability_refresh = std::time::Instant::now();
+                let mut refresh_failed = false;
                 if let Some(ref mut transport) = active_transport {
                     match transport.refresh_capabilities() {
                         Ok(capabilities) => {
@@ -1103,7 +1104,19 @@ pub fn spawn_engine() -> EngineHandle {
                                     Some(format!("refresh PCController capabilities: {error}"));
                             }
                             engine_connected.store(false, Ordering::Relaxed);
+                            refresh_failed = true;
                         }
+                    }
+                }
+                if refresh_failed {
+                    // A timed-out request leaves a persistent JSON-RPC stream
+                    // ambiguous. Drop it immediately so the normal one-second
+                    // retry opens a clean transport instead of repeatedly
+                    // publishing a half-connected state.
+                    active_transport = None;
+                    connected = false;
+                    if let Ok(mut guard) = engine_transport_description.lock() {
+                        *guard = None;
                     }
                 }
             }
