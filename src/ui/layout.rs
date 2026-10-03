@@ -5269,7 +5269,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         crate::ui::controls::transport_context_menu(self.app, ui)
                                     });
 
-                                    // seekbar
                                     let mut current_pos = if has_video {
                                         self.app.seek_pos.unwrap_or(self.app.playback_time)
                                     } else {
@@ -5280,51 +5279,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     } else {
                                         1.0
                                     };
-                                    let slider = egui::Slider::new(&mut current_pos, 0.0..=max_dur)
-                                        .show_value(false)
-                                        .trailing_fill(true);
-
-                                    let seekbar_w = (ui.available_width() - 180.0).max(50.0);
-                                    let old_w = ui.spacing().slider_width;
-                                    ui.spacing_mut().slider_width = seekbar_w;
-                                    let response = ui.add_enabled(can_seek, slider);
-                                    ui.spacing_mut().slider_width = old_w;
-                                    response.context_menu(|ui| {
-                                        crate::ui::controls::transport_context_menu(self.app, ui)
-                                    });
-
-                                    if let Some(buffered_until) = self.app.buffered_until() {
-                                        let fraction = (buffered_until / self.app.duration)
-                                            .clamp(0.0, 1.0)
-                                            as f32;
-                                        let buffered_rect = egui::Rect::from_min_max(
-                                            egui::pos2(
-                                                response.rect.left(),
-                                                response.rect.bottom() - 2.0,
-                                            ),
-                                            egui::pos2(
-                                                response.rect.left()
-                                                    + response.rect.width() * fraction,
-                                                response.rect.bottom(),
-                                            ),
-                                        );
-                                        ui.painter().rect_filled(
-                                            buffered_rect,
-                                            1.0,
-                                            ui.visuals()
-                                                .selection
-                                                .bg_fill
-                                                .linear_multiply(0.55),
-                                        );
-                                    }
-
-                                    if can_seek && response.dragged() {
-                                        self.app.scrub_to(current_pos);
-                                    }
-                                    if can_seek && response.drag_stopped() {
-                                        self.app.finish_scrub(current_pos);
-                                    }
-
                                     let displayed_total = if self.app.show_remaining_time {
                                         -(self.app.duration - elapsed).max(0.0)
                                     } else {
@@ -5370,30 +5324,104 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     } else {
                                         egui::RichText::new(total_label)
                                     };
-                                    let total_response = ui
-                                        .add(
-                                            egui::Label::new(total_text).sense(if finite_timeline {
-                                                egui::Sense::click()
-                                            } else {
-                                                egui::Sense::hover()
-                                            }),
+
+                                    // Anchor the duration and fullscreen affordance to the right
+                                    // edge first, then give the seekbar the exact remaining width.
+                                    // A former fixed 180 px reservation was wider than these
+                                    // controls and left a visible, useless tail after fullscreen.
+                                    let response = ui
+                                        .with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                let fullscreen_response = ui
+                                                    .button(crate::ui::icons::ARROWS_OUT)
+                                                    .on_hover_text(format!(
+                                                        "{} (F)",
+                                                        self.app.tr("Fullscreen")
+                                                    ));
+                                                fullscreen_response.context_menu(|ui| {
+                                                    crate::ui::controls::transport_context_menu(
+                                                        self.app, ui,
+                                                    )
+                                                });
+                                                if fullscreen_response.clicked() {
+                                                    self.app.set_fullscreen(ui.ctx(), true);
+                                                }
+
+                                                let total_response = ui
+                                                    .add(
+                                                        egui::Label::new(total_text).sense(
+                                                            if finite_timeline {
+                                                                egui::Sense::click()
+                                                            } else {
+                                                                egui::Sense::hover()
+                                                            },
+                                                        ),
+                                                    )
+                                                    .on_hover_text(total_tooltip);
+                                                total_response.context_menu(|ui| {
+                                                    crate::ui::controls::transport_context_menu(
+                                                        self.app, ui,
+                                                    )
+                                                });
+                                                if finite_timeline && total_response.clicked() {
+                                                    self.app.show_remaining_time =
+                                                        !self.app.show_remaining_time;
+                                                    self.app.save_config();
+                                                }
+
+                                                let slider = egui::Slider::new(
+                                                    &mut current_pos,
+                                                    0.0..=max_dur,
+                                                )
+                                                .show_value(false)
+                                                .trailing_fill(true);
+                                                let seekbar_width =
+                                                    ui.available_width().max(1.0);
+                                                let old_width = ui.spacing().slider_width;
+                                                ui.spacing_mut().slider_width = seekbar_width;
+                                                let response = ui.add_enabled(can_seek, slider);
+                                                ui.spacing_mut().slider_width = old_width;
+                                                response.context_menu(|ui| {
+                                                    crate::ui::controls::transport_context_menu(
+                                                        self.app, ui,
+                                                    )
+                                                });
+                                                response
+                                            },
                                         )
-                                        .on_hover_text(total_tooltip);
-                                    total_response.context_menu(|ui| {
-                                        crate::ui::controls::transport_context_menu(self.app, ui)
-                                    });
-                                    if finite_timeline && total_response.clicked() {
-                                        self.app.show_remaining_time = !self.app.show_remaining_time;
-                                        self.app.save_config();
+                                        .inner;
+
+                                    if let Some(buffered_until) = self.app.buffered_until() {
+                                        let fraction = (buffered_until / self.app.duration)
+                                            .clamp(0.0, 1.0)
+                                            as f32;
+                                        let buffered_rect = egui::Rect::from_min_max(
+                                            egui::pos2(
+                                                response.rect.left(),
+                                                response.rect.bottom() - 2.0,
+                                            ),
+                                            egui::pos2(
+                                                response.rect.left()
+                                                    + response.rect.width() * fraction,
+                                                response.rect.bottom(),
+                                            ),
+                                        );
+                                        ui.painter().rect_filled(
+                                            buffered_rect,
+                                            1.0,
+                                            ui.visuals()
+                                                .selection
+                                                .bg_fill
+                                                .linear_multiply(0.55),
+                                        );
                                     }
-                                    let fullscreen_response = ui
-                                        .button(crate::ui::icons::ARROWS_OUT)
-                                        .on_hover_text(format!("{} (F)", self.app.tr("Fullscreen")));
-                                    fullscreen_response.context_menu(|ui| {
-                                        crate::ui::controls::transport_context_menu(self.app, ui)
-                                    });
-                                    if fullscreen_response.clicked() {
-                                        self.app.set_fullscreen(ui.ctx(), true);
+
+                                    if can_seek && response.dragged() {
+                                        self.app.scrub_to(current_pos);
+                                    }
+                                    if can_seek && response.drag_stopped() {
+                                        self.app.finish_scrub(current_pos);
                                     }
                                 });
                             });
