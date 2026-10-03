@@ -77,8 +77,6 @@ const EFFECT_CARD_ACTION_GUTTER: f32 = 100.0;
 const EFFECT_CARD_ACTION_BUTTONS_WIDTH: f32 = 72.0;
 const HARDWARE_CARD_STROKE_WIDTH: f32 = 1.0;
 const BOARD_IDENTITY_TWO_LINE_HEIGHT: f32 = 42.0;
-const BOARD_IDENTITY_TITLE_HEIGHT: f32 = 20.0;
-const BOARD_IDENTITY_SUBTITLE_HEIGHT: f32 = 15.0;
 const BOARD_IDENTITY_LINE_GAP: f32 = 0.0;
 const EFFECT_CONTROLS_RIGHT_GUTTER: f32 = 8.0;
 const EFFECT_CONTROLS_CARD_MARGIN: i8 = 10;
@@ -1325,6 +1323,57 @@ fn board_card_labels(
     };
     let subtitle = profile.filter(|profile| !profile.trim().eq_ignore_ascii_case(title.trim()));
     (title, subtitle)
+}
+
+fn board_identity_text_positions(
+    rect: egui::Rect,
+    title_height: f32,
+    subtitle_height: Option<f32>,
+) -> (egui::Pos2, Option<egui::Pos2>) {
+    let gap = subtitle_height
+        .map(|_| BOARD_IDENTITY_LINE_GAP)
+        .unwrap_or_default();
+    let stack_height = title_height + subtitle_height.unwrap_or_default() + gap;
+    let top = rect.center().y - stack_height * 0.5;
+    let title = egui::pos2(rect.left(), top);
+    let subtitle = subtitle_height.map(|_| egui::pos2(rect.left(), top + title_height + gap));
+    (title, subtitle)
+}
+
+fn draw_board_identity_block(
+    ui: &mut egui::Ui,
+    width: f32,
+    height: f32,
+    title: &str,
+    subtitle: Option<&str>,
+) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(width.max(1.0), height), egui::Sense::click());
+    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+    let title_color = ui.visuals().strong_text_color();
+    let subtitle_color = ui.visuals().weak_text_color();
+    let title_galley = painter.layout_no_wrap(
+        title.to_owned(),
+        egui::TextStyle::Heading.resolve(ui.style()),
+        title_color,
+    );
+    let subtitle_galley = subtitle.map(|subtitle| {
+        painter.layout_no_wrap(
+            subtitle.to_owned(),
+            egui::TextStyle::Small.resolve(ui.style()),
+            subtitle_color,
+        )
+    });
+    let (title_pos, subtitle_pos) = board_identity_text_positions(
+        rect,
+        title_galley.size().y,
+        subtitle_galley.as_ref().map(|galley| galley.size().y),
+    );
+    painter.galley(title_pos, title_galley, title_color);
+    if let (Some(galley), Some(position)) = (subtitle_galley, subtitle_pos) {
+        painter.galley(position, galley, subtitle_color);
+    }
+    response
 }
 
 fn open_board_information(
@@ -4505,13 +4554,24 @@ mod timeline_row_tests {
 
     #[test]
     fn board_identity_multiline_block_is_tight_and_vertically_centered() {
-        let text_height =
-            BOARD_IDENTITY_TITLE_HEIGHT + BOARD_IDENTITY_LINE_GAP + BOARD_IDENTITY_SUBTITLE_HEIGHT;
+        let text_height = 20.0 + BOARD_IDENTITY_LINE_GAP + 15.0;
         let top_inset = (BOARD_IDENTITY_TWO_LINE_HEIGHT - text_height) / 2.0;
         let bottom_inset = BOARD_IDENTITY_TWO_LINE_HEIGHT - text_height - top_inset;
         assert_eq!(BOARD_IDENTITY_LINE_GAP, 0.0);
         assert!(top_inset > 0.0);
         assert_eq!(top_inset, bottom_inset);
+    }
+
+    #[test]
+    fn board_identity_lines_share_the_exact_same_left_origin() {
+        let rect = egui::Rect::from_min_size(egui::pos2(23.5, 10.0), egui::vec2(240.0, 42.0));
+        let (title, subtitle) = board_identity_text_positions(rect, 20.0, Some(15.0));
+        let subtitle = subtitle.expect("the two-line identity has a subtitle position");
+
+        assert_eq!(title.x, rect.left());
+        assert_eq!(subtitle.x, rect.left());
+        assert_eq!(title.x, subtitle.x);
+        assert_eq!(subtitle.y, title.y + 20.0 + BOARD_IDENTITY_LINE_GAP);
     }
 
     #[test]
@@ -7640,64 +7700,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         .size(22.0),
                                                 ),
                                             );
-                                            let name_response = ui
-                                                .allocate_ui_with_layout(
-                                                    egui::vec2(identity_width, row_height),
-                                                    egui::Layout::top_down(egui::Align::Min),
-                                                    |ui| {
-                                                        ui.spacing_mut().item_spacing.y =
-                                                            BOARD_IDENTITY_LINE_GAP;
-                                                        if board_card_subtitle.is_some() {
-                                                            let text_height =
-                                                                BOARD_IDENTITY_TITLE_HEIGHT
-                                                                    + BOARD_IDENTITY_LINE_GAP
-                                                                    + BOARD_IDENTITY_SUBTITLE_HEIGHT;
-                                                            ui.add_space(
-                                                                ((row_height - text_height) / 2.0)
-                                                                    .max(0.0),
-                                                            );
-                                                        }
-                                                        let title_height = if board_card_subtitle
-                                                            .is_some()
-                                                        {
-                                                            BOARD_IDENTITY_TITLE_HEIGHT
-                                                        } else {
-                                                            row_height
-                                                        };
-                                                        let response = ui.add_sized(
-                                                            [identity_width, title_height],
-                                                            egui::Label::new(
-                                                                egui::RichText::new(
-                                                                    &board_card_title,
-                                                                )
-                                                                .heading()
-                                                                .strong(),
-                                                            )
-                                                            .halign(egui::Align::Min)
-                                                            .truncate()
-                                                            .sense(egui::Sense::click()),
-                                                        );
-                                                        if let Some(subtitle) =
-                                                            board_card_subtitle.as_deref()
-                                                        {
-                                                            ui.add_sized(
-                                                                [
-                                                                    identity_width,
-                                                                    BOARD_IDENTITY_SUBTITLE_HEIGHT,
-                                                                ],
-                                                                egui::Label::new(
-                                                                    egui::RichText::new(subtitle)
-                                                                        .small()
-                                                                        .weak(),
-                                                                )
-                                                                .halign(egui::Align::Min)
-                                                                .truncate(),
-                                                            );
-                                                        }
-                                                        response
-                                                    },
-                                                )
-                                                .inner;
+                                            let name_response = draw_board_identity_block(
+                                                ui,
+                                                identity_width,
+                                                row_height,
+                                                &board_card_title,
+                                                board_card_subtitle.as_deref(),
+                                            );
                                             if name_response
                                                 .on_hover_text(self.app.tr("Rename board"))
                                                 .clicked()
