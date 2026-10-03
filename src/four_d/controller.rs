@@ -101,6 +101,95 @@ pub struct HardwareCapabilities {
     pub macros: Vec<HardwareMacro>,
 }
 
+impl HardwareCapabilities {
+    /// Applies PCController's authoritative response to a presentation update
+    /// immediately. A background catalog refresh still follows as an
+    /// eventual-consistency check, but the UI and the next edit must use the
+    /// returned revision instead of racing a stale cached catalog.
+    pub(crate) fn apply_presentation_update(&mut self, result: &Value) -> Result<String, String> {
+        let peripheral = result
+            .get("peripheral")
+            .and_then(Value::as_object)
+            .ok_or_else(|| "PCController omitted the updated peripheral".to_string())?;
+        let key = peripheral
+            .get("key")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .ok_or_else(|| "PCController returned an updated peripheral without a key".to_string())?
+            .to_string();
+        let presentation = result
+            .get("control")
+            .and_then(Value::as_object)
+            .unwrap_or(peripheral);
+        let string_field = |field: &str| {
+            presentation
+                .get(field)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        let default_name = peripheral
+            .get("default_name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let name = presentation
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| !name.trim().is_empty())
+            .or_else(|| peripheral.get("name").and_then(Value::as_str))
+            .filter(|name| !name.trim().is_empty())
+            .or_else(|| (!default_name.is_empty()).then_some(default_name.as_str()))
+            .ok_or_else(|| "PCController omitted the updated channel name".to_string())?
+            .to_string();
+        let control = self
+            .controls
+            .iter_mut()
+            .find(|control| control.key == key)
+            .ok_or_else(|| format!("PCController updated unknown channel {key:?}"))?;
+        control.name.clone_from(&name);
+        if !default_name.is_empty() {
+            control.default_name.clone_from(&default_name);
+        }
+        control.icon = string_field("icon");
+        control.color = string_field("color");
+        control.group = string_field("group");
+        control.hidden = presentation
+            .get("hidden")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        control.locked = presentation
+            .get("locked")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+
+        if name == control.default_name {
+            self.peripheral_names.remove(&key);
+        } else {
+            self.peripheral_names.insert(key.clone(), name.clone());
+        }
+        for output in self
+            .peripherals
+            .iter_mut()
+            .chain(self.relays.iter_mut())
+            .chain(self.pwm_channels.iter_mut())
+            .filter(|output| output.key == key)
+        {
+            output.name.clone_from(&name);
+        }
+        if let Some(revision) = result
+            .pointer("/board_profile/revision")
+            .and_then(Value::as_str)
+        {
+            if let Some(profile) = self.board_profile.as_mut() {
+                profile.revision = revision.to_string();
+            }
+        }
+        Ok(key)
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HardwareBoardIdentity {
     pub product_name: String,
@@ -1680,6 +1769,82 @@ mod tests {
         assert!(!is_controller_endpoint("direct:COM4"));
         assert!(!is_controller_endpoint(r"C:\\devices\\controller"));
         assert!(!is_controller_endpoint("/dev/ttyACM0"));
+    }
+
+    #[test]
+    fn presentation_update_immediately_replaces_name_and_profile_revision() {
+        let output = HardwareOutput {
+            id: 5,
+            key: "relay.5".to_string(),
+            name: "User Relay 5".to_string(),
+            role: "user-output".to_string(),
+            control: "relay".to_string(),
+        };
+        let mut capabilities = HardwareCapabilities {
+            board_profile: Some(HardwareBoardProfile {
+                revision: "old-revision".to_string(),
+                ..Default::default()
+            }),
+            controls: vec![HardwareControl {
+                key: "relay.5".to_string(),
+                kind: "relay".to_string(),
+                name: "User Relay 5".to_string(),
+                default_name: "User Relay 5".to_string(),
+                ..Default::default()
+            }],
+            peripherals: vec![output.clone()],
+            relays: vec![output],
+            ..Default::default()
+        };
+
+        let renamed = serde_json::json!({
+            "board_profile": {"revision": "renamed-revision"},
+            "peripheral": {
+                "key": "relay.5",
+                "name": "Aisle lamp",
+                "default_name": "User Relay 5"
+            },
+            "control": {
+                "key": "relay.5",
+                "name": "Aisle lamp",
+                "icon": "lightbulb",
+                "color": "#38D27A",
+                "group": "Auditorium",
+                "hidden": false,
+                "locked": true
+            }
+        });
+        assert_eq!(
+            capabilities.apply_presentation_update(&renamed).unwrap(),
+            "relay.5"
+        );
+        assert_eq!(capabilities.controls[0].name, "Aisle lamp");
+        assert_eq!(capabilities.controls[0].icon, "lightbulb");
+        assert!(capabilities.controls[0].locked);
+        assert_eq!(capabilities.relays[0].name, "Aisle lamp");
+        assert_eq!(capabilities.peripherals[0].name, "Aisle lamp");
+        assert_eq!(capabilities.peripheral_names["relay.5"], "Aisle lamp");
+        assert_eq!(
+            capabilities.board_profile.as_ref().unwrap().revision,
+            "renamed-revision"
+        );
+
+        let restored = serde_json::json!({
+            "board_profile": {"revision": "restored-revision"},
+            "peripheral": {
+                "key": "relay.5",
+                "name": "User Relay 5",
+                "default_name": "User Relay 5"
+            },
+            "control": {"key": "relay.5", "name": "User Relay 5"}
+        });
+        capabilities.apply_presentation_update(&restored).unwrap();
+        assert_eq!(capabilities.controls[0].name, "User Relay 5");
+        assert!(!capabilities.peripheral_names.contains_key("relay.5"));
+        assert_eq!(
+            capabilities.board_profile.as_ref().unwrap().revision,
+            "restored-revision"
+        );
     }
 
     #[test]

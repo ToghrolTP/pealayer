@@ -1728,6 +1728,22 @@ impl PealayerApp {
             }
             match result.result {
                 Ok(value) => {
+                    let presentation_apply_error = if is_presentation_operation {
+                        self.engine_handle
+                            .hardware_capabilities
+                            .lock()
+                            .map_err(|_| "hardware catalog lock is unavailable".to_string())
+                            .and_then(|mut current| {
+                                current
+                                    .as_mut()
+                                    .ok_or_else(|| "hardware catalog is unavailable".to_string())?
+                                    .apply_presentation_update(&value)
+                                    .map(|_| ())
+                            })
+                            .err()
+                    } else {
+                        None
+                    };
                     let output = value
                         .get("output")
                         .and_then(serde_json::Value::as_str)
@@ -1773,6 +1789,11 @@ impl PealayerApp {
                         _ => {}
                     }
                     if is_presentation_operation {
+                        // The authoritative response has already updated the
+                        // rendered catalog and revision. Refresh in the
+                        // background to verify the complete catalog and to
+                        // recover gracefully from an older controller that did
+                        // not return the typed presentation payload.
                         self.engine_handle.request_catalog_refresh();
                     }
                     if is_board_operation {
@@ -1780,7 +1801,11 @@ impl PealayerApp {
                     } else if !is_presentation_operation {
                         self.hardware_effect_authoring.status = output.clone();
                     }
-                    self.set_osd(output);
+                    if let Some(error) = presentation_apply_error {
+                        self.set_osd(format!("Channel saved; refreshing details: {error}"));
+                    } else {
+                        self.set_osd(output);
+                    }
                 }
                 Err(error) => {
                     if result.operation == "effect-preview" {

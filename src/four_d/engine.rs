@@ -195,6 +195,13 @@ fn enforce_emergency_stop(transport: &mut HardwareTransport) -> Result<(), Strin
 }
 
 fn controller_call_allowed_during_estop(method: &str, params: &serde_json::Value) -> bool {
+    // Presentation changes cannot energize hardware. Keeping rename, icon,
+    // visibility, and lock edits available while the output latch is active
+    // prevents an unrelated safety state from making configuration appear
+    // broken.
+    if method == "controller.peripheral.presentation.update" {
+        return true;
+    }
     if method == "controller.estop.set" {
         return params
             .get("active")
@@ -1871,6 +1878,10 @@ mod tests {
                 serde_json::json!({"command": "keyboard stop"}),
             ),
             ("controller.pwm.off", serde_json::json!({})),
+            (
+                "controller.peripheral.presentation.update",
+                serde_json::json!({"key": "relay.5", "name": "Aisle lamp"}),
+            ),
             ("controller.estop.set", serde_json::json!({"active": true})),
             ("controller.estop.set", serde_json::json!({"active": false})),
         ] {
