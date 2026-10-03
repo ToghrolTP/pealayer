@@ -259,6 +259,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub workspace_profiles_initialized: bool,
     #[serde(default)]
+    pub workspace_profiles_revision: u32,
+    #[serde(default)]
     pub active_workspace_profile: Option<String>,
 }
 
@@ -324,6 +326,7 @@ impl Default for AppConfig {
             workspace_session: WorkspaceProfile::default(),
             workspace_profiles: default_workspace_profiles(),
             workspace_profiles_initialized: true,
+            workspace_profiles_revision: 1,
             active_workspace_profile: Some("nle".to_string()),
         }
     }
@@ -684,7 +687,8 @@ pub fn control_port() -> u16 {
 
 impl AppConfig {
     fn normalize_workspace_profiles(&mut self) {
-        if !self.workspace_profiles_initialized {
+        let migrating_profile_metadata = self.workspace_profiles_revision < 1;
+        if !self.workspace_profiles_initialized || migrating_profile_metadata {
             for (id, profile) in default_workspace_profiles() {
                 self.workspace_profiles.entry(id).or_insert(profile);
             }
@@ -702,6 +706,13 @@ impl AppConfig {
             if profile.name.trim().is_empty() {
                 profile.name = id.clone();
             }
+            if migrating_profile_metadata {
+                if id == "simple" && profile.name == "simple" {
+                    profile.name = "Simple".to_string();
+                } else if id == "nle" && profile.name == "nle" {
+                    profile.name = "NLE".to_string();
+                }
+            }
             if profile.icon.trim().is_empty() {
                 profile.icon = if profile.nle { "timeline" } else { "monitor" }.to_string();
             }
@@ -710,6 +721,26 @@ impl AppConfig {
                 next_order += 1;
             }
         }
+        let mut ordered_ids = self.workspace_profiles.keys().cloned().collect::<Vec<_>>();
+        ordered_ids.sort_by(|left_id, right_id| {
+            let left = &self.workspace_profiles[left_id];
+            let right = &self.workspace_profiles[right_id];
+            let default_rank = |id: &str| match id {
+                "simple" => 0,
+                "nle" => 1,
+                _ => 2,
+            };
+            left.order
+                .cmp(&right.order)
+                .then_with(|| default_rank(left_id).cmp(&default_rank(right_id)))
+                .then_with(|| left_id.cmp(right_id))
+        });
+        for (order, id) in ordered_ids.into_iter().enumerate() {
+            if let Some(profile) = self.workspace_profiles.get_mut(&id) {
+                profile.order = order as i32;
+            }
+        }
+        self.workspace_profiles_revision = 1;
         if self
             .active_workspace_profile
             .as_ref()
@@ -1163,6 +1194,7 @@ mod tests {
         assert!(!migrated.workspace_profiles_initialized);
         migrated.normalize_workspace_profiles();
         assert!(migrated.workspace_profiles_initialized);
+        assert_eq!(migrated.workspace_profiles_revision, 1);
         assert_eq!(
             migrated
                 .workspace_profiles
@@ -1178,6 +1210,39 @@ mod tests {
         reloaded.normalize_workspace_profiles();
         assert!(!reloaded.workspace_profiles.contains_key("simple"));
         assert!(reloaded.workspace_profiles.contains_key("nle"));
+    }
+
+    #[test]
+    fn first_profile_metadata_migration_repairs_seed_captions_and_order_once() {
+        let mut migrated = AppConfig::default();
+        migrated.workspace_profiles_revision = 0;
+        {
+            let simple = migrated.workspace_profiles.get_mut("simple").unwrap();
+            simple.name = "simple".to_string();
+            simple.order = 0;
+        }
+        {
+            let nle = migrated.workspace_profiles.get_mut("nle").unwrap();
+            nle.name = "nle".to_string();
+            nle.order = 0;
+        }
+        migrated.normalize_workspace_profiles();
+
+        assert_eq!(migrated.workspace_profiles["simple"].name, "Simple");
+        assert_eq!(migrated.workspace_profiles["simple"].order, 0);
+        assert_eq!(migrated.workspace_profiles["nle"].name, "NLE");
+        assert_eq!(migrated.workspace_profiles["nle"].order, 1);
+
+        {
+            let simple = migrated.workspace_profiles.get_mut("simple").unwrap();
+            simple.name = "Cinema".to_string();
+            simple.order = 1;
+        }
+        migrated.workspace_profiles.get_mut("nle").unwrap().order = 0;
+        migrated.normalize_workspace_profiles();
+        assert_eq!(migrated.workspace_profiles["simple"].name, "Cinema");
+        assert_eq!(migrated.workspace_profiles["nle"].order, 0);
+        assert_eq!(migrated.workspace_profiles["simple"].order, 1);
     }
 
     #[test]
