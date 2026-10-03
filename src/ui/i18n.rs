@@ -641,6 +641,40 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Name" => "نام",
         "Duration" => "مدت",
         "Actions" => "عملیات",
+        "Selected cue" => "نشانهٔ انتخاب‌شده",
+        "1 cue" => "۱ نشانه",
+        "cues" => "نشانه",
+        "selected" => "انتخاب‌شده",
+        "controller-owned" => "تحت مدیریت کنترل‌گر",
+        "Multiple cues selected" => "چند نشانه انتخاب شده است",
+        "Changes apply to every compatible cue" => {
+            "تغییرات روی همهٔ نشانه‌های سازگار اعمال می‌شود"
+        }
+        "Timing" => "زمان‌بندی",
+        "Exact timeline placement and length" => "جای‌گذاری و مدت دقیق در خط زمانی",
+        "Starts" => "آغاز",
+        "Go to cue" => "رفتن به نشانه",
+        "Untitled effect" => "جلوهٔ بی‌نام",
+        "No cue selected" => "هیچ نشانه‌ای انتخاب نشده است",
+        "Select a cue on the timeline to manage it" => {
+            "برای مدیریت، نشانه‌ای را در خط زمانی انتخاب کنید"
+        }
+        "Cue unavailable" => "نشانه در دسترس نیست",
+        "The selected cue is no longer on the timeline" => {
+            "نشانهٔ انتخاب‌شده دیگر در خط زمانی نیست"
+        }
+        "Source" => "منبع",
+        "Addressable lighting" => "نورپردازی آدرس‌پذیر",
+        "Hardware macro" => "ماکروی سخت‌افزاری",
+        "PCController effect" => "جلوهٔ PCController",
+        "Relay sequence" => "توالی رله",
+        "Timeline effect" => "جلوهٔ خط زمانی",
+        "No live hardware outputs" => "هیچ خروجی سخت‌افزاری زنده‌ای در دسترس نیست",
+        "Output" => "خروجی",
+        "Set hardware target" => "تعیین مقصد سخت‌افزاری",
+        "Target mismatch" => "ناهماهنگی مقصد",
+        "Configured output" => "خروجی پیکربندی‌شده",
+        "Move cue to matching track" => "انتقال نشانه به ترک سازگار",
         "Add to timeline" => "افزودن به خط زمانی",
         "Create custom template" => "ساخت الگوی سفارشی",
         "Name:" => "نام:",

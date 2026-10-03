@@ -52,6 +52,8 @@ const EFFECT_CARD_STROKE_WIDTH: f32 = 1.0;
 const EFFECT_CARD_ACTION_GUTTER: f32 = 100.0;
 const EFFECT_CARD_ACTION_BUTTONS_WIDTH: f32 = 72.0;
 const HARDWARE_CARD_STROKE_WIDTH: f32 = 1.0;
+const EFFECT_CONTROLS_RIGHT_GUTTER: f32 = 8.0;
+const EFFECT_CONTROLS_CARD_MARGIN: i8 = 10;
 
 pub(crate) fn timeline_keyboard_focus_id() -> egui::Id {
     egui::Id::new("timeline-keyboard-focus")
@@ -228,6 +230,96 @@ fn effect_group_header<R>(
             ui.set_width(content_width);
             add_contents(ui)
         })
+}
+
+fn effect_controls_content_width(available_width: f32) -> f32 {
+    (available_width - EFFECT_CONTROLS_RIGHT_GUTTER).max(1.0)
+}
+
+fn effect_controls_frame_content_width(outer_width: f32) -> f32 {
+    (outer_width - f32::from(EFFECT_CONTROLS_CARD_MARGIN) * 2.0 - 2.0).max(1.0)
+}
+
+fn effect_controls_card<R>(
+    ui: &mut egui::Ui,
+    outer_width: f32,
+    icon: &str,
+    title: &str,
+    subtitle: Option<&str>,
+    emphasized: bool,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    ui.set_width(outer_width);
+    let visuals = ui.visuals();
+    let fill = if emphasized {
+        visuals
+            .selection
+            .bg_fill
+            .gamma_multiply(if visuals.dark_mode { 0.18 } else { 0.10 })
+    } else {
+        visuals.widgets.noninteractive.bg_fill
+    };
+    let stroke = if emphasized {
+        egui::Stroke::new(1.0_f32, visuals.selection.bg_fill.gamma_multiply(0.72))
+    } else {
+        visuals.widgets.noninteractive.bg_stroke
+    };
+    egui::Frame::new()
+        .fill(fill)
+        .stroke(stroke)
+        .corner_radius(9.0)
+        .inner_margin(egui::Margin::symmetric(EFFECT_CONTROLS_CARD_MARGIN, 9))
+        .show(ui, |ui| {
+            ui.set_width(effect_controls_frame_content_width(outer_width));
+            ui.horizontal(|ui| {
+                let icon_color = if emphasized {
+                    ui.visuals().selection.bg_fill
+                } else {
+                    ui.visuals().strong_text_color()
+                };
+                ui.label(egui::RichText::new(icon).size(17.0).color(icon_color));
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(title).strong());
+                    if let Some(subtitle) = subtitle.filter(|value| !value.trim().is_empty()) {
+                        ui.label(egui::RichText::new(subtitle).small().weak());
+                    }
+                });
+            });
+            ui.add_space(7.0);
+            add_contents(ui)
+        })
+}
+
+fn effect_controls_badge(ui: &mut egui::Ui, icon: &str, text: impl Into<String>) {
+    let visuals = ui.visuals();
+    egui::Frame::new()
+        .fill(visuals.widgets.inactive.weak_bg_fill)
+        .stroke(visuals.widgets.noninteractive.bg_stroke)
+        .corner_radius(20.0)
+        .inner_margin(egui::Margin::symmetric(7, 3))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(format!("{icon}  {}", text.into())).small());
+        });
+}
+
+fn effect_controls_kind(
+    effect: &crate::four_d::models::Effect,
+) -> (&'static str, &'static str, &'static str) {
+    if effect.controller_strip_effect.is_some() {
+        (
+            crate::ui::icons::SPARKLE,
+            "Addressable lighting",
+            "PCController effect",
+        )
+    } else if effect.controller_macro.is_some() {
+        (
+            crate::ui::icons::WAVEFORM,
+            "Hardware macro",
+            "PCController effect",
+        )
+    } else {
+        (crate::ui::icons::PLUG, "Relay sequence", "Timeline effect")
+    }
 }
 
 fn hardware_frame_content_width(outer_width: f32, horizontal_margin: i8) -> f32 {
@@ -3948,6 +4040,77 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn effect_controls_cards_are_stable_and_never_wider_than_the_panel() {
+        let context = egui::Context::default();
+        for available in [168.0_f32, 280.0, 420.0] {
+            let painted = std::cell::RefCell::new(Vec::new());
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(available, 420.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let width = effect_controls_content_width(ui.available_width());
+                    ui.set_width(width);
+                    for row in 0..3 {
+                        let card = effect_controls_card(
+                            ui,
+                            width,
+                            crate::ui::icons::CLOCK,
+                            &format!("Card {row}"),
+                            Some("Responsive inspector section"),
+                            row == 0,
+                            |ui| {
+                                ui.add_sized(
+                                    [ui.available_width(), 24.0],
+                                    egui::Label::new("Content"),
+                                );
+                            },
+                        );
+                        painted.borrow_mut().push(card.response.rect.width());
+                    }
+                },
+            );
+            drop(output);
+            let painted = painted.into_inner();
+            assert_eq!(painted.len(), 3);
+            assert!(painted.windows(2).all(|pair| pair[0] == pair[1]));
+            assert!(painted[0] <= available + f32::EPSILON);
+            assert_eq!(painted[0], effect_controls_content_width(available));
+        }
+    }
+
+    #[test]
+    fn effect_controls_identify_each_authoritative_effect_kind() {
+        let relay = crate::four_d::models::Effect::with_target(
+            "Seat".to_string(),
+            String::new(),
+            500,
+            crate::four_d::models::HardwareTarget::Relay(5),
+            vec![],
+        );
+        let macro_effect = crate::four_d::models::Effect::controller_macro(
+            "Motion".to_string(),
+            String::new(),
+            1_000,
+            17,
+            "host".to_string(),
+        );
+        let strip = crate::four_d::models::Effect::controller_strip_effect(
+            "Thunder".to_string(),
+            2_000,
+            "thunder".to_string(),
+        );
+
+        assert_eq!(effect_controls_kind(&relay).1, "Relay sequence");
+        assert_eq!(effect_controls_kind(&macro_effect).1, "Hardware macro");
+        assert_eq!(effect_controls_kind(&strip).1, "Addressable lighting");
+    }
+
+    #[test]
     fn effect_card_action_click_survives_the_drag_surface() {
         let context = egui::Context::default();
         let payload = EffectDragPayload {
@@ -4933,29 +5096,56 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         });
                     }
                     PealayerTab::EffectControls => {
-                        let advertised_relays = self.app
+                        let connected_hardware = self
+                            .app
                             .advertised_hardware()
-                            .filter(|capabilities| capabilities.board_connected)
-                            .map(|capabilities| capabilities.relays)
+                            .filter(|capabilities| capabilities.board_connected);
+                        let advertised_relays = connected_hardware
+                            .as_ref()
+                            .map(|capabilities| capabilities.relays.clone())
                             .unwrap_or_default();
+                        let active_relays = connected_hardware
+                            .as_ref()
+                            .map(|capabilities| capabilities.active_relays.clone())
+                            .unwrap_or_default();
+                        let board_name = connected_hardware
+                            .as_ref()
+                            .map(|capabilities| {
+                                crate::ui::i18n::visual_text(
+                                    display_language,
+                                    &capabilities.board_name,
+                                )
+                            })
+                            .filter(|name| !name.trim().is_empty());
                         let selected_count = self.app.selected_instance_ids.len();
+                        let panel_width = effect_controls_content_width(ui.available_width());
+                        ui.set_width(panel_width);
 
                         if selected_count == 1 {
                             let id = *self.app.selected_instance_ids.iter().next().unwrap();
                             let mut timeline_dirty = false;
                             let mut delete_cue = false;
+                            let mut jump_to_cue = false;
                             let mut relocate_effect_id = None;
 
-                            ui.heading(self.app.tr("Effect Controls"));
-                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                ui.heading(self.app.tr("Effect Controls"));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    effect_controls_badge(
+                                        ui,
+                                        crate::ui::icons::SELECTION_ALL,
+                                        self.app.tr("1 cue"),
+                                    );
+                                });
+                            });
+                            ui.add_space(6.0);
 
-                            let mut instance_idx = None;
-                            for (idx, inst) in self.app.timeline.instances.iter().enumerate() {
-                                if inst.id == id {
-                                    instance_idx = Some(idx);
-                                    break;
-                                }
-                            }
+                            let instance_idx = self
+                                .app
+                                .timeline
+                                .instances
+                                .iter()
+                                .position(|instance| instance.id == id);
 
                             let mut push_undo = false;
                             let mut isolate_instance = false;
@@ -4964,90 +5154,173 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let mut update_relay_to = None;
 
                             if let Some(idx) = instance_idx {
-                                let identity_label = self.app.tr("Identity");
-                                let name_label = self.app.tr("Name:");
-                                let timing_label = self.app.tr("Timing constraints");
-                                let start_time_label = self.app.tr("Start time:");
-                                let duration_label = self.app.tr("Duration:");
+                                let selected_cue_label = self.app.tr("Selected cue");
+                                let name_label = self.app.tr("Name");
+                                let timing_label = self.app.tr("Timing");
+                                let timing_subtitle = self.app.tr("Exact timeline placement and length");
+                                let start_time_label = self.app.tr("Starts");
+                                let duration_label = self.app.tr("Duration");
                                 let hardware_target_label = self.app.tr("Hardware target");
+                                let source_label = self.app.tr("Source");
                                 let unavailable_output_label = self.app.tr("Unavailable output");
                                 let unavailable_project_output_label =
                                     self.app.tr("Unavailable project output");
-                                let connect_output_label = self
-                                    .app
-                                    .tr("Connect PCController to choose an available output.");
-                                let target_output_label = self.app.tr("Target output:");
+                                let connect_output_label = self.app.tr("No live hardware outputs");
+                                let target_output_label = self.app.tr("Output");
                                 let delete_cue_label = self.app.tr("Delete Cue");
+                                let jump_label = self.app.tr("Go to cue");
+                                let details_label = self.app.tr("Technical details");
+                                let target_mismatch_label = self.app.tr("Target mismatch");
+                                let configured_output_label = self.app.tr("Configured output");
+                                let move_matching_label = self.app.tr("Move cue to matching track");
+                                let macro_label = self.app.tr("Macro");
+                                let mode_label = self.app.tr("Mode");
+                                let effect_label = self.app.tr("Effect");
+                                let untitled_effect_label = self.app.tr("Untitled effect");
                                 let max_secs = if self.app.duration > 0.0 {
                                     self.app.duration
                                 } else {
                                     60.0
                                 };
-                                let instance = &mut self.app.timeline.instances[idx];
+                                let instance_effect_id = self.app.timeline.instances[idx].effect_id;
+                                let instance_start_ms = self.app.timeline.instances[idx].start_time_ms;
 
                                 let mut template_idx = None;
                                 for (t_idx, tmpl) in self.app.timeline.templates.iter().enumerate() {
-                                    if tmpl.id == instance.effect_id {
+                                    if tmpl.id == instance_effect_id {
                                         template_idx = Some(t_idx);
                                         break;
                                     }
                                 }
 
                                 if let Some(t_idx) = template_idx {
+                                    let (kind_icon, kind_label, ownership_label) =
+                                        effect_controls_kind(&self.app.timeline.templates[t_idx]);
+                                    let displayed_kind = self.app.tr(kind_label);
+                                    let displayed_ownership = self.app.tr(ownership_label);
                                     let template = &mut self.app.timeline.templates[t_idx];
+                                    let summary_title = if template.name.trim().is_empty() {
+                                        untitled_effect_label
+                                    } else {
+                                        crate::ui::i18n::visual_text(display_language, &template.name)
+                                    };
 
-                                    ui.group(|ui| {
-                                        ui.strong(&identity_label);
-                                        ui.add_space(4.0);
-
-                                        ui.horizontal(|ui| {
-                                            ui.label(&name_label);
-                                            if ui.text_edit_singleline(&mut template.name).changed() {
+                                    effect_controls_card(
+                                        ui,
+                                        panel_width,
+                                        kind_icon,
+                                        &summary_title,
+                                        Some(&selected_cue_label),
+                                        true,
+                                        |ui| {
+                                            ui.horizontal_wrapped(|ui| {
+                                                effect_controls_badge(
+                                                    ui,
+                                                    kind_icon,
+                                                    displayed_kind.clone(),
+                                                );
+                                                effect_controls_badge(
+                                                    ui,
+                                                    crate::ui::icons::CLOCK,
+                                                    crate::duration::format_effect_duration_for_language(
+                                                        display_language,
+                                                        template.duration_ms,
+                                                    ),
+                                                );
+                                            });
+                                            ui.add_space(7.0);
+                                            ui.label(egui::RichText::new(&name_label).small().weak());
+                                            let name_editor = ui.add_sized(
+                                                [ui.available_width(), 26.0],
+                                                egui::TextEdit::singleline(&mut template.name),
+                                            );
+                                            if name_editor.changed() {
                                                 timeline_dirty = true;
                                             }
-                                        });
-
-                                        ui.label(format!("Cue ID: {}", id));
-                                        ui.label(format!("Template ID: {}", template.id));
-                                    });
+                                        },
+                                    );
 
                                     ui.add_space(8.0);
 
-                                    ui.group(|ui| {
-                                        ui.strong(&timing_label);
-                                        ui.add_space(4.0);
-
-                                        let mut start_secs = instance.start_time_ms as f64 / 1000.0;
-                                        ui.horizontal(|ui| {
-                                            ui.label(&start_time_label);
-                                            let slider = ui.add(egui::Slider::new(&mut start_secs, 0.0..=max_secs).suffix("s"));
-                                            if slider.drag_started() || (slider.changed() && !slider.dragged()) {
+                                    effect_controls_card(
+                                        ui,
+                                        panel_width,
+                                        crate::ui::icons::CLOCK,
+                                        &timing_label,
+                                        Some(&timing_subtitle),
+                                        false,
+                                        |ui| {
+                                            let max_start_ms = (max_secs * 1_000.0).round() as u64;
+                                            let mut start_ms = instance_start_ms;
+                                            ui.horizontal(|ui| {
+                                                ui.label(egui::RichText::new(&start_time_label).weak());
+                                                ui.with_layout(
+                                                    egui::Layout::right_to_left(egui::Align::Center),
+                                                    |ui| {
+                                                        let editor = ui.add(
+                                                            crate::duration::time_value_drag(
+                                                                &mut start_ms,
+                                                                0..=max_start_ms,
+                                                                50.0,
+                                                            ),
+                                                        );
+                                                        if editor.drag_started()
+                                                            || (editor.changed() && !editor.dragged())
+                                                        {
+                                                            push_undo = true;
+                                                        }
+                                                        if editor.changed() {
+                                                            update_start_to = Some(start_ms);
+                                                            timeline_dirty = true;
+                                                        }
+                                                    },
+                                                );
+                                            });
+                                            let mut start_secs = start_ms as f64 / 1_000.0;
+                                            let slider = ui.add_sized(
+                                                [ui.available_width(), 18.0],
+                                                egui::Slider::new(&mut start_secs, 0.0..=max_secs)
+                                                    .show_value(false),
+                                            );
+                                            if slider.drag_started()
+                                                || (slider.changed() && !slider.dragged())
+                                            {
                                                 push_undo = true;
                                             }
                                             if slider.changed() {
                                                 update_start_to = Some((start_secs * 1000.0) as u64);
                                                 timeline_dirty = true;
                                             }
-                                        });
 
-                                        let mut duration_ms = template.duration_ms;
-                                        ui.horizontal(|ui| {
-                                            ui.label(&duration_label);
-                                            let editor = ui.add(crate::duration::time_value_drag(
-                                                &mut duration_ms,
-                                                50..=60_000,
-                                                50.0,
-                                            ));
-                                            if editor.drag_started() || (editor.changed() && !editor.dragged()) {
-                                                push_undo = true;
-                                            }
-                                            if editor.changed() {
-                                                isolate_instance = true;
-                                                update_duration_to = Some(duration_ms);
-                                                timeline_dirty = true;
-                                            }
-                                        });
-                                    });
+                                            ui.add_space(5.0);
+                                            ui.horizontal(|ui| {
+                                                ui.label(egui::RichText::new(&duration_label).weak());
+                                                ui.with_layout(
+                                                    egui::Layout::right_to_left(egui::Align::Center),
+                                                    |ui| {
+                                                        let mut duration_ms = template.duration_ms;
+                                                        let editor = ui.add(
+                                                            crate::duration::time_value_drag(
+                                                                &mut duration_ms,
+                                                                50..=3_600_000,
+                                                                50.0,
+                                                            ),
+                                                        );
+                                                        if editor.drag_started()
+                                                            || (editor.changed() && !editor.dragged())
+                                                        {
+                                                            push_undo = true;
+                                                        }
+                                                        if editor.changed() {
+                                                            isolate_instance = true;
+                                                            update_duration_to = Some(duration_ms);
+                                                            timeline_dirty = true;
+                                                        }
+                                                    },
+                                                );
+                                            });
+                                        },
+                                    );
 
                                     ui.add_space(8.0);
 
@@ -5068,34 +5341,57 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 )
                                             })
                                             .unwrap_or_else(|| unavailable_output_label.clone());
-                                        ui.group(|ui| {
-                                            ui.colored_label(
-                                                egui::Color32::from_rgb(245, 158, 11),
-                                                format!("{} Track mismatch: configured for {configured_name}", crate::ui::icons::WARNING),
-                                            );
+                                        effect_controls_card(
+                                            ui,
+                                            panel_width,
+                                            crate::ui::icons::WARNING,
+                                            &target_mismatch_label,
+                                            Some(&format!(
+                                                "{configured_output_label}: {configured_name}"
+                                            )),
+                                            false,
+                                            |ui| {
                                             if let Some(primary) = template.target.primary_relay_id() {
                                                 if advertised_relays.iter().any(|relay| relay.id == primary)
-                                                    && ui.button(format!("Relocate to {configured_name}")).clicked()
+                                                    && ui.button(format!("{}  {move_matching_label}", crate::ui::icons::PUSH_PIN)).clicked()
                                                 {
                                                     relocate_effect_id = Some(template.id);
                                                 }
                                             }
-                                        });
+                                            },
+                                        );
                                         ui.add_space(8.0);
                                     }
 
-                                    ui.group(|ui| {
-                                        ui.strong(&hardware_target_label);
-                                        ui.add_space(4.0);
-
+                                    effect_controls_card(
+                                        ui,
+                                        panel_width,
+                                        crate::ui::icons::PLUG,
+                                        &hardware_target_label,
+                                        board_name.as_deref(),
+                                        false,
+                                        |ui| {
                                         let mut selected_relay = current_relay_id;
 
                                         if advertised_relays.is_empty() {
-                                            ui.label(&connect_output_label);
+                                            ui.horizontal(|ui| {
+                                                ui.label(crate::ui::icons::WARNING);
+                                                ui.label(egui::RichText::new(&connect_output_label).weak());
+                                            });
                                         } else {
                                           ui.horizontal(|ui| {
-                                            ui.label(&target_output_label);
+                                            ui.label(egui::RichText::new(&target_output_label).weak());
+                                            let active = active_relays.contains(&selected_relay);
+                                            ui.colored_label(
+                                                if active {
+                                                    egui::Color32::from_rgb(34, 197, 94)
+                                                } else {
+                                                    ui.visuals().weak_text_color()
+                                                },
+                                                crate::ui::icons::DOT_OUTLINE,
+                                            );
                                             egui::ComboBox::from_id_salt("relay_combo")
+                                                .width((ui.available_width() - 8.0).max(80.0))
                                                 .selected_text(
                                                     advertised_relays
                                                         .iter()
@@ -5117,14 +5413,103 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             update_relay_to = Some(selected_relay);
                                             timeline_dirty = true;
                                         }
-                                    });
+                                        },
+                                    );
+                                    } else {
+                                        effect_controls_card(
+                                            ui,
+                                            panel_width,
+                                            kind_icon,
+                                            &source_label,
+                                            Some(&displayed_ownership),
+                                            false,
+                                            |ui| {
+                                                if let Some(macro_cue) = template.controller_macro.as_ref() {
+                                                    ui.horizontal(|ui| {
+                                                        ui.label(egui::RichText::new(&macro_label).weak());
+                                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                            ui.label(format!("#{}", macro_cue.id));
+                                                        });
+                                                    });
+                                                    if !macro_cue.mode.trim().is_empty() {
+                                                        ui.horizontal(|ui| {
+                                                            ui.label(egui::RichText::new(&mode_label).weak());
+                                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                                ui.label(&macro_cue.mode);
+                                                            });
+                                                        });
+                                                    }
+                                                }
+                                                if let Some(strip_cue) = template.controller_strip_effect.as_ref() {
+                                                    ui.horizontal(|ui| {
+                                                        ui.label(egui::RichText::new(&effect_label).weak());
+                                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                            ui.label(&strip_cue.id);
+                                                        });
+                                                    });
+                                                }
+                                            },
+                                        );
                                     }
 
-                                    ui.add_space(12.0);
-                                    if ui.button(egui::RichText::new(format!("{} {delete_cue_label}", crate::ui::icons::X)).color(egui::Color32::from_rgb(231, 76, 60))).clicked() {
-                                        delete_cue = true;
+                                    ui.add_space(8.0);
+                                    let details_open = crate::ui::icons::disclosure_header(
+                                        ui,
+                                        ("effect-control-details", id),
+                                        &format!("{}  {details_label}", crate::ui::icons::INFO),
+                                        false,
+                                    );
+                                    if details_open {
+                                        egui::Grid::new(("effect-control-identifiers", id))
+                                            .num_columns(2)
+                                            .spacing([8.0, 4.0])
+                                            .show(ui, |ui| {
+                                                ui.label(egui::RichText::new("Cue ID").small().weak());
+                                                ui.add(egui::Label::new(egui::RichText::new(id.to_string()).monospace().small()).selectable(true));
+                                                ui.end_row();
+                                                ui.label(egui::RichText::new("Effect ID").small().weak());
+                                                ui.add(egui::Label::new(egui::RichText::new(template.id.to_string()).monospace().small()).selectable(true));
+                                                ui.end_row();
+                                            });
                                     }
+
+                                    ui.add_space(8.0);
+                                    ui.horizontal(|ui| {
+                                        if ui
+                                            .button(format!("{}  {jump_label}", crate::ui::icons::SKIP_BACK))
+                                            .clicked()
+                                        {
+                                            jump_to_cue = true;
+                                        }
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if ui
+                                                    .button(
+                                                        egui::RichText::new(format!(
+                                                            "{}  {delete_cue_label}",
+                                                            crate::ui::icons::TRASH
+                                                        ))
+                                                        .color(egui::Color32::from_rgb(220, 74, 74)),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    delete_cue = true;
+                                                }
+                                            },
+                                        );
+                                    });
                                 }
+                            } else {
+                                effect_controls_card(
+                                    ui,
+                                    panel_width,
+                                    crate::ui::icons::WARNING,
+                                    &self.app.tr("Cue unavailable"),
+                                    Some(&self.app.tr("The selected cue is no longer on the timeline")),
+                                    false,
+                                    |_| {},
+                                );
                             }
 
                             if push_undo {
@@ -5171,6 +5556,18 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 ui.ctx().request_repaint();
                             }
 
+                            if jump_to_cue {
+                                if let Some(instance) = self
+                                    .app
+                                    .timeline
+                                    .instances
+                                    .iter()
+                                    .find(|instance| instance.id == id)
+                                {
+                                    self.app.seek_absolute(instance.start_time_ms as f64 / 1_000.0);
+                                }
+                            }
+
                             if delete_cue {
                                 self.app.undo_stack.push(self.app.snapshot_timeline());
                                 self.app.timeline.instances.retain(|inst| inst.id != id);
@@ -5183,55 +5580,142 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 ui.ctx().request_repaint();
                             }
                         } else if selected_count > 1 {
-                            ui.heading(self.app.tr("Bulk effect controls"));
-                            ui.add_space(8.0);
-
-                            ui.label(format!("Selected Cues: {}", selected_count));
-                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                ui.heading(self.app.tr("Effect Controls"));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    effect_controls_badge(
+                                        ui,
+                                        crate::ui::icons::SELECTION_ALL,
+                                        format!("{selected_count} {}", self.app.tr("cues")),
+                                    );
+                                });
+                            });
+                            ui.add_space(6.0);
 
                             let mut timeline_dirty = false;
                             let mut delete_all = false;
+                            let mut bulk_relay = None;
 
-                            ui.group(|ui| {
-                                ui.strong(self.app.tr("Bulk hardware target override"));
-                                ui.add_space(8.0);
-
-                                ui.horizontal_wrapped(|ui| {
-                                    for relay in &advertised_relays {
-                                        if ui.button(crate::ui::i18n::visual_text(display_language, &relay.name)).clicked() {
-                                            // Apply the advertised target to all selected instances' templates.
-                                            let selected_ids = &self.app.selected_instance_ids;
-                                            for inst in &mut self.app.timeline.instances {
-                                                    if selected_ids.contains(&inst.id) {
-                                                        if let Some(template) = self.app.timeline.templates.iter_mut().find(|t| t.id == inst.effect_id) {
-                                                            if template.controller_macro.is_some()
-                                                                || template.controller_strip_effect.is_some()
-                                                            {
-                                                                continue;
-                                                            }
-                                                            template.actions = crate::four_d::patterns::generate_constant(relay.id, true, template.duration_ms);
-                                                        template.target = crate::four_d::models::HardwareTarget::Relay(relay.id);
-                                                    }
-                                                }
-                                            }
-                                            timeline_dirty = true;
+                            effect_controls_card(
+                                ui,
+                                panel_width,
+                                crate::ui::icons::SELECTION_ALL,
+                                &self.app.tr("Multiple cues selected"),
+                                Some(&self.app.tr("Changes apply to every compatible cue")),
+                                true,
+                                |ui| {
+                                    let controller_owned = self
+                                        .app
+                                        .timeline
+                                        .instances
+                                        .iter()
+                                        .filter(|instance| self.app.selected_instance_ids.contains(&instance.id))
+                                        .filter(|instance| {
+                                            self.app
+                                                .timeline
+                                                .templates
+                                                .iter()
+                                                .find(|template| template.id == instance.effect_id)
+                                                .is_some_and(|template| {
+                                                    template.controller_macro.is_some()
+                                                        || template.controller_strip_effect.is_some()
+                                                })
+                                        })
+                                        .count();
+                                    ui.horizontal_wrapped(|ui| {
+                                        effect_controls_badge(
+                                            ui,
+                                            crate::ui::icons::PUSH_PIN,
+                                            format!("{selected_count} {}", self.app.tr("selected")),
+                                        );
+                                        if controller_owned > 0 {
+                                            effect_controls_badge(
+                                                ui,
+                                                crate::ui::icons::CIRCUITRY,
+                                                format!("{controller_owned} {}", self.app.tr("controller-owned")),
+                                            );
                                         }
-                                    }
-                                });
-                            });
+                                    });
+                                },
+                            );
 
                             ui.add_space(8.0);
+                            effect_controls_card(
+                                ui,
+                                panel_width,
+                                crate::ui::icons::PLUG,
+                                &self.app.tr("Set hardware target"),
+                                board_name.as_deref(),
+                                false,
+                                |ui| {
+                                    if advertised_relays.is_empty() {
+                                        ui.horizontal(|ui| {
+                                            ui.label(crate::ui::icons::WARNING);
+                                            ui.label(egui::RichText::new(self.app.tr("No live hardware outputs")).weak());
+                                        });
+                                    } else {
+                                        ui.horizontal_wrapped(|ui| {
+                                            for relay in &advertised_relays {
+                                                let active = active_relays.contains(&relay.id);
+                                                let label = format!(
+                                                    "{}  {}",
+                                                    if active { crate::ui::icons::DOT_OUTLINE } else { crate::ui::icons::PLUG },
+                                                    crate::ui::i18n::visual_text(display_language, &relay.name),
+                                                );
+                                                if ui.button(label).clicked() {
+                                                    bulk_relay = Some(relay.id);
+                                                }
+                                            }
+                                        });
+                                    }
+                                },
+                            );
 
-                            ui.group(|ui| {
-                                ui.strong(self.app.tr("Bulk actions"));
-                                ui.add_space(8.0);
-
-                                if ui.button(egui::RichText::new(format!("× {delete_all_label}")).color(egui::Color32::from_rgb(231, 76, 60))).clicked() {
-                                    delete_all = true;
+                            if let Some(relay_id) = bulk_relay {
+                                self.app.undo_stack.push(self.app.snapshot_timeline());
+                                let selected_ids = &self.app.selected_instance_ids;
+                                for instance in &self.app.timeline.instances {
+                                    if selected_ids.contains(&instance.id) {
+                                        if let Some(template) = self
+                                            .app
+                                            .timeline
+                                            .templates
+                                            .iter_mut()
+                                            .find(|template| template.id == instance.effect_id)
+                                        {
+                                            if template.controller_macro.is_some()
+                                                || template.controller_strip_effect.is_some()
+                                            {
+                                                continue;
+                                            }
+                                            template.actions = crate::four_d::patterns::generate_constant(
+                                                relay_id,
+                                                true,
+                                                template.duration_ms,
+                                            );
+                                            template.target = crate::four_d::models::HardwareTarget::Relay(relay_id);
+                                        }
+                                    }
                                 }
-                            });
+                                timeline_dirty = true;
+                            }
+
+                            ui.add_space(10.0);
+                            if ui
+                                .button(
+                                    egui::RichText::new(format!(
+                                        "{}  {delete_all_label}",
+                                        crate::ui::icons::TRASH
+                                    ))
+                                    .color(egui::Color32::from_rgb(220, 74, 74)),
+                                )
+                                .clicked()
+                            {
+                                delete_all = true;
+                            }
 
                             if delete_all {
+                                self.app.undo_stack.push(self.app.snapshot_timeline());
                                 let selected_ids = &self.app.selected_instance_ids;
                                 self.app.timeline.instances.retain(|inst| !selected_ids.contains(&inst.id));
                                 self.app.selected_instance_ids.clear();
@@ -5242,9 +5726,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 self.app.sync_timeline_engine();
                             }
                         } else {
-                            ui.centered_and_justified(|ui| {
-                                ui.label(egui::RichText::new(self.app.tr("No Cue Selected")).weak().size(14.0));
-                            });
+                            ui.heading(self.app.tr("Effect Controls"));
+                            ui.add_space(6.0);
+                            effect_controls_card(
+                                ui,
+                                panel_width,
+                                crate::ui::icons::SELECTION_ALL,
+                                &self.app.tr("No cue selected"),
+                                Some(&self.app.tr("Select a cue on the timeline to manage it")),
+                                false,
+                                |_| {},
+                            );
                         }
                     }
                     PealayerTab::EffectsLibrary => {
