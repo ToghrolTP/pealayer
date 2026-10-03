@@ -419,17 +419,17 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 // Workspace switcher
                 top_menu_button(ui, app.tr("Workspace"), |ui| {
                     if ui
-                        .selectable_label(app.show_four_d_editor, app.tr("NLE Layout (Docked)"))
-                        .clicked()
-                    {
-                        app.show_four_d_editor = true;
-                        ui.close();
-                    }
-                    if ui
                         .selectable_label(!app.show_four_d_editor, app.tr("Simple Player"))
                         .clicked()
                     {
                         app.show_four_d_editor = false;
+                        ui.close();
+                    }
+                    if ui
+                        .selectable_label(app.show_four_d_editor, app.tr("NLE Layout (Docked)"))
+                        .clicked()
+                    {
+                        app.show_four_d_editor = true;
                         ui.close();
                     }
                     ui.separator();
