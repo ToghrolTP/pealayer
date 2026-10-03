@@ -2968,6 +2968,19 @@ impl PealayerApp {
         profiles
     }
 
+    fn compact_workspace_profile_order(&mut self) {
+        let ordered_ids = self
+            .ordered_workspace_profiles()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        for (order, id) in ordered_ids.into_iter().enumerate() {
+            if let Some(profile) = self.workspace_profiles.get_mut(&id) {
+                profile.order = order as i32;
+            }
+        }
+    }
+
     pub(crate) fn active_workspace_name(&self) -> String {
         self.active_workspace_profile
             .as_ref()
@@ -3101,6 +3114,7 @@ impl PealayerApp {
             if self.active_workspace_profile.as_deref() == Some(id) {
                 self.active_workspace_profile = None;
             }
+            self.compact_workspace_profile_order();
             self.config_status =
                 format!("{}: {}", self.tr("Workspace profile deleted"), profile.name);
             self.save_config();
