@@ -20,6 +20,7 @@ import {
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
+  CheckOutlined,
   DeleteOutlined,
   EditOutlined,
   MoreOutlined,
@@ -30,6 +31,7 @@ import {
 } from '@ant-design/icons';
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
+import { effectGlyph, effectIconOptions } from '../effectIcons';
 
 interface EffectsTabProps {
   state: PlayerState;
@@ -63,6 +65,7 @@ type EffectDraft = {
   reference: string;
   id: string;
   name: string;
+  icon: string;
   category: string;
   description: string;
   kind: 'sequence' | 'strip-stream';
@@ -74,6 +77,12 @@ type EffectDraft = {
   properties: Record<string, unknown>;
   programText: string;
   is_new: boolean;
+};
+
+type InlineEffectEdit = {
+  reference: string;
+  name: string;
+  icon: string;
 };
 
 const defaultStep = (): EffectStep => ({ at_us: 0, kind: 'relay', target: 1, value: 1, action_ids: [] });
@@ -91,6 +100,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
   const effects = state.controller_effects ?? [];
   const [draft, setDraft] = useState<EffectDraft | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [inlineEdit, setInlineEdit] = useState<InlineEffectEdit | null>(null);
   const selectedEffect = effects.find((effect) => effect.reference === selected);
   const grouped = useMemo(() => {
     const groups = new Map<string, typeof effects>();
@@ -104,6 +114,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       reference: effect.reference,
       id: effect.id,
       name: effect.name,
+      icon: effect.icon || 'plug',
       category: effect.category,
       description: effect.description,
       kind: effect.kind,
@@ -116,7 +127,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       programText: effect.kind === 'strip-stream' ? JSON.stringify(effect.program ?? {}, null, 2) : '{}',
       is_new: false,
     } : {
-      reference: '', id: '', name: '', category: 'Motion', description: '', kind: 'sequence',
+      reference: '', id: '', name: '', icon: 'plug', category: 'Motion', description: '', kind: 'sequence',
       duration_ms: 1000, color: '#38D27A', default_fps: 20, default_pixels: 100,
       steps: [defaultStep()], properties: { mode: 'host', timing_tolerance_us: 0, keep_outputs_on_cancel: false },
       programText: '{}', is_new: true,
@@ -153,6 +164,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       reference: draft.reference,
       id: draft.id,
       name: draft.name,
+      icon: draft.icon,
       category: draft.category,
       description: draft.description,
       kind: draft.kind,
@@ -164,6 +176,27 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       is_new: draft.is_new,
     });
     setDraft(null);
+  };
+
+  const saveInlineIdentity = (effect: typeof effects[number]) => {
+    if (!inlineEdit || inlineEdit.reference !== effect.reference || !inlineEdit.name.trim()) return;
+    const parts = programParts(effect.program);
+    sendCmd('controller_effect.save', {
+      reference: effect.reference,
+      id: effect.id,
+      name: inlineEdit.name.trim(),
+      icon: inlineEdit.icon,
+      category: effect.category,
+      description: effect.description,
+      kind: effect.kind,
+      duration_ms: effect.duration_ms,
+      color: String(parts.properties.color ?? '#38D27A'),
+      default_fps: effect.default_fps ?? 20,
+      default_pixels: effect.default_pixels ?? 100,
+      program: effect.program,
+      is_new: false,
+    });
+    setInlineEdit(null);
   };
 
   return <section className="surface-page effects-library-page">
@@ -197,13 +230,53 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
             if (key === 'cue') sendCmd('controller_effect_cue.add', { reference: effect.reference, start_time_ms: Math.max(0, Math.round((state.playback_time ?? 0) * 1000)) });
             if (key === 'delete') sendCmd('controller_effect.delete', { reference: effect.reference });
           };
-          return <article className={`effect-card ${selected === effect.reference ? 'is-selected' : ''}`} key={effect.reference} onClick={() => setSelected(effect.reference)}>
-            <div className="effect-card__icon"><PlayCircleOutlined /></div>
-            <div className="effect-card__body"><strong>{effect.name}</strong><span>{effect.lane} · {effect.action_count} {tr(locale, 'actions')} · {effect.duration_display}</span></div>
-            <Tooltip title={tr(locale, 'Play effect')}><Button type="text" icon={<PlayCircleOutlined />} onClick={(event) => { event.stopPropagation(); run('play'); }} /></Tooltip>
-            <Dropdown menu={{ items: actions, onClick: ({ key }) => run(key) }} trigger={['click']}>
-              <Button type="text" icon={<MoreOutlined />} onClick={(event) => event.stopPropagation()} aria-label={tr(locale, 'Actions')} />
-            </Dropdown>
+          const editing = inlineEdit?.reference === effect.reference;
+          const beginInlineEdit = () => setInlineEdit({
+            reference: effect.reference,
+            name: effect.name,
+            icon: effect.icon || 'plug',
+          });
+          return <article className={`effect-card ${selected === effect.reference ? 'is-selected' : ''} ${editing ? 'is-editing' : ''}`} key={effect.reference} onClick={() => setSelected(effect.reference)}>
+            {editing ? <>
+              <Select
+                className="effect-card__inline-icon"
+                value={inlineEdit.icon}
+                options={effectIconOptions}
+                popupMatchSelectWidth={false}
+                showSearch
+                optionFilterProp="value"
+                aria-label={tr(locale, 'Icon')}
+                onClick={(event) => event.stopPropagation()}
+                onChange={(icon) => setInlineEdit({ ...inlineEdit, icon })}
+              />
+              <Input
+                className="effect-card__inline-name"
+                value={inlineEdit.name}
+                autoFocus
+                maxLength={64}
+                aria-label={tr(locale, 'Name')}
+                onClick={(event) => event.stopPropagation()}
+                onChange={(event) => setInlineEdit({ ...inlineEdit, name: event.target.value })}
+                onPressEnter={() => saveInlineIdentity(effect)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') setInlineEdit(null);
+                }}
+              />
+              <Tooltip title={tr(locale, 'Save')}><Button type="text" icon={<CheckOutlined />} disabled={!inlineEdit.name.trim()} onClick={(event) => { event.stopPropagation(); saveInlineIdentity(effect); }} /></Tooltip>
+              <Tooltip title={tr(locale, 'Cancel')}><Button type="text" icon={<StopOutlined />} onClick={(event) => { event.stopPropagation(); setInlineEdit(null); }} /></Tooltip>
+            </> : <>
+              <Tooltip title={tr(locale, 'Change icon')}>
+                <button type="button" className="effect-card__icon" onClick={(event) => { event.stopPropagation(); beginInlineEdit(); }}>{effectGlyph(effect.icon)}</button>
+              </Tooltip>
+              <button type="button" className="effect-card__caption" onClick={(event) => { event.stopPropagation(); beginInlineEdit(); }}>
+                <strong>{effect.name}</strong>
+                <span>{effect.lane} · {effect.action_count} {tr(locale, 'actions')} · {effect.duration_display}</span>
+              </button>
+              <Tooltip title={tr(locale, 'Play effect')}><Button type="text" icon={<PlayCircleOutlined />} onClick={(event) => { event.stopPropagation(); run('play'); }} /></Tooltip>
+              <Dropdown menu={{ items: actions, onClick: ({ key }) => run(key) }} trigger={['click']}>
+                <Button type="text" icon={<MoreOutlined />} onClick={(event) => event.stopPropagation()} aria-label={tr(locale, 'Actions')} />
+              </Dropdown>
+            </>}
           </article>;
         })}</div>,
       }))} />}
@@ -225,6 +298,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
           <label><span>{tr(locale, 'Type')}</span><Select value={draft.kind} options={[{ value: 'sequence', label: tr(locale, 'Sequence') }, { value: 'strip-stream', label: tr(locale, 'Lighting') }]} onChange={(kind) => setDraft({ ...draft, kind })} /></label>
           <label><span>{tr(locale, 'ID')}</span><Input value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} /></label>
           <label><span>{tr(locale, 'Name')}</span><Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
+          <label><span>{tr(locale, 'Icon')}</span><Select showSearch optionFilterProp="value" value={draft.icon} options={effectIconOptions} onChange={(icon) => setDraft({ ...draft, icon })} /></label>
           <label><span>{tr(locale, 'Category')}</span><Input value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value })} /></label>
           <label className="effect-editor__wide"><span>{tr(locale, 'Description')}</span><Input value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
           <label><span>{tr(locale, 'Duration')}</span><InputNumber min={1} addonAfter="ms" value={draft.duration_ms} onChange={(duration_ms) => setDraft({ ...draft, duration_ms: duration_ms ?? 1 })} /></label>

@@ -308,10 +308,19 @@ body {
 .effect-card { min-width: 0; min-height: 58px; padding: 9px; display: grid; grid-template-columns: 36px minmax(0, 1fr) 30px 30px; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); cursor: pointer; }
 .effect-card:hover, .effect-card.is-selected { border-color: color-mix(in srgb, var(--accent) 62%, var(--line)); background: var(--accent-soft); }
 .effect-card__icon { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 8px; color: var(--accent); background: var(--surface-0); }
+.effect-card button.effect-card__icon { padding: 0; cursor: pointer; font: inherit; }
 .effect-card__body { min-width: 0; display: grid; gap: 3px; }
 .effect-card__body strong, .effect-card__body span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.effect-card__body strong { color: var(--text); font-size: 13px; }
+.effect-card__body strong { color: var(--text); font-size: 13px; text-align: start; }
 .effect-card__body span { color: var(--subtle); font-size: 11px; }
+.effect-card__caption { min-width: 0; padding: 0; display: grid; gap: 3px; overflow: hidden; border: 0; color: inherit; background: transparent; text-align: start; cursor: text; }
+.effect-card__caption strong, .effect-card__caption span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; }
+.effect-card__caption strong { color: var(--text); font-size: 13px; }
+.effect-card__caption span { color: var(--subtle); font-size: 11px; }
+.effect-card.is-editing { cursor: default; }
+.effect-card__inline-icon { width: 58px; }
+.effect-card__inline-name { min-width: 0; }
+.effect-icon-option { display: inline-flex; align-items: center; gap: 8px; }
 .selection-bar { position: sticky; inset-block-end: 0; padding: 8px 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 9px; background: color-mix(in srgb, var(--surface-1) 94%, transparent); backdrop-filter: blur(14px); }
 .effect-editor-modal .ant-modal-body { max-height: min(68vh, 720px); overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .effect-editor-modal .ant-modal-content { max-height: calc(100dvh - 32px); display: flex; flex-direction: column; overflow: hidden; }

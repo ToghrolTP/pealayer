@@ -509,6 +509,8 @@ pub struct WebControllerEffect {
     pub reference: String,
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub icon: String,
     pub category: String,
     pub description: String,
     pub kind: String,
@@ -529,6 +531,8 @@ pub struct WebControllerEffectDraft {
     pub reference: String,
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub icon: String,
     pub category: String,
     #[serde(default)]
     pub description: String,
@@ -570,6 +574,9 @@ impl WebControllerEffectDraft {
         };
         field("effect name", &self.name)?;
         field("effect category", &self.category)?;
+        if !self.icon.trim().is_empty() {
+            field("effect icon", &self.icon)?;
+        }
         match self.kind.as_str() {
             "sequence" => self
                 .id
@@ -1928,13 +1935,15 @@ mod tests {
         ));
 
         let save: JsonRpcRequest = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":2,"method":"controller_effect.save","params":{"id":"lighting-primary","name":"Lighting primary","category":"Lighting","kind":"strip-stream","program":{"primitive":"police"},"default_fps":30,"duration_ms":5000,"default_pixels":100,"is_new":true}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"controller_effect.save","params":{"id":"lighting-primary","name":"Lighting primary","icon":"lightning","category":"Lighting","kind":"strip-stream","program":{"primitive":"police"},"default_fps":30,"duration_ms":5000,"default_pixels":100,"is_new":true}}"#,
         )
         .unwrap();
         assert!(matches!(
             command_from_json_rpc(&save).unwrap(),
             Some(InteropCommand::SaveControllerEffect { effect })
-                if effect.id == "lighting-primary" && effect.program["primitive"] == "police"
+                if effect.id == "lighting-primary"
+                    && effect.icon == "lightning"
+                    && effect.program["primitive"] == "police"
         ));
 
         let invalid: JsonRpcRequest = serde_json::from_str(

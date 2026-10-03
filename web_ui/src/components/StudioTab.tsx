@@ -17,6 +17,7 @@ import {
 import { Button, Empty, Input, InputNumber, message, Modal, Popconfirm, Select, Slider, Tooltip } from 'antd';
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
+import { effectGlyph as configuredEffectGlyph, effectIconOptions } from '../effectIcons';
 
 interface StudioTabProps {
   state: PlayerState;
@@ -87,7 +88,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       default_pixels: effect.default_pixels ?? 100,
       is_new: false,
     } : {
-      reference: '', id: '', name: '', category: 'Lighting', description: '',
+      reference: '', id: '', name: '', icon: 'plug', category: 'Lighting', description: '',
       kind: 'strip-stream', programText: '{}',
       color: 'green', default_fps: 20, duration_ms: 5000, default_pixels: 100,
       is_new: true,
@@ -135,7 +136,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                 className={`effect-profile ${selectedCard ? 'is-selected' : ''}`}
                 onClick={() => setSelectedEffect(effect.reference)}
               >
-                <span className="effect-profile__icon">{effectGlyph(effect.kind === 'sequence' ? 'controller' : 'strip')}</span>
+                <span className="effect-profile__icon">{configuredEffectGlyph(effect.icon)}</span>
                 <div className="effect-profile__body">
                   <strong>{effect.name}</strong>
                   <span>{effect.category} · {effect.action_count} {tr(locale, 'actions')} · {effect.duration_display}</span>
@@ -208,6 +209,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             <label><span>{tr(locale, 'Type')}</span><Select value={effectDraft.kind} options={[{ value: 'strip-stream', label: tr(locale, 'Lighting') }, { value: 'sequence', label: tr(locale, 'Sequence') }]} onChange={(kind) => setEffectDraft({ ...effectDraft, kind })} /></label>
             <label><span>{tr(locale, 'ID')}</span><Input value={effectDraft.id} onChange={(event) => setEffectDraft({ ...effectDraft, id: event.target.value })} /></label>
             <label><span>{tr(locale, 'Name')}</span><Input value={effectDraft.name} onChange={(event) => setEffectDraft({ ...effectDraft, name: event.target.value })} /></label>
+            <label><span>{tr(locale, 'Icon')}</span><Select showSearch optionFilterProp="value" value={effectDraft.icon} options={effectIconOptions} onChange={(icon) => setEffectDraft({ ...effectDraft, icon })} /></label>
             <label><span>{tr(locale, 'Category')}</span><Input value={effectDraft.category} onChange={(event) => setEffectDraft({ ...effectDraft, category: event.target.value })} /></label>
             <label className="effect-editor-grid__wide"><span>{tr(locale, 'Description')}</span><Input value={effectDraft.description} onChange={(event) => setEffectDraft({ ...effectDraft, description: event.target.value })} /></label>
             <label><span>{tr(locale, 'Duration (ms)')}</span><InputNumber min={1} value={effectDraft.duration_ms} onChange={(duration_ms) => setEffectDraft({ ...effectDraft, duration_ms: duration_ms ?? 1 })} /></label>

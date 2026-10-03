@@ -80,6 +80,7 @@ export interface PlayerState {
     reference: string;
     id: string;
     name: string;
+    icon: string;
     category: string;
     description: string;
     kind: 'sequence' | 'strip-stream';

@@ -55,6 +55,12 @@ const HARDWARE_CARD_STROKE_WIDTH: f32 = 1.0;
 const EFFECT_CONTROLS_RIGHT_GUTTER: f32 = 8.0;
 const EFFECT_CONTROLS_CARD_MARGIN: i8 = 10;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InlineEffectIdentityEdit {
+    name: String,
+    icon: String,
+}
+
 pub(crate) fn timeline_keyboard_focus_id() -> egui::Id {
     egui::Id::new("timeline-keyboard-focus")
 }
@@ -6327,38 +6333,140 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let mut place_at_playhead = false;
                                                 let mut more_response = None;
                                                 let card_width = effects_width;
+                                                let inline_edit_id = item_id.with("inline-identity");
+                                                let mut inline_edit = ui.data_mut(|data| {
+                                                    data.get_temp::<InlineEffectIdentityEdit>(
+                                                        inline_edit_id,
+                                                    )
+                                                });
+                                                let inline_editing = inline_edit.is_some();
+                                                let mut begin_inline_edit = false;
+                                                let mut save_inline_edit = false;
+                                                let mut cancel_inline_edit = false;
                                                 let response = effect_drag_source_with_action_gutter(
                                                     ui,
                                                     item_id,
                                                     payload.clone(),
-                                                    EFFECT_CARD_ACTION_GUTTER,
+                                                    if inline_editing {
+                                                        card_width
+                                                    } else {
+                                                        EFFECT_CARD_ACTION_GUTTER
+                                                    },
                                                     |ui| {
                                                         effect_card(ui, card_width, |ui| {
+                                                            if let Some(edit) = inline_edit.as_mut() {
                                                                 ui.horizontal(|ui| {
-                                                                    ui.add_sized(
+                                                                    let selected_icon = crate::ui::icons::named_control_icon(
+                                                                        &edit.icon,
+                                                                    )
+                                                                    .unwrap_or(crate::ui::icons::SPARKLE);
+                                                                    egui::ComboBox::from_id_salt(
+                                                                        item_id.with("inline-icon"),
+                                                                    )
+                                                                    .width(38.0)
+                                                                    .selected_text(selected_icon)
+                                                                    .show_ui(ui, |ui| {
+                                                                        for (key, label, glyph) in
+                                                                            crate::ui::icons::CONTROL_ICON_PRESETS
+                                                                        {
+                                                                            if ui
+                                                                                .selectable_label(
+                                                                                    edit.icon.eq_ignore_ascii_case(key),
+                                                                                    format!("{glyph}  {label}"),
+                                                                                )
+                                                                                .clicked()
+                                                                            {
+                                                                                edit.icon = (*key).to_string();
+                                                                            }
+                                                                        }
+                                                                    });
+                                                                    let action_spacing = ui.spacing().item_spacing.x;
+                                                                    let name_width = (ui.available_width()
+                                                                        - 48.0
+                                                                        - action_spacing * 2.0)
+                                                                        .max(54.0);
+                                                                    let name_response = ui.add_sized(
+                                                                        [name_width, 24.0],
+                                                                        egui::TextEdit::singleline(&mut edit.name)
+                                                                            .char_limit(64),
+                                                                    );
+                                                                    if name_response.lost_focus()
+                                                                        && ui.input(|input| {
+                                                                            input.key_pressed(egui::Key::Enter)
+                                                                        })
+                                                                    {
+                                                                        save_inline_edit = true;
+                                                                    }
+                                                                    if ui
+                                                                        .add_sized(
+                                                                            [24.0, 24.0],
+                                                                            egui::Button::new(
+                                                                                crate::ui::icons::CHECK,
+                                                                            )
+                                                                            .frame(false),
+                                                                        )
+                                                                        .on_hover_text(self.app.tr("Save"))
+                                                                        .clicked()
+                                                                    {
+                                                                        save_inline_edit = true;
+                                                                    }
+                                                                    if ui
+                                                                        .add_sized(
+                                                                            [24.0, 24.0],
+                                                                            egui::Button::new(
+                                                                                crate::ui::icons::X,
+                                                                            )
+                                                                            .frame(false),
+                                                                        )
+                                                                        .on_hover_text(self.app.tr("Cancel"))
+                                                                        .clicked()
+                                                                        || ui.input(|input| {
+                                                                            input.key_pressed(egui::Key::Escape)
+                                                                        })
+                                                                    {
+                                                                        cancel_inline_edit = true;
+                                                                    }
+                                                                });
+                                                            } else {
+                                                                ui.horizontal(|ui| {
+                                                                    let icon_response = ui.add_sized(
                                                                         [20.0, 24.0],
-                                                                        egui::Label::new(
+                                                                        egui::Button::new(
                                                                         egui::RichText::new(&preset.effect.icon)
                                                                         .size(16.0),
-                                                                        ),
-                                                                    );
+                                                                        )
+                                                                        .frame(false),
+                                                                    )
+                                                                    .on_hover_text(self.app.tr("Change icon"));
+                                                                    begin_inline_edit |= icon_response.clicked();
                                                                     let action_spacing = ui.spacing().item_spacing.x;
                                                                     let (title_width, reserved_actions) =
                                                                         effect_card_header_widths(
                                                                             ui.available_width(),
                                                                             action_spacing,
                                                                         );
-                                                                    ui.add_sized(
-                                                                        [title_width, 24.0],
-                                                                        egui::Label::new(
-                                                                            egui::RichText::new(
-                                                                                &displayed_effect_name,
-                                                                            )
-                                                                            .strong(),
+                                                                    let title_response = ui
+                                                                        .allocate_ui_with_layout(
+                                                                            egui::vec2(title_width, 24.0),
+                                                                            egui::Layout::left_to_right(
+                                                                                egui::Align::Center,
+                                                                            ),
+                                                                            |ui| {
+                                                                                ui.add(
+                                                                                    egui::Label::new(
+                                                                                        egui::RichText::new(
+                                                                                            &displayed_effect_name,
+                                                                                        )
+                                                                                        .strong(),
+                                                                                    )
+                                                                                    .truncate()
+                                                                                    .sense(egui::Sense::click()),
+                                                                                )
+                                                                            },
                                                                         )
-                                                                        .halign(egui::Align::Min)
-                                                                        .truncate(),
-                                                                    );
+                                                                        .inner
+                                                                        .on_hover_text(self.app.tr("Rename"));
+                                                                    begin_inline_edit |= title_response.clicked();
                                                                     ui.allocate_ui_with_layout(
                                                                         egui::vec2(reserved_actions, 24.0),
                                                                         egui::Layout::right_to_left(egui::Align::Center),
@@ -6400,6 +6508,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                         },
                                                                     );
                                                                 });
+                                                            }
                                                                 ui.add_space(5.0);
                                                                 ui.horizontal_wrapped(|ui| {
                                                                     for text in [
@@ -6431,6 +6540,54 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                             })
                                                     },
                                                 );
+                                                if begin_inline_edit
+                                                    && crate::ui::effects_library::select_advertised_effect(
+                                                        self.app,
+                                                        source,
+                                                        preset
+                                                            .effect
+                                                            .controller_strip_effect
+                                                            .as_ref()
+                                                            .map(|value| value.id.as_str()),
+                                                    )
+                                                    .is_some()
+                                                {
+                                                    inline_edit = Some(InlineEffectIdentityEdit {
+                                                        name: self.app.effect_library_draft.name.clone(),
+                                                        icon: self.app.effect_library_draft.icon.clone(),
+                                                    });
+                                                    ui.ctx().request_repaint();
+                                                }
+                                                if cancel_inline_edit {
+                                                    inline_edit = None;
+                                                }
+                                                if save_inline_edit
+                                                    && let Some(edit) = inline_edit.as_ref()
+                                                {
+                                                    match crate::ui::effects_library::save_advertised_effect_identity(
+                                                        self.app,
+                                                        source,
+                                                        preset
+                                                            .effect
+                                                            .controller_strip_effect
+                                                            .as_ref()
+                                                            .map(|value| value.id.as_str()),
+                                                        edit.name.clone(),
+                                                        edit.icon.clone(),
+                                                    ) {
+                                                        Ok(()) => inline_edit = None,
+                                                        Err(error) => self.app.set_osd(error),
+                                                    }
+                                                }
+                                                ui.data_mut(|data| {
+                                                    if let Some(edit) = inline_edit.clone() {
+                                                        data.insert_temp(inline_edit_id, edit);
+                                                    } else {
+                                                        data.remove::<InlineEffectIdentityEdit>(
+                                                            inline_edit_id,
+                                                        );
+                                                    }
+                                                });
                                                 if response.response.dragged() {
                                                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                                                 }

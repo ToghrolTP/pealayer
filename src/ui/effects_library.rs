@@ -121,6 +121,20 @@ pub(crate) fn select_advertised_effect(
     }
 }
 
+pub(crate) fn save_advertised_effect_identity(
+    app: &mut PealayerApp,
+    source: crate::app::EffectPresetSource,
+    strip_id: Option<&str>,
+    name: String,
+    icon: String,
+) -> Result<(), String> {
+    select_advertised_effect(app, source, strip_id)
+        .ok_or_else(|| app.tr("Effect is no longer available"))?;
+    app.effect_library_draft.name = name;
+    app.effect_library_draft.icon = icon;
+    app.save_controller_effect()
+}
+
 pub(crate) fn duplicate_selected(app: &mut PealayerApp) {
     let duplicate_id = if app.effect_library_draft.kind == "sequence" {
         let used = app

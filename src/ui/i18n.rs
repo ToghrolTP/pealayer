@@ -254,6 +254,8 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Revert" => "بازگردانی",
         "Live settings" => "تنظیمات زنده",
         "Board name" => "نام برد",
+        "Change icon" => "تغییر نماد",
+        "Rename" => "تغییر نام",
         "Stored board name" => "نام ذخیره‌شدهٔ برد",
         "Product identity" => "هویت محصول",
         "Name storage" => "محل ذخیرهٔ نام",
