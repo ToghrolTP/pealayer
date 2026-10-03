@@ -351,7 +351,8 @@ pub struct PealayerApp {
     pub(crate) native_preferences: Option<crate::ui::preferences::NativePreferencesController>,
     pub(crate) status_bar: crate::config::StatusBarConfig,
     pub(crate) config_fingerprint: Option<u64>,
-    pub(crate) last_config_poll: std::time::Instant,
+    pub(crate) config_watcher: Option<crate::config::ConfigFileWatcher>,
+    pub(crate) config_reload_due: Option<std::time::Instant>,
     pub(crate) config_status: String,
     pub(crate) was_hardware_connected: bool,
     pub(crate) was_board_connected: bool,
@@ -3182,7 +3183,7 @@ impl PealayerApp {
                 .ok();
                 self.config_status = format!(
                     "Saved {}",
-                    crate::config::AppConfig::get_config_path().display()
+                    crate::config::display_config_path(&crate::config::AppConfig::get_config_path())
                 );
                 crate::platform::interop::set_live_config(cfg);
             }
@@ -3301,18 +3302,57 @@ impl PealayerApp {
     pub(crate) fn reload_config_from_disk(&mut self, ctx: &egui::Context) -> Result<(), String> {
         let path = crate::config::AppConfig::get_config_path();
         let config = crate::config::AppConfig::load_from_path(&path)?;
-        self.apply_runtime_config(ctx, config)?;
+        self.apply_runtime_config(ctx, config.clone())?;
         self.config_fingerprint = crate::config::AppConfig::fingerprint(&path).ok();
-        self.config_status = format!("Reloaded {}", path.display());
+        let status = format!("Reloaded {}", crate::config::display_config_path(&path));
+        self.config_status = status.clone();
+        let conflict_status =
+            self.tr("Configuration changed on disk; reload it or save your draft");
+        if let Some(draft) = self.preferences_draft.as_mut() {
+            draft.apply_external_config(config, status, conflict_status);
+        }
         Ok(())
     }
 
     fn poll_external_config(&mut self, ctx: &egui::Context) {
-        if self.last_config_poll.elapsed() < std::time::Duration::from_millis(750) {
+        let path = crate::config::AppConfig::get_config_path();
+        if self.config_watcher.is_none() {
+            let repaint = ctx.clone();
+            match crate::config::ConfigFileWatcher::new(&path, move || {
+                repaint.request_repaint();
+            }) {
+                Ok(watcher) => self.config_watcher = Some(watcher),
+                Err(error) => {
+                    self.config_status = error;
+                    return;
+                }
+            }
+        }
+        let changed = self
+            .config_watcher
+            .as_ref()
+            .map(crate::config::ConfigFileWatcher::take_changed)
+            .transpose();
+        match changed {
+            Ok(Some(true)) => {
+                let delay = std::time::Duration::from_millis(90);
+                self.config_reload_due = Some(std::time::Instant::now() + delay);
+                ctx.request_repaint_after(delay);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                self.config_status = error;
+                return;
+            }
+        }
+        let Some(due) = self.config_reload_due else {
+            return;
+        };
+        if std::time::Instant::now() < due {
+            ctx.request_repaint_after(due.saturating_duration_since(std::time::Instant::now()));
             return;
         }
-        self.last_config_poll = std::time::Instant::now();
-        let path = crate::config::AppConfig::get_config_path();
+        self.config_reload_due = None;
         let Ok(fingerprint) = crate::config::AppConfig::fingerprint(&path) else {
             return;
         };
@@ -4011,7 +4051,8 @@ impl Default for PealayerApp {
                 &crate::config::AppConfig::get_config_path(),
             )
             .ok(),
-            last_config_poll: std::time::Instant::now(),
+            config_watcher: None,
+            config_reload_due: None,
             config_status: String::new(),
             was_hardware_connected: false,
             was_board_connected: false,

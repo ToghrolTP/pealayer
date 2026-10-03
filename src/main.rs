@@ -563,7 +563,8 @@ fn main() -> eframe::Result {
                     &crate::config::AppConfig::get_config_path(),
                 )
                 .ok(),
-                last_config_poll: std::time::Instant::now(),
+                config_watcher: None,
+                config_reload_due: None,
                 config_status: String::new(),
                 was_hardware_connected: false,
                 was_board_connected: false,

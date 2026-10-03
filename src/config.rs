@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, channel};
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -323,6 +324,92 @@ pub fn resolve_system_config_path() -> PathBuf {
         .join(".config")
         .join("pealayer")
         .join("config.json")
+}
+
+/// A compact, privacy-preserving location for UI surfaces. Configuration
+/// remains addressable without exposing a full user-profile path in the app.
+pub fn display_config_path(path: &std::path::Path) -> String {
+    let roots = [
+        ("APPDATA", "%APPDATA%"),
+        ("XDG_CONFIG_HOME", "$XDG_CONFIG_HOME"),
+        ("HOME", "~"),
+    ];
+    for (variable, label) in roots {
+        if let Some(root) = std::env::var_os(variable).map(PathBuf::from)
+            && let Ok(relative) = path.strip_prefix(root)
+        {
+            return format!("{label}{}{}", std::path::MAIN_SEPARATOR, relative.display());
+        }
+    }
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(directory) = executable.parent()
+        && let Ok(relative) = path.strip_prefix(directory)
+    {
+        return format!(".{}{}", std::path::MAIN_SEPARATOR, relative.display());
+    }
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "config.json".to_string())
+}
+
+/// Native filesystem notifications for the authoritative JSON configuration.
+/// The parent directory is watched so atomic file replacement remains visible.
+pub struct ConfigFileWatcher {
+    _watcher: notify::RecommendedWatcher,
+    events: Receiver<notify::Result<notify::Event>>,
+}
+
+impl ConfigFileWatcher {
+    pub fn new(
+        path: &std::path::Path,
+        wake_ui: impl Fn() + Send + 'static,
+    ) -> Result<Self, String> {
+        use notify::Watcher;
+
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("configuration path has no parent: {}", path.display()))?;
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "create configuration directory {}: {error}",
+                parent.display()
+            )
+        })?;
+        let (sender, events) = channel();
+        let mut watcher =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                let _ = sender.send(event);
+                wake_ui();
+            })
+            .map_err(|error| format!("create configuration file watcher: {error}"))?;
+        watcher
+            .watch(parent, notify::RecursiveMode::NonRecursive)
+            .map_err(|error| {
+                format!(
+                    "watch configuration directory {}: {error}",
+                    parent.display()
+                )
+            })?;
+        Ok(Self {
+            _watcher: watcher,
+            events,
+        })
+    }
+
+    pub fn take_changed(&self) -> Result<bool, String> {
+        let mut changed = false;
+        let mut last_error = None;
+        while let Ok(event) = self.events.try_recv() {
+            match event {
+                Ok(event) if !matches!(event.kind, notify::EventKind::Access(_)) => changed = true,
+                Ok(_) => {}
+                Err(error) => last_error = Some(error.to_string()),
+            }
+        }
+        last_error.map_or(Ok(changed), |error| {
+            Err(format!("configuration file watcher: {error}"))
+        })
+    }
 }
 
 fn parse_language_tag(value: &str) -> Option<AppLanguage> {
@@ -829,6 +916,47 @@ fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn displayed_config_path_does_not_expose_an_absolute_profile_path() {
+        let path = if let Some(appdata) = std::env::var_os("APPDATA") {
+            PathBuf::from(appdata).join("pealayer").join("config.json")
+        } else {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| "/home/test".into()))
+                .join(".config")
+                .join("pealayer")
+                .join("config.json")
+        };
+        let displayed = display_config_path(&path);
+        assert!(!std::path::Path::new(&displayed).is_absolute());
+        assert!(displayed.ends_with("config.json"));
+    }
+
+    #[test]
+    fn config_watcher_observes_external_file_changes() {
+        let directory =
+            std::env::temp_dir().join(format!("pealayer_watch_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("config.json");
+        std::fs::write(&path, b"{}\n").unwrap();
+        let watcher = ConfigFileWatcher::new(&path, || {}).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        std::fs::write(&path, b"{\"volume\":75}\n").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut changed = false;
+        while std::time::Instant::now() < deadline && !changed {
+            changed = watcher.take_changed().unwrap();
+            if !changed {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
+        assert!(
+            changed,
+            "native configuration watcher did not report the write"
+        );
+        drop(watcher);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
 
     #[test]
     fn test_default_config_values() {

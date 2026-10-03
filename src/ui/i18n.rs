@@ -500,6 +500,23 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Technical details" => "جزئیات فنی",
         "Copy details" => "رونوشت جزئیات",
         "Close" => "بستن",
+        "Save" => "ذخیره",
+        "Preferences" => "تنظیمات",
+        "Preferences saved" => "تنظیمات ذخیره شد",
+        "Preferences reloaded from disk" => "تنظیمات از دیسک بازخوانی شد",
+        "No changes to save" => "تغییری برای ذخیره وجود ندارد",
+        "Config file" => "پروندهٔ پیکربندی",
+        "Reload from disk" => "بازخوانی از دیسک",
+        "Edit config file" => "ویرایش پروندهٔ پیکربندی",
+        "Edit config file in an external editor" => "ویرایش پروندهٔ پیکربندی در ویرایشگر بیرونی",
+        "Open containing folder" => "باز کردن پوشهٔ پرونده",
+        "Opened configuration in the external editor" => {
+            "پروندهٔ پیکربندی در ویرایشگر بیرونی باز شد"
+        }
+        "Opened the configuration folder" => "پوشهٔ پیکربندی باز شد",
+        "Configuration changed on disk; reload it or save your draft" => {
+            "پیکربندی روی دیسک تغییر کرده است؛ آن را بازخوانی یا پیش‌نویس را ذخیره کنید"
+        }
         "Open Location / URL" => "باز کردن نشانی یا پیوند",
         "Enter a remote media location" => "نشانی رسانهٔ راه‌دور را وارد کنید",
         "Enter a media URL (HTTP/HTTPS, HLS, RTSP, RTMP, SRT, UDP, or TCP):" => {
