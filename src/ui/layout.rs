@@ -536,7 +536,7 @@ fn take_effect_drop_on_rect(
     rect: egui::Rect,
 ) -> Option<std::sync::Arc<EffectDragPayload>> {
     let released_inside = ctx.input(|input| {
-        input.pointer.any_released()
+        input.pointer.button_released(egui::PointerButton::Primary)
             && input
                 .pointer
                 .latest_pos()
@@ -568,6 +568,10 @@ fn secondary_click_inside(ctx: &egui::Context, rect: egui::Rect) -> bool {
                 .latest_pos()
                 .is_some_and(|position| rect.contains(position))
     })
+}
+
+fn primary_effect_drag_active(ctx: &egui::Context, id: egui::Id) -> bool {
+    ctx.is_being_dragged(id) && ctx.input(|input| input.pointer.primary_down())
 }
 
 fn remember_effect_drag_offset_on_press(
@@ -613,7 +617,11 @@ fn effect_drag_source_with_action_gutter<R>(
     if let Some(source_rect) = ui.data_mut(|data| data.get_temp::<egui::Rect>(source_rect_id)) {
         remember_effect_drag_offset_on_press(ui.ctx(), source_rect, offset_id);
     }
-    if ui.ctx().is_being_dragged(id) {
+    // `Context::is_being_dragged` is deliberately button-agnostic. A moved
+    // secondary click can therefore make it true as well, but right-click is
+    // reserved exclusively for the effect context menu. Only a held primary
+    // button may enter the preview/payload path.
+    if primary_effect_drag_active(ui.ctx(), id) {
         egui::DragAndDrop::set_payload(ui.ctx(), payload);
         let layer_id = egui::LayerId::new(egui::Order::Tooltip, id);
         let response = ui.scope_builder(egui::UiBuilder::new().layer_id(layer_id), |ui| {
@@ -653,7 +661,7 @@ fn effect_drag_source_with_action_gutter<R>(
         let drag = ui
             .interact(drag_rect, id, egui::Sense::drag())
             .on_hover_cursor(egui::CursorIcon::Grab);
-        if drag.drag_started() {
+        if drag.drag_started_by(egui::PointerButton::Primary) {
             // Establish the payload in the same input frame in which egui
             // claims the drag. Waiting until the next paint left a race where
             // the pointer could enter (and even be released over) the timeline
@@ -4727,6 +4735,86 @@ mod timeline_row_tests {
             drop(output);
         }
         assert!(clicked_inside);
+    }
+
+    #[test]
+    fn secondary_effect_card_gesture_only_opens_context_menu_and_never_drags() {
+        let context = egui::Context::default();
+        let payload = EffectDragPayload {
+            name: "Seat rise".to_string(),
+            icon: String::new(),
+            duration_ms: 750,
+            target: crate::four_d::models::HardwareTarget::ControllerMacro,
+            actions: Vec::new(),
+            controller_macro: None,
+            controller_strip_effect: None,
+        };
+        let source = std::cell::Cell::new(egui::Rect::NOTHING);
+        let menu_requested = std::cell::Cell::new(false);
+        let id = egui::Id::new("secondary-only-effect-card");
+        let render = |events: Vec<egui::Event>| {
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(360.0, 180.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let response = effect_drag_source(ui, id, payload.clone(), |ui| {
+                        ui.add_sized([180.0, 48.0], egui::Label::new("Seat rise"))
+                    });
+                    source.set(response.response.rect);
+                    if secondary_click_inside(&context, response.response.rect) {
+                        menu_requested.set(true);
+                    }
+                },
+            );
+            drop(output);
+        };
+
+        render(Vec::new());
+        let press = source.get().center();
+        render(vec![
+            egui::Event::PointerMoved(press),
+            egui::Event::PointerButton {
+                pos: press,
+                button: egui::PointerButton::Secondary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        let release = press + egui::vec2(18.0, 4.0);
+        render(vec![egui::Event::PointerMoved(release)]);
+
+        assert!(
+            egui::DragAndDrop::payload::<EffectDragPayload>(&context).is_none(),
+            "moving a held secondary button published an effect drag payload"
+        );
+        assert!(
+            context
+                .data_mut(|data| data.get_temp::<egui::Vec2>(id.with("pointer-offset")))
+                .is_none(),
+            "secondary press captured primary-drag state"
+        );
+
+        render(vec![egui::Event::PointerButton {
+            pos: release,
+            button: egui::PointerButton::Secondary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+
+        assert!(
+            menu_requested.get(),
+            "secondary release did not request the menu"
+        );
+        assert!(
+            egui::DragAndDrop::payload::<EffectDragPayload>(&context).is_none(),
+            "secondary context-menu gesture left an effect drag payload behind"
+        );
     }
 
     #[test]
