@@ -1223,6 +1223,18 @@ enum RecentLocationAction {
     DefaultClickEdits(bool),
 }
 
+fn secondary_click_released_inside(ctx: &egui::Context, rect: egui::Rect) -> bool {
+    ctx.input(|input| {
+        input
+            .pointer
+            .button_released(egui::PointerButton::Secondary)
+            && input
+                .pointer
+                .latest_pos()
+                .is_some_and(|position| rect.contains(position))
+    })
+}
+
 fn draw_recent_location(
     ui: &mut egui::Ui,
     language: crate::config::AppLanguage,
@@ -1322,63 +1334,75 @@ fn draw_recent_location(
             },
         )
         .response;
-    row_response.context_menu(|ui| {
-        if ui
-            .button(format!(
-                "{}  {}",
-                crate::ui::icons::PLAY,
-                tr(language, "Play")
-            ))
-            .clicked()
-        {
-            action = Some(RecentLocationAction::Play);
-            ui.close();
-        }
-        if ui
-            .button(format!(
-                "{}  {}",
-                crate::ui::icons::PENCIL_SIMPLE,
-                tr(language, "Edit")
-            ))
-            .clicked()
-        {
-            action = Some(RecentLocationAction::Edit);
-            ui.close();
-        }
-        if ui
-            .button(format!(
-                "{}  {}",
-                crate::ui::icons::COPY,
-                tr(language, "Copy")
-            ))
-            .clicked()
-        {
-            ui.ctx().copy_text(target.to_owned());
-            ui.close();
-        }
-        if ui
-            .button(format!(
-                "{}  {}",
-                crate::ui::icons::TRASH,
-                tr(language, "Clear from history")
-            ))
-            .clicked()
-        {
-            action = Some(RecentLocationAction::Remove);
-            ui.close();
-        }
-        ui.separator();
-        let mut play_on_click = !default_click_edits;
-        if ui
-            .checkbox(
-                &mut play_on_click,
-                tr(language, "Play when a recent location is clicked"),
-            )
-            .changed()
-        {
-            action = Some(RecentLocationAction::DefaultClickEdits(!play_on_click));
-        }
-    });
+    // Every visible part of the recent row is a child widget. Those children
+    // own their pointer responses, so `row_response.context_menu(...)` only
+    // worked over incidental empty padding. Detect the released secondary
+    // button against the complete row rectangle and open one stable popup per
+    // URL instead. This preserves the Play/Edit/Remove buttons while making
+    // thumbnails, captions, action buttons, and row padding all right-clickable.
+    let open_context_menu =
+        row_response.secondary_clicked() || secondary_click_released_inside(ui.ctx(), row_rect);
+    egui::Popup::menu(&row_response)
+        .id(ui.make_persistent_id(("open-url-recent-context", target)))
+        .at_pointer_fixed()
+        .open_memory(open_context_menu.then_some(egui::SetOpenCommand::Bool(true)))
+        .show(|ui| {
+            if ui
+                .button(format!(
+                    "{}  {}",
+                    crate::ui::icons::PLAY,
+                    tr(language, "Play")
+                ))
+                .clicked()
+            {
+                action = Some(RecentLocationAction::Play);
+                ui.close();
+            }
+            if ui
+                .button(format!(
+                    "{}  {}",
+                    crate::ui::icons::PENCIL_SIMPLE,
+                    tr(language, "Edit")
+                ))
+                .clicked()
+            {
+                action = Some(RecentLocationAction::Edit);
+                ui.close();
+            }
+            if ui
+                .button(format!(
+                    "{}  {}",
+                    crate::ui::icons::COPY,
+                    tr(language, "Copy")
+                ))
+                .clicked()
+            {
+                ui.ctx().copy_text(target.to_owned());
+                ui.close();
+            }
+            if ui
+                .button(format!(
+                    "{}  {}",
+                    crate::ui::icons::TRASH,
+                    tr(language, "Clear from history")
+                ))
+                .clicked()
+            {
+                action = Some(RecentLocationAction::Remove);
+                ui.close();
+            }
+            ui.separator();
+            let mut play_on_click = !default_click_edits;
+            if ui
+                .checkbox(
+                    &mut play_on_click,
+                    tr(language, "Play when a recent location is clicked"),
+                )
+                .changed()
+            {
+                action = Some(RecentLocationAction::DefaultClickEdits(!play_on_click));
+            }
+        });
     action
 }
 
@@ -1724,6 +1748,54 @@ pub fn human_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secondary_click_on_recent_item_content_opens_its_context_menu() {
+        let context = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(520.0, 160.0));
+        let pointer = egui::pos2(120.0, 28.0);
+        let draw = |ui: &mut egui::Ui| {
+            let _ = draw_recent_location(
+                ui,
+                crate::config::AppLanguage::English,
+                true,
+                "https://example.com/media/movie.mp4",
+                None,
+            );
+        };
+
+        let pressed = egui::RawInput {
+            screen_rect: Some(screen),
+            events: vec![
+                egui::Event::PointerMoved(pointer),
+                egui::Event::PointerButton {
+                    pos: pointer,
+                    button: egui::PointerButton::Secondary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        };
+        let _ = context.run_ui(pressed, draw);
+
+        let released = egui::RawInput {
+            screen_rect: Some(screen),
+            events: vec![
+                egui::Event::PointerMoved(pointer),
+                egui::Event::PointerButton {
+                    pos: pointer,
+                    button: egui::PointerButton::Secondary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        };
+        let _ = context.run_ui(released, draw);
+
+        assert!(egui::Popup::is_any_open(&context));
+    }
 
     #[test]
     fn validates_supported_media_urls_and_extracts_identity() {
