@@ -232,6 +232,8 @@ fn controller_call_allowed_during_estop(method: &str, params: &serde_json::Value
         | ["effect", "cancel"]
         | ["effect", "stop"]
         | ["strip", "stop"]
+        | ["strip", "clear"]
+        | ["strip", "status"]
         | ["rgb", "effect", "stop"] => true,
         ["effect", "stop", _] => true,
         ["relay", "side", "left" | "right", "stop"] => true,
@@ -1876,6 +1878,14 @@ mod tests {
             (
                 "controller.command.execute",
                 serde_json::json!({"command": "keyboard stop"}),
+            ),
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "strip clear"}),
+            ),
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "strip status"}),
             ),
             ("controller.pwm.off", serde_json::json!({})),
             (

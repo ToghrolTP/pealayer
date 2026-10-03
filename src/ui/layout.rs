@@ -1575,6 +1575,424 @@ fn board_tool_card(ui: &mut egui::Ui, icon: &str, title: &str, body: impl FnOnce
         });
 }
 
+fn addressable_strip_gradient(
+    pixels: u16,
+    start: egui::Color32,
+    end: egui::Color32,
+    brightness: u8,
+) -> Vec<u8> {
+    let scale = f32::from(brightness) / 255.0;
+    let denominator = f32::from(pixels.saturating_sub(1).max(1));
+    let mut frame = Vec::with_capacity(usize::from(pixels) * 3);
+    for index in 0..pixels {
+        let amount = f32::from(index) / denominator;
+        for (from, to) in [
+            (start.r(), end.r()),
+            (start.g(), end.g()),
+            (start.b(), end.b()),
+        ] {
+            let channel = f32::from(from) + (f32::from(to) - f32::from(from)) * amount;
+            frame.push((channel * scale).round().clamp(0.0, 255.0) as u8);
+        }
+    }
+    frame
+}
+
+fn draw_addressable_strip_tool(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+) {
+    let Some(strip) = capabilities.strip_control.as_ref() else {
+        return;
+    };
+    let pixels_id = ui.make_persistent_id("hardware_strip_pixels");
+    let fps_id = ui.make_persistent_id("hardware_strip_fps");
+    let mode_id = ui.make_persistent_id("hardware_strip_mode");
+    let color_id = ui.make_persistent_id("hardware_strip_color");
+    let second_color_id = ui.make_persistent_id("hardware_strip_second_color");
+    let brightness_id = ui.make_persistent_id("hardware_strip_brightness");
+    let pixel_id = ui.make_persistent_id("hardware_strip_pixel");
+    let effect_selection_id = ui.make_persistent_id("hardware_strip_effect");
+
+    let mut pixels = ui.data_mut(|data| {
+        data.get_persisted::<u16>(pixels_id)
+            .unwrap_or(strip.default_pixels)
+            .clamp(strip.minimum_pixels, strip.maximum_pixels)
+    });
+    let mut fps = ui.data_mut(|data| {
+        data.get_persisted::<u8>(fps_id)
+            .unwrap_or(strip.default_fps)
+            .clamp(strip.minimum_fps, strip.maximum_fps)
+    });
+    let available_modes = ["solid", "pixel", "frame", "rainbow", "effect"]
+        .into_iter()
+        .filter(|mode| strip.supports(mode))
+        .collect::<Vec<_>>();
+    let mut mode = ui.data_mut(|data| {
+        data.get_persisted::<String>(mode_id)
+            .filter(|mode| available_modes.contains(&mode.as_str()))
+            .or_else(|| available_modes.first().map(ToString::to_string))
+            .unwrap_or_default()
+    });
+    let mut color = ui.data_mut(|data| {
+        data.get_persisted::<egui::Color32>(color_id)
+            .unwrap_or(egui::Color32::WHITE)
+    });
+    let mut second_color = ui.data_mut(|data| {
+        data.get_persisted::<egui::Color32>(second_color_id)
+            .unwrap_or(egui::Color32::from_rgb(0, 96, 255))
+    });
+    let mut brightness = ui.data_mut(|data| data.get_persisted::<u8>(brightness_id).unwrap_or(255));
+    let mut pixel = ui.data_mut(|data| {
+        data.get_persisted::<u16>(pixel_id)
+            .unwrap_or(0)
+            .min(pixels.saturating_sub(1))
+    });
+    let mut effect_id = ui.data_mut(|data| {
+        data.get_persisted::<String>(effect_selection_id)
+            .filter(|id| {
+                capabilities
+                    .strip_effects
+                    .iter()
+                    .any(|effect| &effect.id == id)
+            })
+            .or_else(|| {
+                capabilities
+                    .strip_effects
+                    .first()
+                    .map(|effect| effect.id.clone())
+            })
+            .unwrap_or_default()
+    });
+    let pending = app.hardware_effect_authoring.pending_operation.is_some();
+    let mutation_enabled = !pending && !app.estop_active;
+    let live = strip.running || app.hardware_effect_authoring.preview_active;
+
+    board_tool_card(
+        ui,
+        crate::ui::icons::SPARKLE,
+        &app.tr("Addressable LED strip"),
+        |ui| {
+            ui.horizontal_wrapped(|ui| {
+                let state_color = if live {
+                    egui::Color32::from_rgb(34, 197, 94)
+                } else {
+                    ui.visuals().weak_text_color()
+                };
+                ui.colored_label(state_color, crate::ui::icons::DOT_OUTLINE);
+                ui.label(if live {
+                    if strip.active_name.trim().is_empty() {
+                        app.tr("Streaming")
+                    } else {
+                        strip.active_name.clone()
+                    }
+                } else {
+                    app.tr("Idle")
+                });
+                ui.separator();
+                ui.weak(format!(
+                    "{}–{} {} · {}–{} FPS",
+                    strip.minimum_pixels,
+                    strip.maximum_pixels,
+                    app.tr("pixels"),
+                    strip.minimum_fps,
+                    strip.maximum_fps
+                ));
+            });
+            ui.add_space(7.0);
+
+            egui::Grid::new("hardware_strip_configuration")
+                .num_columns(2)
+                .spacing([10.0, 7.0])
+                .show(ui, |ui| {
+                    ui.label(app.tr("Pixel count"));
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut pixels)
+                                .range(strip.minimum_pixels..=strip.maximum_pixels),
+                        );
+                        if ui
+                            .add_enabled(
+                                mutation_enabled,
+                                egui::Button::new(format!(
+                                    "{} {}",
+                                    crate::ui::icons::GEAR,
+                                    app.tr("Configure")
+                                )),
+                            )
+                            .clicked()
+                        {
+                            if let Err(error) = app.configure_addressable_strip(pixels) {
+                                app.set_osd(error);
+                            }
+                        }
+                    });
+                    ui.end_row();
+
+                    ui.label(app.tr("Mode"));
+                    egui::ComboBox::from_id_salt("hardware_strip_mode_combo")
+                        .selected_text(match mode.as_str() {
+                            "solid" => app.tr("Solid color"),
+                            "pixel" => app.tr("Single pixel"),
+                            "frame" => app.tr("Color frame"),
+                            "rainbow" => app.tr("Rainbow"),
+                            "effect" => app.tr("Effect"),
+                            _ => app.tr("Unavailable"),
+                        })
+                        .show_ui(ui, |ui| {
+                            for advertised in &available_modes {
+                                let label = match *advertised {
+                                    "solid" => app.tr("Solid color"),
+                                    "pixel" => app.tr("Single pixel"),
+                                    "frame" => app.tr("Color frame"),
+                                    "rainbow" => app.tr("Rainbow"),
+                                    "effect" => app.tr("Effect"),
+                                    _ => (*advertised).to_string(),
+                                };
+                                ui.selectable_value(&mut mode, (*advertised).to_string(), label);
+                            }
+                        });
+                    ui.end_row();
+                });
+
+            ui.add_space(7.0);
+            match mode.as_str() {
+                "solid" => {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(app.tr("Color"));
+                        ui.color_edit_button_srgba(&mut color);
+                        ui.label(app.tr("Brightness"));
+                        ui.add(egui::Slider::new(&mut brightness, 0..=255).show_value(true));
+                    });
+                    if ui
+                        .add_enabled(
+                            mutation_enabled,
+                            egui::Button::new(format!(
+                                "{} {}",
+                                crate::ui::icons::PALETTE,
+                                app.tr("Fill strip")
+                            )),
+                        )
+                        .clicked()
+                    {
+                        if let Err(error) =
+                            app.fill_addressable_strip(color.r(), color.g(), color.b(), brightness)
+                        {
+                            app.set_osd(error);
+                        }
+                    }
+                }
+                "pixel" => {
+                    pixel = pixel.min(pixels.saturating_sub(1));
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(app.tr("Pixel"));
+                        ui.add(
+                            egui::DragValue::new(&mut pixel).range(0..=pixels.saturating_sub(1)),
+                        );
+                        ui.label(app.tr("Color"));
+                        ui.color_edit_button_srgba(&mut color);
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(app.tr("Brightness"));
+                        ui.add(egui::Slider::new(&mut brightness, 0..=255).show_value(true));
+                        if ui
+                            .add_enabled(
+                                mutation_enabled,
+                                egui::Button::new(format!(
+                                    "{} {}",
+                                    crate::ui::icons::PAPER_PLANE_TILT,
+                                    app.tr("Apply pixel")
+                                )),
+                            )
+                            .clicked()
+                        {
+                            if let Err(error) = app.set_addressable_strip_pixel(
+                                pixel,
+                                pixels,
+                                color.r(),
+                                color.g(),
+                                color.b(),
+                                brightness,
+                            ) {
+                                app.set_osd(error);
+                            }
+                        }
+                    });
+                }
+                "frame" => {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(app.tr("Start color"));
+                        ui.color_edit_button_srgba(&mut color);
+                        ui.label(app.tr("End color"));
+                        ui.color_edit_button_srgba(&mut second_color);
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(app.tr("Brightness"));
+                        ui.add(egui::Slider::new(&mut brightness, 0..=255).show_value(true));
+                        if ui
+                            .add_enabled(
+                                mutation_enabled,
+                                egui::Button::new(format!(
+                                    "{} {}",
+                                    crate::ui::icons::PAPER_PLANE_TILT,
+                                    app.tr("Send color frame")
+                                )),
+                            )
+                            .clicked()
+                        {
+                            let frame =
+                                addressable_strip_gradient(pixels, color, second_color, brightness);
+                            if let Err(error) = app.send_addressable_strip_frame(pixels, &frame) {
+                                app.set_osd(error);
+                            }
+                        }
+                    });
+                }
+                "rainbow" => {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(app.tr("Frame rate"));
+                        ui.add(
+                            egui::DragValue::new(&mut fps)
+                                .range(strip.minimum_fps..=strip.maximum_fps)
+                                .suffix(" FPS"),
+                        );
+                        if ui
+                            .add_enabled(
+                                mutation_enabled,
+                                egui::Button::new(format!(
+                                    "{} {}",
+                                    crate::ui::icons::PLAY,
+                                    app.tr("Start rainbow")
+                                )),
+                            )
+                            .clicked()
+                        {
+                            if let Err(error) = app.start_addressable_strip_rainbow(pixels, fps) {
+                                app.set_osd(error);
+                            }
+                        }
+                    });
+                }
+                "effect" => {
+                    if capabilities.strip_effects.is_empty() {
+                        ui.weak(app.tr("No addressable LED effects are advertised"));
+                    } else {
+                        ui.horizontal_wrapped(|ui| {
+                            egui::ComboBox::from_id_salt("hardware_strip_effect_combo")
+                                .selected_text(
+                                    capabilities
+                                        .strip_effects
+                                        .iter()
+                                        .find(|effect| effect.id == effect_id)
+                                        .map(|effect| app.display_text(&effect.name))
+                                        .unwrap_or_else(|| app.tr("Select effect")),
+                                )
+                                .show_ui(ui, |ui| {
+                                    for effect in &capabilities.strip_effects {
+                                        ui.selectable_value(
+                                            &mut effect_id,
+                                            effect.id.clone(),
+                                            app.display_text(&effect.name),
+                                        );
+                                    }
+                                });
+                            ui.add(
+                                egui::DragValue::new(&mut fps)
+                                    .range(strip.minimum_fps..=strip.maximum_fps)
+                                    .suffix(" FPS"),
+                            );
+                            if ui
+                                .add_enabled(
+                                    mutation_enabled && !effect_id.is_empty(),
+                                    egui::Button::new(format!(
+                                        "{} {}",
+                                        crate::ui::icons::PLAY,
+                                        app.tr("Start effect")
+                                    )),
+                                )
+                                .clicked()
+                            {
+                                if let Err(error) =
+                                    app.start_addressable_strip_effect(&effect_id, pixels, fps)
+                                {
+                                    app.set_osd(error);
+                                }
+                            }
+                        });
+                    }
+                }
+                _ => {}
+            }
+
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(
+                        !pending,
+                        egui::Button::new(format!(
+                            "{} {}",
+                            crate::ui::icons::ERASER,
+                            app.tr("Clear strip")
+                        )),
+                    )
+                    .clicked()
+                {
+                    if let Err(error) = app.clear_addressable_strip() {
+                        app.set_osd(error);
+                    }
+                }
+                if live
+                    && ui
+                        .add_enabled(
+                            !pending,
+                            egui::Button::new(format!(
+                                "{} {}",
+                                crate::ui::icons::STOP_CIRCLE,
+                                app.tr("Stop stream")
+                            )),
+                        )
+                        .clicked()
+                {
+                    if let Err(error) = app.stop_addressable_strip() {
+                        app.set_osd(error);
+                    }
+                }
+                if ui
+                    .add_enabled(
+                        !pending,
+                        egui::Button::new(format!(
+                            "{} {}",
+                            crate::ui::icons::ARROW_CLOCKWISE,
+                            app.tr("Refresh status")
+                        )),
+                    )
+                    .clicked()
+                {
+                    if let Err(error) = app.refresh_addressable_strip_status() {
+                        app.set_osd(error);
+                    }
+                }
+            });
+            if !app.hardware_effect_authoring.status.is_empty() {
+                ui.add_space(5.0);
+                ui.weak(&app.hardware_effect_authoring.status);
+            }
+        },
+    );
+
+    ui.data_mut(|data| {
+        data.insert_persisted(pixels_id, pixels);
+        data.insert_persisted(fps_id, fps);
+        data.insert_persisted(mode_id, mode);
+        data.insert_persisted(color_id, color);
+        data.insert_persisted(second_color_id, second_color);
+        data.insert_persisted(brightness_id, brightness);
+        data.insert_persisted(pixel_id, pixel);
+        data.insert_persisted(effect_selection_id, effect_id);
+    });
+}
+
 fn default_display_text_target(segments_available: bool, lcd_available: bool) -> &'static str {
     if segments_available {
         "segments"
@@ -2729,6 +3147,20 @@ mod timeline_row_tests {
         assert_eq!(default_display_text_target(true, true), "segments");
         assert_eq!(default_display_text_target(true, false), "segments");
         assert_eq!(default_display_text_target(false, true), "lcd");
+    }
+
+    #[test]
+    fn addressable_strip_frames_preserve_endpoints_and_apply_brightness() {
+        let frame = addressable_strip_gradient(
+            3,
+            egui::Color32::from_rgb(200, 0, 0),
+            egui::Color32::from_rgb(0, 0, 100),
+            128,
+        );
+        assert_eq!(frame.len(), 9);
+        assert_eq!(&frame[0..3], &[100, 0, 0]);
+        assert_eq!(&frame[3..6], &[50, 0, 25]);
+        assert_eq!(&frame[6..9], &[0, 0, 50]);
     }
 
     #[test]
@@ -5634,6 +6066,23 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             ui,
                                             &capabilities,
                                             &pwm_controls,
+                                        );
+                                    },
+                                );
+                            }
+
+                            if capabilities.strip_control.is_some() {
+                                hardware_section(
+                                    ui,
+                                    "hardware_addressable_strip_section",
+                                    crate::ui::icons::SPARKLE,
+                                    &self.app.tr("Addressable LED strip"),
+                                    true,
+                                    |ui| {
+                                        draw_addressable_strip_tool(
+                                            self.app,
+                                            ui,
+                                            &capabilities,
                                         );
                                     },
                                 );

@@ -97,6 +97,7 @@ pub struct HardwareCapabilities {
     pub front_panel: Option<HardwareFrontPanel>,
     pub telemetry: HardwareTelemetry,
     pub warnings: Vec<HardwareWarning>,
+    pub strip_control: Option<HardwareStripControl>,
     pub strip_effects: Vec<HardwareStripEffect>,
     pub macros: Vec<HardwareMacro>,
 }
@@ -333,6 +334,25 @@ pub struct HardwareStripEffect {
     pub maximum_fps: Option<u8>,
     pub minimum_pixels: Option<u16>,
     pub maximum_pixels: Option<u16>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HardwareStripControl {
+    pub minimum_pixels: u16,
+    pub maximum_pixels: u16,
+    pub default_pixels: u16,
+    pub minimum_fps: u8,
+    pub maximum_fps: u8,
+    pub default_fps: u8,
+    pub modes: Vec<String>,
+    pub running: bool,
+    pub active_name: String,
+}
+
+impl HardwareStripControl {
+    pub fn supports(&self, mode: &str) -> bool {
+        self.modes.iter().any(|item| item == mode)
+    }
 }
 
 impl HardwareCapabilities {
@@ -937,6 +957,71 @@ fn parse_strip_effects(value: &Value) -> Vec<HardwareStripEffect> {
             })
         })
         .collect()
+}
+
+fn parse_strip_control(snapshot: &Value, catalog: &Value) -> Option<HardwareStripControl> {
+    let descriptor = catalog.get("strip")?.as_object()?;
+    let word = |key: &str| {
+        descriptor
+            .get(key)
+            .and_then(Value::as_u64)
+            .and_then(|value| u16::try_from(value).ok())
+    };
+    let byte = |key: &str| {
+        descriptor
+            .get(key)
+            .and_then(Value::as_u64)
+            .and_then(|value| u8::try_from(value).ok())
+    };
+    let minimum_pixels = word("minimum_pixels")?;
+    let maximum_pixels = word("maximum_pixels")?;
+    let default_pixels = word("default_pixels")?;
+    let minimum_fps = byte("minimum_fps")?;
+    let maximum_fps = byte("maximum_fps")?;
+    let default_fps = byte("default_fps")?;
+    if minimum_pixels == 0
+        || minimum_pixels > default_pixels
+        || default_pixels > maximum_pixels
+        || minimum_fps == 0
+        || minimum_fps > default_fps
+        || default_fps > maximum_fps
+    {
+        return None;
+    }
+    let modes = descriptor
+        .get("modes")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|mode| !mode.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if modes.is_empty() {
+        return None;
+    }
+    let active_name = snapshot
+        .pointer("/outputs/strip_name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let running = snapshot
+        .pointer("/outputs/strip_id")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        != 0
+        || !active_name.is_empty();
+    Some(HardwareStripControl {
+        minimum_pixels,
+        maximum_pixels,
+        default_pixels,
+        minimum_fps,
+        maximum_fps,
+        default_fps,
+        modes,
+        running,
+        active_name,
+    })
 }
 
 #[cfg(test)]
@@ -1583,6 +1668,9 @@ fn parse_hardware_capabilities_with_front_panel(
         .map(|effects| parse_strip_effects(&Value::Array(effects.clone())))
         .or_else(|| snapshot.get("strip_effects").map(parse_strip_effects))
         .unwrap_or_default();
+    let strip_control = board_connected
+        .then(|| parse_strip_control(snapshot, catalog))
+        .flatten();
     let sequence_entries = unified_effects.or_else(|| {
         snapshot
             .pointer("/macros/library")
@@ -1707,6 +1795,7 @@ fn parse_hardware_capabilities_with_front_panel(
         front_panel,
         telemetry,
         warnings,
+        strip_control,
         strip_effects,
         macros,
     }
@@ -1997,8 +2086,18 @@ mod tests {
                 "name": "Injected arguments"
             }
         ]});
-        let catalog =
-            json!({"strip_effects": [{"id":"must-not-be-read","name":"Old split catalog"}]});
+        let catalog = json!({
+            "strip": {
+                "minimum_pixels": 1,
+                "maximum_pixels": 100,
+                "default_pixels": 100,
+                "minimum_fps": 1,
+                "maximum_fps": 30,
+                "default_fps": 20,
+                "modes": ["solid", "pixel", "frame", "rainbow", "effect"]
+            },
+            "strip_effects": [{"id":"must-not-be-read","name":"Old split catalog"}]
+        });
 
         let parsed = parse_hardware_capabilities(&snapshot, &catalog);
         assert_eq!(parsed.strip_effects.len(), 1);
@@ -2006,11 +2105,23 @@ mod tests {
         assert_eq!(parsed.strip_effects[0].maximum_pixels, Some(100));
         assert_eq!(parsed.strip_effects[0].icon, "lightbulb");
         assert_eq!(parsed.strip_effects[0].group_icon, "lamp");
+        let strip = parsed
+            .strip_control
+            .as_ref()
+            .expect("connected addressable strip control");
+        assert_eq!(strip.minimum_pixels, 1);
+        assert_eq!(strip.maximum_pixels, 100);
+        assert_eq!(strip.default_pixels, 100);
+        assert_eq!(strip.minimum_fps, 1);
+        assert_eq!(strip.maximum_fps, 30);
+        assert_eq!(strip.default_fps, 20);
+        assert!(strip.supports("frame"));
 
         let mut disconnected_snapshot = snapshot;
         disconnected_snapshot["connected"] = json!(false);
         let disconnected = parse_hardware_capabilities(&disconnected_snapshot, &catalog);
         assert_eq!(disconnected.strip_effects.len(), 1);
+        assert!(disconnected.strip_control.is_none());
     }
 
     #[test]

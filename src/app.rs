@@ -1520,6 +1520,158 @@ impl PealayerApp {
         self.request_hardware_effect_command("effect-stop", "effect stop".to_string())
     }
 
+    fn addressable_strip_contract(
+        &self,
+        mode: &str,
+    ) -> Result<crate::four_d::controller::HardwareStripControl, String> {
+        let capabilities = self
+            .advertised_hardware()
+            .filter(|capabilities| capabilities.board_connected)
+            .ok_or_else(|| "No live board is connected".to_string())?;
+        let strip = capabilities.strip_control.ok_or_else(|| {
+            "The connected board does not advertise addressable LED controls".to_string()
+        })?;
+        if !mode.is_empty() && !strip.supports(mode) {
+            return Err(format!(
+                "The connected PCController does not advertise {mode} strip control"
+            ));
+        }
+        Ok(strip)
+    }
+
+    fn validate_strip_settings(
+        strip: &crate::four_d::controller::HardwareStripControl,
+        pixels: u16,
+        fps: Option<u8>,
+    ) -> Result<(), String> {
+        if !(strip.minimum_pixels..=strip.maximum_pixels).contains(&pixels) {
+            return Err(format!(
+                "Pixel count must be {}–{} for this controller",
+                strip.minimum_pixels, strip.maximum_pixels
+            ));
+        }
+        if let Some(fps) = fps {
+            if !(strip.minimum_fps..=strip.maximum_fps).contains(&fps) {
+                return Err(format!(
+                    "Frame rate must be {}–{} FPS for this controller",
+                    strip.minimum_fps, strip.maximum_fps
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn configure_addressable_strip(&mut self, pixels: u16) -> Result<(), String> {
+        let strip = self.addressable_strip_contract("")?;
+        Self::validate_strip_settings(&strip, pixels, None)?;
+        self.request_hardware_effect_command("strip-config", format!("strip config {pixels}"))
+    }
+
+    pub(crate) fn fill_addressable_strip(
+        &mut self,
+        red: u8,
+        green: u8,
+        blue: u8,
+        brightness: u8,
+    ) -> Result<(), String> {
+        self.addressable_strip_contract("")?;
+        self.request_hardware_effect_command(
+            "strip-fill",
+            format!("strip fill {red} {green} {blue} {brightness}"),
+        )
+    }
+
+    pub(crate) fn set_addressable_strip_pixel(
+        &mut self,
+        pixel: u16,
+        pixels: u16,
+        red: u8,
+        green: u8,
+        blue: u8,
+        brightness: u8,
+    ) -> Result<(), String> {
+        let strip = self.addressable_strip_contract("pixel")?;
+        Self::validate_strip_settings(&strip, pixels, None)?;
+        if pixel >= pixels {
+            return Err(format!(
+                "Pixel index must be 0–{}",
+                pixels.saturating_sub(1)
+            ));
+        }
+        self.request_hardware_effect_command(
+            "strip-pixel",
+            format!("strip pixel {pixel} {red} {green} {blue} {brightness}"),
+        )
+    }
+
+    pub(crate) fn send_addressable_strip_frame(
+        &mut self,
+        pixels: u16,
+        rgb: &[u8],
+    ) -> Result<(), String> {
+        let strip = self.addressable_strip_contract("frame")?;
+        Self::validate_strip_settings(&strip, pixels, None)?;
+        if rgb.len() != usize::from(pixels) * 3 {
+            return Err("The color frame does not match the configured pixel count".to_string());
+        }
+        let encoded = rgb
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        self.request_hardware_effect_command("strip-frame", format!("strip frame {encoded}"))
+    }
+
+    pub(crate) fn start_addressable_strip_rainbow(
+        &mut self,
+        pixels: u16,
+        fps: u8,
+    ) -> Result<(), String> {
+        let strip = self.addressable_strip_contract("rainbow")?;
+        Self::validate_strip_settings(&strip, pixels, Some(fps))?;
+        self.request_hardware_effect_command(
+            "strip-rainbow",
+            format!("strip rainbow {pixels} {fps}"),
+        )
+    }
+
+    pub(crate) fn start_addressable_strip_effect(
+        &mut self,
+        id: &str,
+        pixels: u16,
+        fps: u8,
+    ) -> Result<(), String> {
+        let strip = self.addressable_strip_contract("effect")?;
+        Self::validate_strip_settings(&strip, pixels, Some(fps))?;
+        let advertised = self.advertised_hardware().is_some_and(|capabilities| {
+            capabilities
+                .strip_effects
+                .iter()
+                .any(|effect| effect.id == id)
+        });
+        if !advertised || !crate::four_d::controller::valid_strip_effect_id(id) {
+            return Err("The selected strip effect is no longer advertised".to_string());
+        }
+        self.request_hardware_effect_command(
+            "effect-preview",
+            format!("strip effect play {id} {pixels} {fps}"),
+        )
+    }
+
+    pub(crate) fn clear_addressable_strip(&mut self) -> Result<(), String> {
+        self.addressable_strip_contract("solid")?;
+        self.request_hardware_effect_command("strip-clear", "strip clear".to_string())
+    }
+
+    pub(crate) fn stop_addressable_strip(&mut self) -> Result<(), String> {
+        self.addressable_strip_contract("")?;
+        self.request_hardware_effect_command("strip-stop", "strip stop".to_string())
+    }
+
+    pub(crate) fn refresh_addressable_strip_status(&mut self) -> Result<(), String> {
+        self.addressable_strip_contract("")?;
+        self.request_hardware_effect_command("strip-status", "strip status".to_string())
+    }
+
     pub(crate) fn save_controller_effect(&mut self) -> Result<(), String> {
         let draft = self.effect_library_draft.clone();
         let name = Self::controller_command_argument(&draft.name).ok_or_else(|| {
@@ -1768,11 +1920,13 @@ impl PealayerApp {
                             self.hardware_effect_authoring.active = false;
                             self.hardware_effect_authoring.pending_saved_macro_id = None;
                         }
-                        "effect-preview" => {
+                        "effect-preview" | "strip-rainbow" => {
                             self.hardware_effect_authoring.preview_active = true;
+                            self.engine_handle.request_catalog_refresh();
                         }
-                        "effect-stop" => {
+                        "effect-stop" | "strip-stop" | "strip-clear" => {
                             self.hardware_effect_authoring.preview_active = false;
+                            self.engine_handle.request_catalog_refresh();
                         }
                         "board-name"
                         | "board-settings"
@@ -1783,7 +1937,8 @@ impl PealayerApp {
                             }
                             self.engine_handle.request_catalog_refresh();
                         }
-                        "effect-save" | "effect-delete" => {
+                        "effect-save" | "effect-delete" | "strip-config" | "strip-fill"
+                        | "strip-frame" | "strip-pixel" | "strip-status" => {
                             self.engine_handle.request_catalog_refresh();
                         }
                         _ => {}
