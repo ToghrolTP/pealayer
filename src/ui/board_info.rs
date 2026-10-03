@@ -17,7 +17,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         return;
     };
     if app.board_name_draft.is_empty() {
-        app.board_name_draft = capabilities.board_name.clone();
+        app.board_name_draft = capabilities.board_identity.stored_name.clone();
     }
 
     let mut open = true;
@@ -125,7 +125,30 @@ fn overview(
             .num_columns(2)
             .spacing([18.0, 8.0])
             .show(ui, |ui| {
-                row(ui, &app.tr("Board name"), &capabilities.board_name);
+                let stored_name = if capabilities.board_identity.stored_name_available
+                    && !capabilities.board_identity.stored_name.trim().is_empty()
+                {
+                    capabilities.board_identity.stored_name.clone()
+                } else {
+                    app.tr("Not assigned")
+                };
+                row(ui, &app.tr("Stored board name"), &stored_name);
+                row(
+                    ui,
+                    &app.tr("Product identity"),
+                    &capabilities.board_identity.product_name,
+                );
+                if capabilities.board_identity.stored_name_available {
+                    row(
+                        ui,
+                        &app.tr("Name storage"),
+                        &if capabilities.board_identity.stored_name_persisted {
+                            app.tr("EEPROM (persisted)")
+                        } else {
+                            app.tr("Not persisted")
+                        },
+                    );
+                }
                 row(
                     ui,
                     &app.tr("Board kind"),
@@ -148,6 +171,40 @@ fn overview(
                     row(ui, &app.tr("Mode"), &profile.mode);
                     row(ui, &app.tr("Profile revision"), &profile.revision);
                 }
+            });
+    });
+
+    section(ui, &app.tr("Connection"), |ui| {
+        egui::Grid::new("board_connection_grid")
+            .num_columns(2)
+            .spacing([18.0, 8.0])
+            .show(ui, |ui| {
+                optional_row(ui, &app.tr("Device path"), &capabilities.port.name);
+                optional_row(ui, &app.tr("Device name"), &capabilities.port.display_name);
+                optional_row(
+                    ui,
+                    &app.tr("Friendly name"),
+                    &capabilities.port.friendly_name,
+                );
+                optional_row(ui, &app.tr("Product"), &capabilities.port.product);
+                optional_row(ui, &app.tr("Manufacturer"), &capabilities.port.manufacturer);
+                let usb_id = match (capabilities.port.vid.trim(), capabilities.port.pid.trim()) {
+                    ("", "") => String::new(),
+                    (vid, "") => format!("VID {vid}"),
+                    ("", pid) => format!("PID {pid}"),
+                    (vid, pid) => format!("VID {vid} · PID {pid}"),
+                };
+                optional_row(ui, &app.tr("USB identity"), &usb_id);
+                optional_row(
+                    ui,
+                    &app.tr("Serial number"),
+                    &capabilities.port.serial_number,
+                );
+                optional_row(
+                    ui,
+                    &app.tr("Device instance"),
+                    &capabilities.port.instance_id,
+                );
             });
     });
 
@@ -426,6 +483,12 @@ fn row(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.label(egui::RichText::new(label).weak());
     ui.label(value);
     ui.end_row();
+}
+
+fn optional_row(ui: &mut egui::Ui, label: &str, value: &str) {
+    if !value.trim().is_empty() {
+        row(ui, label, value);
+    }
 }
 
 fn pill(ui: &mut egui::Ui, text: &str) {

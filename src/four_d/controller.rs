@@ -92,6 +92,10 @@ pub struct HardwareCapabilities {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HardwareBoardIdentity {
+    pub product_name: String,
+    pub stored_name: String,
+    pub stored_name_available: bool,
+    pub stored_name_persisted: bool,
     pub board_kind: u64,
     pub identity_schema: u64,
     pub build_hash: Option<u64>,
@@ -101,9 +105,14 @@ pub struct HardwareBoardIdentity {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HardwarePort {
     pub name: String,
+    pub display_name: String,
+    pub friendly_name: String,
     pub product: String,
+    pub manufacturer: String,
     pub vid: String,
     pub pid: String,
+    pub serial_number: String,
+    pub instance_id: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -792,12 +801,34 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
         .pointer("/hello/capabilities")
         .and_then(Value::as_u64)
         .unwrap_or(0) as u32;
-    let board_name = snapshot
+    let product_name = snapshot
         .pointer("/hello/name")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    let stored_name_available = snapshot
+        .get("have_board_name")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let stored_name = snapshot
+        .pointer("/board_name/name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let stored_name_persisted = snapshot
+        .pointer("/board_name/persisted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let board_name = if stored_name_available && !stored_name.trim().is_empty() {
+        stored_name.clone()
+    } else {
+        product_name.clone()
+    };
     let board_identity = HardwareBoardIdentity {
+        product_name,
+        stored_name,
+        stored_name_available,
+        stored_name_persisted,
         board_kind: snapshot
             .pointer("/hello/board_kind")
             .and_then(Value::as_u64)
@@ -821,13 +852,38 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
+        display_name: snapshot
+            .pointer("/port/display_name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        friendly_name: snapshot
+            .pointer("/port/friendly_name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
         product: snapshot
             .pointer("/port/product")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
+        manufacturer: snapshot
+            .pointer("/port/manufacturer")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
         vid: snapshot
             .pointer("/port/vid")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        serial_number: snapshot
+            .pointer("/port/serial_number")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        instance_id: snapshot
+            .pointer("/port/instance_id")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
@@ -1712,6 +1768,19 @@ mod tests {
         let snapshot = json!({
             "connected": true,
             "hello": {"name": "Cinema", "capabilities": CAPABILITY_PWM | CAPABILITY_RELAY_MOTION},
+            "board_name": {"name": "CAFE-01", "persisted": true},
+            "have_board_name": true,
+            "port": {
+                "name": "COM4",
+                "display_name": "USB-SERIAL CH340",
+                "friendly_name": "USB-SERIAL CH340",
+                "product": "USB Serial",
+                "manufacturer": "QinHeng",
+                "vid": "1A86",
+                "pid": "7523",
+                "serial_number": "BOARD-1",
+                "instance_id": "USB\\VID_1A86&PID_7523\\BOARD-1"
+            },
             "status": {"active_relays": 16},
             "macros": {"library": [{"id": 3, "name": "Thunder", "mode": "mcu", "steps": [{"at_us": 250000, "kind": "relay-mask"}]}]}
         });
@@ -1725,7 +1794,14 @@ mod tests {
         });
         let parsed = parse_hardware_capabilities(&snapshot, &catalog);
         assert!(parsed.board_connected);
-        assert_eq!(parsed.board_name, "Cinema");
+        assert_eq!(parsed.board_name, "CAFE-01");
+        assert_eq!(parsed.board_identity.product_name, "Cinema");
+        assert_eq!(parsed.board_identity.stored_name, "CAFE-01");
+        assert!(parsed.board_identity.stored_name_persisted);
+        assert_eq!(parsed.port.name, "COM4");
+        assert_eq!(parsed.port.display_name, "USB-SERIAL CH340");
+        assert_eq!(parsed.port.manufacturer, "QinHeng");
+        assert_eq!(parsed.port.serial_number, "BOARD-1");
         assert_eq!(parsed.relays[0].name, "Left Air");
         assert!(parsed.active_relays.contains(&5));
         assert_eq!(parsed.pwm_channels.len(), 2);
@@ -1838,14 +1914,16 @@ mod tests {
         let snapshot = json!({
             "connected": true,
             "hello": {
-                "name": "CAFE-01",
+                "name": "PCController",
                 "board_kind": 7,
                 "identity_schema": 2,
                 "build_hash": 0xA97EC116_u64,
                 "build_timestamp": "260929223718",
                 "capabilities": 0
             },
-            "port": {"name":"COM3", "product":"USB-SERIAL CH340", "vid":"1A86", "pid":"7523"},
+            "board_name": {"name":"CAFE-01", "persisted":true},
+            "have_board_name": true,
+            "port": {"name":"COM3", "display_name":"USB-SERIAL CH340", "friendly_name":"USB-SERIAL CH340", "product":"USB-SERIAL CH340", "manufacturer":"QinHeng", "vid":"1A86", "pid":"7523", "serial_number":"BOARD-3", "instance_id":"USB\\VID_1A86&PID_7523\\BOARD-3"},
             "have_settings": true,
             "settings": {
                 "flags": 1,
@@ -1876,8 +1954,12 @@ mod tests {
         });
         let parsed = parse_hardware_capabilities(&snapshot, &json!({}));
         assert_eq!(parsed.board_name, "CAFE-01");
+        assert_eq!(parsed.board_identity.product_name, "PCController");
+        assert_eq!(parsed.board_identity.stored_name, "CAFE-01");
         assert_eq!(parsed.board_identity.build_hash, Some(0xA97EC116));
         assert_eq!(parsed.port.name, "COM3");
+        assert_eq!(parsed.port.display_name, "USB-SERIAL CH340");
+        assert_eq!(parsed.port.serial_number, "BOARD-3");
         let settings = parsed.settings.expect("settings must be advertised");
         assert!(settings.silent);
         assert_eq!(settings.stream_period_ms, 25);

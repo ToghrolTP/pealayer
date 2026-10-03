@@ -786,7 +786,7 @@ fn open_board_information(
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     tab: usize,
 ) {
-    app.board_name_draft = capabilities.board_name.clone();
+    app.board_name_draft = capabilities.board_identity.stored_name.clone();
     app.board_info_tab = tab;
     app.show_board_info_dialog = true;
 }
