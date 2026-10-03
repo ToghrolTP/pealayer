@@ -2002,7 +2002,7 @@ fn control_supports_presentation_policy(
     relay_id_from_control_key(&control.key).is_some() || is_pwm_control(control)
 }
 
-fn is_motion_control(control: &crate::four_d::controller::HardwareControl) -> bool {
+pub(crate) fn is_motion_control(control: &crate::four_d::controller::HardwareControl) -> bool {
     matches!(
         control.kind.to_ascii_lowercase().as_str(),
         "motion" | "seat"
@@ -2069,7 +2069,7 @@ fn invoke_held_motion_action(app: &PealayerApp, action_id: &str) {
     invoke_advertised_action(app, action_id);
 }
 
-fn update_held_motion_action(
+pub(crate) fn update_held_motion_action(
     app: &mut PealayerApp,
     ui: &egui::Ui,
     response: &egui::Response,
@@ -2129,29 +2129,10 @@ pub(crate) fn motion_control_is_active(
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
 ) -> bool {
-    let key = control.key.to_ascii_lowercase();
-    if control.control.eq_ignore_ascii_case("raw-motion") {
-        let enable_relay = if key.contains("left") || key.ends_with(".a") {
-            Some(2)
-        } else if key.contains("right") || key.ends_with(".b") {
-            Some(4)
-        } else {
-            None
-        };
-        return enable_relay.is_some_and(|relay| capabilities.active_relays.contains(&relay));
-    }
-    let side = if key.contains("left") || key.ends_with(".a") {
-        Some(["left", "motion-a", "seat-a"])
-    } else if key.contains("right") || key.ends_with(".b") {
-        Some(["right", "motion-b", "seat-b"])
-    } else {
-        None
-    };
-    capabilities.relays.iter().any(|relay| {
-        let role = relay.role.to_ascii_lowercase();
-        capabilities.active_relays.contains(&relay.id)
-            && side.is_none_or(|aliases| aliases.iter().any(|alias| role.contains(alias)))
-    })
+    matches!(
+        motion_control_direction(capabilities, control),
+        MotionDirectionState::Up | MotionDirectionState::Down
+    )
 }
 
 fn open_control_dialog(
@@ -3302,8 +3283,8 @@ fn draw_compact_control_card(
                     }
                     response.on_hover_text(format!("{} — {}", title, app.tr("Rename")));
                     if is_motion {
-                        if let Some(stop) = contextual_stop_action(capabilities, control)
-                            && ui
+                        if let Some(stop) = contextual_stop_action(capabilities, control) {
+                            let response = ui
                                 .add_enabled(
                                     !app.estop_active && !control.locked,
                                     egui::Button::new(crate::ui::icons::action(&stop.verb))
@@ -3312,10 +3293,10 @@ fn draw_compact_control_card(
                                 .on_hover_text(crate::ui::i18n::visual_text(
                                     app.language,
                                     &stop.name,
-                                ))
-                                .clicked()
-                        {
-                            crate::ui::hardware_control::invoke_action(app, control, stop);
+                                ));
+                            if hardware_control_activated(app, ui, &response) {
+                                crate::ui::hardware_control::invoke_action(app, control, stop);
+                            }
                         }
                         if ui
                             .button(crate::ui::icons::PENCIL_SIMPLE)
@@ -3378,9 +3359,16 @@ fn draw_compact_control_card(
                                     action,
                                     stop.expect("checked above"),
                                 );
-                            } else if (matches!(action.verb.to_ascii_lowercase().as_str(), "on" | "off")
-                                && hardware_control_activated(app, ui, &response))
-                                || (!matches!(action.verb.to_ascii_lowercase().as_str(), "on" | "off")
+                            } else if ((is_motion
+                                || matches!(
+                                    action.verb.to_ascii_lowercase().as_str(),
+                                    "on" | "off"
+                                )) && hardware_control_activated(app, ui, &response))
+                                || (!is_motion
+                                    && !matches!(
+                                        action.verb.to_ascii_lowercase().as_str(),
+                                        "on" | "off"
+                                    )
                                     && response.clicked())
                             {
                                 crate::ui::hardware_control::invoke_action(app, control, action);
@@ -3610,7 +3598,8 @@ fn draw_control_card(
                                     }
                                     if let Some(stop) =
                                         contextual_stop_action(capabilities, control)
-                                        && ui
+                                    {
+                                        let response = ui
                                             .add_enabled(
                                                 !app.estop_active && !control.locked,
                                                 egui::Button::new(crate::ui::icons::action(
@@ -3620,12 +3609,12 @@ fn draw_control_card(
                                             .on_hover_text(crate::ui::i18n::visual_text(
                                                 app.language,
                                                 &stop.name,
-                                            ))
-                                            .clicked()
-                                    {
-                                        crate::ui::hardware_control::invoke_action(
-                                            app, control, stop,
-                                        );
+                                            ));
+                                        if hardware_control_activated(app, ui, &response) {
+                                            crate::ui::hardware_control::invoke_action(
+                                                app, control, stop,
+                                            );
+                                        }
                                     }
                                     let title = left_aligned_click_label(
                                         ui,
@@ -3777,9 +3766,11 @@ fn draw_control_card(
                                                 action,
                                                 stop_action.expect("checked above"),
                                             );
-                                        } else if (matches!(verb.as_str(), "on" | "off")
+                                        } else if ((is_motion
+                                            || matches!(verb.as_str(), "on" | "off"))
                                             && hardware_control_activated(app, ui, &response))
-                                            || (!matches!(verb.as_str(), "on" | "off")
+                                            || (!is_motion
+                                                && !matches!(verb.as_str(), "on" | "off")
                                                 && response.clicked())
                                         {
                                             crate::ui::hardware_control::invoke_action(
@@ -5004,12 +4995,12 @@ mod timeline_row_tests {
     }
 
     #[test]
-    fn seat_stop_is_inline_and_only_present_while_that_seat_is_active() {
+    fn semantic_seat_stop_is_inline_and_only_present_while_that_seat_is_active() {
         let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
         let control = crate::four_d::controller::HardwareControl {
             key: "seat.a".into(),
-            kind: "motion".into(),
-            control: "raw-motion".into(),
+            kind: "seat".into(),
+            control: "seat".into(),
             actions: ["up", "down", "stop"]
                 .into_iter()
                 .map(|verb| crate::four_d::controller::HardwareAction {
@@ -5936,7 +5927,7 @@ mod timeline_row_tests {
         );
         assert_eq!(
             control_indicator_state(&capabilities, &control("seat.a", "motion")),
-            ControlIndicatorState::Inactive
+            ControlIndicatorState::Active
         );
         assert_eq!(
             control_indicator_state(&capabilities, &control("pwm.1", "mosfet")),

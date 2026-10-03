@@ -79,8 +79,8 @@ pub enum VideoBackground {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MotionControlMode {
-    #[default]
     Toggle,
+    #[default]
     Hold,
 }
 
@@ -1536,6 +1536,15 @@ mod tests {
         let config = AppConfig::default();
         assert!(config.show_estop_control);
         assert!(config.confirm_estop_release);
+    }
+
+    #[test]
+    fn motion_controls_default_to_push_behavior() {
+        assert_eq!(MotionControlMode::default(), MotionControlMode::Hold);
+        assert_eq!(
+            AppConfig::default().motion_control_mode,
+            MotionControlMode::Hold
+        );
     }
 
     #[test]

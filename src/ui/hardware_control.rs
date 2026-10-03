@@ -295,7 +295,7 @@ fn parse_display_order(value: &str, peer_count: usize) -> Option<u16> {
 }
 
 fn draw_manager_live_action(
-    app: &PealayerApp,
+    app: &mut PealayerApp,
     ui: &mut egui::Ui,
     capabilities: &HardwareCapabilities,
     control: &HardwareControl,
@@ -375,13 +375,18 @@ fn draw_manager_live_action(
             }
         }
     } else {
+        let is_motion = crate::ui::layout::is_motion_control(control);
+        let stop = control
+            .actions
+            .iter()
+            .find(|action| action.verb.eq_ignore_ascii_case("stop"));
         for action in control
             .actions
             .iter()
             .filter(|action| !action.verb.eq_ignore_ascii_case("stop"))
             .take(2)
         {
-            if ui
+            let response = ui
                 .add_enabled(
                     enabled,
                     egui::Button::new(format!(
@@ -391,10 +396,32 @@ fn draw_manager_live_action(
                     ))
                     .min_size(egui::vec2(56.0, 25.0)),
                 )
-                .on_hover_text(crate::ui::i18n::visual_text(app.language, &action.name))
-                .clicked()
+                .on_hover_text(crate::ui::i18n::visual_text(app.language, &action.name));
+            if is_motion
+                && app.motion_control_mode == crate::config::MotionControlMode::Hold
+                && let Some(stop) = stop
             {
+                crate::ui::layout::update_held_motion_action(
+                    app, ui, &response, control, action, stop,
+                );
+            } else if crate::ui::layout::hardware_control_activated(app, ui, &response) {
                 invoke_action(app, control, action);
+            }
+        }
+        if let Some(stop) = crate::ui::layout::contextual_stop_action(capabilities, control) {
+            let response = ui
+                .add_enabled(
+                    enabled,
+                    egui::Button::new(format!(
+                        "{} {}",
+                        crate::ui::icons::action(&stop.verb),
+                        crate::ui::i18n::visual_text(app.language, &stop.name)
+                    ))
+                    .min_size(egui::vec2(56.0, 25.0)),
+                )
+                .on_hover_text(crate::ui::i18n::visual_text(app.language, &stop.name));
+            if crate::ui::layout::hardware_control_activated(app, ui, &response) {
+                invoke_action(app, control, stop);
             }
         }
     }
@@ -1188,6 +1215,11 @@ fn draw_channel_detail_page(
             if !control.actions.is_empty() {
                 ui.add_space(6.0);
                 let columns = if ui.available_width() >= 420.0 { 3 } else { 1 };
+                let is_motion = crate::ui::layout::is_motion_control(control);
+                let stop_action = control
+                    .actions
+                    .iter()
+                    .find(|action| action.verb.eq_ignore_ascii_case("stop"));
                 let actions = control
                     .actions
                     .iter()
@@ -1210,7 +1242,22 @@ fn draw_channel_detail_page(
                                 .min_size(egui::vec2(uis[index].available_width(), 32.0)),
                             );
                             let verb = action.verb.to_ascii_lowercase();
-                            let activated = if matches!(verb.as_str(), "on" | "off") {
+                            if is_motion
+                                && !verb.eq("stop")
+                                && app.motion_control_mode == crate::config::MotionControlMode::Hold
+                                && let Some(stop) = stop_action
+                            {
+                                crate::ui::layout::update_held_motion_action(
+                                    app,
+                                    &uis[index],
+                                    &response,
+                                    &control,
+                                    action,
+                                    stop,
+                                );
+                                continue;
+                            }
+                            let activated = if is_motion || matches!(verb.as_str(), "on" | "off") {
                                 crate::ui::layout::hardware_control_activated(
                                     app,
                                     &uis[index],

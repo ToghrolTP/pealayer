@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -48,6 +48,16 @@ interface HardwareTabProps {
   sendCmd: (command: string, payload?: Record<string, unknown>) => void;
   locale: UiLocale;
 }
+
+type HardwareControl = NonNullable<PlayerState['hardware_details']>['controls'][number];
+type HardwareAction = HardwareControl['actions'][number];
+
+const isMotionControl = (control: HardwareControl) =>
+  /seat|motion/i.test(control.kind)
+  || /motion/i.test(control.control)
+  || control.actions.some((action) => /^(up|down|stop)$/i.test(action.verb));
+
+const isStopAction = (action: HardwareAction) => action.verb.toLowerCase() === 'stop';
 
 const controlIcon = (kind: string) => {
   if (/pwm|mosfet/i.test(kind)) return <DashboardOutlined />;
@@ -102,12 +112,66 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
   const [renameDraft, setRenameDraft] = useState('');
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [dropKey, setDropKey] = useState<string | null>(null);
+  const heldMotionPointers = useRef(new Map<string, number>());
   const controls = useMemo(
     () => [...(details?.controls ?? [])].sort((left, right) => left.order - right.order || left.key.localeCompare(right.key)),
     [details],
   );
   const updatePresentation = (key: string, fields: Record<string, unknown>) =>
     sendCmd('hardware.presentation.update', { key, fields });
+  const actionInputProps = (control: HardwareControl, action: HardwareAction) => {
+    const invoke = () => sendCmd('hardware.action.invoke', { action_id: action.id });
+    if (!isMotionControl(control)) return { onClick: invoke };
+
+    const keyboardInvoke = (event: React.MouseEvent<HTMLElement>) => {
+      if (event.detail === 0) invoke();
+    };
+    if (isStopAction(action) || (details?.motion_control_mode ?? 'hold') === 'toggle') {
+      return {
+        onPointerDown: (event: React.PointerEvent<HTMLElement>) => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+          invoke();
+        },
+        onClick: keyboardInvoke,
+      };
+    }
+
+    const stop = control.actions.find(isStopAction);
+    if (!stop) return { onPointerDown: (event: React.PointerEvent<HTMLElement>) => {
+      if (event.button === 0) invoke();
+    }, onClick: keyboardInvoke };
+    const release = (pointerId?: number) => {
+      if (pointerId !== undefined && heldMotionPointers.current.get(control.key) !== pointerId) return;
+      if (!heldMotionPointers.current.has(control.key)) return;
+      heldMotionPointers.current.delete(control.key);
+      sendCmd('hardware.action.invoke', { action_id: stop.id });
+    };
+    return {
+      onPointerDown: (event: React.PointerEvent<HTMLElement>) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        heldMotionPointers.current.set(control.key, event.pointerId);
+        event.currentTarget.setPointerCapture(event.pointerId);
+        invoke();
+      },
+      onPointerUp: (event: React.PointerEvent<HTMLElement>) => release(event.pointerId),
+      onPointerCancel: (event: React.PointerEvent<HTMLElement>) => release(event.pointerId),
+      onKeyDown: (event: React.KeyboardEvent<HTMLElement>) => {
+        if ((event.key === 'Enter' || event.key === ' ') && !event.repeat && !heldMotionPointers.current.has(control.key)) {
+          heldMotionPointers.current.set(control.key, -1);
+          invoke();
+        }
+      },
+      onKeyUp: (event: React.KeyboardEvent<HTMLElement>) => {
+        if (event.key === 'Enter' || event.key === ' ') release(-1);
+      },
+      onClick: (event: React.MouseEvent<HTMLElement>) => event.preventDefault(),
+    };
+  };
+  const visibleActions = (control: HardwareControl) => control.actions.filter(
+    (action) => !isStopAction(action) || Boolean(control.active),
+  );
   const moveControl = (key: string, delta: number) => {
     const source = controls.find((control) => control.key === key);
     if (!source) return;
@@ -200,11 +264,11 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
               aria-label={control.active ? tr(locale, 'On') : tr(locale, 'Off')}
             />}
             <Space.Compact className="hardware-control__actions">
-              {control.actions.map((action) => <Tooltip title={action.name || action.verb} key={action.id}>
+              {visibleActions(control).map((action) => <Tooltip title={action.name || action.verb} key={action.id}>
                 <Button
                   disabled={control.locked || !state.hardware_connected || (state.estop_active && action.verb !== 'stop')}
                   danger={action.verb === 'stop'}
-                  onClick={() => sendCmd('hardware.action.invoke', { action_id: action.id })}
+                  {...actionInputProps(control, action)}
                 >
                   {action.name || action.verb}
                 </Button>
@@ -273,7 +337,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
           <div><dt>{tr(locale, 'Control')}</dt><dd>{control.control}</dd></div>
           <div><dt>{tr(locale, 'Stable key')}</dt><dd><code>{control.key}</code></dd></div>
         </dl>
-        <Space wrap>{control.actions.map((action) => <Button key={action.id} disabled={control.locked || state.estop_active} onClick={() => sendCmd('hardware.action.invoke', { action_id: action.id })}>{action.name || action.verb}</Button>)}</Space>
+        <Space wrap>{visibleActions(control).map((action) => <Button key={action.id} disabled={control.locked || (state.estop_active && action.verb !== 'stop')} {...actionInputProps(control, action)}>{action.name || action.verb}</Button>)}</Space>
       </div>) : <>
         <div className="channel-manager__summary">
           <strong>{details.board_name || tr(locale, 'PCController')}</strong>
@@ -300,9 +364,11 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                 const active = Boolean(control.active);
                 const onAction = control.actions.find((action) => action.verb.toLowerCase() === 'on');
                 const offAction = control.actions.find((action) => action.verb.toLowerCase() === 'off');
-                const liveActions = onAction && offAction
+                const baseLiveActions = onAction && offAction
                   ? [onAction, offAction]
                   : control.actions.filter((action) => action.verb.toLowerCase() !== 'stop').slice(0, 2);
+                const stopAction = control.actions.find(isStopAction);
+                const liveActions = active && stopAction ? [...baseLiveActions, stopAction] : baseLiveActions;
                 return <React.Fragment key={control.key}>
                   <div
                     className={`channel-manager__row ${control.hidden ? 'is-hidden' : ''} ${dragKey === control.key ? 'is-dragging' : ''} ${dropKey === control.key ? 'is-drop-target' : ''}`}
@@ -370,7 +436,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                         const selected = (verb === 'on' && active) || (verb === 'off' && !active);
                         const icon = /up/.test(verb) ? <ArrowUpOutlined /> : /down/.test(verb) ? <ArrowDownOutlined /> : verb === 'on' ? <ThunderboltOutlined /> : <PoweroffOutlined />;
                         const label = verb === 'on' ? tr(locale, 'On') : verb === 'off' ? tr(locale, 'Off') : action.name || action.verb;
-                        return <Tooltip title={action.name || action.verb} key={action.id}><Button size="small" icon={icon} type={selected ? 'primary' : 'default'} disabled={control.locked || state.estop_active} onClick={() => sendCmd('hardware.action.invoke', { action_id: action.id })}>{label}</Button></Tooltip>;
+                        return <Tooltip title={action.name || action.verb} key={action.id}><Button size="small" icon={icon} type={selected ? 'primary' : 'default'} danger={verb === 'stop'} disabled={control.locked || (state.estop_active && verb !== 'stop')} {...actionInputProps(control, action)}>{label}</Button></Tooltip>;
                       })}
                     </Space.Compact>
                     <div className="channel-manager__ordering">

@@ -362,10 +362,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "hardware",
             "Motion controls",
             "Button behavior",
-            &[
-                ("toggle", "Toggle on press"),
-                ("hold", "Run only while held"),
-            ],
+            &[("hold", "Push"), ("toggle", "Toggle")],
         ),
         PreferenceControl::boolean(
             "compact_hardware_controls",

@@ -4176,7 +4176,17 @@ fn web_hardware_details(
                 .iter()
                 .find(|output| output.key == control.key)
                 .map(|output| output.id);
-            let active = relay_id.map(|relay| capabilities.active_relays.contains(&relay));
+            let active = relay_id
+                .map(|relay| capabilities.active_relays.contains(&relay))
+                .or_else(|| {
+                    crate::ui::layout::is_motion_control(control).then(|| {
+                        matches!(
+                            crate::ui::layout::motion_control_direction(capabilities, control),
+                            crate::ui::layout::MotionDirectionState::Up
+                                | crate::ui::layout::MotionDirectionState::Down
+                        )
+                    })
+                });
             let pwm_percent = pwm_channel.and_then(|channel| {
                 (capabilities.telemetry.pwm_channel == Some(channel)).then(|| {
                     f64::from(capabilities.telemetry.pwm_value.unwrap_or_default()) * 100.0 / 4095.0
