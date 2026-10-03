@@ -332,6 +332,33 @@ fn hardware_frame_content_width(outer_width: f32, horizontal_margin: i8) -> f32 
     (outer_width - (f32::from(horizontal_margin) + HARDWARE_CARD_STROKE_WIDTH) * 2.0).max(1.0)
 }
 
+/// Keep controls visibly distinct from the nearly-white Hardware Monitor card
+/// surface. The global light palette deliberately stays subtle, but its
+/// inactive button fill is otherwise only one RGB level away from a window
+/// card and visually disappears. Scope this stronger surface to hardware cards
+/// so the rest of the application's control palette is unaffected.
+fn configure_hardware_card_controls(ui: &mut egui::Ui) {
+    configure_hardware_card_visuals(ui.visuals_mut());
+}
+
+fn configure_hardware_card_visuals(visuals: &mut egui::Visuals) {
+    if visuals.dark_mode {
+        return;
+    }
+
+    let widgets = &mut visuals.widgets;
+    widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(230, 233, 237);
+    widgets.inactive.bg_fill = egui::Color32::from_rgb(230, 233, 237);
+    widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(185, 192, 201));
+    widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(220, 226, 232);
+    widgets.hovered.bg_fill = egui::Color32::from_rgb(220, 226, 232);
+    widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(145, 155, 167));
+    widgets.noninteractive.weak_bg_fill = egui::Color32::from_rgb(240, 242, 244);
+    widgets.noninteractive.bg_fill = egui::Color32::from_rgb(240, 242, 244);
+    widgets.noninteractive.bg_stroke =
+        egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(207, 212, 218));
+}
+
 fn pwm_percent(raw: u16) -> f64 {
     f64::from(raw.min(4095)) * 100.0 / 4095.0
 }
@@ -1894,6 +1921,7 @@ fn board_tool_card(ui: &mut egui::Ui, icon: &str, title: &str, body: impl FnOnce
         ))
         .corner_radius(9.0)
         .show(ui, |ui| {
+            configure_hardware_card_controls(ui);
             ui.set_width(hardware_frame_content_width(outer_width, 12));
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(icon).size(18.0));
@@ -2547,6 +2575,7 @@ fn draw_compact_control_card(
         ))
         .corner_radius(7.0)
         .show(ui, |ui| {
+            configure_hardware_card_controls(ui);
             ui.set_width(card_content_width);
             ui.horizontal(|ui| {
                 ui.label(
@@ -2841,6 +2870,7 @@ fn draw_control_card(
         ))
         .corner_radius(8.0)
         .show(ui, |ui| {
+            configure_hardware_card_controls(ui);
             ui.set_width(card_content_width);
             let mut editing = ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
             ui.horizontal(|ui| {
@@ -3179,6 +3209,7 @@ fn draw_compact_relay_group(
         ))
         .corner_radius(7.0)
         .show(ui, |ui| {
+            configure_hardware_card_controls(ui);
             ui.set_width(hardware_frame_content_width(outer_width, 9));
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(crate::ui::icons::PLUG).size(17.0));
@@ -3851,6 +3882,28 @@ mod timeline_row_tests {
             let reconstructed = content + 2.0 * (f32::from(margin) + HARDWARE_CARD_STROKE_WIDTH);
             assert_eq!(reconstructed, outer_width);
         }
+    }
+
+    #[test]
+    fn light_hardware_card_buttons_have_visible_surfaces_and_outlines() {
+        let mut visuals = egui::Visuals::light();
+        configure_hardware_card_visuals(&mut visuals);
+        let widgets = visuals.widgets;
+        assert_eq!(
+            widgets.inactive.weak_bg_fill,
+            egui::Color32::from_rgb(230, 233, 237)
+        );
+        assert_eq!(widgets.inactive.bg_stroke.width, 1.0);
+        assert_ne!(widgets.inactive.bg_stroke.color, egui::Color32::TRANSPARENT);
+        assert_ne!(
+            widgets.noninteractive.weak_bg_fill, widgets.inactive.weak_bg_fill,
+            "disabled and enabled buttons must remain visually distinguishable"
+        );
+
+        let mut dark = egui::Visuals::dark();
+        let original_dark_widgets = dark.widgets.clone();
+        configure_hardware_card_visuals(&mut dark);
+        assert_eq!(dark.widgets, original_dark_widgets);
     }
 
     #[test]
@@ -6927,6 +6980,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 ))
                                 .corner_radius(10.0)
                                 .show(ui, |ui| {
+                                    configure_hardware_card_controls(ui);
                                     ui.set_width(hardware_frame_content_width(board_card_width, 14));
                                     let row_height = if board_card_subtitle.is_some() {
                                         42.0
