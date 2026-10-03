@@ -1,5 +1,12 @@
 use crate::app::PealayerApp;
+use crate::ui::dialog;
 use eframe::egui;
+
+const AUDIO_DIALOG_WIDTH: f32 = 420.0;
+const AUDIO_DIALOG_DEFAULT_HEIGHT: f32 = 300.0;
+const AUDIO_DIALOG_MIN_HEIGHT: f32 = 220.0;
+const AUDIO_DIALOG_MAX_HEIGHT: f32 = 430.0;
+const AUDIO_DIALOG_FOOTER_RESERVE: f32 = 38.0;
 
 pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if !app.show_audio_settings {
@@ -8,8 +15,14 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
     let mut open = app.show_audio_settings;
     let bounds = ui.ctx().content_rect().shrink(20.0);
-    let max_size = egui::vec2(bounds.width().min(460.0), bounds.height().min(430.0));
-    let default_size = egui::vec2(max_size.x.min(420.0), max_size.y.min(380.0));
+    let max_size = egui::vec2(
+        bounds.width().min(460.0),
+        bounds.height().min(AUDIO_DIALOG_MAX_HEIGHT),
+    );
+    let default_size = egui::vec2(
+        max_size.x.min(AUDIO_DIALOG_WIDTH),
+        max_size.y.min(AUDIO_DIALOG_DEFAULT_HEIGHT),
+    );
     let default_rect = crate::ui::dialog::centered_default_rect(bounds, default_size);
     let mut close_requested = crate::ui::dialog::escape_pressed(ui.ctx());
 
@@ -18,17 +31,23 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
         crate::ui::icons::MUSIC_NOTE,
         app.tr("Audio Settings")
     ))
-    .id(egui::Id::new("audio_settings_dialog_bounded_v2"))
+    // The v3 id intentionally discards remembered geometry from the older,
+    // over-tall dialog so existing installations receive the compact default.
+    .id(egui::Id::new("audio_settings_dialog_content_sized_v3"))
     .open(&mut open)
     .collapsible(false)
     .resizable(true)
     .default_rect(default_rect)
-    .min_size([340.0_f32.min(max_size.x), 260.0_f32.min(max_size.y)])
+    .min_size([
+        340.0_f32.min(max_size.x),
+        AUDIO_DIALOG_MIN_HEIGHT.min(max_size.y),
+    ])
     .max_size(max_size)
     .constrain_to(bounds)
     .movable(true)
     .show(ui.ctx(), |ui| {
-        crate::ui::dialog::scroll_column(ui, "audio_settings_body_v2", None, |ui| {
+        let body_max_height = (ui.available_height() - AUDIO_DIALOG_FOOTER_RESERVE).max(96.0);
+        dialog::fit_scroll(ui, "audio_settings_body_v3", Some(body_max_height), |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
 
             crate::ui::dialog::section(ui, crate::ui::icons::MUSIC_NOTE, &app.tr("Track"), |ui| {
@@ -179,5 +198,12 @@ mod tests {
         assert_eq!(clamp_audio_delay(-800.0), -600.0);
         assert_eq!(clamp_audio_delay(950.0), 600.0);
         assert_eq!(clamp_audio_delay(-12.4), -12.4);
+    }
+
+    #[test]
+    fn audio_dialog_defaults_are_compact_and_resizable() {
+        assert!(AUDIO_DIALOG_MIN_HEIGHT < AUDIO_DIALOG_DEFAULT_HEIGHT);
+        assert!(AUDIO_DIALOG_DEFAULT_HEIGHT < AUDIO_DIALOG_MAX_HEIGHT);
+        assert_eq!(AUDIO_DIALOG_DEFAULT_HEIGHT, 300.0);
     }
 }

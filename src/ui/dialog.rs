@@ -340,10 +340,33 @@ pub fn scroll_column(
     max_height: Option<f32>,
     body: impl FnOnce(&mut egui::Ui),
 ) {
+    scroll_column_impl(ui, id, max_height, false, body);
+}
+
+/// A vertically content-sized scroll column for compact dialogs. It behaves
+/// like [`scroll_column`], but does not stretch a short body to fill the whole
+/// window. A height limit still lets the body scroll when the user makes the
+/// dialog smaller than its contents.
+pub fn fit_scroll(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash,
+    max_height: Option<f32>,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    scroll_column_impl(ui, id, max_height, true, body);
+}
+
+fn scroll_column_impl(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash,
+    max_height: Option<f32>,
+    shrink_height_to_content: bool,
+    body: impl FnOnce(&mut egui::Ui),
+) {
     let width = ui.available_width();
     let mut scroll = egui::ScrollArea::vertical()
         .id_salt(id)
-        .auto_shrink([false, false]);
+        .auto_shrink([false, shrink_height_to_content]);
     if let Some(max_height) = max_height {
         scroll = scroll.max_height(max_height);
     }
