@@ -532,13 +532,8 @@ fn relay_id_from_control_key(key: &str) -> Option<u8> {
     key.strip_prefix("relay.")?.parse().ok()
 }
 
-fn relay_identifier_label(app: &PealayerApp, relay_id: u8) -> String {
-    let kind = if relay_id <= 4 {
-        app.tr("Raw relay")
-    } else {
-        app.tr("Relay")
-    };
-    format!("{kind} {relay_id}")
+fn relay_identifier_label(relay_id: u8) -> String {
+    format!("R{relay_id}")
 }
 
 fn is_pwm_control(control: &crate::four_d::controller::HardwareControl) -> bool {
@@ -1724,7 +1719,7 @@ fn draw_compact_control_card(
                 }
                 if app.prefix_relay_identifiers && let Some(id) = relay_id {
                     ui.label(
-                        egui::RichText::new(relay_identifier_label(app, id))
+                        egui::RichText::new(relay_identifier_label(id))
                             .monospace()
                             .weak(),
                     );
@@ -2009,7 +2004,7 @@ fn draw_control_card(
                     && let Some(id) = relay_id
                 {
                     ui.label(
-                        egui::RichText::new(relay_identifier_label(app, id))
+                        egui::RichText::new(relay_identifier_label(id))
                             .monospace()
                             .weak(),
                     );
@@ -2381,7 +2376,7 @@ fn draw_compact_relay_group(
                             ui.label(
                                 egui::RichText::new(format!(
                                     "{} · {}",
-                                    relay_identifier_label(app, relay_id),
+                                    relay_identifier_label(relay_id),
                                     control.key
                                 ))
                                 .monospace()
@@ -2610,6 +2605,14 @@ mod timeline_row_tests {
         assert_eq!(control_grid_columns(720.0), 2);
         assert_eq!(action_grid_columns(280.0, 2), 2);
         assert_eq!(action_grid_columns(420.0, 3), 3);
+    }
+
+    #[test]
+    fn relay_identifiers_are_compact_for_raw_and_general_outputs() {
+        assert_eq!(relay_identifier_label(1), "R1");
+        assert_eq!(relay_identifier_label(4), "R4");
+        assert_eq!(relay_identifier_label(5), "R5");
+        assert_eq!(relay_identifier_label(8), "R8");
     }
 
     #[test]
@@ -4606,7 +4609,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 } else if let crate::four_d::models::HardwareTarget::Relay(id) =
                                                     preset.effect.target
                                                 {
-                                                    format!("{} {id}", self.app.tr("Relay"))
+                                                    relay_identifier_label(id)
                                                 } else {
                                                     self.app.tr("Effect")
                                                 };
@@ -6137,7 +6140,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                                         let start_secs = primary_new_start as f64 / 1000.0;
                                                         let track_name = target_relay
-                                                            .map(|relay_id| relay_identifier_label(self.app, relay_id))
+                                                            .map(relay_identifier_label)
                                                             .unwrap_or_else(|| "Track".to_string());
                                                         format!("⏱ Start: {:.3}s | {}", start_secs, track_name)
                                                     }
