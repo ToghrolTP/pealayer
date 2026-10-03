@@ -367,28 +367,34 @@ fn pwm_wheel_steps(ui: &egui::Ui, response: &egui::Response) -> f64 {
         return 0.0;
     }
     ui.ctx().input_mut(|input| {
-        let steps = input
-            .events
-            .iter()
-            .filter_map(|event| match event {
-                egui::Event::MouseWheel { delta, .. } => {
-                    let delta = if delta.y.abs() >= delta.x.abs() {
-                        delta.y
-                    } else {
-                        delta.x
-                    };
-                    (delta != 0.0).then_some(f64::from(delta.signum()))
-                }
-                _ => None,
-            })
-            .sum::<f64>();
-        if steps != 0.0 {
-            // The hovered PWM slider owns this wheel gesture; do not also
-            // scroll the enclosing Hardware Monitor panel.
+        let (steps, consume_scroll) = pwm_wheel_gesture(&input.events, input.smooth_scroll_delta);
+        if consume_scroll {
+            // The hovered PWM slider owns the complete wheel gesture, including
+            // egui's smoothed tail on frames that contain no new MouseWheel
+            // event. Otherwise that tail leaks into the enclosing Hardware
+            // Monitor ScrollArea and moves the panel after changing the value.
             input.smooth_scroll_delta = egui::Vec2::ZERO;
         }
         steps
     })
+}
+
+fn pwm_wheel_gesture(events: &[egui::Event], smooth_delta: egui::Vec2) -> (f64, bool) {
+    let steps = events
+        .iter()
+        .filter_map(|event| match event {
+            egui::Event::MouseWheel { delta, .. } => {
+                let delta = if delta.y.abs() >= delta.x.abs() {
+                    delta.y
+                } else {
+                    delta.x
+                };
+                (delta != 0.0).then_some(f64::from(delta.signum()))
+            }
+            _ => None,
+        })
+        .sum::<f64>();
+    (steps, steps != 0.0 || smooth_delta != egui::Vec2::ZERO)
 }
 
 pub(crate) fn draw_pwm_editor_row(
@@ -3944,6 +3950,26 @@ mod timeline_row_tests {
         };
         assert!(!committed.should_transmit(true));
         assert!(committed.should_transmit(false));
+    }
+
+    #[test]
+    fn pwm_wheel_consumes_raw_steps_and_the_smoothed_scroll_tail() {
+        let wheel_event = egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, 12.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        };
+        assert_eq!(
+            pwm_wheel_gesture(&[wheel_event], egui::vec2(0.0, 12.0)),
+            (1.0, true)
+        );
+        assert_eq!(
+            pwm_wheel_gesture(&[], egui::vec2(0.0, 3.0)),
+            (0.0, true),
+            "a hovered PWM slider must also consume egui's residual smooth scroll"
+        );
+        assert_eq!(pwm_wheel_gesture(&[], egui::Vec2::ZERO), (0.0, false));
     }
 
     #[test]
