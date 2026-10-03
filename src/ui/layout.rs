@@ -927,7 +927,63 @@ struct TimelineTrackRow {
     linked: bool,
     visible: bool,
     icon: String,
+    control_key: Option<String>,
+    relay_ids: Vec<u8>,
+    dimmed: bool,
     kind: TimelineTrackKind,
+}
+
+fn default_hardware_track_state(
+    app: &PealayerApp,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+    key: &str,
+) -> crate::four_d::models::TimelineTrackState {
+    app.timeline.track_states.get(key).copied().unwrap_or(
+        crate::four_d::models::TimelineTrackState {
+            linked: true,
+            // Raw diagnostic channels remain available from the track picker,
+            // while semantic controls are the default authoring surface.
+            visible: !is_non_user_control(capabilities, control),
+        },
+    )
+}
+
+fn control_timeline_relay_ids(control: &crate::four_d::controller::HardwareControl) -> Vec<u8> {
+    if let Some(relay) = relay_id_from_control_key(&control.key) {
+        return vec![relay];
+    }
+    if is_motion_control(control) {
+        let key = control.key.to_ascii_lowercase();
+        if key.contains("left") || key.ends_with(".a") {
+            return vec![1, 2];
+        }
+        if key.contains("right") || key.ends_with(".b") {
+            return vec![3, 4];
+        }
+    }
+    Vec::new()
+}
+
+fn timeline_track_matches_filter(row: &TimelineTrackRow, filter: &str) -> bool {
+    let filter = filter.trim().to_lowercase();
+    filter.is_empty()
+        || row.name.to_lowercase().contains(&filter)
+        || row.key.to_lowercase().contains(&filter)
+        || row
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.to_lowercase().contains(&filter))
+}
+
+fn can_add_timeline_keyframe(
+    rows: &[TimelineTrackRow],
+    visible_analog_tracks: usize,
+    playback_time: f64,
+) -> bool {
+    (!rows.is_empty() || visible_analog_tracks > 0)
+        && playback_time.is_finite()
+        && playback_time >= 0.0
 }
 
 fn media_timeline_track_label(
@@ -990,6 +1046,9 @@ fn all_timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
             linked: state.linked,
             visible: state.visible,
             icon: crate::ui::icons::FILE_VIDEO.to_string(),
+            control_key: None,
+            relay_ids: Vec::new(),
+            dimmed: false,
             kind: TimelineTrackKind::Video,
         });
         for (ordinal, track) in app.audio_tracks.iter().enumerate() {
@@ -1012,6 +1071,9 @@ fn all_timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
                 linked: state.linked,
                 visible: state.visible,
                 icon: crate::ui::icons::SPEAKER_HIGH.to_string(),
+                control_key: None,
+                relay_ids: Vec::new(),
+                dimmed: false,
                 kind: TimelineTrackKind::Audio(track.id),
             });
         }
@@ -1035,6 +1097,9 @@ fn all_timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
                 linked: state.linked,
                 visible: state.visible,
                 icon: crate::ui::icons::SUBTITLES.to_string(),
+                control_key: None,
+                relay_ids: Vec::new(),
+                dimmed: false,
                 kind: TimelineTrackKind::Subtitle(track.id),
             });
         }
@@ -1071,6 +1136,9 @@ fn all_timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
             linked: state.linked,
             visible: state.visible,
             icon: controller_effect_lane_icon(lane).to_string(),
+            control_key: None,
+            relay_ids: Vec::new(),
+            dimmed: false,
             kind: TimelineTrackKind::ControllerEffect(lane),
         }
     }));
@@ -1080,8 +1148,11 @@ fn all_timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
                 .into_iter()
                 .map(|control| {
                     let key = crate::four_d::models::hardware_timeline_track_key(&control.key);
-                    let state = app.timeline.track_state(&key);
+                    let state = default_hardware_track_state(app, capabilities, &control, &key);
                     let relay_id = relay_id_from_control_key(&control.key);
+                    let dimmed = app.non_user_control_visibility
+                        == crate::config::NonUserControlVisibility::Dimmed
+                        && is_non_user_control(capabilities, &control);
                     TimelineTrackRow {
                         key,
                         name: app.display_text(&control.name),
@@ -1095,6 +1166,9 @@ fn all_timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
                         linked: state.linked,
                         visible: state.visible,
                         icon: crate::ui::icons::control(&control.kind, &control.icon).to_string(),
+                        control_key: Some(control.key.clone()),
+                        relay_ids: control_timeline_relay_ids(&control),
+                        dimmed,
                         kind: relay_id.map_or_else(
                             || TimelineTrackKind::Hardware(control.key.clone()),
                             TimelineTrackKind::Relay,
@@ -4399,6 +4473,9 @@ mod timeline_row_tests {
                 linked: true,
                 visible: true,
                 icon: crate::ui::icons::FILE_VIDEO.to_string(),
+                control_key: None,
+                relay_ids: Vec::new(),
+                dimmed: false,
                 kind: TimelineTrackKind::Video,
             },
             TimelineTrackRow {
@@ -4410,6 +4487,9 @@ mod timeline_row_tests {
                 linked: true,
                 visible: true,
                 icon: crate::ui::icons::SPEAKER_HIGH.to_string(),
+                control_key: None,
+                relay_ids: Vec::new(),
+                dimmed: false,
                 kind: TimelineTrackKind::Audio(1),
             },
             TimelineTrackRow {
@@ -4421,6 +4501,9 @@ mod timeline_row_tests {
                 linked: true,
                 visible: true,
                 icon: crate::ui::icons::SUBTITLES.to_string(),
+                control_key: None,
+                relay_ids: Vec::new(),
+                dimmed: false,
                 kind: TimelineTrackKind::Subtitle(2),
             },
             TimelineTrackRow {
@@ -4432,6 +4515,9 @@ mod timeline_row_tests {
                 linked: true,
                 visible: true,
                 icon: crate::ui::icons::PLUG.to_string(),
+                control_key: Some("relay.6".to_string()),
+                relay_ids: vec![6],
+                dimmed: false,
                 kind: TimelineTrackKind::Relay(6),
             },
         ];
@@ -4509,6 +4595,12 @@ mod timeline_row_tests {
                     ..Default::default()
                 },
                 crate::four_d::controller::HardwareControl {
+                    key: "relay.1".to_string(),
+                    kind: "relay".to_string(),
+                    name: "Raw direction relay".to_string(),
+                    ..Default::default()
+                },
+                crate::four_d::controller::HardwareControl {
                     key: "pwm.12".to_string(),
                     kind: "pwm".to_string(),
                     name: "Enclosure light".to_string(),
@@ -4522,6 +4614,7 @@ mod timeline_row_tests {
         assert!(rows.iter().any(|row| {
             row.key == "hardware:seat.a"
                 && row.kind == TimelineTrackKind::Hardware("seat.a".to_string())
+                && row.relay_ids == [1, 2]
         }));
         assert!(rows.iter().any(|row| {
             row.key == "hardware:relay.5" && row.kind == TimelineTrackKind::Relay(5)
@@ -4530,6 +4623,10 @@ mod timeline_row_tests {
             row.key == "hardware:pwm.12"
                 && row.kind == TimelineTrackKind::Hardware("pwm.12".to_string())
         }));
+        assert!(
+            rows.iter()
+                .any(|row| row.key == "hardware:relay.1" && !row.visible)
+        );
 
         app.timeline.set_track_visible("hardware:pwm.12", false);
         app.timeline.set_track_linked("hardware:relay.5", false);
@@ -4537,6 +4634,45 @@ mod timeline_row_tests {
         assert!(!visible_rows.iter().any(|row| row.key == "hardware:pwm.12"));
         assert!(!visible_rows.iter().any(|row| row.key == "hardware:relay.5"));
         assert!(visible_rows.iter().any(|row| row.key == "hardware:seat.a"));
+
+        app.set_timeline_track_visible("hardware:relay.1", true);
+        assert!(
+            timeline_track_rows(&app)
+                .iter()
+                .any(|row| row.key == "hardware:relay.1")
+        );
+
+        app.non_user_control_visibility = crate::config::NonUserControlVisibility::Dimmed;
+        assert!(
+            all_timeline_track_rows(&app)
+                .iter()
+                .any(|row| row.key == "hardware:relay.1" && row.dimmed)
+        );
+    }
+
+    #[test]
+    fn timeline_track_filter_searches_caption_detail_and_stable_key() {
+        let row = TimelineTrackRow {
+            key: "hardware:seat.a".to_string(),
+            name: "Left cinema seat".to_string(),
+            detail: Some("Motion controls".to_string()),
+            active: false,
+            enabled: true,
+            linked: true,
+            visible: true,
+            icon: crate::ui::icons::SEAT.to_string(),
+            control_key: Some("seat.a".to_string()),
+            relay_ids: vec![1, 2],
+            dimmed: false,
+            kind: TimelineTrackKind::Hardware("seat.a".to_string()),
+        };
+        assert!(timeline_track_matches_filter(&row, "cinema"));
+        assert!(timeline_track_matches_filter(&row, "motion"));
+        assert!(timeline_track_matches_filter(&row, "seat.a"));
+        assert!(!timeline_track_matches_filter(&row, "right"));
+        assert!(can_add_timeline_keyframe(&[row], 0, 0.0));
+        assert!(!can_add_timeline_keyframe(&[], 0, 0.0));
+        assert!(!can_add_timeline_keyframe(&[], 1, f64::NAN));
     }
 
     #[test]
@@ -8340,6 +8476,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         // unlimited GPU render loop when V-Sync was disabled.
                     }
                     PealayerTab::Timeline => {
+                        let timeline_filter_id =
+                            egui::Id::new("timeline_track_filter_text");
+                        let mut timeline_track_filter = ui.ctx().data_mut(|data| {
+                            data.get_temp::<String>(timeline_filter_id)
+                                .unwrap_or_default()
+                        });
                         let all_timeline_rows = all_timeline_track_rows(self.app);
                         let timeline_rows = all_timeline_rows
                             .iter()
@@ -8347,6 +8489,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 row.linked
                                     && row.visible
                                     && !hardware_row_has_analog_track(self.app, row)
+                                    && timeline_track_matches_filter(
+                                        row,
+                                        &timeline_track_filter,
+                                    )
                             })
                             .cloned()
                             .collect::<Vec<_>>();
@@ -8356,12 +8502,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             .analog_tracks
                             .iter()
                             .filter(|track| {
-                                self.app
-                                    .timeline
-                                    .track_state(&crate::four_d::models::hardware_timeline_track_key(
-                                        &format!("pwm.{}", track.channel),
-                                    ))
-                                    .linked
+                                let key = crate::four_d::models::hardware_timeline_track_key(
+                                    &format!("pwm.{}", track.channel),
+                                );
+                                all_timeline_rows
+                                    .iter()
+                                    .find(|row| row.key == key)
+                                    .map(|row| row.linked)
+                                    .unwrap_or_else(|| self.app.timeline.track_state(&key).linked)
                             })
                             .map(|track| track.id)
                             .collect::<std::collections::BTreeSet<_>>();
@@ -8371,16 +8519,32 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             .analog_tracks
                             .iter()
                             .filter(|track| {
-                                let state = self.app.timeline.track_state(
-                                    &crate::four_d::models::hardware_timeline_track_key(&format!(
-                                        "pwm.{}",
-                                        track.channel
-                                    )),
+                                let key = crate::four_d::models::hardware_timeline_track_key(
+                                    &format!("pwm.{}", track.channel),
                                 );
-                                state.linked && state.visible
+                                let state = all_timeline_rows
+                                    .iter()
+                                    .find(|row| row.key == key)
+                                    .map(|row| (row.linked, row.visible))
+                                    .unwrap_or_else(|| {
+                                        let state = self.app.timeline.track_state(&key);
+                                        (state.linked, state.visible)
+                                    });
+                                let identity = format!("P{} {}", track.channel, track.name);
+                                state.0
+                                    && state.1
+                                    && (timeline_track_filter.trim().is_empty()
+                                        || identity.to_lowercase().contains(
+                                            &timeline_track_filter.trim().to_lowercase(),
+                                        ))
                             })
                             .map(|track| track.id)
                             .collect::<std::collections::BTreeSet<_>>();
+                        let can_add_keyframe = can_add_timeline_keyframe(
+                            &timeline_rows,
+                            visible_analog_track_ids.len(),
+                            self.app.playback_time,
+                        );
                         if timeline_rows.is_empty() && self.app.timeline.analog_tracks.is_empty() {
                             let message = if self.app.advertised_hardware().is_none() {
                                 self.app.tr("Open media or connect PCController to populate the timeline.")
@@ -8401,20 +8565,16 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     [egui::pos2(header_rect.min.x, header_rect.max.y), egui::pos2(header_rect.max.x, header_rect.max.y)],
                                     ui.visuals().widgets.noninteractive.bg_stroke,
                                 );
-                                ui.painter().text(
-                                    header_rect.left_center() + egui::vec2(6.0, 0.0),
-                                    egui::Align2::LEFT_CENTER,
-                                    self.app.tr("Tracks"),
-                                    egui::FontId::proportional(11.0),
-                                    ui.visuals().weak_text_color(),
-                                );
                                 let mut header_ui = ui.new_child(
                                     egui::UiBuilder::new()
                                         .max_rect(header_rect.shrink2(egui::vec2(4.0, 1.0)))
                                         .layout(egui::Layout::right_to_left(egui::Align::Center)),
                                 );
                                 if header_ui
-                                    .button(crate::ui::icons::DIAMOND)
+                                    .add_enabled(
+                                        can_add_keyframe,
+                                        egui::Button::new(crate::ui::icons::DIAMOND),
+                                    )
                                     .on_hover_text(self.app.tr("Add exact timeline keyframe at playhead (K)"))
                                     .clicked()
                                 {
@@ -8476,7 +8636,26 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         );
                                     }
                                 });
+                                let filter_response = header_ui.add_sized(
+                                    [158.0, 22.0],
+                                    egui::TextEdit::singleline(&mut timeline_track_filter)
+                                        .hint_text(self.app.tr("Tracks"))
+                                        .frame(egui::Frame::NONE)
+                                        .margin(egui::Margin::symmetric(4, 2)),
+                                );
+                                if filter_response.changed() {
+                                    header_ui.ctx().data_mut(|data| {
+                                        data.insert_temp(
+                                            timeline_filter_id,
+                                            timeline_track_filter.clone(),
+                                        );
+                                    });
+                                    header_ui.ctx().request_repaint();
+                                }
 
+                                let rename_key_id = egui::Id::new("timeline_track_rename_key");
+                                let rename_draft_id = egui::Id::new("timeline_track_rename_draft");
+                                let rename_focus_id = egui::Id::new("timeline_track_rename_focus");
                                 for track_row in &timeline_rows {
                                     let (rect, response) = ui.allocate_exact_size(
                                         egui::vec2(250.0, 32.0),
@@ -8492,9 +8671,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     ui.painter().rect_filled(rect, 0.0, row_fill);
                                     ui.painter().rect_stroke(rect, 0.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
 
-                                    // Create a nested UI at this rect to place buttons
-                                    let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+                                    // Keep the advertised icon, caption and actions vertically
+                                    // centered in the same compact row used by the canvas.
+                                    let mut child_ui = ui.new_child(
+                                        egui::UiBuilder::new()
+                                            .max_rect(rect)
+                                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                                    );
+                                    if track_row.dimmed {
+                                        child_ui.set_opacity(0.58);
+                                    }
                                     let mut media_control_clicked = false;
+                                    let editing_name = child_ui.ctx().data(|data| {
+                                        data.get_temp::<String>(rename_key_id).as_deref()
+                                            == track_row.control_key.as_deref()
+                                    });
+                                    let mut rename_commit = None;
                                     child_ui.horizontal(|ui| {
                                         ui.add_space(6.0);
                                         let icon_color = if track_row.active && track_row.enabled {
@@ -8502,45 +8694,92 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         } else {
                                             ui.visuals().weak_text_color()
                                         };
-                                        ui.label(egui::RichText::new(&track_row.icon).color(icon_color));
-                                        let label_width = if matches!(
-                                            track_row.kind,
-                                            TimelineTrackKind::Relay(_)
-                                                | TimelineTrackKind::Hardware(_)
-                                        ) {
-                                            78.0
+                                        ui.allocate_ui_with_layout(
+                                            egui::vec2(18.0, 32.0),
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                ui.label(
+                                                    egui::RichText::new(&track_row.icon)
+                                                        .color(icon_color),
+                                                );
+                                            },
+                                        );
+                                        let label_width = if !track_row.relay_ids.is_empty() {
+                                            116.0
                                         } else {
                                             158.0
                                         };
                                         ui.allocate_ui(egui::vec2(label_width, 28.0), |ui| {
-                                            let title = egui::RichText::new(&track_row.name)
-                                                .size(11.0)
-                                                .strong();
-                                            if let Some(detail) = track_row.detail.as_deref() {
-                                                ui.spacing_mut().item_spacing.y = 0.0;
-                                                ui.vertical(|ui| {
-                                                    ui.add(egui::Label::new(title).truncate());
-                                                    ui.add(
-                                                        egui::Label::new(
-                                                            egui::RichText::new(detail).size(9.0).weak(),
-                                                        )
-                                                        .truncate(),
-                                                    );
+                                            if editing_name {
+                                                let mut draft = ui.ctx().data(|data| {
+                                                    data.get_temp::<String>(rename_draft_id)
+                                                        .unwrap_or_else(|| track_row.name.clone())
                                                 });
-                                            } else {
-                                                ui.with_layout(
-                                                    egui::Layout::left_to_right(
-                                                        egui::Align::Center,
-                                                    ),
-                                                    |ui| {
-                                                        ui.add(
-                                                            egui::Label::new(title).truncate(),
-                                                        );
-                                                    },
+                                                let edit = ui.add_sized(
+                                                    [label_width, 24.0],
+                                                    egui::TextEdit::singleline(&mut draft),
                                                 );
+                                                let focus = ui.ctx().data_mut(|data| {
+                                                    data.get_temp::<bool>(rename_focus_id)
+                                                        .unwrap_or(false)
+                                                });
+                                                if focus {
+                                                    edit.request_focus();
+                                                    ui.ctx().data_mut(|data| {
+                                                        data.insert_temp(rename_focus_id, false)
+                                                    });
+                                                }
+                                                ui.ctx().data_mut(|data| {
+                                                    data.insert_temp(rename_draft_id, draft.clone())
+                                                });
+                                                let accept = edit.lost_focus()
+                                                    || ui.input(|input| {
+                                                        input.key_pressed(egui::Key::Enter)
+                                                    });
+                                                let cancel = ui.input(|input| {
+                                                    input.key_pressed(egui::Key::Escape)
+                                                });
+                                                if accept && !cancel {
+                                                    rename_commit = Some(draft);
+                                                }
+                                                if accept || cancel {
+                                                    ui.ctx().data_mut(|data| {
+                                                        data.remove::<String>(rename_key_id);
+                                                        data.remove::<String>(rename_draft_id);
+                                                    });
+                                                }
+                                            } else {
+                                                let title = egui::RichText::new(&track_row.name)
+                                                    .size(11.0)
+                                                    .strong();
+                                                if let Some(detail) = track_row.detail.as_deref() {
+                                                    ui.spacing_mut().item_spacing.y = 0.0;
+                                                    ui.add_space(2.0);
+                                                    ui.vertical(|ui| {
+                                                        ui.add(egui::Label::new(title).truncate());
+                                                        ui.add(
+                                                            egui::Label::new(
+                                                                egui::RichText::new(detail)
+                                                                    .size(9.0)
+                                                                    .weak(),
+                                                            )
+                                                            .truncate(),
+                                                        );
+                                                    });
+                                                } else {
+                                                    ui.with_layout(
+                                                        egui::Layout::left_to_right(egui::Align::Center),
+                                                        |ui| {
+                                                            ui.add(egui::Label::new(title).truncate());
+                                                        },
+                                                    );
+                                                }
                                             }
                                         });
-
+                                        ui.allocate_ui_with_layout(
+                                            ui.available_size(),
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
                                         if let TimelineTrackKind::Subtitle(_) = track_row.kind {
                                             let visible = track_row.active && track_row.enabled;
                                             let visibility = ui
@@ -8589,48 +8828,91 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 crate::ui::icons::DOT_OUTLINE,
                                             )
                                             .on_hover_text(self.app.tr("Active track"));
-                                        } else if let TimelineTrackKind::Relay(relay_id) = track_row.kind {
-                                            // Mute button (M)
-                                            let muted = self.app.track_muted.contains(&relay_id);
-                                            let m_btn = ui.selectable_label(muted, egui::RichText::new("M").strong().size(10.0))
-                                                .on_hover_text(&relay_mute_help);
-                                            if m_btn.clicked() {
-                                                if muted {
-                                                    self.app.track_muted.remove(&relay_id);
-                                                } else {
-                                                    self.app.track_muted.insert(relay_id);
+                                        } else if !track_row.relay_ids.is_empty() {
+                                            let locked = track_row.relay_ids.iter().all(|relay| {
+                                                self.app.track_locked.contains(relay)
+                                            });
+                                            if ui
+                                                .selectable_label(locked, crate::ui::icons::LOCK)
+                                                .on_hover_text(&lock_help)
+                                                .clicked()
+                                            {
+                                                for relay in &track_row.relay_ids {
+                                                    if locked {
+                                                        self.app.track_locked.remove(relay);
+                                                    } else {
+                                                        self.app.track_locked.insert(*relay);
+                                                    }
+                                                }
+                                            }
+
+                                            let soloed = track_row.relay_ids.iter().all(|relay| {
+                                                self.app.track_soloed.contains(relay)
+                                            });
+                                            if ui
+                                                .selectable_label(soloed, crate::ui::icons::HEADPHONES)
+                                                .on_hover_text(&relay_solo_help)
+                                                .clicked()
+                                            {
+                                                for relay in &track_row.relay_ids {
+                                                    if soloed {
+                                                        self.app.track_soloed.remove(relay);
+                                                    } else {
+                                                        self.app.track_soloed.insert(*relay);
+                                                    }
                                                 }
                                                 let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
                                                 let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
                                             }
 
-                                            // Solo button (S)
-                                            let soloed = self.app.track_soloed.contains(&relay_id);
-                                            let s_btn = ui.selectable_label(soloed, egui::RichText::new("S").strong().size(10.0))
-                                                .on_hover_text(&relay_solo_help);
-                                            if s_btn.clicked() {
-                                                if soloed {
-                                                    self.app.track_soloed.remove(&relay_id);
-                                                } else {
-                                                    self.app.track_soloed.insert(relay_id);
+                                            let muted = track_row.relay_ids.iter().all(|relay| {
+                                                self.app.track_muted.contains(relay)
+                                            });
+                                            if ui
+                                                .selectable_label(muted, crate::ui::icons::SPEAKER_SLASH)
+                                                .on_hover_text(&relay_mute_help)
+                                                .clicked()
+                                            {
+                                                for relay in &track_row.relay_ids {
+                                                    if muted {
+                                                        self.app.track_muted.remove(relay);
+                                                    } else {
+                                                        self.app.track_muted.insert(*relay);
+                                                    }
                                                 }
                                                 let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
                                                 let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
-                                            }
-
-                                            // Lock button (L)
-                                            let locked = self.app.track_locked.contains(&relay_id);
-                                            let l_btn = ui.selectable_label(locked, egui::RichText::new("L").strong().size(10.0))
-                                                .on_hover_text(&lock_help);
-                                            if l_btn.clicked() {
-                                                if locked {
-                                                    self.app.track_locked.remove(&relay_id);
-                                                } else {
-                                                    self.app.track_locked.insert(relay_id);
-                                                }
                                             }
                                         }
+                                            },
+                                        );
                                     });
+                                    if let (Some(control_key), Some(requested_name)) =
+                                        (track_row.control_key.as_deref(), rename_commit)
+                                    {
+                                        if let Some(capabilities) = self.app.advertised_hardware() {
+                                            if let Some(control) = crate::ui::hardware_control::managed_controls(&capabilities)
+                                                .into_iter()
+                                                .find(|control| control.key == control_key)
+                                            {
+                                                update_control_name(
+                                                    self.app,
+                                                    &capabilities,
+                                                    &control,
+                                                    requested_name,
+                                                );
+                                            }
+                                        }
+                                    }
+                                    if response.double_clicked() {
+                                        if let Some(control_key) = track_row.control_key.as_ref() {
+                                            response.ctx.data_mut(|data| {
+                                                data.insert_temp(rename_key_id, control_key.clone());
+                                                data.insert_temp(rename_draft_id, track_row.name.clone());
+                                                data.insert_temp(rename_focus_id, true);
+                                            });
+                                        }
+                                    }
                                     if response.clicked() && !media_control_clicked {
                                         match track_row.kind {
                                             TimelineTrackKind::Audio(track_id) => {
@@ -8652,6 +8934,42 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
                                     }
                                     response.context_menu(|ui| {
+                                        if let Some(control_key) = track_row.control_key.as_ref() {
+                                            if ui
+                                                .button(format!(
+                                                    "{}  {}",
+                                                    crate::ui::icons::PENCIL_SIMPLE,
+                                                    self.app.tr("Rename")
+                                                ))
+                                                .clicked()
+                                            {
+                                                ui.ctx().data_mut(|data| {
+                                                    data.insert_temp(rename_key_id, control_key.clone());
+                                                    data.insert_temp(rename_draft_id, track_row.name.clone());
+                                                    data.insert_temp(rename_focus_id, true);
+                                                });
+                                                ui.close();
+                                            }
+                                            if ui
+                                                .button(format!(
+                                                    "{}  {}",
+                                                    crate::ui::icons::SLIDERS_HORIZONTAL,
+                                                    self.app.tr("Manage...")
+                                                ))
+                                                .clicked()
+                                            {
+                                                if let Some(capabilities) = self.app.advertised_hardware() {
+                                                    if let Some(control) = crate::ui::hardware_control::managed_controls(&capabilities)
+                                                        .into_iter()
+                                                        .find(|control| control.key == *control_key)
+                                                    {
+                                                        open_control_dialog(self.app, &capabilities, &control);
+                                                    }
+                                                }
+                                                ui.close();
+                                            }
+                                            ui.separator();
+                                        }
                                         if ui
                                             .button(format!(
                                                 "{}  {}",
@@ -8682,10 +9000,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 // Analog Curve Track Headers
                                 let mut analog_tracks_changed = false;
                                 let mut analog_track_action: Option<(String, bool, bool)> = None;
+                                let mut analog_rename_action: Option<(String, String)> = None;
+                                let mut analog_manage_action: Option<String> = None;
                                 let hide_timeline_track_label =
                                     self.app.tr("Hide timeline track");
                                 let unlink_timeline_track_label =
                                     self.app.tr("Unlink from timeline");
+                                let rename_track_label = self.app.tr("Rename");
+                                let manage_track_label = self.app.tr("Manage...");
                                 for track in self
                                     .app
                                     .timeline
@@ -8697,6 +9019,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         crate::four_d::models::hardware_timeline_track_key(
                                             &format!("pwm.{}", track.channel),
                                         );
+                                    let control_key = format!("pwm.{}", track.channel);
+                                    let advertised_row = all_timeline_rows
+                                        .iter()
+                                        .find(|row| row.key == track_key);
                                     let (rect, response) = ui.allocate_exact_size(
                                         egui::vec2(250.0, 40.0),
                                         egui::Sense::click(),
@@ -8728,19 +9054,84 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         egui::Color32::from_rgb(90, 90, 90),
                                     );
 
-                                    let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+                                    let mut child_ui = ui.new_child(
+                                        egui::UiBuilder::new()
+                                            .max_rect(rect)
+                                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                                    );
+                                    if advertised_row.is_some_and(|row| row.dimmed) {
+                                        child_ui.set_opacity(0.58);
+                                    }
                                     child_ui.horizontal(|ui| {
                                         ui.add_space(6.0);
-                                        ui.allocate_ui(egui::vec2(85.0, 20.0), |ui| {
+                                        ui.allocate_ui_with_layout(
+                                            egui::vec2(18.0, 40.0),
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                ui.label(
+                                                    advertised_row
+                                                        .map(|row| row.icon.as_str())
+                                                        .unwrap_or(crate::ui::icons::SLIDERS_HORIZONTAL),
+                                                );
+                                            },
+                                        );
+                                        ui.allocate_ui(egui::vec2(88.0, 24.0), |ui| {
                                             let track_name = crate::ui::i18n::visual_text(display_language, &track.name);
-                                            ui.label(egui::RichText::new(format!("P{}: {}", track.channel, track_name)).size(10.5).strong().color(egui::Color32::from_rgb(0, 220, 255)))
-                                                .on_hover_text(format!("{analog_track_label}: {}\n{port_channel_label}: P{}", track_name, track.channel));
+                                            let editing = ui.ctx().data(|data| {
+                                                data.get_temp::<String>(rename_key_id).as_deref()
+                                                    == Some(control_key.as_str())
+                                            });
+                                            if editing {
+                                                let mut draft = ui.ctx().data(|data| {
+                                                    data.get_temp::<String>(rename_draft_id)
+                                                        .unwrap_or_else(|| track.name.clone())
+                                                });
+                                                let edit = ui.add_sized(
+                                                    [88.0, 22.0],
+                                                    egui::TextEdit::singleline(&mut draft),
+                                                );
+                                                let focus = ui.ctx().data_mut(|data| {
+                                                    data.get_temp::<bool>(rename_focus_id)
+                                                        .unwrap_or(false)
+                                                });
+                                                if focus {
+                                                    edit.request_focus();
+                                                    ui.ctx().data_mut(|data| data.insert_temp(rename_focus_id, false));
+                                                }
+                                                ui.ctx().data_mut(|data| data.insert_temp(rename_draft_id, draft.clone()));
+                                                let accept = edit.lost_focus()
+                                                    || ui.input(|input| input.key_pressed(egui::Key::Enter));
+                                                let cancel = ui.input(|input| input.key_pressed(egui::Key::Escape));
+                                                if accept && !cancel {
+                                                    analog_rename_action =
+                                                        Some((control_key.clone(), draft));
+                                                }
+                                                if accept || cancel {
+                                                    ui.ctx().data_mut(|data| {
+                                                        data.remove::<String>(rename_key_id);
+                                                        data.remove::<String>(rename_draft_id);
+                                                    });
+                                                }
+                                            } else {
+                                                ui.label(egui::RichText::new(track_name.clone()).size(10.5).strong())
+                                                    .on_hover_text(format!("{analog_track_label}: {}\n{port_channel_label}: P{}", track_name, track.channel));
+                                            }
                                         });
+                                        ui.allocate_ui_with_layout(
+                                            ui.available_size(),
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
 
-                                        let m_btn = ui.selectable_label(track.muted, egui::RichText::new("M").strong().size(10.0))
-                                            .on_hover_text(&actuator_mute_help);
-                                        if m_btn.clicked() {
-                                            track.muted = !track.muted;
+                                        let add_btn = ui
+                                            .add_enabled(
+                                                can_add_keyframe,
+                                                egui::Button::new(crate::ui::icons::DIAMOND),
+                                            )
+                                            .on_hover_text(&add_keyframe_help);
+                                        if add_btn.clicked() {
+                                            let cur_ms = (self.app.playback_time * 1000.0) as u64;
+                                            let cur_val = track.evaluate(cur_ms);
+                                            track.add_keyframe(crate::four_d::curve::Keyframe::new(cur_ms, cur_val, crate::four_d::curve::Interpolation::Linear));
                                             analog_tracks_changed = true;
                                         }
 
@@ -8752,7 +9143,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         };
                                         let arm_btn = ui.selectable_label(
                                             track.armed,
-                                            egui::RichText::new("●").size(12.0).color(arm_color),
+                                            egui::RichText::new(crate::ui::icons::RECORD)
+                                                .size(12.0)
+                                                .color(arm_color),
                                         )
                                         .on_hover_text(&record_arm_help);
                                         if arm_btn.clicked() {
@@ -8787,16 +9180,54 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
                                         }
 
-                                        let add_btn = ui.button(egui::RichText::new("+").size(10.0))
-                                            .on_hover_text(&add_keyframe_help);
-                                        if add_btn.clicked() {
-                                            let cur_ms = (self.app.playback_time * 1000.0) as u64;
-                                            let cur_val = track.evaluate(cur_ms);
-                                            track.add_keyframe(crate::four_d::curve::Keyframe::new(cur_ms, cur_val, crate::four_d::curve::Interpolation::Linear));
+                                        let m_btn = ui
+                                            .selectable_label(
+                                                track.muted,
+                                                crate::ui::icons::SPEAKER_SLASH,
+                                            )
+                                            .on_hover_text(&actuator_mute_help);
+                                        if m_btn.clicked() {
+                                            track.muted = !track.muted;
                                             analog_tracks_changed = true;
                                         }
+                                            },
+                                        );
                                     });
+                                    if response.double_clicked() {
+                                        response.ctx.data_mut(|data| {
+                                            data.insert_temp(rename_key_id, control_key.clone());
+                                            data.insert_temp(rename_draft_id, track.name.clone());
+                                            data.insert_temp(rename_focus_id, true);
+                                        });
+                                    }
                                     response.context_menu(|ui| {
+                                        if ui
+                                            .button(format!(
+                                                "{}  {}",
+                                                crate::ui::icons::PENCIL_SIMPLE,
+                                                rename_track_label
+                                            ))
+                                            .clicked()
+                                        {
+                                            ui.ctx().data_mut(|data| {
+                                                data.insert_temp(rename_key_id, control_key.clone());
+                                                data.insert_temp(rename_draft_id, track.name.clone());
+                                                data.insert_temp(rename_focus_id, true);
+                                            });
+                                            ui.close();
+                                        }
+                                        if ui
+                                            .button(format!(
+                                                "{}  {}",
+                                                crate::ui::icons::SLIDERS_HORIZONTAL,
+                                                manage_track_label
+                                            ))
+                                            .clicked()
+                                        {
+                                            analog_manage_action = Some(control_key.clone());
+                                            ui.close();
+                                        }
+                                        ui.separator();
                                         if ui
                                             .button(format!(
                                                 "{}  {}",
@@ -8828,6 +9259,31 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         self.app.set_timeline_track_visible(&key, visible);
                                     } else {
                                         self.app.set_timeline_track_linked(&key, false);
+                                    }
+                                }
+                                if let Some((control_key, requested_name)) = analog_rename_action {
+                                    if let Some(capabilities) = self.app.advertised_hardware() {
+                                        if let Some(control) = crate::ui::hardware_control::managed_controls(&capabilities)
+                                            .into_iter()
+                                            .find(|control| control.key == control_key)
+                                        {
+                                            update_control_name(
+                                                self.app,
+                                                &capabilities,
+                                                &control,
+                                                requested_name,
+                                            );
+                                        }
+                                    }
+                                }
+                                if let Some(control_key) = analog_manage_action {
+                                    if let Some(capabilities) = self.app.advertised_hardware() {
+                                        if let Some(control) = crate::ui::hardware_control::managed_controls(&capabilities)
+                                            .into_iter()
+                                            .find(|control| control.key == control_key)
+                                        {
+                                            open_control_dialog(self.app, &capabilities, &control);
+                                        }
                                     }
                                 }
                                 if analog_tracks_changed {
@@ -8893,11 +9349,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 .clamp(0.0, total_seconds * 1_000.0)
                                                 as u64;
                                             if ui
-                                                .button(format!(
+                                                .add_enabled(
+                                                    can_add_keyframe,
+                                                    egui::Button::new(format!(
                                                     "{} {}",
                                                     crate::ui::icons::DIAMOND,
                                                     self.app.tr("Add keyframe at playhead")
-                                                ))
+                                                    )),
+                                                )
                                                 .clicked()
                                             {
                                                 if !self.app.timeline.keyframes.iter().any(|keyframe| keyframe.time_ms == playhead_ms) {
@@ -8912,12 +9371,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     .round() as u64)
                                                     .min((total_seconds * 1_000.0).round() as u64);
                                                 if ui
-                                                    .button(format!(
+                                                    .add_enabled(
+                                                        can_add_keyframe,
+                                                        egui::Button::new(format!(
                                                         "{} {} ({})",
                                                         crate::ui::icons::PUSH_PIN,
                                                         self.app.tr("Add exact keyframe here"),
                                                         crate::duration::format_time_value_ms(pointer_ms)
-                                                    ))
+                                                        )),
+                                                    )
                                                     .clicked()
                                                 {
                                                     if !self.app.timeline.keyframes.iter().any(|keyframe| keyframe.time_ms == pointer_ms) {

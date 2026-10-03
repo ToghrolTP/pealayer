@@ -4163,11 +4163,18 @@ impl PealayerApp {
     }
 
     pub(crate) fn set_timeline_track_visible(&mut self, key: &str, visible: bool) {
-        if self.timeline.track_state(key).visible == visible {
+        if self
+            .timeline
+            .track_states
+            .get(key)
+            .is_some_and(|state| state.visible == visible)
+        {
             return;
         }
         self.undo_stack.push(self.snapshot_timeline());
-        self.timeline.set_track_visible(key.to_string(), visible);
+        let mut state = self.timeline.track_state(key);
+        state.visible = visible;
+        self.timeline.track_states.insert(key.to_string(), state);
         self.persist_timeline_track_preferences();
     }
 
