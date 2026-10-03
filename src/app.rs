@@ -4413,9 +4413,18 @@ fn web_hardware_details(
                     })
                 });
             let pwm_percent = pwm_channel.and_then(|channel| {
-                (capabilities.telemetry.pwm_channel == Some(channel)).then(|| {
-                    f64::from(capabilities.telemetry.pwm_value.unwrap_or_default()) * 100.0 / 4095.0
-                })
+                capabilities
+                    .telemetry
+                    .pwm_values
+                    .get(usize::from(channel))
+                    .copied()
+                    .flatten()
+                    .or_else(|| {
+                        (capabilities.telemetry.pwm_channel == Some(channel))
+                            .then_some(capabilities.telemetry.pwm_value)
+                            .flatten()
+                    })
+                    .map(|value| f64::from(value) * 100.0 / 4095.0)
             });
             serde_json::json!({
                 "key": control.key,
@@ -5336,5 +5345,29 @@ mod tests {
 
         assert!(!app.estop_active);
         assert!(!app.show_estop_release_dialog);
+    }
+
+    #[test]
+    fn web_hardware_details_publish_every_sampled_pwm_channel() {
+        let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
+        capabilities.controls = vec![crate::four_d::controller::HardwareControl {
+            key: "pwm.3".to_string(),
+            kind: "pwm".to_string(),
+            name: "PWM 4".to_string(),
+            ..Default::default()
+        }];
+        capabilities.pwm_channels = vec![crate::four_d::controller::HardwareOutput {
+            id: 3,
+            key: "pwm.3".to_string(),
+            name: "PWM 4".to_string(),
+            role: String::new(),
+            control: "slider".to_string(),
+        }];
+        capabilities.telemetry.pwm_values = vec![None, None, None, Some(2048)];
+
+        let details =
+            web_hardware_details(&capabilities, crate::config::MotionControlMode::default());
+        let percent = details["controls"][0]["percent"].as_f64().unwrap();
+        assert!((percent - (2048.0 * 100.0 / 4095.0)).abs() < f64::EPSILON);
     }
 }
