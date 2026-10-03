@@ -72,6 +72,15 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Workspace" => "فضای کاری",
         "Workspace profiles" => "نمایه‌های فضای کاری",
         "Workspace profiles..." => "نمایه‌های فضای کاری…",
+        "Workspaces" => "فضاهای کاری",
+        "Manage workspaces..." => "مدیریت فضاهای کاری…",
+        "Manage workspaces" => "مدیریت فضاهای کاری",
+        "Add workspace" => "افزودن فضای کاری",
+        "No workspace profiles" => "هیچ فضای کاری وجود ندارد",
+        "Active workspace" => "فضای کاری فعال",
+        "Delete workspace" => "حذف فضای کاری",
+        "Replace with current workspace" => "جایگزینی با فضای کاری کنونی",
+        "Switch workspace" => "تغییر فضای کاری",
         "Save this window, panel, dialog, and scroll arrangement as a reusable workspace." => {
             "این چیدمان پنجره، پنل‌ها، گفتگوها و پیمایش را به‌عنوان فضای کاری قابل استفادهٔ مجدد ذخیره کنید."
         }

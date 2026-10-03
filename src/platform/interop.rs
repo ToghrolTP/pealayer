@@ -168,7 +168,24 @@ pub enum InteropCommand {
     },
     Quit,
     SetWorkspace {
-        nle: bool,
+        profile: String,
+    },
+    CreateWorkspaceProfile {
+        name: String,
+        icon: String,
+    },
+    UpdateWorkspaceProfile {
+        id: String,
+        name: String,
+        icon: String,
+        capture: bool,
+    },
+    DeleteWorkspaceProfile {
+        id: String,
+    },
+    MoveWorkspaceProfile {
+        id: String,
+        direction: i32,
     },
     AddEffectCue {
         effect_id: String,
@@ -226,6 +243,24 @@ pub enum InteropCommand {
     },
     ReloadConfig,
     GetStatus,
+}
+
+fn valid_workspace_profile_id(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
+fn valid_workspace_profile_name(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty() && value.chars().count() <= 64 && !value.chars().any(char::is_control)
+}
+
+fn valid_workspace_profile_icon(value: &str) -> bool {
+    valid_workspace_profile_id(value)
 }
 
 impl InteropCommand {
@@ -308,6 +343,28 @@ impl InteropCommand {
             Self::ShowMessage { message } if message.chars().count() > 2_048 => {
                 Err("message must not exceed 2048 characters".to_string())
             }
+            Self::SetWorkspace { profile }
+            | Self::DeleteWorkspaceProfile { id: profile }
+            | Self::MoveWorkspaceProfile { id: profile, .. }
+                if !valid_workspace_profile_id(profile) =>
+            {
+                Err("workspace profile ID is invalid".to_string())
+            }
+            Self::CreateWorkspaceProfile { name, icon }
+                if !valid_workspace_profile_name(name) || !valid_workspace_profile_icon(icon) =>
+            {
+                Err("workspace profile name or icon is invalid".to_string())
+            }
+            Self::UpdateWorkspaceProfile { id, name, icon, .. }
+                if !valid_workspace_profile_id(id)
+                    || !valid_workspace_profile_name(name)
+                    || !valid_workspace_profile_icon(icon) =>
+            {
+                Err("workspace profile update is invalid".to_string())
+            }
+            Self::MoveWorkspaceProfile { direction, .. } if !matches!(direction, -1 | 1) => {
+                Err("workspace profile direction must be -1 or 1".to_string())
+            }
             Self::UpdateConfig { values } => crate::config::AppConfig::validate_patch_shape(values),
             _ => Ok(()),
         }
@@ -322,7 +379,9 @@ pub fn command_catalog() -> Value {
             "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
             "seek", "seek_to", "seek_abs", "set_volume", "set_mute", "toggle_mute",
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
-            "maximize", "restore", "open_preferences", "show_message", "set_workspace", "update_config",
+            "maximize", "restore", "open_preferences", "show_message", "set_workspace",
+            "create_workspace_profile", "update_workspace_profile", "delete_workspace_profile",
+            "move_workspace_profile", "update_config",
             "reload_config", "add_effect_cue", "remove_effect_cue", "set_recording",
             "get_status", "quit", "controller_effect_cue.add", "controller_effect.play",
             "controller_effect.stop", "controller_effect.save", "controller_effect.delete",
@@ -422,13 +481,9 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "message" | "show_message" | "show-message" => InteropCommand::ShowMessage {
             message: argument.to_string(),
         },
-        "workspace" | "set_workspace" | "set-workspace" => {
-            match argument.to_ascii_lowercase().as_str() {
-                "nle" | "editor" => InteropCommand::SetWorkspace { nle: true },
-                "simple" | "player" => InteropCommand::SetWorkspace { nle: false },
-                _ => return Err("workspace must be nle or simple".to_string()),
-            }
-        }
+        "workspace" | "set_workspace" | "set-workspace" => InteropCommand::SetWorkspace {
+            profile: argument.to_string(),
+        },
         "add_effect_cue" | "add-effect-cue" => effect_cue()?,
         "remove_effect_cue" | "remove-effect-cue" => InteropCommand::RemoveEffectCue {
             instance_id: argument.to_string(),
@@ -473,6 +528,10 @@ pub struct PlayerStatusResponse {
     #[serde(default)]
     pub workspace: String,
     #[serde(default)]
+    pub active_workspace_profile: Option<String>,
+    #[serde(default)]
+    pub workspace_profiles: Vec<WebWorkspaceProfile>,
+    #[serde(default)]
     pub controller_connected: bool,
     #[serde(default)]
     pub hardware_connected: bool,
@@ -506,6 +565,15 @@ pub struct WebEffectProfile {
     pub target: String,
     #[serde(default)]
     pub lane: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebWorkspaceProfile {
+    pub id: String,
+    pub name: String,
+    pub icon: String,
+    pub order: i32,
+    pub mode: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -631,6 +699,8 @@ impl Default for PlayerStatusResponse {
             buffering_percent: None,
             fullscreen: false,
             workspace: String::new(),
+            active_workspace_profile: None,
+            workspace_profiles: Vec::new(),
             controller_connected: false,
             hardware_connected: false,
             estop_active: false,
@@ -765,13 +835,46 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
             message: string(&["message", "text", "value"])?,
         }),
         "quit" | "exit" | "pealayer.quit" => Some(InteropCommand::Quit),
-        "workspace" | "set_workspace" | "pealayer.workspace.set" => {
-            let workspace = string(&["workspace", "value"])?;
-            match workspace.trim().to_ascii_lowercase().as_str() {
-                "nle" | "editor" => Some(InteropCommand::SetWorkspace { nle: true }),
-                "simple" | "player" => Some(InteropCommand::SetWorkspace { nle: false }),
-                _ => return Err("workspace must be nle or simple".to_string()),
-            }
+        "workspace" | "set_workspace" | "pealayer.workspace.set" | "pealayer.workspace.restore" => {
+            Some(InteropCommand::SetWorkspace {
+                profile: string(&["profile", "workspace", "id", "value"])?
+                    .trim()
+                    .to_string(),
+            })
+        }
+        "workspace.create" | "pealayer.workspace.create" => {
+            Some(InteropCommand::CreateWorkspaceProfile {
+                name: string(&["name"])?,
+                icon: string(&["icon"])?,
+            })
+        }
+        "workspace.update" | "pealayer.workspace.update" => {
+            Some(InteropCommand::UpdateWorkspaceProfile {
+                id: string(&["id", "profile"])?,
+                name: string(&["name"])?,
+                icon: string(&["icon"])?,
+                capture: request
+                    .params
+                    .get("capture")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            })
+        }
+        "workspace.delete" | "pealayer.workspace.delete" => {
+            Some(InteropCommand::DeleteWorkspaceProfile {
+                id: string(&["id", "profile"])?,
+            })
+        }
+        "workspace.move" | "pealayer.workspace.move" => {
+            Some(InteropCommand::MoveWorkspaceProfile {
+                id: string(&["id", "profile"])?,
+                direction: request
+                    .params
+                    .get("direction")
+                    .and_then(Value::as_i64)
+                    .and_then(|value| i32::try_from(value).ok())
+                    .ok_or_else(|| "missing workspace move direction".to_string())?,
+            })
         }
         "effect_cue.add" | "pealayer.effect_cue.add" | "pealayer.timeline.effect.add" => {
             Some(InteropCommand::AddEffectCue {
@@ -1473,11 +1576,11 @@ fn controller_action_from_event(event: &Value, instance_id: &str) -> Option<Cont
             "pealayer.fullscreen.toggle" if value.is_empty() => {
                 Some(InteropCommand::ToggleFullscreen)
             }
-            "pealayer.workspace.set" => match value.to_ascii_lowercase().as_str() {
-                "nle" | "editor" => Some(InteropCommand::SetWorkspace { nle: true }),
-                "simple" | "player" => Some(InteropCommand::SetWorkspace { nle: false }),
-                _ => None,
-            },
+            "pealayer.workspace.set" if valid_workspace_profile_id(value) => {
+                Some(InteropCommand::SetWorkspace {
+                    profile: value.to_string(),
+                })
+            }
             "pealayer.window.activate" if value.is_empty() => Some(InteropCommand::Activate),
             "pealayer.window.minimize" if value.is_empty() => Some(InteropCommand::Minimize),
             "pealayer.window.maximize" if value.is_empty() => Some(InteropCommand::Maximize),
@@ -2122,6 +2225,43 @@ mod tests {
     }
 
     #[test]
+    fn workspace_profile_rpc_uses_stable_ids_and_shared_crud_commands() {
+        let restore = JsonRpcRequest {
+            jsonrpc: Some("2.0".to_string()),
+            id: serde_json::json!(1),
+            method: "pealayer.workspace.restore".to_string(),
+            params: serde_json::json!({"profile":"workspace-cinema"}),
+        };
+        assert_eq!(
+            command_from_json_rpc(&restore).unwrap(),
+            Some(InteropCommand::SetWorkspace {
+                profile: "workspace-cinema".to_string()
+            })
+        );
+
+        let update = JsonRpcRequest {
+            jsonrpc: Some("2.0".to_string()),
+            id: serde_json::json!(2),
+            method: "pealayer.workspace.update".to_string(),
+            params: serde_json::json!({
+                "id":"workspace-cinema",
+                "name":"Cinema authoring",
+                "icon":"timeline",
+                "capture":true
+            }),
+        };
+        assert_eq!(
+            command_from_json_rpc(&update).unwrap(),
+            Some(InteropCommand::UpdateWorkspaceProfile {
+                id: "workspace-cinema".to_string(),
+                name: "Cinema authoring".to_string(),
+                icon: "timeline".to_string(),
+                capture: true,
+            })
+        );
+    }
+
+    #[test]
     fn parses_validated_config_json_rpc_commands() {
         let update: JsonRpcRequest = serde_json::from_str(
             r#"{"jsonrpc":"2.0","id":"preferences","method":"pealayer.config.update","params":{"theme":"dark","show_subseconds":false}}"#,
@@ -2285,11 +2425,11 @@ mod tests {
         );
         assert!(matches!(
             action("pealayer.workspace.set", "nle").command,
-            Some(InteropCommand::SetWorkspace { nle: true })
+            Some(InteropCommand::SetWorkspace { profile }) if profile == "nle"
         ));
         assert!(matches!(
             action("pealayer.workspace.set", "simple").command,
-            Some(InteropCommand::SetWorkspace { nle: false })
+            Some(InteropCommand::SetWorkspace { profile }) if profile == "simple"
         ));
         let invalid = action("pealayer.fullscreen.set", "sometimes");
         assert!(invalid.command.is_none());

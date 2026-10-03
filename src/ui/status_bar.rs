@@ -62,11 +62,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                 if app.status_bar.workspace {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let response = ui.label(if app.show_four_d_editor {
-                            app.tr("Workspace: NLE Layout")
-                        } else {
-                            app.tr("Workspace: Simple Player")
-                        });
+                        let response = ui.label(format!(
+                            "{}: {}",
+                            app.tr("Workspace"),
+                            app.active_workspace_name()
+                        ));
                         if hide_item_menu(app, response, app.tr("Workspace mode")) {
                             app.status_bar.workspace = false;
                             app.save_config();

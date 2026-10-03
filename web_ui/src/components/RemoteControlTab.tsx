@@ -24,6 +24,14 @@ export interface PlayerState {
   playback_rate?: number;
   fullscreen?: boolean;
   workspace?: string;
+  active_workspace_profile?: string | null;
+  workspace_profiles?: Array<{
+    id: string;
+    name: string;
+    icon: string;
+    order: number;
+    mode: 'simple' | 'nle';
+  }>;
   controller_connected?: boolean;
   hardware_connected?: boolean;
   estop_active?: boolean;

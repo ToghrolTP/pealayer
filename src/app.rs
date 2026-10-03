@@ -315,6 +315,7 @@ pub struct PealayerApp {
     pub(crate) show_hardware_channels_dialog: bool,
     pub(crate) show_workspace_profiles_dialog: bool,
     pub(crate) workspace_profile_name_draft: String,
+    pub(crate) workspace_profile_icon_draft: String,
     pub(crate) workspace_profiles:
         std::collections::BTreeMap<String, crate::config::WorkspaceProfile>,
     pub(crate) active_workspace_profile: Option<String>,
@@ -630,6 +631,20 @@ impl eframe::App for PealayerApp {
                     "simple"
                 }
                 .to_string(),
+                active_workspace_profile: self.active_workspace_profile.clone(),
+                workspace_profiles: self
+                    .ordered_workspace_profiles()
+                    .into_iter()
+                    .map(
+                        |(id, profile)| crate::platform::interop::WebWorkspaceProfile {
+                            id,
+                            name: profile.name,
+                            icon: profile.icon,
+                            order: profile.order,
+                            mode: if profile.nle { "nle" } else { "simple" }.to_string(),
+                        },
+                    )
+                    .collect(),
                 controller_connected,
                 hardware_connected,
                 estop_active: self.estop_active,
@@ -1086,17 +1101,30 @@ impl eframe::App for PealayerApp {
                                 self.save_dock_layout();
                                 ui.close();
                             }
-                            if ui
-                                .button(format!(
-                                    "{} {}",
-                                    crate::ui::icons::PLAY,
-                                    self.tr("Switch to Simple Player")
-                                ))
-                                .clicked()
-                            {
-                                self.show_four_d_editor = false;
-                                ui.close();
-                            }
+                            crate::ui::icons::submenu(
+                                ui,
+                                format!("{} {}", crate::ui::icons::TABS, self.tr("Workspaces")),
+                                |ui| {
+                                    for (id, profile) in self.ordered_workspace_profiles() {
+                                        let active = self.active_workspace_profile.as_deref()
+                                            == Some(id.as_str());
+                                        if ui
+                                            .selectable_label(
+                                                active,
+                                                format!(
+                                                    "{}  {}",
+                                                    crate::ui::icons::workspace_icon(&profile.icon),
+                                                    profile.name
+                                                ),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.restore_workspace_profile(ui.ctx(), &id);
+                                            ui.close();
+                                        }
+                                    }
+                                },
+                            );
                             ui.separator();
                             if ui
                                 .button(format!(
@@ -2198,9 +2226,29 @@ impl PealayerApp {
                 return;
             }
             InteropCommand::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            InteropCommand::SetWorkspace { nle } => {
-                let observed = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
-                self.apply_workspace_request(nle, observed);
+            InteropCommand::SetWorkspace { profile } => {
+                self.restore_workspace_profile(ctx, &profile);
+            }
+            InteropCommand::CreateWorkspaceProfile { name, icon } => {
+                self.workspace_profile_icon_draft = icon;
+                self.save_workspace_profile(ctx, &name);
+            }
+            InteropCommand::UpdateWorkspaceProfile {
+                id,
+                name,
+                icon,
+                capture,
+            } => {
+                self.update_workspace_profile_metadata(&id, &name, &icon);
+                if capture {
+                    self.overwrite_workspace_profile(ctx, &id);
+                }
+            }
+            InteropCommand::DeleteWorkspaceProfile { id } => {
+                self.delete_workspace_profile(&id);
+            }
+            InteropCommand::MoveWorkspaceProfile { id, direction } => {
+                self.move_workspace_profile(&id, direction);
             }
             InteropCommand::AddEffectCue {
                 effect_id,
@@ -2809,6 +2857,9 @@ impl PealayerApp {
         let mut dock_state = self.dock_state.clone();
         crate::ui::layout::sanitize_dock_rects(&mut dock_state);
         crate::config::WorkspaceProfile {
+            name: String::new(),
+            icon: String::new(),
+            order: 0,
             nle: self.show_four_d_editor,
             window_geometry: self.window_geometry,
             dock_layout: serde_json::to_string(&dock_state).ok(),
@@ -2879,7 +2930,8 @@ impl PealayerApp {
         self.effect_library_selection = dialogs.effects_selection.clone();
         // Keep this manager open while switching profiles so the user can
         // immediately compare or return to another saved arrangement.
-        self.show_workspace_profiles_dialog = true;
+        self.show_workspace_profiles_dialog =
+            self.show_workspace_profiles_dialog || dialogs.workspace_profiles;
 
         if let Some(geometry) = profile.window_geometry.filter(|value| value.is_valid()) {
             self.window_geometry = Some(geometry);
@@ -2899,42 +2951,158 @@ impl PealayerApp {
         Ok(())
     }
 
+    pub(crate) fn ordered_workspace_profiles(
+        &self,
+    ) -> Vec<(String, crate::config::WorkspaceProfile)> {
+        let mut profiles = self
+            .workspace_profiles
+            .iter()
+            .map(|(id, profile)| (id.clone(), profile.clone()))
+            .collect::<Vec<_>>();
+        profiles.sort_by(|(left_id, left), (right_id, right)| {
+            left.order
+                .cmp(&right.order)
+                .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+                .then_with(|| left_id.cmp(right_id))
+        });
+        profiles
+    }
+
+    pub(crate) fn active_workspace_name(&self) -> String {
+        self.active_workspace_profile
+            .as_ref()
+            .and_then(|id| self.workspace_profiles.get(id))
+            .map(|profile| profile.name.clone())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| self.tr("Workspace"))
+    }
+
     pub(crate) fn save_workspace_profile(&mut self, ctx: &egui::Context, name: &str) {
         let name = name.trim();
         if name.is_empty() {
             self.config_status = self.tr("Enter a workspace profile name");
             return;
         }
-        let profile = self.capture_workspace_profile(ctx);
-        self.workspace_profiles.insert(name.to_string(), profile);
-        self.active_workspace_profile = Some(name.to_string());
-        self.workspace_profile_name_draft = name.to_string();
+        let mut profile = self.capture_workspace_profile(ctx);
+        profile.name = name.to_string();
+        profile.icon = if self.workspace_profile_icon_draft.trim().is_empty() {
+            "window".to_string()
+        } else {
+            self.workspace_profile_icon_draft.trim().to_string()
+        };
+        profile.order = self
+            .workspace_profiles
+            .values()
+            .map(|profile| profile.order)
+            .max()
+            .unwrap_or(-1)
+            + 1;
+        let id = format!("workspace-{}", uuid::Uuid::new_v4().simple());
+        self.workspace_profiles.insert(id.clone(), profile);
+        self.active_workspace_profile = Some(id);
+        self.workspace_profile_name_draft.clear();
         self.config_status = format!("{}: {name}", self.tr("Workspace profile saved"));
         self.save_config();
     }
 
-    pub(crate) fn restore_workspace_profile(&mut self, ctx: &egui::Context, name: &str) {
-        let Some(profile) = self.workspace_profiles.get(name).cloned() else {
-            self.config_status = format!("{}: {name}", self.tr("Workspace profile not found"));
+    pub(crate) fn restore_workspace_profile(&mut self, ctx: &egui::Context, id: &str) {
+        let Some(profile) = self.workspace_profiles.get(id).cloned() else {
+            self.config_status = format!("{}: {id}", self.tr("Workspace profile not found"));
             return;
         };
         match self.apply_workspace_profile(ctx, &profile) {
             Ok(()) => {
-                self.active_workspace_profile = Some(name.to_string());
-                self.workspace_profile_name_draft = name.to_string();
-                self.config_status = format!("{}: {name}", self.tr("Workspace profile restored"));
+                if ctx.input(|input| input.viewport().fullscreen.unwrap_or(false)) {
+                    self.workspace_before_fullscreen = Some(profile.nle);
+                    self.show_four_d_editor = false;
+                }
+                self.active_workspace_profile = Some(id.to_string());
+                self.config_status = format!(
+                    "{}: {}",
+                    self.tr("Workspace profile restored"),
+                    profile.name
+                );
                 self.save_config();
             }
             Err(error) => self.config_status = error,
         }
     }
 
-    pub(crate) fn delete_workspace_profile(&mut self, name: &str) {
-        if self.workspace_profiles.remove(name).is_some() {
-            if self.active_workspace_profile.as_deref() == Some(name) {
+    pub(crate) fn update_workspace_profile_metadata(&mut self, id: &str, name: &str, icon: &str) {
+        let name = name.trim();
+        let icon = icon.trim();
+        if name.is_empty() || icon.is_empty() {
+            return;
+        }
+        if let Some(profile) = self.workspace_profiles.get_mut(id) {
+            profile.name = name.to_string();
+            profile.icon = icon.to_string();
+            self.config_status = format!("{}: {name}", self.tr("Workspace profile saved"));
+            self.save_config();
+        }
+    }
+
+    pub(crate) fn overwrite_workspace_profile(&mut self, ctx: &egui::Context, id: &str) {
+        let Some(previous) = self.workspace_profiles.get(id).cloned() else {
+            return;
+        };
+        let mut profile = self.capture_workspace_profile(ctx);
+        profile.name = previous.name.clone();
+        profile.icon = previous.icon;
+        profile.order = previous.order;
+        self.workspace_profiles.insert(id.to_string(), profile);
+        self.active_workspace_profile = Some(id.to_string());
+        self.config_status = format!("{}: {}", self.tr("Workspace profile saved"), previous.name);
+        self.save_config();
+    }
+
+    pub(crate) fn move_workspace_profile(&mut self, id: &str, direction: i32) {
+        let profiles = self.ordered_workspace_profiles();
+        let Some(index) = profiles.iter().position(|(candidate, _)| candidate == id) else {
+            return;
+        };
+        let target = if direction < 0 {
+            index.checked_sub(1)
+        } else if direction > 0 && index + 1 < profiles.len() {
+            Some(index + 1)
+        } else {
+            None
+        };
+        let Some(target) = target else { return };
+        let other_id = &profiles[target].0;
+        let current_order = profiles[index].1.order;
+        let other_order = profiles[target].1.order;
+        if let Some(profile) = self.workspace_profiles.get_mut(id) {
+            profile.order = other_order;
+        }
+        if let Some(profile) = self.workspace_profiles.get_mut(other_id) {
+            profile.order = current_order;
+        }
+        self.save_config();
+    }
+
+    pub(crate) fn cycle_workspace_profile(&mut self, ctx: &egui::Context) {
+        let profiles = self.ordered_workspace_profiles();
+        if profiles.is_empty() {
+            return;
+        }
+        let current = self
+            .active_workspace_profile
+            .as_ref()
+            .and_then(|active| profiles.iter().position(|(id, _)| id == active));
+        let next = current
+            .map(|index| (index + 1) % profiles.len())
+            .unwrap_or(0);
+        self.restore_workspace_profile(ctx, &profiles[next].0);
+    }
+
+    pub(crate) fn delete_workspace_profile(&mut self, id: &str) {
+        if let Some(profile) = self.workspace_profiles.remove(id) {
+            if self.active_workspace_profile.as_deref() == Some(id) {
                 self.active_workspace_profile = None;
             }
-            self.config_status = format!("{}: {name}", self.tr("Workspace profile deleted"));
+            self.config_status =
+                format!("{}: {}", self.tr("Workspace profile deleted"), profile.name);
             self.save_config();
         }
     }
@@ -3352,6 +3520,9 @@ impl PealayerApp {
             cfg.workspace_dock_layout = Some(json);
         }
         cfg.workspace_session = crate::config::WorkspaceProfile {
+            name: String::new(),
+            icon: String::new(),
+            order: 0,
             nle: self.show_four_d_editor,
             window_geometry: self.window_geometry,
             dock_layout: cfg.workspace_dock_layout.clone(),
@@ -4228,8 +4399,9 @@ impl Default for PealayerApp {
             show_hardware_channels_dialog: false,
             show_workspace_profiles_dialog: false,
             workspace_profile_name_draft: String::new(),
-            workspace_profiles: std::collections::BTreeMap::new(),
-            active_workspace_profile: None,
+            workspace_profile_icon_draft: "window".to_string(),
+            workspace_profiles: crate::config::default_workspace_profiles(),
+            active_workspace_profile: Some("nle".to_string()),
             hardware_control_dialog_key: None,
             hardware_channel_detail_active: false,
             hardware_control_name_draft: String::new(),

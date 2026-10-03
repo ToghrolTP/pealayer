@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import {
   AppstoreOutlined,
+  ArrowDownOutlined,
+  ArrowUpOutlined,
   CaretRightFilled,
   ClockCircleOutlined,
   DeleteOutlined,
@@ -11,10 +13,12 @@ import {
   PauseOutlined,
   PlusOutlined,
   RadarChartOutlined,
+  SaveOutlined,
+  SettingOutlined,
   SoundOutlined,
   VideoCameraOutlined,
 } from '@ant-design/icons';
-import { Button, Empty, Input, InputNumber, message, Modal, Popconfirm, Select, Slider, Tooltip } from 'antd';
+import { Button, Dropdown, Empty, Input, InputNumber, message, Modal, Popconfirm, Select, Slider, Tooltip } from 'antd';
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
 import { effectGlyph as configuredEffectGlyph, effectIconOptions } from '../effectIcons';
@@ -45,11 +49,35 @@ const effectGlyph = (target: string) => {
   return <ClockCircleOutlined />;
 };
 
+const workspaceIconOptions = [
+  { value: 'monitor', label: 'Monitor' },
+  { value: 'timeline', label: 'Timeline' },
+  { value: 'tabs', label: 'Tabs' },
+  { value: 'window', label: 'Window' },
+  { value: 'video', label: 'Video' },
+  { value: 'hardware', label: 'Hardware' },
+  { value: 'effects', label: 'Effects' },
+  { value: 'layout', label: 'Layout' },
+];
+
+const workspaceGlyph = (icon?: string) => {
+  switch (icon) {
+    case 'timeline': return <EditOutlined />;
+    case 'hardware': return <RadarChartOutlined />;
+    case 'effects': return <AppstoreOutlined />;
+    case 'tabs': return <AppstoreOutlined />;
+    default: return <DesktopOutlined />;
+  }
+};
+
 export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl, surface = 'studio' }) => {
   const [selectedEffect, setSelectedEffect] = useState<string | null>(null);
   const [effectEditorOpen, setEffectEditorOpen] = useState(false);
   const [effectDraft, setEffectDraft] = useState<Record<string, any> | null>(null);
   const [seekDraft, setSeekDraft] = useState<number | null>(null);
+  const [workspaceManagerOpen, setWorkspaceManagerOpen] = useState(false);
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [workspaceIcon, setWorkspaceIcon] = useState('window');
   const effects = state.effects ?? [];
   const controllerEffects = state.controller_effects ?? [];
   const cues = state.cues ?? [];
@@ -71,6 +99,11 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
     const active = new Set(effects.map((effect) => effect.lane || 'sequence'));
     return order.filter((lane) => active.has(lane));
   }, [effects]);
+  const workspaceProfiles = useMemo(
+    () => [...(state.workspace_profiles ?? [])].sort((left, right) => left.order - right.order || left.name.localeCompare(right.name)),
+    [state.workspace_profiles],
+  );
+  const activeWorkspace = workspaceProfiles.find((profile) => profile.id === state.active_workspace_profile);
 
   const addCue = (reference: string) => {
     sendCmd('controller_effect_cue.add', {
@@ -221,6 +254,99 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         )}
       </Modal>
 
+      <Modal
+        title={tr(locale, 'Workspaces')}
+        open={workspaceManagerOpen}
+        footer={null}
+        width={720}
+        onCancel={() => setWorkspaceManagerOpen(false)}
+      >
+        <div className="workspace-create-row">
+          <Input
+            value={workspaceName}
+            placeholder={tr(locale, 'Workspace name')}
+            onChange={(event) => setWorkspaceName(event.target.value)}
+          />
+          <Select
+            value={workspaceIcon}
+            options={workspaceIconOptions.map((option) => ({
+              ...option,
+              label: <span className="workspace-icon-option">{workspaceGlyph(option.value)} {tr(locale, option.label)}</span>,
+            }))}
+            onChange={setWorkspaceIcon}
+          />
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            disabled={!workspaceName.trim()}
+            onClick={() => {
+              sendCmd('workspace.create', { name: workspaceName.trim(), icon: workspaceIcon });
+              setWorkspaceName('');
+            }}
+          >
+            {tr(locale, 'Add workspace')}
+          </Button>
+        </div>
+        <div className="workspace-profile-list">
+          {workspaceProfiles.map((profile, index) => (
+            <div className={`workspace-profile-row ${profile.id === state.active_workspace_profile ? 'is-active' : ''}`} key={profile.id}>
+              <span className="workspace-profile-row__state">{workspaceGlyph(profile.icon)}</span>
+              <Input
+                defaultValue={profile.name}
+                key={`${profile.id}:${profile.name}`}
+                onBlur={(event) => {
+                  const name = event.target.value.trim();
+                  if (name && name !== profile.name) {
+                    sendCmd('workspace.update', { id: profile.id, name, icon: profile.icon, capture: false });
+                  }
+                }}
+                onPressEnter={(event) => event.currentTarget.blur()}
+              />
+              <Select
+                value={profile.icon}
+                options={workspaceIconOptions.map((option) => ({
+                  ...option,
+                  label: <span className="workspace-icon-option">{workspaceGlyph(option.value)} {tr(locale, option.label)}</span>,
+                }))}
+                onChange={(icon) => sendCmd('workspace.update', {
+                  id: profile.id,
+                  name: profile.name,
+                  icon,
+                  capture: false,
+                })}
+              />
+              <Tooltip title={tr(locale, 'Restore')}>
+                <Button icon={workspaceGlyph(profile.icon)} onClick={() => sendCmd('set_workspace', { profile: profile.id })} />
+              </Tooltip>
+              <Tooltip title={tr(locale, 'Replace with current workspace')}>
+                <Button icon={<SaveOutlined />} onClick={() => sendCmd('workspace.update', {
+                  id: profile.id,
+                  name: profile.name,
+                  icon: profile.icon,
+                  capture: true,
+                })} />
+              </Tooltip>
+              <Button
+                icon={<ArrowUpOutlined />}
+                disabled={index === 0}
+                onClick={() => sendCmd('workspace.move', { id: profile.id, direction: -1 })}
+              />
+              <Button
+                icon={<ArrowDownOutlined />}
+                disabled={index + 1 === workspaceProfiles.length}
+                onClick={() => sendCmd('workspace.move', { id: profile.id, direction: 1 })}
+              />
+              <Popconfirm
+                title={tr(locale, 'Delete workspace?')}
+                onConfirm={() => sendCmd('workspace.delete', { id: profile.id })}
+              >
+                <Button danger icon={<DeleteOutlined />} />
+              </Popconfirm>
+            </div>
+          ))}
+        </div>
+      </Modal>
+
       <section className="studio-panel player-panel-web">
         <header className="studio-panel__header">
           <div>
@@ -297,19 +423,23 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             <h2>{tr(locale, 'Cues')}</h2>
           </div>
           <div className="timeline-toolbar__actions">
-            <Tooltip title={tr(locale, 'Show timeline workspace')}>
-              <Button
-                type={state.workspace === 'nle' ? 'primary' : 'default'}
-                icon={<EditOutlined />}
-                onClick={() => sendCmd('set_workspace', { nle: true })}
-              />
-            </Tooltip>
-            <Tooltip title={tr(locale, 'Show player workspace')}>
-              <Button
-                type={state.workspace === 'simple' ? 'primary' : 'default'}
-                icon={<DesktopOutlined />}
-                onClick={() => sendCmd('set_workspace', { nle: false })}
-              />
+            <Dropdown
+              menu={{
+                selectedKeys: state.active_workspace_profile ? [state.active_workspace_profile] : [],
+                items: workspaceProfiles.map((profile) => ({
+                  key: profile.id,
+                  icon: workspaceGlyph(profile.icon),
+                  label: profile.name,
+                })),
+                onClick: ({ key }) => sendCmd('set_workspace', { profile: key }),
+              }}
+            >
+              <Button icon={workspaceGlyph(activeWorkspace?.icon)}>
+                {activeWorkspace?.name ?? tr(locale, 'Workspaces')}
+              </Button>
+            </Dropdown>
+            <Tooltip title={tr(locale, 'Manage workspaces')}>
+              <Button icon={<SettingOutlined />} onClick={() => setWorkspaceManagerOpen(true)} />
             </Tooltip>
             <span className="timeline-meta">{cues.length} {tr(locale, 'cues')}</span>
           </div>

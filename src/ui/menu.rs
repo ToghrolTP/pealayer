@@ -418,19 +418,17 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                 // Workspace switcher
                 top_menu_button(ui, app.tr("Workspace"), |ui| {
-                    if ui
-                        .selectable_label(!app.show_four_d_editor, app.tr("Simple Player"))
-                        .clicked()
-                    {
-                        app.show_four_d_editor = false;
-                        ui.close();
-                    }
-                    if ui
-                        .selectable_label(app.show_four_d_editor, app.tr("NLE Layout (Docked)"))
-                        .clicked()
-                    {
-                        app.show_four_d_editor = true;
-                        ui.close();
+                    for (id, profile) in app.ordered_workspace_profiles() {
+                        let active = app.active_workspace_profile.as_deref() == Some(id.as_str());
+                        let label = format!(
+                            "{}  {}",
+                            crate::ui::icons::workspace_icon(&profile.icon),
+                            profile.name
+                        );
+                        if ui.selectable_label(active, label).clicked() {
+                            app.restore_workspace_profile(ui.ctx(), &id);
+                            ui.close();
+                        }
                     }
                     ui.separator();
                     crate::ui::icons::submenu(
@@ -443,7 +441,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         .button(format!(
                             "{}  {}",
                             crate::ui::icons::FLOPPY_DISK,
-                            app.tr("Workspace profiles...")
+                            app.tr("Manage workspaces...")
                         ))
                         .clicked()
                     {

@@ -64,7 +64,7 @@ PLAYER OPTIONS:
   -f, --fullscreen          Enter fullscreen
   --windowed                Leave fullscreen
   --toggle-fullscreen       Toggle fullscreen
-  --workspace <simple|nle>  Select the player workspace
+  --workspace <profile>    Restore a workspace profile by its stable ID
   --activate                Activate and focus the window
   --minimize | --maximize   Change the window state
   --restore                 Restore and focus the window
@@ -178,7 +178,7 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
             "--workspace" => {
                 let value = args_iter
                     .next()
-                    .ok_or("Option '--workspace' requires 'simple' or 'nle'")?;
+                    .ok_or("Option '--workspace' requires a workspace profile ID")?;
                 commands.push(crate::platform::interop::parse_text_command(&format!(
                     "workspace {value}"
                 ))?);
@@ -516,7 +516,9 @@ mod tests {
                 InteropCommand::SeekTo { seconds: 12.5 },
                 InteropCommand::SetMute { muted: true },
                 InteropCommand::SetRate { rate: 1.25 },
-                InteropCommand::SetWorkspace { nle: false },
+                InteropCommand::SetWorkspace {
+                    profile: "simple".to_string(),
+                },
                 InteropCommand::Maximize,
             ]
         );

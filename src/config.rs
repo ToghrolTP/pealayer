@@ -167,6 +167,13 @@ pub struct WorkspaceDialogs {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct WorkspaceProfile {
+    /// Stable machine-facing identity. The map key remains authoritative; this
+    /// human-facing caption can be renamed freely without breaking RPC callers.
+    pub name: String,
+    /// Stable Phosphor icon name shared by the native and web renderers.
+    pub icon: String,
+    /// Explicit user-defined ordering. UI surfaces never sort by caption.
+    pub order: i32,
     pub nle: bool,
     pub window_geometry: Option<WindowGeometry>,
     pub dock_layout: Option<String>,
@@ -179,6 +186,9 @@ pub struct WorkspaceProfile {
 impl Default for WorkspaceProfile {
     fn default() -> Self {
         Self {
+            name: String::new(),
+            icon: String::new(),
+            order: 0,
             nle: true,
             window_geometry: None,
             dock_layout: None,
@@ -247,6 +257,8 @@ pub struct AppConfig {
     pub workspace_session: WorkspaceProfile,
     pub workspace_profiles: BTreeMap<String, WorkspaceProfile>,
     #[serde(default)]
+    pub workspace_profiles_initialized: bool,
+    #[serde(default)]
     pub active_workspace_profile: Option<String>,
 }
 
@@ -310,10 +322,36 @@ impl Default for AppConfig {
             window_geometry: None,
             workspace_dock_layout: None,
             workspace_session: WorkspaceProfile::default(),
-            workspace_profiles: BTreeMap::new(),
-            active_workspace_profile: None,
+            workspace_profiles: default_workspace_profiles(),
+            workspace_profiles_initialized: true,
+            active_workspace_profile: Some("nle".to_string()),
         }
     }
+}
+
+pub fn default_workspace_profiles() -> BTreeMap<String, WorkspaceProfile> {
+    BTreeMap::from([
+        (
+            "simple".to_string(),
+            WorkspaceProfile {
+                name: "Simple".to_string(),
+                icon: "monitor".to_string(),
+                order: 0,
+                nle: false,
+                ..Default::default()
+            },
+        ),
+        (
+            "nle".to_string(),
+            WorkspaceProfile {
+                name: "NLE".to_string(),
+                icon: "timeline".to_string(),
+                order: 1,
+                nle: true,
+                ..Default::default()
+            },
+        ),
+    ])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -645,6 +683,48 @@ pub fn control_port() -> u16 {
 }
 
 impl AppConfig {
+    fn normalize_workspace_profiles(&mut self) {
+        if !self.workspace_profiles_initialized {
+            for (id, profile) in default_workspace_profiles() {
+                self.workspace_profiles.entry(id).or_insert(profile);
+            }
+            self.workspace_profiles_initialized = true;
+        }
+
+        let mut next_order = self
+            .workspace_profiles
+            .values()
+            .map(|profile| profile.order)
+            .max()
+            .unwrap_or(-1)
+            + 1;
+        for (id, profile) in &mut self.workspace_profiles {
+            if profile.name.trim().is_empty() {
+                profile.name = id.clone();
+            }
+            if profile.icon.trim().is_empty() {
+                profile.icon = if profile.nle { "timeline" } else { "monitor" }.to_string();
+            }
+            if profile.order < 0 {
+                profile.order = next_order;
+                next_order += 1;
+            }
+        }
+        if self
+            .active_workspace_profile
+            .as_ref()
+            .is_none_or(|id| !self.workspace_profiles.contains_key(id))
+        {
+            self.active_workspace_profile = self
+                .workspace_profiles
+                .iter()
+                .filter(|(_, profile)| profile.nle == self.workspace_session.nle)
+                .min_by_key(|(_, profile)| profile.order)
+                .map(|(id, _)| id.clone())
+                .or_else(|| self.workspace_profiles.keys().next().cloned());
+        }
+    }
+
     pub fn get_config_path() -> PathBuf {
         if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {
             return PathBuf::from(path);
@@ -676,9 +756,10 @@ impl AppConfig {
 
                 #[cfg(target_os = "windows")]
                 {
-                    if let Ok(Some(reg_cfg)) =
+                    if let Ok(Some(mut reg_cfg)) =
                         crate::platform::registry::load_settings_from_registry()
                     {
+                        reg_cfg.normalize_workspace_profiles();
                         if reg_cfg.validate().is_ok() {
                             return reg_cfg;
                         }
@@ -760,8 +841,9 @@ impl AppConfig {
     pub fn load_from_path(path: &std::path::Path) -> Result<Self, String> {
         let data = std::fs::read_to_string(path)
             .map_err(|error| format!("read configuration {}: {error}", path.display()))?;
-        let config = serde_json::from_str::<Self>(&data)
+        let mut config = serde_json::from_str::<Self>(&data)
             .map_err(|error| format!("parse configuration {}: {error}", path.display()))?;
+        config.normalize_workspace_profiles();
         config.validate()?;
         Ok(config)
     }
@@ -842,8 +924,9 @@ impl AppConfig {
             }
             target.insert(key.clone(), replacement.clone());
         }
-        let updated = serde_json::from_value::<Self>(value)
+        let mut updated = serde_json::from_value::<Self>(value)
             .map_err(|error| format!("invalid configuration update: {error}"))?;
+        updated.normalize_workspace_profiles();
         updated.validate()?;
         Ok(updated)
     }
@@ -921,6 +1004,32 @@ impl AppConfig {
             .is_some_and(|geometry| !geometry.is_valid())
         {
             return Err("window_geometry contains invalid coordinates or dimensions".to_string());
+        }
+        if self.workspace_profiles.len() > 64 {
+            return Err("workspace_profiles contains more than 64 profiles".to_string());
+        }
+        for (id, profile) in &self.workspace_profiles {
+            let valid_id = !id.is_empty()
+                && id.len() <= 64
+                && id.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+                });
+            if !valid_id {
+                return Err(format!("workspace profile ID is invalid: {id}"));
+            }
+            let name = profile.name.trim();
+            if name.is_empty() || name.chars().count() > 64 {
+                return Err(format!("workspace profile name is invalid: {id}"));
+            }
+            let icon = profile.icon.trim();
+            if icon.is_empty()
+                || icon.len() > 64
+                || !icon.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+                })
+            {
+                return Err(format!("workspace profile icon is invalid: {id}"));
+            }
         }
         Ok(())
     }
@@ -1040,6 +1149,35 @@ mod tests {
         assert!(cfg.open_url_use_proxy);
         assert!(cfg.open_url_proxy_url.is_none());
         assert!(cfg.native_dialog_windows);
+        assert_eq!(cfg.active_workspace_profile.as_deref(), Some("nle"));
+        assert_eq!(cfg.workspace_profiles["simple"].name, "Simple");
+        assert_eq!(cfg.workspace_profiles["nle"].name, "NLE");
+    }
+
+    #[test]
+    fn old_workspace_storage_is_seeded_once_but_user_deletions_stay_deleted() {
+        let mut migrated: AppConfig = serde_json::from_str(
+            r#"{"workspace_profiles":{},"workspace_profiles_initialized":false}"#,
+        )
+        .unwrap();
+        assert!(!migrated.workspace_profiles_initialized);
+        migrated.normalize_workspace_profiles();
+        assert!(migrated.workspace_profiles_initialized);
+        assert_eq!(
+            migrated
+                .workspace_profiles
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["nle".to_string(), "simple".to_string()]
+        );
+
+        migrated.workspace_profiles.remove("simple");
+        let json = serde_json::to_string(&migrated).unwrap();
+        let mut reloaded: AppConfig = serde_json::from_str(&json).unwrap();
+        reloaded.normalize_workspace_profiles();
+        assert!(!reloaded.workspace_profiles.contains_key("simple"));
+        assert!(reloaded.workspace_profiles.contains_key("nle"));
     }
 
     #[test]
@@ -1057,6 +1195,9 @@ mod tests {
         cfg.native_dialog_windows = true;
         cfg.recent_media.push(PathBuf::from("/test/file.mp4"));
         cfg.workspace_session = WorkspaceProfile {
+            name: String::new(),
+            icon: String::new(),
+            order: 0,
             nle: false,
             window_geometry: Some(WindowGeometry {
                 x: 20.0,
@@ -1076,9 +1217,16 @@ mod tests {
             },
             egui_memory: None,
         };
-        cfg.workspace_profiles
-            .insert("Hardware review".to_string(), cfg.workspace_session.clone());
-        cfg.active_workspace_profile = Some("Hardware review".to_string());
+        cfg.workspace_profiles.insert(
+            "hardware-review".to_string(),
+            WorkspaceProfile {
+                name: "Hardware review".to_string(),
+                icon: "hardware".to_string(),
+                order: 2,
+                ..cfg.workspace_session.clone()
+            },
+        );
+        cfg.active_workspace_profile = Some("hardware-review".to_string());
 
         let json = serde_json::to_string(&cfg).unwrap();
         let loaded: AppConfig = serde_json::from_str(&json).unwrap();
@@ -1120,10 +1268,10 @@ mod tests {
                 .dialogs
                 .hardware_channel_detail_active
         );
-        assert!(loaded.workspace_profiles.contains_key("Hardware review"));
+        assert!(loaded.workspace_profiles.contains_key("hardware-review"));
         assert_eq!(
             loaded.active_workspace_profile.as_deref(),
-            Some("Hardware review")
+            Some("hardware-review")
         );
     }
 

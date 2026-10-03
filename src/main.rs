@@ -410,6 +410,16 @@ fn main() -> eframe::Result {
                     Some(ds)
                 })
                 .unwrap_or_else(crate::ui::layout::create_initial_layout);
+            let mut workspace_profiles = loaded_config.workspace_profiles.clone();
+            let default_dock_layout =
+                serde_json::to_string(&crate::ui::layout::create_initial_layout()).ok();
+            for id in ["simple", "nle"] {
+                if let Some(profile) = workspace_profiles.get_mut(id)
+                    && profile.dock_layout.is_none()
+                {
+                    profile.dock_layout = default_dock_layout.clone();
+                }
+            }
 
             let mut app = PealayerApp {
                 app_name: app_name.clone(),
@@ -546,11 +556,9 @@ fn main() -> eframe::Result {
                     .workspace_session
                     .dialogs
                     .workspace_profiles,
-                workspace_profile_name_draft: loaded_config
-                    .active_workspace_profile
-                    .clone()
-                    .unwrap_or_default(),
-                workspace_profiles: loaded_config.workspace_profiles.clone(),
+                workspace_profile_name_draft: String::new(),
+                workspace_profile_icon_draft: "window".to_string(),
+                workspace_profiles,
                 active_workspace_profile: loaded_config.active_workspace_profile.clone(),
                 hardware_control_dialog_key: loaded_config
                     .workspace_session

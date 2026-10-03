@@ -168,14 +168,11 @@ const App: React.FC = () => {
         remove_effect_cue: 'pealayer.timeline.effect.remove',
         set_recording: 'pealayer.recording.set',
       };
-      const params = command === 'set_workspace'
-        ? { workspace: payload.nle ? 'nle' : 'simple' }
-        : payload;
       wsRef.current.send(JSON.stringify({
         jsonrpc: '2.0',
         id: nextRequestId.current++,
         method: methodAliases[command] || command,
-        params,
+        params: payload,
       }));
     } else {
       const body = JSON.stringify({ command, ...payload });

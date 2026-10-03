@@ -455,7 +455,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     app.tr("Pin Controls")
                 };
                 let audio_tooltip = app.tr("Audio Settings...");
-                let workspace_tooltip = app.tr("Switch NLE / Simple Player");
+                let workspace_tooltip = app.tr("Switch workspace");
                 let subtitles_tooltip = app.tr("Subtitle Settings...");
                 let mute_tooltip = format!(
                     "{} (M)",
@@ -669,7 +669,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     app.show_audio_settings = !app.show_audio_settings;
                 }
                 if toggle_workspace {
-                    app.show_four_d_editor = !app.show_four_d_editor;
+                    app.cycle_workspace_profile(&ctx);
                 }
                 if toggle_subtitles {
                     app.show_sub_settings = !app.show_sub_settings;

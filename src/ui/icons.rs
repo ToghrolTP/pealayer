@@ -36,6 +36,33 @@ pub const CONTROL_ICON_PRESETS: &[(&str, &str, &str)] = &[
     ("gear", "Gear", GEAR),
 ];
 
+pub const WORKSPACE_ICON_PRESETS: &[(&str, &str, &str)] = &[
+    ("monitor", "Monitor", MONITOR_PLAY),
+    ("timeline", "Timeline", WAVEFORM),
+    ("tabs", "Tabs", TABS),
+    ("window", "Window", APP_WINDOW),
+    ("video", "Video", FILE_VIDEO),
+    ("hardware", "Hardware", CIRCUITRY),
+    ("effects", "Effects", SPARKLE),
+    ("layout", "Layout", SELECTION_ALL),
+];
+
+pub fn workspace_icon(name: &str) -> &'static str {
+    WORKSPACE_ICON_PRESETS
+        .iter()
+        .find(|(key, _, _)| key.eq_ignore_ascii_case(name.trim()))
+        .map(|(_, _, glyph)| *glyph)
+        .unwrap_or(APP_WINDOW)
+}
+
+pub fn workspace_icon_name(name: &str) -> &'static str {
+    WORKSPACE_ICON_PRESETS
+        .iter()
+        .find(|(key, _, _)| key.eq_ignore_ascii_case(name.trim()))
+        .map(|(_, label, _)| *label)
+        .unwrap_or("Window")
+}
+
 pub fn named_control_icon(name: &str) -> Option<&'static str> {
     CONTROL_ICON_PRESETS
         .iter()
@@ -127,5 +154,12 @@ mod tests {
     fn control_icon_uses_kind_fallback_for_unknown_saved_names() {
         assert_eq!(control("relay", "custom-future-icon"), PLUG);
         assert_eq!(control("mosfet", ""), LIGHTBULB);
+    }
+
+    #[test]
+    fn workspace_icons_share_stable_names_across_surfaces() {
+        assert_eq!(workspace_icon("timeline"), WAVEFORM);
+        assert_eq!(workspace_icon_name("monitor"), "Monitor");
+        assert_eq!(workspace_icon("unknown"), APP_WINDOW);
     }
 }
