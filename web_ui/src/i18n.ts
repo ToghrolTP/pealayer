@@ -1,6 +1,19 @@
 export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
+  'Player': 'پخش‌کننده',
+  'Timeline': 'خط زمانی',
+  'Effects Library': 'کتابخانهٔ افکت‌ها',
+  'Hardware Monitor': 'پایش سخت‌افزار',
+  'About and system': 'درباره و سامانه',
+  'Preferences': 'تنظیمات',
+  'Motion controls': 'کنترل‌های حرکتی',
+  'Motion control': 'کنترل حرکتی',
+  'Relay outputs': 'خروجی‌های رله',
+  'Relay output': 'خروجی رله',
+  'PWM outputs': 'خروجی‌های PWM',
+  'PWM output': 'خروجی PWM',
+  'Other controls': 'کنترل‌های دیگر',
   'Studio': 'استودیو',
   'Remote Control': 'کنترل از راه دور',
   'Media Library': 'کتابخانه رسانه',

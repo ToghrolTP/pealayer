@@ -107,6 +107,30 @@ pub(crate) fn invoke_action(app: &PealayerApp, control: &HardwareControl, action
     let _ = app.engine_handle.sender.send(message);
 }
 
+/// Dispatch an advertised action through the same routing policy used by the
+/// native Hardware Monitor. This is intentionally shared with the web/API
+/// command path so raw relay and motion controls cannot drift back to semantic
+/// action IDs that PCController rejects before a profile is configured.
+pub(crate) fn invoke_action_by_id(
+    app: &PealayerApp,
+    capabilities: &HardwareCapabilities,
+    action_id: &str,
+) -> Result<(), String> {
+    let (control, action) = capabilities
+        .controls
+        .iter()
+        .find_map(|control| {
+            control
+                .actions
+                .iter()
+                .find(|action| action.id == action_id)
+                .map(|action| (control, action))
+        })
+        .ok_or_else(|| format!("Hardware action {action_id:?} is not currently advertised"))?;
+    invoke_action(app, control, action);
+    Ok(())
+}
+
 fn set_relay(app: &PealayerApp, relay: u8, on: bool) {
     let _ = app
         .engine_handle

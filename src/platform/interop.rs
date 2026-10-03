@@ -197,6 +197,26 @@ pub enum InteropCommand {
     SetEmergencyStop {
         active: bool,
     },
+    InvokeHardwareAction {
+        action_id: String,
+    },
+    SetHardwarePwm {
+        channel: u8,
+        percent: f64,
+    },
+    ConfigureAddressableStrip {
+        pixels: u16,
+    },
+    FillAddressableStrip {
+        red: u8,
+        green: u8,
+        blue: u8,
+        brightness: u8,
+    },
+    ClearAddressableStrip,
+    PressFrontPanelKey {
+        key: String,
+    },
     UpdateConfig {
         values: Value,
     },
@@ -224,6 +244,28 @@ impl InteropCommand {
             }
             Self::SetRate { rate } if !rate.is_finite() || !(0.05..=16.0).contains(rate) => {
                 Err("playback rate must be a finite value from 0.05 to 16".to_string())
+            }
+            Self::SetHardwarePwm { percent, .. }
+                if !percent.is_finite() || !(0.0..=100.0).contains(percent) =>
+            {
+                Err("PWM percent must be a finite value from 0 to 100".to_string())
+            }
+            Self::ConfigureAddressableStrip { pixels } if *pixels == 0 => {
+                Err("addressable strip pixel count must be greater than zero".to_string())
+            }
+            Self::InvokeHardwareAction { action_id }
+                if action_id.trim().is_empty()
+                    || action_id.len() > 128
+                    || !action_id.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+                    }) =>
+            {
+                Err("hardware action ID is invalid".to_string())
+            }
+            Self::PressFrontPanelKey { key }
+                if !matches!(key.to_ascii_uppercase().as_str(), "K1" | "K2" | "K3" | "K4") =>
+            {
+                Err("front-panel key must be K1, K2, K3, or K4".to_string())
             }
             Self::Open { target } if target.trim().is_empty() || target.len() > 32_768 => {
                 Err("media target must contain 1 to 32768 bytes".to_string())
@@ -270,7 +312,9 @@ pub fn command_catalog() -> Value {
             "reload_config", "add_effect_cue", "remove_effect_cue", "set_recording",
             "get_status", "quit", "controller_effect_cue.add", "controller_effect.play",
             "controller_effect.stop", "controller_effect.save", "controller_effect.delete",
-            "set_emergency_stop"
+            "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm",
+            "configure_addressable_strip", "fill_addressable_strip", "clear_addressable_strip",
+            "press_front_panel_key"
         ],
         "json_rpc_prefix": "pealayer",
         "discovery": "/api/player/commands"
@@ -434,6 +478,8 @@ pub struct PlayerStatusResponse {
     pub controller_effects: Vec<WebControllerEffect>,
     #[serde(default)]
     pub cues: Vec<WebEffectCue>,
+    #[serde(default)]
+    pub hardware_details: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -444,6 +490,8 @@ pub struct WebEffectProfile {
     pub duration_display: String,
     pub action_count: usize,
     pub target: String,
+    #[serde(default)]
+    pub lane: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -468,6 +516,8 @@ pub struct WebControllerEffect {
     pub duration_display: String,
     pub action_count: usize,
     pub editable: bool,
+    #[serde(default)]
+    pub lane: String,
     pub program: Value,
     pub default_fps: Option<u8>,
     pub default_pixels: Option<u16>,
@@ -570,6 +620,7 @@ impl Default for PlayerStatusResponse {
             effects: Vec::new(),
             controller_effects: Vec::new(),
             cues: Vec::new(),
+            hardware_details: None,
         }
     }
 }
@@ -762,6 +813,56 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 .and_then(Value::as_bool)
                 .ok_or_else(|| "missing boolean parameter: active".to_string())?;
             Some(InteropCommand::SetEmergencyStop { active })
+        }
+        "hardware.action.invoke" | "pealayer.hardware.action.invoke" => {
+            Some(InteropCommand::InvokeHardwareAction {
+                action_id: string(&["action_id", "action"])?,
+            })
+        }
+        "hardware.pwm.set" | "pealayer.hardware.pwm.set" => {
+            let channel = request
+                .params
+                .get("channel")
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .ok_or_else(|| "missing valid PWM channel".to_string())?;
+            Some(InteropCommand::SetHardwarePwm {
+                channel,
+                percent: number(&["percent", "value"])?,
+            })
+        }
+        "hardware.strip.configure" | "pealayer.hardware.strip.configure" => {
+            let pixels = request
+                .params
+                .get("pixels")
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .ok_or_else(|| "missing valid addressable strip pixel count".to_string())?;
+            Some(InteropCommand::ConfigureAddressableStrip { pixels })
+        }
+        "hardware.strip.fill" | "pealayer.hardware.strip.fill" => {
+            let byte = |name: &str| {
+                request
+                    .params
+                    .get(name)
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u8::try_from(value).ok())
+                    .ok_or_else(|| format!("missing valid strip {name}"))
+            };
+            Some(InteropCommand::FillAddressableStrip {
+                red: byte("red")?,
+                green: byte("green")?,
+                blue: byte("blue")?,
+                brightness: byte("brightness")?,
+            })
+        }
+        "hardware.strip.clear" | "pealayer.hardware.strip.clear" => {
+            Some(InteropCommand::ClearAddressableStrip)
+        }
+        "hardware.front_panel.press" | "pealayer.hardware.front_panel.press" => {
+            Some(InteropCommand::PressFrontPanelKey {
+                key: string(&["key"])?,
+            })
         }
         "config.update" | "pealayer.config.update" => {
             crate::config::AppConfig::validate_patch_shape(&request.params)?;

@@ -517,6 +517,7 @@ impl eframe::App for PealayerApp {
         if should_broadcast {
             self.last_web_broadcast = Some(now);
             let hardware = self.advertised_hardware();
+            let hardware_details = hardware.as_ref().map(web_hardware_details);
             let controller_effects = hardware
                 .as_ref()
                 .map(|capabilities| {
@@ -537,22 +538,23 @@ impl eframe::App for PealayerApp {
                             ),
                             action_count: effect.steps.len(),
                             editable: true,
-                            program: serde_json::Value::Array(
-                                effect
-                                    .steps
-                                    .iter()
-                                    .map(|step| {
-                                        serde_json::json!({
-                                            "at_us": step.at_us,
-                                            "kind": step.kind,
-                                            "target": step.target,
-                                            "value": step.value,
-                                        })
-                                    })
-                                    .collect(),
-                            ),
+                            program: serde_json::json!({
+                                "steps": effect.steps,
+                                "properties": {
+                                    "mode": effect.mode,
+                                    "color": effect.color,
+                                    "label": effect.label,
+                                    "lcd_message": effect.lcd_message,
+                                    "timing_tolerance_us": effect.timing_tolerance_us,
+                                    "keep_outputs_on_cancel": effect.keep_outputs_on_cancel,
+                                    "board_profile_key": effect.board_profile_key,
+                                    "board_profile_mode": effect.board_profile_mode,
+                                }
+                            }),
                             default_fps: None,
                             default_pixels: None,
+                            lane: controller_effect_lane_name(controller_macro_lane(effect))
+                                .to_string(),
                         })
                         .chain(capabilities.strip_effects.iter().map(|effect| {
                             crate::platform::interop::WebControllerEffect {
@@ -570,6 +572,7 @@ impl eframe::App for PealayerApp {
                                     ),
                                 action_count: 1,
                                 editable: effect.editable,
+                                lane: "lighting".to_string(),
                                 program: effect.program.clone(),
                                 default_fps: effect.default_fps,
                                 default_pixels: effect.default_pixels,
@@ -618,9 +621,9 @@ impl eframe::App for PealayerApp {
                 controller_connected,
                 hardware_connected,
                 estop_active: self.estop_active,
-                hardware: hardware.map(|capabilities| {
+                hardware: hardware.as_ref().map(|capabilities| {
                     crate::platform::interop::HardwareStatusSummary {
-                        board_name: capabilities.board_name,
+                        board_name: capabilities.board_name.clone(),
                         relay_count: capabilities.relays.len(),
                         pwm_count: capabilities.pwm_channels.len(),
                         supports_rf_transmit: capabilities.supports_rf_transmit,
@@ -629,6 +632,7 @@ impl eframe::App for PealayerApp {
                         supports_lcd_display: capabilities.supports_lcd_display,
                     }
                 }),
+                hardware_details,
                 recording: self.is_recording,
                 recording_armed: self.timeline.analog_tracks.iter().any(|track| track.armed),
                 recordable_track_count: self.timeline.analog_tracks.len(),
@@ -654,6 +658,11 @@ impl eframe::App for PealayerApp {
                                 "controller".to_string()
                             }
                         },
+                        lane: effect
+                            .controller_lane
+                            .map(controller_effect_lane_name)
+                            .unwrap_or("sequence")
+                            .to_string(),
                     })
                     .collect(),
                 controller_effects,
@@ -2261,6 +2270,30 @@ impl PealayerApp {
                 }
             }
             InteropCommand::SaveControllerEffect { effect } => {
+                let steps = if effect.kind == "sequence" {
+                    let value = effect
+                        .program
+                        .get("steps")
+                        .cloned()
+                        .unwrap_or_else(|| effect.program.clone());
+                    match serde_json::from_value(value) {
+                        Ok(steps) => steps,
+                        Err(error) => {
+                            self.set_osd(format!("Invalid effect sequence: {error}"));
+                            return;
+                        }
+                    }
+                } else {
+                    Vec::new()
+                };
+                let properties = effect.program.get("properties");
+                let property_string = |name: &str| {
+                    properties
+                        .and_then(|value| value.get(name))
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                };
                 self.effect_library_draft = ControllerEffectDraft {
                     reference: effect.reference,
                     id: effect.id,
@@ -2275,14 +2308,26 @@ impl PealayerApp {
                     default_fps: effect.default_fps,
                     duration_ms: effect.duration_ms,
                     default_pixels: effect.default_pixels,
-                    engine: "host".to_string(),
-                    steps: Vec::new(),
-                    label: String::new(),
-                    lcd_message: String::new(),
-                    timing_tolerance_us: 0,
-                    keep_outputs_on_cancel: false,
-                    board_profile_key: String::new(),
-                    board_profile_mode: String::new(),
+                    engine: properties
+                        .and_then(|value| value.get("mode"))
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|mode| matches!(*mode, "host" | "mcu"))
+                        .unwrap_or("host")
+                        .to_string(),
+                    steps,
+                    label: property_string("label"),
+                    lcd_message: property_string("lcd_message"),
+                    timing_tolerance_us: properties
+                        .and_then(|value| value.get("timing_tolerance_us"))
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|value| u32::try_from(value).ok())
+                        .unwrap_or_default(),
+                    keep_outputs_on_cancel: properties
+                        .and_then(|value| value.get("keep_outputs_on_cancel"))
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false),
+                    board_profile_key: property_string("board_profile_key"),
+                    board_profile_mode: property_string("board_profile_mode"),
                     is_new: effect.is_new,
                 };
                 if let Err(error) = self.save_controller_effect() {
@@ -2306,6 +2351,61 @@ impl PealayerApp {
             InteropCommand::SetEmergencyStop { active } => {
                 self.set_emergency_stop(active);
                 return;
+            }
+            InteropCommand::InvokeHardwareAction { action_id } => {
+                let Some(capabilities) = self
+                    .advertised_hardware()
+                    .filter(|capabilities| capabilities.board_connected)
+                else {
+                    self.set_osd(self.tr("No board is connected or advertising live controls"));
+                    return;
+                };
+                if let Err(error) = crate::ui::hardware_control::invoke_action_by_id(
+                    self,
+                    &capabilities,
+                    &action_id,
+                ) {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::SetHardwarePwm { channel, percent } => {
+                let value = (percent.clamp(0.0, 100.0) * 4095.0 / 100.0).round() as u16;
+                let _ = self.engine_handle.sender.send(
+                    crate::four_d::engine::EngineMessage::ControllerCall {
+                        method: "controller.pwm.set".to_string(),
+                        params: serde_json::json!({"channel": channel, "value": value}),
+                    },
+                );
+            }
+            InteropCommand::ConfigureAddressableStrip { pixels } => {
+                if let Err(error) = self.configure_addressable_strip(pixels) {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::FillAddressableStrip {
+                red,
+                green,
+                blue,
+                brightness,
+            } => {
+                if let Err(error) = self.fill_addressable_strip(red, green, blue, brightness) {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::ClearAddressableStrip => {
+                if let Err(error) = self.clear_addressable_strip() {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::PressFrontPanelKey { key } => {
+                if let Err(error) = self.press_front_panel_key(&key) {
+                    self.set_osd(error);
+                    return;
+                }
             }
             InteropCommand::UpdateConfig { values } => {
                 match self.apply_config_patch(ctx, &values) {
@@ -3507,6 +3607,174 @@ pub(crate) fn controller_macro_lane(
         1 => *lanes.iter().next().expect("one classified effect lane"),
         _ => ControllerEffectLane::Composite,
     }
+}
+
+fn controller_effect_lane_name(lane: crate::four_d::models::ControllerEffectLane) -> &'static str {
+    use crate::four_d::models::ControllerEffectLane;
+    match lane {
+        ControllerEffectLane::Motion => "motion",
+        ControllerEffectLane::Relay => "relay",
+        ControllerEffectLane::Pwm => "pwm",
+        ControllerEffectLane::Lighting => "lighting",
+        ControllerEffectLane::Display => "display",
+        ControllerEffectLane::Rf => "rf",
+        ControllerEffectLane::Audio => "audio",
+        ControllerEffectLane::Sequence => "sequence",
+        ControllerEffectLane::Composite => "composite",
+    }
+}
+
+/// Publishes the same capability-derived hardware model used by egui. The web
+/// client deliberately receives no demo channels or inferred board features.
+fn web_hardware_details(
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+) -> serde_json::Value {
+    let controls = capabilities
+        .controls
+        .iter()
+        .map(|control| {
+            let relay_id = capabilities
+                .relays
+                .iter()
+                .find(|output| output.key == control.key)
+                .map(|output| output.id);
+            let pwm_channel = capabilities
+                .pwm_channels
+                .iter()
+                .find(|output| output.key == control.key)
+                .map(|output| output.id);
+            let active = relay_id.map(|relay| capabilities.active_relays.contains(&relay));
+            let pwm_percent = pwm_channel.and_then(|channel| {
+                (capabilities.telemetry.pwm_channel == Some(channel)).then(|| {
+                    f64::from(capabilities.telemetry.pwm_value.unwrap_or_default()) * 100.0 / 4095.0
+                })
+            });
+            serde_json::json!({
+                "key": control.key,
+                "kind": control.kind,
+                "order": control.order,
+                "name": control.name,
+                "default_name": control.default_name,
+                "control": control.control,
+                "icon": control.icon,
+                "color": control.color,
+                "group": control.group,
+                "hidden": control.hidden,
+                "locked": control.locked,
+                "channel": relay_id.or(pwm_channel),
+                "active": active,
+                "percent": pwm_percent,
+                "actions": control.actions.iter().map(|action| serde_json::json!({
+                    "id": action.id,
+                    "verb": action.verb,
+                    "name": action.name,
+                    "icon": action.icon,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let profile = capabilities.board_profile.as_ref().map(|profile| {
+        serde_json::json!({
+            "key": profile.key,
+            "mode": profile.mode,
+            "configured": profile.configured,
+            "attached": profile.attached,
+            "revision": profile.revision,
+            "expose_raw_relays": profile.expose_raw_relays,
+        })
+    });
+    let settings = capabilities.settings.as_ref().map(|settings| {
+        serde_json::json!({
+            "silent": settings.silent,
+            "light_mode": settings.light_mode,
+            "on_brightness": settings.on_brightness,
+            "off_brightness": settings.off_brightness,
+            "display_brightness": settings.display_brightness,
+            "status_brightness": settings.status_brightness,
+            "stream_period_ms": settings.stream_period_ms,
+            "default_page": settings.default_page,
+            "motion_break_ms": settings.motion_break_ms,
+            "persisted": settings.persisted,
+        })
+    });
+    let front_panel = capabilities.front_panel.as_ref().map(|panel| {
+        serde_json::json!({
+            "raw_segments": panel.raw_segments,
+            "brightness": panel.brightness,
+            "blink": panel.blink,
+            "segments_active": panel.segments_active,
+            "pressed_keys": panel.pressed_keys,
+            "menu_page": panel.menu_page,
+            "program_mode": panel.program_mode,
+            "lcd_available": panel.lcd_available,
+            "lcd_address": panel.lcd_address,
+            "lcd_line_1": panel.lcd_line_1,
+            "lcd_line_2": panel.lcd_line_2,
+        })
+    });
+    let strip = capabilities.strip_control.as_ref().map(|strip| {
+        serde_json::json!({
+            "minimum_pixels": strip.minimum_pixels,
+            "maximum_pixels": strip.maximum_pixels,
+            "default_pixels": strip.default_pixels,
+            "minimum_fps": strip.minimum_fps,
+            "maximum_fps": strip.maximum_fps,
+            "default_fps": strip.default_fps,
+            "modes": strip.modes,
+            "running": strip.running,
+            "active_name": strip.active_name,
+        })
+    });
+    serde_json::json!({
+        "board_name": capabilities.board_name,
+        "capability_bits": capabilities.capability_bits,
+        "host_instance_id": capabilities.host_instance_id,
+        "profile": profile,
+        "port": {
+            "name": capabilities.port.name,
+            "display_name": capabilities.port.display_name,
+            "friendly_name": capabilities.port.friendly_name,
+            "product": capabilities.port.product,
+            "manufacturer": capabilities.port.manufacturer,
+            "vid": capabilities.port.vid,
+            "pid": capabilities.port.pid,
+            "serial_number": capabilities.port.serial_number,
+        },
+        "identity": {
+            "product_name": capabilities.board_identity.product_name,
+            "stored_name": capabilities.board_identity.stored_name,
+            "build_hash": capabilities.board_identity.build_hash,
+            "build_timestamp": capabilities.board_identity.build_timestamp,
+        },
+        "controls": controls,
+        "active_relays": capabilities.active_relays,
+        "telemetry": {
+            "supply_mv": capabilities.telemetry.supply_mv,
+            "bus_mv": capabilities.telemetry.bus_mv,
+            "current_ma": capabilities.telemetry.current_ma,
+            "power_mw": capabilities.telemetry.power_mw,
+            "led_temperature_centi_c": capabilities.telemetry.led_temperature_centi_c,
+            "audio_temperature_centi_c": capabilities.telemetry.audio_temperature_centi_c,
+            "door_open": capabilities.telemetry.door_open,
+        },
+        "warnings": capabilities.warnings.iter().map(|warning| serde_json::json!({
+            "code": warning.code,
+            "severity": warning.severity,
+            "message": warning.message,
+        })).collect::<Vec<_>>(),
+        "settings": settings,
+        "front_panel": front_panel,
+        "strip": strip,
+        "supports": {
+            "rf_transmit": capabilities.supports_rf_transmit,
+            "segment_display": capabilities.supports_segment_display,
+            "lcd_display": capabilities.supports_lcd_display,
+            "addressable_led": capabilities.supports_addressable_led,
+            "persistent_settings": capabilities.supports_persistent_settings,
+            "measurements": capabilities.supports_measurements,
+            "temperature_sensors": capabilities.supports_temperature_sensors,
+        },
+    })
 }
 
 fn controller_strip_effect_preset(

@@ -26,6 +26,7 @@ export interface PlayerState {
   workspace?: string;
   controller_connected?: boolean;
   hardware_connected?: boolean;
+  estop_active?: boolean;
   hardware?: {
     board_name?: string;
     relay_count?: number;
@@ -34,6 +35,34 @@ export interface PlayerState {
     supports_addressable_led?: boolean;
     supports_segment_display?: boolean;
     supports_lcd_display?: boolean;
+  } | null;
+  hardware_details?: {
+    board_name: string;
+    capability_bits: number;
+    host_instance_id: string;
+    profile?: { key: string; mode: string; configured: boolean; attached: boolean; revision: string; expose_raw_relays: boolean } | null;
+    port?: { name: string; display_name: string; friendly_name: string; product: string; manufacturer: string; vid: string; pid: string; serial_number: string };
+    identity?: { product_name: string; stored_name: string; build_hash?: number | null; build_timestamp?: string | null };
+    controls: Array<{
+      key: string; kind: string; order: number; name: string; default_name: string;
+      control: string; icon: string; color: string; group: string; hidden: boolean;
+      locked: boolean; channel?: number | null; active?: boolean | null; percent?: number | null;
+      actions: Array<{ id: string; verb: string; name: string; icon: string }>;
+    }>;
+    telemetry?: Record<string, number | boolean | null>;
+    warnings?: Array<{ code: string; severity: string; message: string }>;
+    settings?: Record<string, number | boolean> | null;
+    front_panel?: {
+      raw_segments: number[]; brightness: number; blink: boolean; segments_active: boolean;
+      pressed_keys: number; menu_page: number; program_mode: number; lcd_available: boolean;
+      lcd_address: number; lcd_line_1: string; lcd_line_2: string;
+    } | null;
+    strip?: {
+      minimum_pixels: number; maximum_pixels: number; default_pixels: number;
+      minimum_fps: number; maximum_fps: number; default_fps: number;
+      modes: string[]; running: boolean; active_name: string;
+    } | null;
+    supports?: Record<string, boolean>;
   } | null;
   recording?: boolean;
   recording_armed?: boolean;
@@ -45,6 +74,7 @@ export interface PlayerState {
     duration_display: string;
     action_count: number;
     target: string;
+    lane: string;
   }>;
   controller_effects?: Array<{
     reference: string;
@@ -57,6 +87,7 @@ export interface PlayerState {
     duration_display: string;
     action_count: number;
     editable: boolean;
+    lane: string;
     program: unknown;
     default_fps?: number | null;
     default_pixels?: number | null;

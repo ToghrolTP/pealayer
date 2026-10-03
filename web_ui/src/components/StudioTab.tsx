@@ -25,6 +25,7 @@ interface StudioTabProps {
   appName: string;
   quickSeekSeconds: number;
   apiBaseUrl: string;
+  surface?: 'studio' | 'timeline';
 }
 
 const formatTime = (seconds = 0, showMilliseconds = true) => {
@@ -43,7 +44,7 @@ const effectGlyph = (target: string) => {
   return <ClockCircleOutlined />;
 };
 
-export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl }) => {
+export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl, surface = 'studio' }) => {
   const [selectedEffect, setSelectedEffect] = useState<string | null>(null);
   const [effectEditorOpen, setEffectEditorOpen] = useState(false);
   const [effectDraft, setEffectDraft] = useState<Record<string, any> | null>(null);
@@ -64,6 +65,11 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   const seekPercent = durationSeconds > 0 ? (currentSeconds / durationSeconds) * 100 : 0;
   const activeSeek = seekDraft ?? seekPercent;
   const canRecord = (state.recordable_track_count ?? 0) > 0;
+  const timelineLanes = useMemo(() => {
+    const order = ['motion', 'relay', 'pwm', 'lighting', 'display', 'rf', 'audio', 'sequence', 'composite'];
+    const active = new Set(effects.map((effect) => effect.lane || 'sequence'));
+    return order.filter((lane) => active.has(lane));
+  }, [effects]);
 
   const addCue = (reference: string) => {
     sendCmd('controller_effect_cue.add', {
@@ -90,7 +96,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   };
 
   return (
-    <div className="studio-suite">
+    <div className={`studio-suite studio-suite--${surface}`}>
       <section className="studio-panel effects-panel">
         <header className="studio-panel__header">
           <div>
@@ -320,15 +326,17 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             className="timeline-playhead-web"
             style={{ left: `${Math.min(100, (currentSeconds * 1000 / timelineDurationMs) * 100)}%` }}
           />
-          {effects.length === 0 ? (
+          {timelineLanes.length === 0 ? (
             <div className="timeline-empty">{tr(locale, 'No effects')}</div>
-          ) : effects.map((effect) => {
-            const effectCues = cues.filter((cue) => cue.effect_id === effect.id);
+          ) : timelineLanes.map((lane) => {
+            const laneEffects = effects.filter((effect) => (effect.lane || 'sequence') === lane);
+            const laneEffectIds = new Set(laneEffects.map((effect) => effect.id));
+            const effectCues = cues.filter((cue) => laneEffectIds.has(cue.effect_id));
             return (
-              <div className="timeline-row" key={effect.id}>
+              <div className="timeline-row" key={lane}>
                 <div className="timeline-row__label">
-                  <span>{effectGlyph(effect.target)}</span>
-                  <strong>{effect.name}</strong>
+                  <span>{effectGlyph(lane === 'relay' || lane === 'motion' ? 'relay:lane' : lane === 'sequence' ? 'controller' : lane)}</span>
+                  <strong>{lane.charAt(0).toUpperCase() + lane.slice(1)}</strong>
                 </div>
                 <div className="timeline-lane">
                   {effectCues.map((cue) => (
@@ -355,7 +363,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                     </button>
                   ))}
                 </div>
-                <span className="timeline-row__duration">{effect.duration_display}</span>
+                <span className="timeline-row__duration">{effectCues.length}</span>
               </div>
             );
           })}

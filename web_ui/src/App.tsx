@@ -1,22 +1,35 @@
 import React, { useCallback, useEffect, useState, useRef } from 'react';
-import { ConfigProvider, theme, Layout, Menu } from 'antd';
+import { ConfigProvider, theme, Layout, Menu, Spin } from 'antd';
 import {
   AppstoreOutlined,
+  BulbOutlined,
   ControlOutlined,
+  DashboardOutlined,
   FolderOpenOutlined,
   InfoCircleOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
 import { HeaderBar } from './components/HeaderBar';
-import { RemoteControlTab, PlayerState } from './components/RemoteControlTab';
-import { MediaLibraryTab } from './components/MediaLibraryTab';
-import { PlayerInfoTab } from './components/PlayerInfoTab';
-import { StudioTab } from './components/StudioTab';
-import { PreferencesTab } from './components/PreferencesTab';
+import type { PlayerState } from './components/RemoteControlTab';
 import { tr } from './i18n';
 import './styles.css';
 
 const { Sider, Content } = Layout;
+const RemoteControlTab = React.lazy(() => import('./components/RemoteControlTab').then((module) => ({ default: module.RemoteControlTab })));
+const MediaLibraryTab = React.lazy(() => import('./components/MediaLibraryTab').then((module) => ({ default: module.MediaLibraryTab })));
+const PlayerInfoTab = React.lazy(() => import('./components/PlayerInfoTab').then((module) => ({ default: module.PlayerInfoTab })));
+const StudioTab = React.lazy(() => import('./components/StudioTab').then((module) => ({ default: module.StudioTab })));
+const PreferencesTab = React.lazy(() => import('./components/PreferencesTab').then((module) => ({ default: module.PreferencesTab })));
+const EffectsTab = React.lazy(() => import('./components/EffectsTab').then((module) => ({ default: module.EffectsTab })));
+const HardwareTab = React.lazy(() => import('./components/HardwareTab').then((module) => ({ default: module.HardwareTab })));
+
+const SURFACE_IDS = ['player', 'timeline', 'effects', 'hardware', 'library', 'about', 'preferences'] as const;
+type SurfaceId = typeof SURFACE_IDS[number];
+
+function surfaceFromLocation(): SurfaceId {
+  const requested = window.location.hash.replace(/^#\/?/, '') || window.localStorage.getItem('pealayer.webTab') || 'player';
+  return SURFACE_IDS.includes(requested as SurfaceId) ? requested as SurfaceId : 'player';
+}
 
 export interface RuntimeConfig {
   appName: string;
@@ -50,7 +63,7 @@ function accentForeground(accent: string): string {
 
 const App: React.FC = () => {
   const [collapsed, setCollapsed] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<string>('studio');
+  const [activeTab, setActiveTabState] = useState<SurfaceId>(surfaceFromLocation);
   const [connected, setConnected] = useState<boolean>(false);
   const [connectionMode, setConnectionMode] = useState<'ws' | 'http'>('http');
   const [state, setState] = useState<PlayerState>({ status: 'initializing' });
@@ -65,11 +78,39 @@ const App: React.FC = () => {
 
   const wsRef = useRef<WebSocket | null>(null);
 
+  const setActiveTab = useCallback((requested: string) => {
+    const tab = SURFACE_IDS.includes(requested as SurfaceId) ? requested as SurfaceId : 'player';
+    setActiveTabState(tab);
+    window.localStorage.setItem('pealayer.webTab', tab);
+    const nextLocation = `${window.location.pathname}${window.location.search}#/${tab}`;
+    if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== nextLocation) {
+      window.history.pushState({ pealayerSurface: tab }, '', nextLocation);
+    }
+  }, []);
+
+  useEffect(() => {
+    const followLocation = () => {
+      const tab = surfaceFromLocation();
+      setActiveTabState(tab);
+      window.localStorage.setItem('pealayer.webTab', tab);
+    };
+    window.addEventListener('hashchange', followLocation);
+    window.addEventListener('popstate', followLocation);
+    return () => {
+      window.removeEventListener('hashchange', followLocation);
+      window.removeEventListener('popstate', followLocation);
+    };
+  }, []);
+
   useEffect(() => {
     if (!runtime) return;
     document.documentElement.lang = runtime.locale;
     document.documentElement.dir = runtime.direction;
-    document.title = `${runtime.appName} — ${tr(runtime.locale, 'Web Studio')}`;
+    const surfaceNames: Record<SurfaceId, string> = {
+      player: 'Player', timeline: 'Timeline', effects: 'Effects Library', hardware: 'Hardware Monitor',
+      library: 'Media Library', about: 'About and system', preferences: 'Preferences',
+    };
+    document.title = `${tr(runtime.locale, surfaceNames[activeTab])} — ${runtime.appName}`;
     const media = window.matchMedia('(prefers-color-scheme: light)');
     const applyTheme = () => {
       const preference = appConfig?.theme ?? runtime.theme;
@@ -82,7 +123,7 @@ const App: React.FC = () => {
     applyTheme();
     media.addEventListener('change', applyTheme);
     return () => media.removeEventListener('change', applyTheme);
-  }, [runtime, appConfig?.theme]);
+  }, [runtime, appConfig?.theme, activeTab]);
 
   const accentColor = resolvedAccent(runtime, appConfig);
   const accentTextColor = accentForeground(accentColor);
@@ -265,14 +306,24 @@ const App: React.FC = () => {
 
   const menuItems = [
     {
-      key: 'studio',
-      icon: <AppstoreOutlined style={{ fontSize: 18 }} />,
-      label: tr(runtime?.locale || 'en', 'Studio'),
+      key: 'player',
+      icon: <ControlOutlined style={{ fontSize: 18 }} />,
+      label: tr(runtime?.locale || 'en', 'Player'),
     },
     {
-      key: 'remote',
-      icon: <ControlOutlined style={{ fontSize: 18 }} />,
-      label: tr(runtime?.locale || 'en', 'Remote Control'),
+      key: 'timeline',
+      icon: <AppstoreOutlined style={{ fontSize: 18 }} />,
+      label: tr(runtime?.locale || 'en', 'Timeline'),
+    },
+    {
+      key: 'effects',
+      icon: <BulbOutlined style={{ fontSize: 18 }} />,
+      label: tr(runtime?.locale || 'en', 'Effects Library'),
+    },
+    {
+      key: 'hardware',
+      icon: <DashboardOutlined style={{ fontSize: 18 }} />,
+      label: tr(runtime?.locale || 'en', 'Hardware Monitor'),
     },
     {
       key: 'library',
@@ -280,9 +331,9 @@ const App: React.FC = () => {
       label: tr(runtime?.locale || 'en', 'Media Library'),
     },
     {
-      key: 'info',
+      key: 'about',
       icon: <InfoCircleOutlined style={{ fontSize: 18 }} />,
-      label: tr(runtime?.locale || 'en', 'System Info'),
+      label: tr(runtime?.locale || 'en', 'About and system'),
     },
     {
       key: 'preferences',
@@ -344,8 +395,9 @@ const App: React.FC = () => {
             />
           </Sider>
 
-          <Content className={`app-content ${activeTab === 'studio' ? 'app-content--studio' : ''}`}>
-            {activeTab === 'studio' && (
+          <Content className={`app-content ${activeTab === 'timeline' ? 'app-content--studio' : ''}`}>
+            <React.Suspense fallback={<div className="surface-loading"><Spin size="large" /></div>}>
+            {activeTab === 'timeline' && (
               <StudioTab
                 state={state}
                 sendCmd={sendCmd}
@@ -353,9 +405,10 @@ const App: React.FC = () => {
                 appName={runtime?.appName || 'Pealayer'}
                 quickSeekSeconds={quickSeekSeconds}
                 apiBaseUrl={apiBaseUrl}
+                surface="timeline"
               />
             )}
-            {activeTab === 'remote' && (
+            {activeTab === 'player' && (
               <RemoteControlTab
                 state={state}
                 sendCmd={sendCmd}
@@ -368,12 +421,14 @@ const App: React.FC = () => {
             {activeTab === 'library' && (
               <MediaLibraryTab
                 sendCmd={sendCmd}
-                onMediaPlayStarted={() => setActiveTab('remote')}
+                onMediaPlayStarted={() => setActiveTab('player')}
                 locale={runtime?.locale || 'en'}
                 apiBaseUrl={apiBaseUrl}
               />
             )}
-            {activeTab === 'info' && (
+            {activeTab === 'effects' && <EffectsTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} />}
+            {activeTab === 'hardware' && <HardwareTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} />}
+            {activeTab === 'about' && (
               <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} websocketUrl={resolveWebSocketUrl()} />
             )}
             {activeTab === 'preferences' && (
@@ -387,6 +442,7 @@ const App: React.FC = () => {
                 }}
               />
             )}
+            </React.Suspense>
           </Content>
         </Layout>
       </Layout>
