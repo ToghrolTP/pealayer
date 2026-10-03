@@ -5673,28 +5673,63 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                             if let Some(relay_id) = bulk_relay {
                                 self.app.undo_stack.push(self.app.snapshot_timeline());
-                                let selected_ids = &self.app.selected_instance_ids;
-                                for instance in &self.app.timeline.instances {
-                                    if selected_ids.contains(&instance.id) {
-                                        if let Some(template) = self
-                                            .app
-                                            .timeline
-                                            .templates
-                                            .iter_mut()
-                                            .find(|template| template.id == instance.effect_id)
-                                        {
-                                            if template.controller_macro.is_some()
+                                let selected_ids: Vec<_> = self
+                                    .app
+                                    .selected_instance_ids
+                                    .iter()
+                                    .copied()
+                                    .collect();
+                                for instance_id in selected_ids {
+                                    let Some(effect_id) = self
+                                        .app
+                                        .timeline
+                                        .instances
+                                        .iter()
+                                        .find(|instance| instance.id == instance_id)
+                                        .map(|instance| instance.effect_id)
+                                    else {
+                                        continue;
+                                    };
+                                    let controller_owned = self
+                                        .app
+                                        .timeline
+                                        .templates
+                                        .iter()
+                                        .find(|template| template.id == effect_id)
+                                        .is_some_and(|template| {
+                                            template.controller_macro.is_some()
                                                 || template.controller_strip_effect.is_some()
-                                            {
-                                                continue;
-                                            }
-                                            template.actions = crate::four_d::patterns::generate_constant(
+                                        });
+                                    if controller_owned {
+                                        continue;
+                                    }
+
+                                    self.app.isolate_template_for_instance(instance_id);
+                                    let Some(isolated_effect_id) = self
+                                        .app
+                                        .timeline
+                                        .instances
+                                        .iter()
+                                        .find(|instance| instance.id == instance_id)
+                                        .map(|instance| instance.effect_id)
+                                    else {
+                                        continue;
+                                    };
+                                    if let Some(template) = self
+                                        .app
+                                        .timeline
+                                        .templates
+                                        .iter_mut()
+                                        .find(|template| template.id == isolated_effect_id)
+                                    {
+                                        template.actions =
+                                            crate::four_d::patterns::generate_constant(
                                                 relay_id,
                                                 true,
                                                 template.duration_ms,
                                             );
-                                            template.target = crate::four_d::models::HardwareTarget::Relay(relay_id);
-                                        }
+                                        template.target =
+                                            crate::four_d::models::HardwareTarget::Relay(relay_id);
                                     }
                                 }
                                 timeline_dirty = true;

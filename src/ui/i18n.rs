@@ -647,9 +647,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "selected" => "انتخاب‌شده",
         "controller-owned" => "تحت مدیریت کنترل‌گر",
         "Multiple cues selected" => "چند نشانه انتخاب شده است",
-        "Changes apply to every compatible cue" => {
-            "تغییرات روی همهٔ نشانه‌های سازگار اعمال می‌شود"
-        }
+        "Changes apply to every compatible cue" => "تغییرات روی همهٔ نشانه‌های سازگار اعمال می‌شود",
         "Timing" => "زمان‌بندی",
         "Exact timeline placement and length" => "جای‌گذاری و مدت دقیق در خط زمانی",
         "Starts" => "آغاز",
@@ -660,9 +658,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
             "برای مدیریت، نشانه‌ای را در خط زمانی انتخاب کنید"
         }
         "Cue unavailable" => "نشانه در دسترس نیست",
-        "The selected cue is no longer on the timeline" => {
-            "نشانهٔ انتخاب‌شده دیگر در خط زمانی نیست"
-        }
+        "The selected cue is no longer on the timeline" => "نشانهٔ انتخاب‌شده دیگر در خط زمانی نیست",
         "Source" => "منبع",
         "Addressable lighting" => "نورپردازی آدرس‌پذیر",
         "Hardware macro" => "ماکروی سخت‌افزاری",
