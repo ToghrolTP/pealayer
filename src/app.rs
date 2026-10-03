@@ -240,6 +240,7 @@ pub struct PealayerApp {
     // Phase 4 & 5 Selection/Override state
     pub(crate) selected_instance_ids: std::collections::HashSet<uuid::Uuid>,
     pub selected_keyframes: std::collections::HashSet<(uuid::Uuid, usize)>,
+    pub(crate) selected_timeline_keyframe: Option<uuid::Uuid>,
     pub active_keyframe_drag: Option<KeyframeDragState>,
     pub timeline_zoom: f32,
     pub undo_stack: crate::four_d::history::UndoStack,
@@ -825,7 +826,10 @@ impl eframe::App for PealayerApp {
         }
 
         // Handle Keyboard Shortcuts
-        let transport_shortcuts_enabled = !ctx.egui_wants_keyboard_input();
+        let timeline_keyboard_active =
+            ctx.memory(|memory| memory.has_focus(crate::ui::layout::timeline_keyboard_focus_id()));
+        let transport_shortcuts_enabled =
+            !ctx.egui_wants_keyboard_input() && !timeline_keyboard_active;
         if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::Space)) {
             self.toggle_playback();
         }
@@ -3318,6 +3322,7 @@ impl PealayerApp {
             instances: self.timeline.instances.clone(),
             analog_tracks: self.timeline.analog_tracks.clone(),
             templates: self.timeline.templates.clone(),
+            keyframes: self.timeline.keyframes.clone(),
         }
     }
 
@@ -3352,6 +3357,7 @@ impl PealayerApp {
         self.timeline.instances = snapshot.instances;
         self.timeline.analog_tracks = snapshot.analog_tracks;
         self.timeline.templates = snapshot.templates;
+        self.timeline.keyframes = snapshot.keyframes;
         let _ = self.engine_handle.sender.send(
             crate::four_d::engine::EngineMessage::UpdateAnalogTracks(
                 self.timeline.analog_tracks.clone(),
@@ -3566,6 +3572,7 @@ impl Default for PealayerApp {
             hardware_effect_authoring: HardwareEffectAuthoringState::default(),
             selected_instance_ids: std::collections::HashSet::new(),
             selected_keyframes: std::collections::HashSet::new(),
+            selected_timeline_keyframe: None,
             active_keyframe_drag: None,
             timeline_zoom: 100.0,
             undo_stack: crate::four_d::history::UndoStack::default(),

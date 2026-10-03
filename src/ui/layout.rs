@@ -53,6 +53,119 @@ const EFFECT_CARD_ACTION_GUTTER: f32 = 100.0;
 const EFFECT_CARD_ACTION_BUTTONS_WIDTH: f32 = 72.0;
 const HARDWARE_CARD_STROKE_WIDTH: f32 = 1.0;
 
+pub(crate) fn timeline_keyboard_focus_id() -> egui::Id {
+    egui::Id::new("timeline-keyboard-focus")
+}
+
+fn timeline_frame_step_ms(media_fps: f64, frame_count: u32) -> u64 {
+    if media_fps.is_finite() && media_fps > 0.0 {
+        ((1_000.0 * f64::from(frame_count.max(1))) / media_fps)
+            .round()
+            .max(1.0) as u64
+    } else {
+        // Unknown frame rate still needs an exact, deterministic nudge.
+        u64::from(frame_count.max(1))
+    }
+}
+
+fn timeline_snap_tolerance_ms(px_per_ms: f32) -> u64 {
+    if px_per_ms <= f32::EPSILON {
+        return 100;
+    }
+    (8.0 / px_per_ms).round().clamp(1.0, 250.0) as u64
+}
+
+fn timeline_snap_targets(
+    timeline: &crate::four_d::models::Timeline,
+    selected_instances: &std::collections::HashSet<uuid::Uuid>,
+    playhead_ms: u64,
+) -> Vec<u64> {
+    let mut targets = vec![0, playhead_ms];
+    targets.extend(timeline.keyframes.iter().map(|keyframe| keyframe.time_ms));
+    targets.extend(
+        timeline
+            .analog_tracks
+            .iter()
+            .flat_map(|track| track.keyframes.iter().map(|keyframe| keyframe.time_ms)),
+    );
+    for instance in &timeline.instances {
+        if selected_instances.contains(&instance.id) {
+            continue;
+        }
+        if let Some(effect) = timeline
+            .templates
+            .iter()
+            .find(|effect| effect.id == instance.effect_id)
+        {
+            targets.push(instance.start_time_ms);
+            targets.push(instance.start_time_ms.saturating_add(effect.duration_ms));
+        }
+    }
+    targets.sort_unstable();
+    targets.dedup();
+    targets
+}
+
+fn nearest_snap_time(value: u64, targets: &[u64], tolerance_ms: u64) -> Option<u64> {
+    targets
+        .iter()
+        .copied()
+        .filter_map(|target| {
+            let distance = value.abs_diff(target);
+            (distance <= tolerance_ms).then_some((distance, target))
+        })
+        .min_by_key(|(distance, target)| (*distance, *target))
+        .map(|(_, target)| target)
+}
+
+fn adjacent_timeline_time(current: u64, forwards: bool, targets: &[u64]) -> Option<u64> {
+    if forwards {
+        targets.iter().copied().find(|target| *target > current)
+    } else {
+        targets
+            .iter()
+            .rev()
+            .copied()
+            .find(|target| *target < current)
+    }
+}
+
+fn move_selected_cues(
+    timeline: &mut crate::four_d::models::Timeline,
+    selected: &std::collections::HashSet<uuid::Uuid>,
+    delta_ms: i64,
+) -> bool {
+    let Some(first_start) = timeline
+        .instances
+        .iter()
+        .filter(|instance| selected.contains(&instance.id))
+        .map(|instance| instance.start_time_ms)
+        .min()
+    else {
+        return false;
+    };
+    let applied_delta = delta_ms.max(-(first_start as i64));
+    if applied_delta == 0 {
+        return false;
+    }
+    for instance in &mut timeline.instances {
+        if selected.contains(&instance.id) {
+            instance.start_time_ms = (instance.start_time_ms as i64 + applied_delta).max(0) as u64;
+        }
+    }
+    true
+}
+
+fn sorted_cue_ids(timeline: &crate::four_d::models::Timeline) -> Vec<uuid::Uuid> {
+    let mut cues: Vec<_> = timeline
+        .instances
+        .iter()
+        .map(|instance| (instance.start_time_ms, instance.id))
+        .collect();
+    cues.sort_unstable();
+    cues.into_iter().map(|(_, id)| id).collect()
+}
+
 fn effects_panel_content_width(available_width: f32) -> f32 {
     (available_width - EFFECTS_PANEL_RIGHT_GUTTER).max(EFFECT_CARD_MIN_WIDTH)
 }
@@ -3143,6 +3256,60 @@ mod timeline_row_tests {
     use super::*;
 
     #[test]
+    fn magnetic_targets_include_exact_and_automation_keyframes() {
+        let mut timeline = crate::four_d::models::Timeline::default();
+        timeline.add_keyframe(1_250);
+        let mut track = crate::four_d::curve::AnalogTrack::new("PWM", 1);
+        track.add_keyframe(crate::four_d::curve::Keyframe::new(
+            1_500,
+            0.5,
+            crate::four_d::curve::Interpolation::Linear,
+        ));
+        timeline.analog_tracks.push(track);
+        let effect =
+            crate::four_d::models::Effect::new("Cue".to_string(), String::new(), 500, Vec::new());
+        let effect_id = effect.id;
+        timeline.templates.push(effect);
+        let instance = crate::four_d::models::EffectInstance::new(effect_id, 2_000);
+        let instance_id = instance.id;
+        timeline.instances.push(instance);
+
+        let targets = timeline_snap_targets(&timeline, &std::collections::HashSet::new(), 750);
+        assert_eq!(targets, vec![0, 750, 1_250, 1_500, 2_000, 2_500]);
+
+        let selected = std::collections::HashSet::from([instance_id]);
+        let targets = timeline_snap_targets(&timeline, &selected, 750);
+        assert_eq!(targets, vec![0, 750, 1_250, 1_500]);
+    }
+
+    #[test]
+    fn magnetic_snap_chooses_nearest_target_within_visual_tolerance() {
+        assert_eq!(nearest_snap_time(1_040, &[1_000, 1_100], 50), Some(1_000));
+        assert_eq!(nearest_snap_time(1_060, &[1_000, 1_100], 50), Some(1_100));
+        assert_eq!(nearest_snap_time(1_060, &[1_000, 1_100], 30), None);
+        assert_eq!(timeline_snap_tolerance_ms(0.1), 80);
+    }
+
+    #[test]
+    fn keyboard_nudge_preserves_group_spacing_and_clamps_at_zero() {
+        let mut timeline = crate::four_d::models::Timeline::default();
+        let effect =
+            crate::four_d::models::Effect::new("Cue".to_string(), String::new(), 100, Vec::new());
+        let effect_id = effect.id;
+        timeline.templates.push(effect);
+        let first = crate::four_d::models::EffectInstance::new(effect_id, 20);
+        let second = crate::four_d::models::EffectInstance::new(effect_id, 70);
+        let selected = std::collections::HashSet::from([first.id, second.id]);
+        timeline.instances.extend([first, second]);
+
+        assert!(move_selected_cues(&mut timeline, &selected, -50));
+        assert_eq!(timeline.instances[0].start_time_ms, 0);
+        assert_eq!(timeline.instances[1].start_time_ms, 50);
+        assert_eq!(timeline_frame_step_ms(25.0, 1), 40);
+        assert_eq!(timeline_frame_step_ms(0.0, 2), 2);
+    }
+
+    #[test]
     fn display_text_prefers_segments_when_both_displays_are_available() {
         assert_eq!(default_display_text_target(true, true), "segments");
         assert_eq!(default_display_text_target(true, false), "segments");
@@ -6162,6 +6329,25 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     egui::FontId::proportional(11.0),
                                     ui.visuals().weak_text_color(),
                                 );
+                                let mut header_ui = ui.new_child(
+                                    egui::UiBuilder::new()
+                                        .max_rect(header_rect.shrink2(egui::vec2(4.0, 1.0)))
+                                        .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                                );
+                                if header_ui
+                                    .button(crate::ui::icons::DIAMOND)
+                                    .on_hover_text(self.app.tr("Add exact timeline keyframe at playhead (K)"))
+                                    .clicked()
+                                {
+                                    let time_ms = (self.app.playback_time * 1_000.0)
+                                        .round()
+                                        .max(0.0) as u64;
+                                    if !self.app.timeline.keyframes.iter().any(|keyframe| keyframe.time_ms == time_ms) {
+                                        self.app.undo_stack.push(self.app.snapshot_timeline());
+                                    }
+                                    self.app.selected_timeline_keyframe =
+                                        Some(self.app.timeline.add_keyframe(time_ms));
+                                }
 
                                 for track_row in &timeline_rows {
                                     let (rect, _response) = ui.allocate_exact_size(egui::vec2(250.0, 32.0), egui::Sense::hover());
@@ -6377,6 +6563,141 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         let ruler_response = ui.interact(ruler_rect, egui::Id::new("timeline_ruler"), egui::Sense::click_and_drag())
                                             .on_hover_text(&timeline_ruler_help);
+
+                                        ruler_response.context_menu(|ui| {
+                                            ui.label(egui::RichText::new(self.app.tr("Timeline keyframe")).strong());
+                                            let playhead_ms = (self.app.playback_time * 1_000.0)
+                                                .round()
+                                                .clamp(0.0, total_seconds * 1_000.0)
+                                                as u64;
+                                            if ui
+                                                .button(format!(
+                                                    "{} {}",
+                                                    crate::ui::icons::DIAMOND,
+                                                    self.app.tr("Add keyframe at playhead")
+                                                ))
+                                                .clicked()
+                                            {
+                                                if !self.app.timeline.keyframes.iter().any(|keyframe| keyframe.time_ms == playhead_ms) {
+                                                    self.app.undo_stack.push(self.app.snapshot_timeline());
+                                                }
+                                                self.app.selected_timeline_keyframe =
+                                                    Some(self.app.timeline.add_keyframe(playhead_ms));
+                                                ui.close();
+                                            }
+                                            if let Some(position) = pointer_pos {
+                                                let pointer_ms = (((position.x - rect.min.x).max(0.0) / px_per_ms)
+                                                    .round() as u64)
+                                                    .min((total_seconds * 1_000.0).round() as u64);
+                                                if ui
+                                                    .button(format!(
+                                                        "{} {} ({})",
+                                                        crate::ui::icons::PUSH_PIN,
+                                                        self.app.tr("Add exact keyframe here"),
+                                                        crate::duration::format_time_value_ms(pointer_ms)
+                                                    ))
+                                                    .clicked()
+                                                {
+                                                    if !self.app.timeline.keyframes.iter().any(|keyframe| keyframe.time_ms == pointer_ms) {
+                                                        self.app.undo_stack.push(self.app.snapshot_timeline());
+                                                    }
+                                                    self.app.selected_timeline_keyframe =
+                                                        Some(self.app.timeline.add_keyframe(pointer_ms));
+                                                    ui.close();
+                                                }
+                                            }
+                                        });
+
+                                        let mut clicked_any_keyframe = false;
+                                        for marker in self.app.timeline.keyframes.clone() {
+                                            let marker_x = rect.min.x + marker.time_ms as f32 * px_per_ms;
+                                            if marker_x < rect.min.x || marker_x > rect.max.x {
+                                                continue;
+                                            }
+                                            let selected = self.app.selected_timeline_keyframe == Some(marker.id);
+                                            let color = if selected {
+                                                ui.visuals().selection.stroke.color
+                                            } else {
+                                                ui.visuals().hyperlink_color
+                                            };
+                                            painter.line_segment(
+                                                [
+                                                    egui::pos2(marker_x, ruler_rect.center().y),
+                                                    egui::pos2(marker_x, rect.max.y),
+                                                ],
+                                                egui::Stroke::new(if selected { 1.6_f32 } else { 1.0_f32 }, color.gamma_multiply(0.7)),
+                                            );
+                                            let marker_rect = egui::Rect::from_center_size(
+                                                egui::pos2(marker_x, ruler_rect.center().y),
+                                                egui::vec2(20.0, 22.0),
+                                            );
+                                            let marker_response = ui
+                                                .interact(marker_rect, egui::Id::new(("timeline-keyframe", marker.id)), egui::Sense::click())
+                                                .on_hover_text(format!(
+                                                    "{} · {}",
+                                                    self.app.tr("Exact timeline keyframe"),
+                                                    crate::duration::format_time_value_ms(marker.time_ms)
+                                                ));
+                                            painter.text(
+                                                marker_rect.center(),
+                                                egui::Align2::CENTER_CENTER,
+                                                crate::ui::icons::DIAMOND,
+                                                egui::FontId::proportional(13.0),
+                                                color,
+                                            );
+                                            if marker_response.clicked() {
+                                                clicked_any_keyframe = true;
+                                                self.app.selected_timeline_keyframe = Some(marker.id);
+                                                self.app.selected_instance_ids.clear();
+                                                self.app.selected_keyframes.clear();
+                                            }
+                                            if marker_response.double_clicked() {
+                                                self.app.seek_absolute(marker.time_ms as f64 / 1_000.0);
+                                            }
+                                            marker_response.context_menu(|ui| {
+                                                ui.label(egui::RichText::new(self.app.tr("Exact timeline keyframe")).strong());
+                                                let mut exact_time = marker.time_ms;
+                                                ui.horizontal(|ui| {
+                                                    ui.label(self.app.tr("Time"));
+                                                    if ui
+                                                        .add(crate::duration::time_value_drag(
+                                                            &mut exact_time,
+                                                            0..=(total_seconds * 1_000.0).round() as u64,
+                                                            1.0,
+                                                        ))
+                                                        .changed()
+                                                        && exact_time != marker.time_ms
+                                                    {
+                                                        self.app.undo_stack.push(self.app.snapshot_timeline());
+                                                        let _ = self.app.timeline.move_keyframe(marker.id, exact_time);
+                                                    }
+                                                });
+                                                if ui
+                                                    .button(format!(
+                                                        "{} {}",
+                                                        crate::ui::icons::SKIP_FORWARD,
+                                                        self.app.tr("Jump to keyframe")
+                                                    ))
+                                                    .clicked()
+                                                {
+                                                    self.app.seek_absolute(marker.time_ms as f64 / 1_000.0);
+                                                    ui.close();
+                                                }
+                                                if ui
+                                                    .button(format!(
+                                                        "{} {}",
+                                                        crate::ui::icons::TRASH,
+                                                        self.app.tr("Delete Keyframe")
+                                                    ))
+                                                    .clicked()
+                                                {
+                                                    self.app.undo_stack.push(self.app.snapshot_timeline());
+                                                    self.app.timeline.remove_keyframe(marker.id);
+                                                    self.app.selected_timeline_keyframe = None;
+                                                    ui.close();
+                                                }
+                                            });
+                                        }
 
                                         if let Some(pos) = pointer_pos {
                                             if (ruler_rect.contains(pos) || ruler_response.dragged())
@@ -6856,17 +7177,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                                 let snap_enabled = !ui.ctx().input(|i| i.modifiers.shift || i.modifiers.alt);
 
-                                                // Build snap targets list
-                                                let mut snap_targets = vec![0, (self.app.playback_time * 1000.0) as u64];
-                                                for inst in &self.app.timeline.instances {
-                                                    if inst.id == drag_state.instance_id || self.app.selected_instance_ids.contains(&inst.id) {
-                                                        continue;
-                                                    }
-                                                    if let Some(tmpl) = self.app.timeline.templates.iter().find(|t| t.id == inst.effect_id) {
-                                                        snap_targets.push(inst.start_time_ms);
-                                                        snap_targets.push(inst.start_time_ms + tmpl.duration_ms);
-                                                    }
-                                                }
+                                                let snap_targets = timeline_snap_targets(
+                                                    &self.app.timeline,
+                                                    &self.app.selected_instance_ids,
+                                                    (self.app.playback_time * 1000.0).round().max(0.0) as u64,
+                                                );
+                                                let snap_tolerance = timeline_snap_tolerance_ms(px_per_ms);
 
                                                 let hud_text = match drag_state.mode {
                                                     crate::app::DragMode::Move => {
@@ -6893,22 +7209,24 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                                         if snap_enabled {
                                                             // Check snap to start
-                                                            for target in &snap_targets {
-                                                                if (primary_new_start as i64 - *target as i64).abs() <= 100 {
-                                                                    primary_new_start = *target;
-                                                                    snap_line_x = Some(rect.min.x + (primary_new_start as f32 * px_per_ms));
-                                                                    break;
-                                                                }
+                                                            if let Some(target) = nearest_snap_time(
+                                                                primary_new_start,
+                                                                &snap_targets,
+                                                                snap_tolerance,
+                                                            ) {
+                                                                primary_new_start = target;
+                                                                snap_line_x = Some(rect.min.x + (target as f32 * px_per_ms));
                                                             }
                                                             // Check snap to end
                                                             if snap_line_x.is_none() {
                                                                 let primary_new_end = primary_new_start + drag_state.initial_duration_ms;
-                                                                for target in &snap_targets {
-                                                                    if (primary_new_end as i64 - *target as i64).abs() <= 100 {
-                                                                        primary_new_start = target.saturating_sub(drag_state.initial_duration_ms);
-                                                                        snap_line_x = Some(rect.min.x + (*target as f32 * px_per_ms));
-                                                                        break;
-                                                                    }
+                                                                if let Some(target) = nearest_snap_time(
+                                                                    primary_new_end,
+                                                                    &snap_targets,
+                                                                    snap_tolerance,
+                                                                ) {
+                                                                    primary_new_start = target.saturating_sub(drag_state.initial_duration_ms);
+                                                                    snap_line_x = Some(rect.min.x + (target as f32 * px_per_ms));
                                                                 }
                                                             }
                                                         }
@@ -6939,12 +7257,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     crate::app::DragMode::ResizeRight => {
                                                         let mut new_end = (drag_state.initial_start_time_ms + drag_state.initial_duration_ms) as i64 + delta_time_ms;
                                                         if snap_enabled {
-                                                            for target in &snap_targets {
-                                                                if (new_end - *target as i64).abs() <= 100 {
-                                                                    new_end = *target as i64;
-                                                                    snap_line_x = Some(rect.min.x + (new_end as f32 * px_per_ms));
-                                                                    break;
-                                                                }
+                                                            if let Some(target) = nearest_snap_time(
+                                                                new_end.max(0) as u64,
+                                                                &snap_targets,
+                                                                snap_tolerance,
+                                                            ) {
+                                                                new_end = target as i64;
+                                                                snap_line_x = Some(rect.min.x + (target as f32 * px_per_ms));
                                                             }
                                                         }
                                                         let new_dur = (new_end - drag_state.initial_start_time_ms as i64).max(100) as u64;
@@ -6964,12 +7283,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         let right_anchor = drag_state.initial_start_time_ms + drag_state.initial_duration_ms;
                                                         let mut new_start = (drag_state.initial_start_time_ms as i64 + delta_time_ms).max(0) as u64;
                                                         if snap_enabled {
-                                                            for target in &snap_targets {
-                                                                if (new_start as i64 - *target as i64).abs() <= 100 {
-                                                                    new_start = *target;
-                                                                    snap_line_x = Some(rect.min.x + (new_start as f32 * px_per_ms));
-                                                                    break;
-                                                                }
+                                                            if let Some(target) = nearest_snap_time(
+                                                                new_start,
+                                                                &snap_targets,
+                                                                snap_tolerance,
+                                                            ) {
+                                                                new_start = target;
+                                                                snap_line_x = Some(rect.min.x + (target as f32 * px_per_ms));
                                                             }
                                                         }
                                                         new_start = new_start.min(right_anchor.saturating_sub(100));
@@ -7080,7 +7400,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
 
                                         // Render Analog Curve Tracks
-                                        let mut clicked_any_keyframe = false;
                                         let mut curve_updated = false;
                                         let pointer_pos = ui.ctx().pointer_latest_pos();
 
@@ -7693,7 +8012,29 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         ((rect, response), clicked_any_clip, clicked_any_keyframe)
                                 });
 
+                            let timeline_scroll_id = timeline_scroll.id;
+                            let mut timeline_scroll_state = timeline_scroll.state;
+                            let timeline_content_size = timeline_scroll.content_size;
+                            let timeline_viewport = timeline_scroll.inner_rect;
                             let ((rect, response), clicked_any_clip, clicked_any_keyframe) = timeline_scroll.inner;
+
+                            if ui.input(|input| input.pointer.any_pressed()) {
+                                if ui
+                                    .ctx()
+                                    .pointer_latest_pos()
+                                    .is_some_and(|position| timeline_viewport.contains(position))
+                                {
+                                    ui.ctx().memory_mut(|memory| {
+                                        memory.request_focus(timeline_keyboard_focus_id());
+                                    });
+                                } else if ui.ctx().memory(|memory| {
+                                    memory.has_focus(timeline_keyboard_focus_id())
+                                }) {
+                                    ui.ctx().memory_mut(|memory| {
+                                        memory.surrender_focus(timeline_keyboard_focus_id());
+                                    });
+                                }
+                            }
 
                             let tracks_top = rect.min.y + 26.0;
 
@@ -7786,6 +8127,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 if let Some(mouse_pos) = response.interact_pointer_pos() {
                                     if mouse_pos.y >= tracks_top && mouse_pos.y < tracks_top + track_area_height {
                                         self.app.selected_instance_ids.clear();
+                                        self.app.selected_timeline_keyframe = None;
                                         let relative_x = mouse_pos.x - rect.min.x;
                                         let seek_time = (relative_x / zoom) as f64;
                                         let target_time = seek_time.clamp(0.0, total_seconds);
@@ -7803,6 +8145,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 if ui.button(format!("{} {}", crate::ui::icons::SELECTION_ALL, self.app.tr("Select all cues"))).clicked() {
                                     self.app.selected_instance_ids = self.app.timeline.instances.iter().map(|instance| instance.id).collect();
                                     self.app.selected_keyframes.clear();
+                                    self.app.selected_timeline_keyframe = None;
                                     for track in &self.app.timeline.analog_tracks {
                                         for (index, _) in track.keyframes.iter().enumerate() {
                                             self.app.selected_keyframes.insert((track.id, index));
@@ -7813,6 +8156,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 if ui.button(format!("{} {}", crate::ui::icons::ERASER, self.app.tr("Clear selection"))).clicked() {
                                     self.app.selected_instance_ids.clear();
                                     self.app.selected_keyframes.clear();
+                                    self.app.selected_timeline_keyframe = None;
                                     ui.close();
                                 }
                                 ui.separator();
@@ -7831,24 +8175,237 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 }
                             });
 
-                            if !ui.ctx().egui_wants_keyboard_input() {
+                            if ui.ctx().memory(|memory| {
+                                memory.has_focus(timeline_keyboard_focus_id())
+                            }) {
                                 let delete_pressed = ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace));
                                 let undo_pressed = ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Z) && !i.modifiers.shift);
                                 let redo_pressed = ui.input(|i| (i.modifiers.ctrl && i.key_pressed(egui::Key::Y)) || (i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(egui::Key::Z)));
                                 let select_all_pressed = ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::A));
                                 let escape_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
 
+                                let add_timeline_keyframe_pressed = ui.input(|i| {
+                                    i.key_pressed(egui::Key::K)
+                                        && !i.modifiers.ctrl
+                                        && !i.modifiers.command
+                                        && !i.modifiers.alt
+                                });
+                                let previous_cue_pressed = ui.input(|i| {
+                                    i.key_pressed(egui::Key::Tab) && i.modifiers.shift
+                                });
+                                let next_cue_pressed = ui.input(|i| {
+                                    i.key_pressed(egui::Key::Tab) && !i.modifiers.shift
+                                });
+                                let nudge_left_pressed = ui.input(|i| {
+                                    i.key_pressed(egui::Key::ArrowLeft)
+                                        && i.modifiers.alt
+                                        && !i.modifiers.ctrl
+                                        && !i.modifiers.command
+                                });
+                                let nudge_right_pressed = ui.input(|i| {
+                                    i.key_pressed(egui::Key::ArrowRight)
+                                        && i.modifiers.alt
+                                        && !i.modifiers.ctrl
+                                        && !i.modifiers.command
+                                });
+                                let jump_previous_pressed = ui.input(|i| {
+                                    i.key_pressed(egui::Key::ArrowLeft)
+                                        && (i.modifiers.ctrl || i.modifiers.command)
+                                        && !i.modifiers.alt
+                                });
+                                let jump_next_pressed = ui.input(|i| {
+                                    i.key_pressed(egui::Key::ArrowRight)
+                                        && (i.modifiers.ctrl || i.modifiers.command)
+                                        && !i.modifiers.alt
+                                });
+                                let scroll_left_pressed = ui.input(|i| {
+                                    i.key_pressed(egui::Key::ArrowLeft)
+                                        && i.modifiers.shift
+                                        && !i.modifiers.ctrl
+                                        && !i.modifiers.command
+                                        && !i.modifiers.alt
+                                });
+                                let scroll_right_pressed = ui.input(|i| {
+                                    i.key_pressed(egui::Key::ArrowRight)
+                                        && i.modifiers.shift
+                                        && !i.modifiers.ctrl
+                                        && !i.modifiers.command
+                                        && !i.modifiers.alt
+                                });
+                                let playhead_left_pressed = ui.input(|i| {
+                                    i.key_pressed(egui::Key::ArrowLeft) && i.modifiers.is_none()
+                                });
+                                let playhead_right_pressed = ui.input(|i| {
+                                    i.key_pressed(egui::Key::ArrowRight) && i.modifiers.is_none()
+                                });
+                                let scroll_up_pressed = ui.input(|i| {
+                                    i.key_pressed(egui::Key::ArrowUp) && i.modifiers.is_none()
+                                });
+                                let scroll_down_pressed = ui.input(|i| {
+                                    i.key_pressed(egui::Key::ArrowDown) && i.modifiers.is_none()
+                                });
+                                let page_left_pressed = ui.input(|i| i.key_pressed(egui::Key::PageUp));
+                                let page_right_pressed = ui.input(|i| i.key_pressed(egui::Key::PageDown));
+                                let home_pressed = ui.input(|i| i.key_pressed(egui::Key::Home));
+                                let end_pressed = ui.input(|i| i.key_pressed(egui::Key::End));
+
                                 let num_modifier_free = ui.input(|i| !i.modifiers.ctrl && !i.modifiers.alt && !i.modifiers.command && !i.modifiers.shift);
                                 let key_1_pressed = ui.input(|i| i.key_pressed(egui::Key::Num1)) && num_modifier_free;
                                 let key_2_pressed = ui.input(|i| i.key_pressed(egui::Key::Num2)) && num_modifier_free;
                                 let key_3_pressed = ui.input(|i| i.key_pressed(egui::Key::Num3)) && num_modifier_free;
 
-                                if undo_pressed {
+                                if add_timeline_keyframe_pressed {
+                                    let time_ms = (self.app.playback_time * 1_000.0)
+                                        .round()
+                                        .clamp(0.0, total_seconds * 1_000.0)
+                                        as u64;
+                                    if !self.app.timeline.keyframes.iter().any(|keyframe| keyframe.time_ms == time_ms) {
+                                        self.app.undo_stack.push(self.app.snapshot_timeline());
+                                    }
+                                    self.app.selected_timeline_keyframe =
+                                        Some(self.app.timeline.add_keyframe(time_ms));
+                                    self.app.selected_instance_ids.clear();
+                                    self.app.selected_keyframes.clear();
+                                } else if nudge_left_pressed || nudge_right_pressed {
+                                    if !self.app.selected_instance_ids.is_empty() {
+                                        let direction = if nudge_left_pressed { -1 } else { 1 };
+                                        let delta = timeline_frame_step_ms(
+                                            self.app.media_fps,
+                                            self.app.frame_step_count,
+                                        ) as i64
+                                            * direction;
+                                        let snapshot = self.app.snapshot_timeline();
+                                        if move_selected_cues(
+                                            &mut self.app.timeline,
+                                            &self.app.selected_instance_ids,
+                                            delta,
+                                        ) {
+                                            self.app.undo_stack.push(snapshot);
+                                            self.app.sync_timeline_engine();
+                                        }
+                                    }
+                                } else if jump_previous_pressed || jump_next_pressed {
+                                    let selected_none = std::collections::HashSet::new();
+                                    let targets = timeline_snap_targets(
+                                        &self.app.timeline,
+                                        &selected_none,
+                                        0,
+                                    );
+                                    let current_ms = (self.app.playback_time * 1_000.0)
+                                        .round()
+                                        .max(0.0) as u64;
+                                    if let Some(target_ms) = adjacent_timeline_time(
+                                        current_ms,
+                                        jump_next_pressed,
+                                        &targets,
+                                    ) {
+                                        self.app.seek_absolute(target_ms as f64 / 1_000.0);
+                                        timeline_scroll_state.offset.x =
+                                            (target_ms as f32 * px_per_ms
+                                                - timeline_viewport.width() * 0.35)
+                                                .clamp(
+                                                    0.0,
+                                                    (timeline_content_size.x - timeline_viewport.width())
+                                                        .max(0.0),
+                                                );
+                                    }
+                                } else if previous_cue_pressed || next_cue_pressed {
+                                    ui.ctx().input_mut(|input| {
+                                        input.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
+                                        input.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab);
+                                    });
+                                    let cue_ids = sorted_cue_ids(&self.app.timeline);
+                                    if !cue_ids.is_empty() {
+                                        let selected_index = cue_ids.iter().position(|id| {
+                                            self.app.selected_instance_ids.contains(id)
+                                        });
+                                        let next_index = if previous_cue_pressed {
+                                            selected_index
+                                                .unwrap_or(0)
+                                                .checked_sub(1)
+                                                .unwrap_or(cue_ids.len() - 1)
+                                        } else {
+                                            selected_index
+                                                .map(|index| (index + 1) % cue_ids.len())
+                                                .unwrap_or(0)
+                                        };
+                                        let cue_id = cue_ids[next_index];
+                                        self.app.selected_instance_ids.clear();
+                                        self.app.selected_instance_ids.insert(cue_id);
+                                        self.app.selected_keyframes.clear();
+                                        self.app.selected_timeline_keyframe = None;
+                                        if let Some(instance) = self
+                                            .app
+                                            .timeline
+                                            .instances
+                                            .iter()
+                                            .find(|instance| instance.id == cue_id)
+                                        {
+                                            timeline_scroll_state.offset.x =
+                                                (instance.start_time_ms as f32 * px_per_ms
+                                                    - timeline_viewport.width() * 0.35)
+                                                    .clamp(
+                                                        0.0,
+                                                        (timeline_content_size.x
+                                                            - timeline_viewport.width())
+                                                            .max(0.0),
+                                                    );
+                                        }
+                                    }
+                                } else if scroll_left_pressed || scroll_right_pressed {
+                                    let direction = if scroll_left_pressed { -1.0 } else { 1.0 };
+                                    timeline_scroll_state.offset.x =
+                                        (timeline_scroll_state.offset.x
+                                            + direction * (timeline_viewport.width() * 0.12).max(40.0))
+                                            .clamp(
+                                                0.0,
+                                                (timeline_content_size.x - timeline_viewport.width())
+                                                    .max(0.0),
+                                            );
+                                } else if scroll_up_pressed || scroll_down_pressed {
+                                    let direction = if scroll_up_pressed { -1.0 } else { 1.0 };
+                                    timeline_scroll_state.offset.y =
+                                        (timeline_scroll_state.offset.y + direction * 32.0).clamp(
+                                            0.0,
+                                            (timeline_content_size.y - timeline_viewport.height())
+                                                .max(0.0),
+                                        );
+                                } else if page_left_pressed || page_right_pressed {
+                                    let direction = if page_left_pressed { -1.0 } else { 1.0 };
+                                    timeline_scroll_state.offset.x =
+                                        (timeline_scroll_state.offset.x
+                                            + direction * timeline_viewport.width() * 0.85)
+                                            .clamp(
+                                                0.0,
+                                                (timeline_content_size.x - timeline_viewport.width())
+                                                    .max(0.0),
+                                            );
+                                } else if home_pressed || end_pressed {
+                                    let target_seconds = if home_pressed { 0.0 } else { total_seconds };
+                                    self.app.seek_absolute(target_seconds);
+                                    timeline_scroll_state.offset.x = if home_pressed {
+                                        0.0
+                                    } else {
+                                        (timeline_content_size.x - timeline_viewport.width()).max(0.0)
+                                    };
+                                } else if playhead_left_pressed || playhead_right_pressed {
+                                    let direction = if playhead_left_pressed { -1.0 } else { 1.0 };
+                                    let step_seconds = timeline_frame_step_ms(
+                                        self.app.media_fps,
+                                        self.app.frame_step_count,
+                                    ) as f64
+                                        / 1_000.0;
+                                    self.app.seek_absolute(
+                                        (self.app.playback_time + direction * step_seconds)
+                                            .clamp(0.0, total_seconds),
+                                    );
+                                } else if undo_pressed {
                                     let current = self.app.snapshot_timeline();
                                     if let Some(prev) = self.app.undo_stack.undo(current) {
                                         self.app.restore_timeline_snapshot(prev);
                                         self.app.selected_instance_ids.clear();
                                         self.app.selected_keyframes.clear();
+                                        self.app.selected_timeline_keyframe = None;
                                         self.app.sync_timeline_engine();
                                         let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateAnalogTracks(self.app.timeline.analog_tracks.clone()));
                                     }
@@ -7858,6 +8415,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         self.app.restore_timeline_snapshot(next);
                                         self.app.selected_instance_ids.clear();
                                         self.app.selected_keyframes.clear();
+                                        self.app.selected_timeline_keyframe = None;
                                         let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
                                         let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
                                         let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateAnalogTracks(self.app.timeline.analog_tracks.clone()));
@@ -7873,8 +8431,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 } else if escape_pressed {
                                     self.app.selected_instance_ids.clear();
                                     self.app.selected_keyframes.clear();
+                                    self.app.selected_timeline_keyframe = None;
                                 } else if delete_pressed {
-                                    if !self.app.selected_instance_ids.is_empty() || !self.app.selected_keyframes.is_empty() {
+                                    if !self.app.selected_instance_ids.is_empty()
+                                        || !self.app.selected_keyframes.is_empty()
+                                        || self.app.selected_timeline_keyframe.is_some()
+                                    {
                                         self.app.undo_stack.push(self.app.snapshot_timeline());
 
                                         self.app.timeline.instances.retain(|inst| !self.app.selected_instance_ids.contains(&inst.id));
@@ -7890,6 +8452,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     track.keyframes.remove(idx);
                                                 }
                                             }
+                                        }
+
+                                        if let Some(id) = self.app.selected_timeline_keyframe.take() {
+                                            self.app.timeline.remove_keyframe(id);
                                         }
 
                                         self.app.selected_instance_ids.clear();
@@ -7919,6 +8485,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateAnalogTracks(self.app.timeline.analog_tracks.clone()));
                                     }
                                 }
+                                timeline_scroll_state.store(ui.ctx(), timeline_scroll_id);
                             }
                         });
                     }

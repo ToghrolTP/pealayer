@@ -465,6 +465,7 @@ fn main() -> eframe::Result {
                 })),
                 selected_instance_ids: std::collections::HashSet::new(),
                 selected_keyframes: std::collections::HashSet::new(),
+                selected_timeline_keyframe: None,
                 active_keyframe_drag: None,
                 timeline_zoom: 100.0,
                 undo_stack: crate::four_d::history::UndoStack::default(),
