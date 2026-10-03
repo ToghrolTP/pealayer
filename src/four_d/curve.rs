@@ -77,7 +77,10 @@ impl AnalogTrack {
     /// Adds a keyframe, maintaining sorted chronological order.
     /// If a keyframe already exists at `time_ms`, it is replaced in-place.
     pub fn add_keyframe(&mut self, keyframe: Keyframe) {
-        match self.keyframes.binary_search_by_key(&keyframe.time_ms, |k| k.time_ms) {
+        match self
+            .keyframes
+            .binary_search_by_key(&keyframe.time_ms, |k| k.time_ms)
+        {
             Ok(idx) => {
                 self.keyframes[idx] = keyframe;
             }

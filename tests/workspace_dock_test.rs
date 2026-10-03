@@ -1,6 +1,6 @@
 use egui_dock::DockState;
 use pealayer::config::AppConfig;
-use pealayer::ui::layout::{create_initial_layout, PealayerTab};
+use pealayer::ui::layout::{PealayerTab, create_initial_layout};
 
 #[test]
 fn test_config_workspace_dock_layout_field() {
@@ -63,7 +63,9 @@ use pealayer::ui::layout::restore_tab_to_canonical_slot;
 #[test]
 fn test_restore_timeline_to_canonical_slot() {
     let mut dock_state = create_initial_layout();
-    let path = dock_state.find_tab(&PealayerTab::Timeline).expect("find timeline");
+    let path = dock_state
+        .find_tab(&PealayerTab::Timeline)
+        .expect("find timeline");
     dock_state.remove_tab(path);
     assert!(dock_state.find_tab(&PealayerTab::Timeline).is_none());
 
@@ -74,7 +76,9 @@ fn test_restore_timeline_to_canonical_slot() {
 #[test]
 fn test_restore_controls_next_to_hardware_monitor() {
     let mut dock_state = create_initial_layout();
-    let path = dock_state.find_tab(&PealayerTab::EffectControls).expect("find effect controls");
+    let path = dock_state
+        .find_tab(&PealayerTab::EffectControls)
+        .expect("find effect controls");
     dock_state.remove_tab(path);
     assert!(dock_state.find_tab(&PealayerTab::EffectControls).is_none());
 
@@ -102,7 +106,8 @@ static CONFIG_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[test]
 fn test_pealayer_app_tab_toggle_and_focus() {
     let _guard = CONFIG_TEST_MUTEX.lock().unwrap();
-    let temp_dir = std::env::temp_dir().join(format!("pealayer_dock_toggle_{}", uuid::Uuid::new_v4()));
+    let temp_dir =
+        std::env::temp_dir().join(format!("pealayer_dock_toggle_{}", uuid::Uuid::new_v4()));
     let _ = std::fs::create_dir_all(&temp_dir);
     let config_path = temp_dir.join("config.json");
     unsafe {
@@ -144,7 +149,8 @@ fn test_corrupt_dock_json_fallback() {
 #[test]
 fn test_app_save_dock_layout_persists_to_config() {
     let _guard = CONFIG_TEST_MUTEX.lock().unwrap();
-    let temp_dir = std::env::temp_dir().join(format!("pealayer_dock_persist_{}", uuid::Uuid::new_v4()));
+    let temp_dir =
+        std::env::temp_dir().join(format!("pealayer_dock_persist_{}", uuid::Uuid::new_v4()));
     let _ = std::fs::create_dir_all(&temp_dir);
     let config_path = temp_dir.join("config.json");
     unsafe {
@@ -157,8 +163,13 @@ fn test_app_save_dock_layout_persists_to_config() {
     let cfg = pealayer::config::AppConfig::load();
     assert!(cfg.workspace_dock_layout.is_some());
     let layout_json = cfg.workspace_dock_layout.unwrap();
-    let deserialized: DockState<PealayerTab> = serde_json::from_str(&layout_json).expect("valid dock state JSON");
-    assert!(deserialized.find_tab(&PealayerTab::ProgramMonitor).is_some());
+    let deserialized: DockState<PealayerTab> =
+        serde_json::from_str(&layout_json).expect("valid dock state JSON");
+    assert!(
+        deserialized
+            .find_tab(&PealayerTab::ProgramMonitor)
+            .is_some()
+    );
 
     unsafe {
         std::env::remove_var("PEALAYER_CONFIG_FILE");
@@ -178,7 +189,10 @@ fn test_workspace_window_menu_translations() {
     let app = pealayer::app::PealayerApp::default();
     assert_eq!(app.tr("Window"), "Window");
     assert_eq!(app.tr("Panels"), "Panels");
-    assert_eq!(app.tr("Reset Workspace to Default"), "Reset Workspace to Default");
+    assert_eq!(
+        app.tr("Reset Workspace to Default"),
+        "Reset Workspace to Default"
+    );
 
     let fa = pealayer::config::AppLanguage::Persian;
     assert_eq!(

@@ -1,0 +1,32 @@
+{
+  "name": "Pealayer",
+  "short_name": "Pealayer",
+  "description": "Media, timeline, effects, and live PCController hardware workspace",
+  "start_url": "/#/player",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "background_color": "#080a0e",
+  "theme_color": "#0078d4",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/api/runtime/app-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/api/runtime/app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    { "name": "Player", "url": "/#/player" },
+    { "name": "Timeline", "url": "/#/timeline" },
+    { "name": "Effects", "url": "/#/effects" },
+    { "name": "Hardware", "url": "/#/hardware" }
+  ]
+}

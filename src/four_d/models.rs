@@ -65,6 +65,29 @@ pub struct ControllerStripEffectCue {
     pub id: String,
 }
 
+/// Capability-derived timeline lane for a PCController-owned effect.
+///
+/// This is presentation metadata, not a second effect definition: the living
+/// sequence remains owned by PCController and Pealayer stores only its stable
+/// reference plus the lane needed to keep an authored timeline readable while
+/// the controller is temporarily offline.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum ControllerEffectLane {
+    Motion,
+    Relay,
+    Pwm,
+    Lighting,
+    Display,
+    Rf,
+    Audio,
+    #[default]
+    Sequence,
+    Composite,
+}
+
 pub fn default_hardware_target() -> HardwareTarget {
     HardwareTarget::Any
 }
@@ -91,6 +114,8 @@ pub struct Effect {
     /// Opaque PCController strip-effect ID advertised by the active board.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controller_strip_effect: Option<ControllerStripEffectCue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_lane: Option<ControllerEffectLane>,
 }
 
 impl Effect {
@@ -104,6 +129,7 @@ impl Effect {
             actions,
             controller_macro: None,
             controller_strip_effect: None,
+            controller_lane: None,
         }
     }
 
@@ -123,6 +149,7 @@ impl Effect {
             actions,
             controller_macro: None,
             controller_strip_effect: None,
+            controller_lane: None,
         }
     }
 
@@ -142,14 +169,11 @@ impl Effect {
             actions: Vec::new(),
             controller_macro: Some(ControllerMacroCue { id: macro_id, mode }),
             controller_strip_effect: None,
+            controller_lane: Some(ControllerEffectLane::Sequence),
         }
     }
 
-    pub fn controller_strip_effect(
-        name: String,
-        duration_ms: u64,
-        effect_id: String,
-    ) -> Self {
+    pub fn controller_strip_effect(name: String, duration_ms: u64, effect_id: String) -> Self {
         Self {
             id: Uuid::new_v4(),
             name,
@@ -159,6 +183,7 @@ impl Effect {
             actions: Vec::new(),
             controller_macro: None,
             controller_strip_effect: Some(ControllerStripEffectCue { id: effect_id }),
+            controller_lane: Some(ControllerEffectLane::Lighting),
         }
     }
 }
@@ -172,6 +197,27 @@ pub struct EffectInstance {
     pub effect_id: Uuid,
     /// The start time in milliseconds relative to the start of the video
     pub start_time_ms: u64,
+}
+
+/// An exact timeline-wide timing anchor. Unlike an analog automation
+/// keyframe, this does not change a hardware value; it is a named magnetic
+/// guide shared by every cue lane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineKeyframe {
+    pub id: Uuid,
+    pub time_ms: u64,
+    #[serde(default)]
+    pub label: String,
+}
+
+impl TimelineKeyframe {
+    pub fn new(time_ms: u64) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            time_ms,
+            label: String::new(),
+        }
+    }
 }
 
 impl EffectInstance {
@@ -194,6 +240,9 @@ pub struct Timeline {
     /// Continuous analog curve tracks (e.g. PWM fan curves, rumblers)
     #[serde(default)]
     pub analog_tracks: Vec<crate::four_d::curve::AnalogTrack>,
+    /// Timeline-wide exact timing guides used by cue snapping.
+    #[serde(default)]
+    pub keyframes: Vec<TimelineKeyframe>,
 }
 
 impl Default for Timeline {
@@ -206,6 +255,7 @@ impl Default for Timeline {
             // actually advertised by PCController; example actuators must not
             // appear as if they were connected equipment.
             analog_tracks: Vec::new(),
+            keyframes: Vec::new(),
         }
     }
 }
@@ -220,12 +270,72 @@ mod tests {
         assert!(timeline.instances.is_empty());
         assert!(timeline.templates.is_empty());
         assert!(timeline.analog_tracks.is_empty());
+        assert!(timeline.keyframes.is_empty());
+    }
+
+    #[test]
+    fn exact_timeline_keyframes_are_sorted_deduplicated_and_editable() {
+        let mut timeline = Timeline::default();
+        let later = timeline.add_keyframe(2_500);
+        let earlier = timeline.add_keyframe(750);
+        assert_eq!(timeline.add_keyframe(750), earlier);
+        assert_eq!(
+            timeline
+                .keyframes
+                .iter()
+                .map(|keyframe| keyframe.time_ms)
+                .collect::<Vec<_>>(),
+            vec![750, 2_500]
+        );
+        assert!(timeline.move_keyframe(later, 1_250));
+        assert!(!timeline.move_keyframe(later, 750));
+        assert!(timeline.remove_keyframe(earlier));
+        assert_eq!(timeline.keyframes[0].time_ms, 1_250);
     }
 }
 
 impl Timeline {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Adds one exact timeline guide, deduplicating by millisecond and keeping
+    /// the serialized collection stable and chronological.
+    pub fn add_keyframe(&mut self, time_ms: u64) -> Uuid {
+        match self
+            .keyframes
+            .binary_search_by_key(&time_ms, |keyframe| keyframe.time_ms)
+        {
+            Ok(index) => self.keyframes[index].id,
+            Err(index) => {
+                let keyframe = TimelineKeyframe::new(time_ms);
+                let id = keyframe.id;
+                self.keyframes.insert(index, keyframe);
+                id
+            }
+        }
+    }
+
+    pub fn move_keyframe(&mut self, id: Uuid, time_ms: u64) -> bool {
+        let Some(index) = self.keyframes.iter().position(|keyframe| keyframe.id == id) else {
+            return false;
+        };
+        if self
+            .keyframes
+            .iter()
+            .any(|keyframe| keyframe.id != id && keyframe.time_ms == time_ms)
+        {
+            return false;
+        }
+        self.keyframes[index].time_ms = time_ms;
+        self.keyframes.sort_by_key(|keyframe| keyframe.time_ms);
+        true
+    }
+
+    pub fn remove_keyframe(&mut self, id: Uuid) -> bool {
+        let before = self.keyframes.len();
+        self.keyframes.retain(|keyframe| keyframe.id != id);
+        self.keyframes.len() != before
     }
 
     pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {

@@ -16,6 +16,15 @@ pwsh -File scripts/update-screenshots-windows.ps1 `
   -Theme dark -Locale en,fa
 ```
 
+Capture the same Preferences editor in its native-window host by selecting the
+dedicated surface (the default remains the main application window):
+
+```powershell
+pwsh -File scripts/update-screenshots-windows.ps1 `
+  -Executable target/release/pealayer.exe `
+  -Surface preferences -Theme dark -Locale en
+```
+
 For a custom build, pass `-Branding path\to\brand.json` (the shared
 living `application-brand` document) or `-AppName`. With no override, the script
 reads `ProductName` from the executable's Win32 version resource.

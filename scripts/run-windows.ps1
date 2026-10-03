@@ -26,16 +26,24 @@ $cargoTargetDirectory = if ($env:CARGO_TARGET_DIR) {
 }
 $machineRustupHome = [Environment]::GetEnvironmentVariable('RUSTUP_HOME', 'Machine')
 if ($machineRustupHome) { $env:RUSTUP_HOME = $machineRustupHome }
-$systemRustBin = Join-Path $env:ProgramFiles 'Rust\bin'
-if (Test-Path -LiteralPath (Join-Path $systemRustBin 'cargo.exe')) {
-    $env:Path = $systemRustBin + ';' + $env:Path
+$userProfileDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+$rustBin = @(
+    (Join-Path $env:ProgramFiles 'Rust\bin')
+    (Join-Path $userProfileDirectory '.cargo\bin')
+) | Where-Object {
+    (Test-Path -LiteralPath (Join-Path $_ 'cargo.exe') -PathType Leaf) -and
+    (Test-Path -LiteralPath (Join-Path $_ 'rustc.exe') -PathType Leaf)
+} | Select-Object -First 1
+if ($rustBin) {
+    $env:Path = $rustBin + ';' + $env:Path
 }
 
-$libmpvDirectory = if ($env:LIBMPV_DIR) {
+$libmpvSourceDirectory = if ($env:LIBMPV_DIR) {
     $env:LIBMPV_DIR
 } else {
     Join-Path $env:ProgramFiles 'MPV'
 }
+$libmpvDirectory = $libmpvSourceDirectory
 
 $rustHost = (& rustc -vV | Select-String '^host:' | ForEach-Object { $_.Line.Substring(5).Trim() })
 if (-not $rustHost) { throw 'Could not determine the native Rust host triple.' }
@@ -45,14 +53,23 @@ $importLibraryNames = if ($rustHost -like '*-msvc') {
     @('libmpv.dll.a', 'libmpv.a')
 }
 $libmpvImportLibrary = $importLibraryNames |
-    ForEach-Object { Join-Path $libmpvDirectory $_ } |
+    ForEach-Object { Join-Path $libmpvSourceDirectory $_ } |
     Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
     Select-Object -First 1
+if (-not $libmpvImportLibrary -and $rustHost -like '*-msvc') {
+    $gnuImportLibrary = Join-Path $libmpvSourceDirectory 'libmpv.dll.a'
+    if (Test-Path -LiteralPath $gnuImportLibrary -PathType Leaf) {
+        $libmpvDirectory = Join-Path $cargoTargetDirectory 'mpv-msvc-import'
+        New-Item -ItemType Directory -Force -Path $libmpvDirectory | Out-Null
+        $libmpvImportLibrary = Join-Path $libmpvDirectory 'mpv.lib'
+        Copy-Item -LiteralPath $gnuImportLibrary -Destination $libmpvImportLibrary -Force
+    }
+}
 if (-not $libmpvImportLibrary) {
-    throw "Required libmpv import library for $rustHost is missing. Expected one of: $($importLibraryNames -join ', ') in $libmpvDirectory"
+    throw "Required libmpv import library for $rustHost is missing. Expected one of: $($importLibraryNames -join ', ') in $libmpvSourceDirectory"
 }
 $libmpvRuntime = @('libmpv-2.dll', 'mpv-2.dll') |
-    ForEach-Object { Join-Path $libmpvDirectory $_ } |
+    ForEach-Object { Join-Path $libmpvSourceDirectory $_ } |
     Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
     Select-Object -First 1
 if (-not $libmpvRuntime) {

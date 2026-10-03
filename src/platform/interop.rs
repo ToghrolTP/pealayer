@@ -5,9 +5,9 @@ use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
-#[cfg(unix)]
+use std::sync::mpsc::{Receiver, channel};
+#[cfg(any(unix, windows))]
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{channel, Receiver};
 use std::thread;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -20,6 +20,8 @@ pub struct LaunchRequest {
     pub fullscreen: bool,
     pub volume: Option<f64>,
     pub activate: bool,
+    #[serde(default)]
+    pub commands: Vec<InteropCommand>,
 }
 
 impl LaunchRequest {
@@ -34,9 +36,15 @@ impl LaunchRequest {
             .sender_working_directory
             .as_ref()
             .is_some_and(|value| value.len() > 32_768)
-            || self.target.as_ref().is_some_and(|value| value.len() > 32_768)
+            || self
+                .target
+                .as_ref()
+                .is_some_and(|value| value.trim().is_empty() || value.len() > 32_768)
         {
-            return Err("launch path fields must not exceed 32768 bytes".to_string());
+            return Err(
+                "launch target must be non-empty and path fields must not exceed 32768 bytes"
+                    .to_string(),
+            );
         }
         if self
             .volume
@@ -44,16 +52,25 @@ impl LaunchRequest {
         {
             return Err("launch volume must be a finite value from 0 to 130".to_string());
         }
+        if self.commands.len() > 64 {
+            return Err("launch request must not contain more than 64 commands".to_string());
+        }
+        for command in &self.commands {
+            if matches!(command, InteropCommand::Launch { .. }) {
+                return Err("launch request must not contain a nested launch command".to_string());
+            }
+            command.validate()?;
+        }
         Ok(())
     }
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 fn normalized_application_identity(identity: &str) -> String {
     identity.trim().to_lowercase()
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 fn validate_launch_destination(
     request: &LaunchRequest,
     expected_identity: &str,
@@ -73,13 +90,13 @@ fn validate_launch_destination(
     Ok(())
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 #[derive(Default)]
 struct LaunchReceiptCache {
     operation_ids: std::collections::VecDeque<String>,
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows, test))]
 impl LaunchReceiptCache {
     const CAPACITY: usize = 1024;
 
@@ -99,36 +116,402 @@ impl LaunchReceiptCache {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum InteropCommand {
-    Launch { request: LaunchRequest },
+    Launch {
+        request: LaunchRequest,
+    },
     Play,
     Pause,
     TogglePause,
-    Seek { seconds: f64 },
-    SeekAbs { percentage: f64 },
+    Stop,
+    Next,
+    Previous,
+    Seek {
+        seconds: f64,
+    },
+    SeekTo {
+        seconds: f64,
+    },
+    SeekAbs {
+        percentage: f64,
+    },
     #[serde(alias = "volume")]
     SetVolume {
         #[serde(alias = "level")]
         value: f64,
+    },
+    SetMute {
+        muted: bool,
+    },
+    ToggleMute,
+    SetRate {
+        rate: f64,
     },
     #[serde(alias = "open_video")]
     Open {
         #[serde(alias = "path")]
         target: String,
     },
-    SetFullscreen { enabled: bool },
+    SetFullscreen {
+        enabled: bool,
+    },
     ToggleFullscreen,
-    SetWorkspace { nle: bool },
+    Activate,
+    Minimize,
+    Maximize,
+    Restore,
+    OpenPreferences,
+    ShowMessage {
+        message: String,
+    },
+    Quit,
+    SetWorkspace {
+        profile: String,
+    },
+    CreateWorkspaceProfile {
+        name: String,
+        icon: String,
+    },
+    UpdateWorkspaceProfile {
+        id: String,
+        name: String,
+        icon: String,
+        capture: bool,
+    },
+    DeleteWorkspaceProfile {
+        id: String,
+    },
+    MoveWorkspaceProfile {
+        id: String,
+        direction: i32,
+    },
+    AddEffectCue {
+        effect_id: String,
+        start_time_ms: u64,
+    },
+    RemoveEffectCue {
+        instance_id: String,
+    },
+    AddControllerEffectCue {
+        reference: String,
+        start_time_ms: u64,
+    },
+    PlayControllerEffect {
+        reference: String,
+    },
+    StopControllerEffect,
+    DeleteControllerEffect {
+        reference: String,
+    },
+    SaveControllerEffect {
+        effect: WebControllerEffectDraft,
+    },
+    SetRecording {
+        enabled: bool,
+    },
+    SetEmergencyStop {
+        active: bool,
+    },
+    InvokeHardwareAction {
+        action_id: String,
+    },
+    SetHardwarePwm {
+        channel: u8,
+        percent: f64,
+    },
+    UpdateHardwarePresentation {
+        key: String,
+        fields: Value,
+    },
+    ConfigureAddressableStrip {
+        pixels: u16,
+    },
+    FillAddressableStrip {
+        red: u8,
+        green: u8,
+        blue: u8,
+        brightness: u8,
+    },
+    ClearAddressableStrip,
+    PressFrontPanelKey {
+        key: String,
+    },
+    UpdateConfig {
+        values: Value,
+    },
+    ReloadConfig,
     GetStatus,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+fn valid_workspace_profile_id(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
+fn valid_workspace_profile_name(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty() && value.chars().count() <= 64 && !value.chars().any(char::is_control)
+}
+
+fn valid_workspace_profile_icon(value: &str) -> bool {
+    valid_workspace_profile_id(value)
+}
+
+impl InteropCommand {
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Launch { request } => request.validate(),
+            Self::Seek { seconds } if !seconds.is_finite() => {
+                Err("seek value must be finite".to_string())
+            }
+            Self::SeekTo { seconds } if !seconds.is_finite() || *seconds < 0.0 => {
+                Err("absolute seek time must be a finite non-negative value".to_string())
+            }
+            Self::SeekAbs { percentage }
+                if !percentage.is_finite() || !(0.0..=100.0).contains(percentage) =>
+            {
+                Err("seek percentage must be a finite value from 0 to 100".to_string())
+            }
+            Self::SetVolume { value } if !value.is_finite() || !(0.0..=130.0).contains(value) => {
+                Err("volume must be a finite value from 0 to 130".to_string())
+            }
+            Self::SetRate { rate } if !rate.is_finite() || !(0.05..=16.0).contains(rate) => {
+                Err("playback rate must be a finite value from 0.05 to 16".to_string())
+            }
+            Self::SetHardwarePwm { percent, .. }
+                if !percent.is_finite() || !(0.0..=100.0).contains(percent) =>
+            {
+                Err("PWM percent must be a finite value from 0 to 100".to_string())
+            }
+            Self::ConfigureAddressableStrip { pixels } if *pixels == 0 => {
+                Err("addressable strip pixel count must be greater than zero".to_string())
+            }
+            Self::InvokeHardwareAction { action_id }
+                if action_id.trim().is_empty()
+                    || action_id.len() > 128
+                    || !action_id.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+                    }) =>
+            {
+                Err("hardware action ID is invalid".to_string())
+            }
+            Self::UpdateHardwarePresentation { key, fields }
+                if key.trim().is_empty()
+                    || key.len() > 128
+                    || !key.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+                    })
+                    || !fields.is_object() =>
+            {
+                Err("hardware presentation update is invalid".to_string())
+            }
+            Self::PressFrontPanelKey { key }
+                if !matches!(key.to_ascii_uppercase().as_str(), "K1" | "K2" | "K3" | "K4") =>
+            {
+                Err("front-panel key must be K1, K2, K3, or K4".to_string())
+            }
+            Self::Open { target } if target.trim().is_empty() || target.len() > 32_768 => {
+                Err("media target must contain 1 to 32768 bytes".to_string())
+            }
+            Self::AddEffectCue { effect_id, .. }
+                if uuid::Uuid::parse_str(effect_id.trim()).is_err() =>
+            {
+                Err("effect_id must be a valid effect UUID".to_string())
+            }
+            Self::RemoveEffectCue { instance_id }
+                if uuid::Uuid::parse_str(instance_id.trim()).is_err() =>
+            {
+                Err("instance_id must be a valid cue UUID".to_string())
+            }
+            Self::AddControllerEffectCue { reference, .. }
+            | Self::PlayControllerEffect { reference }
+            | Self::DeleteControllerEffect { reference }
+                if !valid_controller_effect_reference(reference) =>
+            {
+                Err("controller effect reference is invalid".to_string())
+            }
+            Self::SaveControllerEffect { effect } => effect.validate(),
+            Self::ShowMessage { message } if message.trim().is_empty() => {
+                Err("message must not be empty".to_string())
+            }
+            Self::ShowMessage { message } if message.chars().count() > 2_048 => {
+                Err("message must not exceed 2048 characters".to_string())
+            }
+            Self::SetWorkspace { profile }
+            | Self::DeleteWorkspaceProfile { id: profile }
+            | Self::MoveWorkspaceProfile { id: profile, .. }
+                if !valid_workspace_profile_id(profile) =>
+            {
+                Err("workspace profile ID is invalid".to_string())
+            }
+            Self::CreateWorkspaceProfile { name, icon }
+                if !valid_workspace_profile_name(name) || !valid_workspace_profile_icon(icon) =>
+            {
+                Err("workspace profile name or icon is invalid".to_string())
+            }
+            Self::UpdateWorkspaceProfile { id, name, icon, .. }
+                if !valid_workspace_profile_id(id)
+                    || !valid_workspace_profile_name(name)
+                    || !valid_workspace_profile_icon(icon) =>
+            {
+                Err("workspace profile update is invalid".to_string())
+            }
+            Self::MoveWorkspaceProfile { direction, .. } if !matches!(direction, -1 | 1) => {
+                Err("workspace profile direction must be -1 or 1".to_string())
+            }
+            Self::UpdateConfig { values } => crate::config::AppConfig::validate_patch_shape(values),
+            _ => Ok(()),
+        }
+    }
+}
+
+pub fn command_catalog() -> Value {
+    serde_json::json!({
+        "contract": "pealayer.control",
+        "transports": ["native", "http", "json-rpc"],
+        "commands": [
+            "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
+            "seek", "seek_to", "seek_abs", "set_volume", "set_mute", "toggle_mute",
+            "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
+            "maximize", "restore", "open_preferences", "show_message", "set_workspace",
+            "create_workspace_profile", "update_workspace_profile", "delete_workspace_profile",
+            "move_workspace_profile", "update_config",
+            "reload_config", "add_effect_cue", "remove_effect_cue", "set_recording",
+            "get_status", "quit", "controller_effect_cue.add", "controller_effect.play",
+            "controller_effect.stop", "controller_effect.save", "controller_effect.delete",
+            "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm",
+            "configure_addressable_strip", "fill_addressable_strip", "clear_addressable_strip",
+            "press_front_panel_key"
+        ],
+        "json_rpc_prefix": "pealayer",
+        "discovery": "/api/player/commands"
+    })
+}
+
+pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("command must not be empty".to_string());
+    }
+    if trimmed.starts_with('{') {
+        return parse_interop_request(trimmed).map(|(_, command)| command);
+    }
+    let (name, argument) = trimmed
+        .split_once(char::is_whitespace)
+        .map(|(name, argument)| (name, argument.trim()))
+        .unwrap_or((trimmed, ""));
+    let number = |label: &str| {
+        argument
+            .parse::<f64>()
+            .map_err(|_| format!("{label} requires a numeric value"))
+    };
+    let boolean = || match argument.to_ascii_lowercase().as_str() {
+        "1" | "true" | "on" | "yes" => Ok(true),
+        "0" | "false" | "off" | "no" => Ok(false),
+        _ => Err("expected on/off, true/false, or 1/0".to_string()),
+    };
+    let effect_cue = || {
+        let mut values = argument.split_whitespace();
+        let effect_id = values
+            .next()
+            .ok_or_else(|| "add-effect-cue requires an effect UUID".to_string())?;
+        let start_time_ms = values
+            .next()
+            .map(|value| {
+                value
+                    .parse::<u64>()
+                    .map_err(|_| "add-effect-cue start time must be milliseconds".to_string())
+            })
+            .transpose()?
+            .unwrap_or_default();
+        if values.next().is_some() {
+            return Err(
+                "add-effect-cue accepts an effect UUID and optional start time".to_string(),
+            );
+        }
+        Ok(InteropCommand::AddEffectCue {
+            effect_id: effect_id.to_string(),
+            start_time_ms,
+        })
+    };
+    let command = match name.to_ascii_lowercase().as_str() {
+        "play" => InteropCommand::Play,
+        "pause" => InteropCommand::Pause,
+        "toggle" | "toggle_pause" | "toggle-pause" => InteropCommand::TogglePause,
+        "stop" => InteropCommand::Stop,
+        "next" => InteropCommand::Next,
+        "previous" | "prev" => InteropCommand::Previous,
+        "seek" => InteropCommand::Seek {
+            seconds: number("seek")?,
+        },
+        "seek_to" | "seek-to" => InteropCommand::SeekTo {
+            seconds: number("seek-to")?,
+        },
+        "seek_abs" | "seek-abs" => InteropCommand::SeekAbs {
+            percentage: number("seek-abs")?,
+        },
+        "volume" | "set_volume" | "set-volume" => InteropCommand::SetVolume {
+            value: number("volume")?,
+        },
+        "mute" if argument.is_empty() => InteropCommand::SetMute { muted: true },
+        "unmute" => InteropCommand::SetMute { muted: false },
+        "mute" | "set_mute" | "set-mute" => InteropCommand::SetMute { muted: boolean()? },
+        "toggle_mute" | "toggle-mute" => InteropCommand::ToggleMute,
+        "rate" | "set_rate" | "set-rate" => InteropCommand::SetRate {
+            rate: number("rate")?,
+        },
+        "open" => InteropCommand::Open {
+            target: argument.to_string(),
+        },
+        "fullscreen" | "set_fullscreen" | "set-fullscreen" => InteropCommand::SetFullscreen {
+            enabled: boolean()?,
+        },
+        "toggle_fullscreen" | "toggle-fullscreen" => InteropCommand::ToggleFullscreen,
+        "activate" | "focus" => InteropCommand::Activate,
+        "minimize" => InteropCommand::Minimize,
+        "maximize" => InteropCommand::Maximize,
+        "restore" => InteropCommand::Restore,
+        "preferences" | "open_preferences" | "open-preferences" => InteropCommand::OpenPreferences,
+        "message" | "show_message" | "show-message" => InteropCommand::ShowMessage {
+            message: argument.to_string(),
+        },
+        "workspace" | "set_workspace" | "set-workspace" => InteropCommand::SetWorkspace {
+            profile: argument.to_string(),
+        },
+        "add_effect_cue" | "add-effect-cue" => effect_cue()?,
+        "remove_effect_cue" | "remove-effect-cue" => InteropCommand::RemoveEffectCue {
+            instance_id: argument.to_string(),
+        },
+        "recording" | "set_recording" | "set-recording" => InteropCommand::SetRecording {
+            enabled: boolean()?,
+        },
+        "estop" | "e-stop" | "emergency_stop" | "emergency-stop" => {
+            InteropCommand::SetEmergencyStop { active: boolean()? }
+        }
+        "status" | "get_status" | "get-status" => InteropCommand::GetStatus,
+        "reload_config" | "reload-config" => InteropCommand::ReloadConfig,
+        "quit" | "exit" => InteropCommand::Quit,
+        _ => return Err(format!("unknown Pealayer command: {name}")),
+    };
+    command.validate()?;
+    Ok(command)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerStatusResponse {
     pub status: String,
     pub playing: bool,
     pub volume: f64,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default = "default_playback_rate")]
+    pub playback_rate: f64,
     pub playback_time: f64,
     pub duration: f64,
     pub current_video: Option<String>,
@@ -145,11 +528,192 @@ pub struct PlayerStatusResponse {
     #[serde(default)]
     pub workspace: String,
     #[serde(default)]
+    pub active_workspace_profile: Option<String>,
+    #[serde(default)]
+    pub workspace_profiles: Vec<WebWorkspaceProfile>,
+    #[serde(default)]
     pub controller_connected: bool,
     #[serde(default)]
     pub hardware_connected: bool,
     #[serde(default)]
+    pub estop_active: bool,
+    #[serde(default)]
     pub hardware: Option<HardwareStatusSummary>,
+    #[serde(default)]
+    pub recording: bool,
+    #[serde(default)]
+    pub recording_armed: bool,
+    #[serde(default)]
+    pub recordable_track_count: usize,
+    #[serde(default)]
+    pub effects: Vec<WebEffectProfile>,
+    #[serde(default)]
+    pub controller_effects: Vec<WebControllerEffect>,
+    #[serde(default)]
+    pub cues: Vec<WebEffectCue>,
+    #[serde(default)]
+    pub hardware_details: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebEffectProfile {
+    pub id: String,
+    pub name: String,
+    pub duration_ms: u64,
+    pub duration_display: String,
+    pub action_count: usize,
+    pub target: String,
+    #[serde(default)]
+    pub lane: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebWorkspaceProfile {
+    pub id: String,
+    pub name: String,
+    pub icon: String,
+    pub order: i32,
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebEffectCue {
+    pub id: String,
+    pub effect_id: String,
+    pub name: String,
+    pub start_time_ms: u64,
+    pub duration_ms: u64,
+    pub duration_display: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebControllerEffect {
+    pub reference: String,
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub icon: String,
+    pub category: String,
+    pub description: String,
+    pub kind: String,
+    pub duration_ms: u64,
+    pub duration_display: String,
+    pub action_count: usize,
+    pub editable: bool,
+    #[serde(default)]
+    pub lane: String,
+    pub program: Value,
+    pub default_fps: Option<u8>,
+    pub default_pixels: Option<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct WebControllerEffectDraft {
+    #[serde(default)]
+    pub reference: String,
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub icon: String,
+    pub category: String,
+    #[serde(default)]
+    pub description: String,
+    pub kind: String,
+    #[serde(default)]
+    pub program: Value,
+    #[serde(default)]
+    pub color: String,
+    #[serde(default)]
+    pub default_fps: u8,
+    #[serde(default)]
+    pub duration_ms: u64,
+    #[serde(default)]
+    pub default_pixels: u16,
+    #[serde(default)]
+    pub is_new: bool,
+}
+
+fn valid_controller_effect_reference(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 128
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, ':' | '.' | '-' | '_')
+        })
+}
+
+impl WebControllerEffectDraft {
+    fn validate(&self) -> Result<(), String> {
+        let field = |label: &str, value: &str| {
+            let value = value.trim();
+            (!value.is_empty()
+                && value.len() <= 64
+                && value
+                    .chars()
+                    .all(|character| character.is_alphanumeric() || " -_".contains(character)))
+            .then_some(())
+            .ok_or_else(|| format!("{label} must contain 1 to 64 safe characters"))
+        };
+        field("effect name", &self.name)?;
+        field("effect category", &self.category)?;
+        if !self.icon.trim().is_empty() {
+            field("effect icon", &self.icon)?;
+        }
+        match self.kind.as_str() {
+            "sequence" => self
+                .id
+                .parse::<u8>()
+                .map(|_| ())
+                .map_err(|_| "sequence effect id must be from 0 to 255".to_string()),
+            "strip-stream" => {
+                if !valid_controller_effect_reference(&self.id) || !self.program.is_object() {
+                    return Err(
+                        "lighting effect requires a safe id and a program object".to_string()
+                    );
+                }
+                Ok(())
+            }
+            _ => Err("effect kind must be sequence or strip-stream".to_string()),
+        }
+    }
+}
+
+fn default_playback_rate() -> f64 {
+    1.0
+}
+
+impl Default for PlayerStatusResponse {
+    fn default() -> Self {
+        Self {
+            status: String::new(),
+            playing: false,
+            volume: 0.0,
+            muted: false,
+            playback_rate: default_playback_rate(),
+            playback_time: 0.0,
+            duration: 0.0,
+            current_video: None,
+            seekable: false,
+            live: false,
+            buffered_until: None,
+            buffering_percent: None,
+            fullscreen: false,
+            workspace: String::new(),
+            active_workspace_profile: None,
+            workspace_profiles: Vec::new(),
+            controller_connected: false,
+            hardware_connected: false,
+            estop_active: false,
+            hardware: None,
+            recording: false,
+            recording_armed: false,
+            recordable_track_count: 0,
+            effects: Vec::new(),
+            controller_effects: Vec::new(),
+            cues: Vec::new(),
+            hardware_details: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -175,7 +739,11 @@ pub struct JsonRpcRequest {
 }
 
 pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropCommand>, String> {
-    if request.jsonrpc.as_deref().is_some_and(|version| version != "2.0") {
+    if request
+        .jsonrpc
+        .as_deref()
+        .is_some_and(|version| version != "2.0")
+    {
         return Err("unsupported JSON-RPC version".to_string());
     }
     let number = |names: &[&str]| {
@@ -191,58 +759,259 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
             .map(str::to_string)
             .ok_or_else(|| format!("missing string parameter: {}", names.join(" or ")))
     };
-    match request.method.as_str() {
-        "play" | "pealayer.play" | "pealayer.player.play" => Ok(Some(InteropCommand::Play)),
-        "pause" | "pealayer.pause" | "pealayer.player.pause" => {
-            Ok(Some(InteropCommand::Pause))
-        }
+    let command = match request.method.as_str() {
+        "play" | "pealayer.play" | "pealayer.player.play" => Some(InteropCommand::Play),
+        "pause" | "pealayer.pause" | "pealayer.player.pause" => Some(InteropCommand::Pause),
         "toggle" | "toggle_pause" | "pealayer.toggle" | "pealayer.player.toggle" => {
-            Ok(Some(InteropCommand::TogglePause))
+            Some(InteropCommand::TogglePause)
         }
-        "seek" | "pealayer.seek" | "pealayer.player.seek" => {
-            Ok(Some(InteropCommand::Seek {
-                seconds: number(&["seconds"] )?,
-            }))
+        "stop" | "pealayer.stop" | "pealayer.player.stop" => Some(InteropCommand::Stop),
+        "next" | "pealayer.next" | "pealayer.player.next" => Some(InteropCommand::Next),
+        "previous" | "prev" | "pealayer.previous" | "pealayer.player.previous" => {
+            Some(InteropCommand::Previous)
+        }
+        "seek" | "pealayer.seek" | "pealayer.player.seek" => Some(InteropCommand::Seek {
+            seconds: number(&["seconds"])?,
+        }),
+        "seek_to" | "pealayer.seek_to" | "pealayer.player.seek_to" => {
+            Some(InteropCommand::SeekTo {
+                seconds: number(&["seconds", "position"])?,
+            })
         }
         "seek_abs" | "pealayer.seek_absolute" | "pealayer.player.seek_absolute" => {
-            Ok(Some(InteropCommand::SeekAbs {
-                percentage: number(&["percentage"] )?,
-            }))
+            Some(InteropCommand::SeekAbs {
+                percentage: number(&["percentage"])?,
+            })
         }
         "volume" | "set_volume" | "pealayer.volume.set" | "pealayer.player.volume.set" => {
-            Ok(Some(InteropCommand::SetVolume {
-                value: number(&["value", "level"] )?,
-            }))
+            Some(InteropCommand::SetVolume {
+                value: number(&["value", "level"])?,
+            })
+        }
+        "mute" | "set_mute" | "pealayer.mute.set" | "pealayer.player.mute.set" => {
+            let muted = request
+                .params
+                .get("muted")
+                .or_else(|| request.params.get("enabled"))
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "missing boolean parameter: muted".to_string())?;
+            Some(InteropCommand::SetMute { muted })
+        }
+        "toggle_mute" | "pealayer.mute.toggle" | "pealayer.player.mute.toggle" => {
+            Some(InteropCommand::ToggleMute)
+        }
+        "rate" | "set_rate" | "pealayer.rate.set" | "pealayer.player.rate.set" => {
+            Some(InteropCommand::SetRate {
+                rate: number(&["rate", "value"])?,
+            })
         }
         "open" | "open_video" | "pealayer.open" | "pealayer.player.open" => {
-            Ok(Some(InteropCommand::Open {
-                target: string(&["target", "path"] )?,
-            }))
+            Some(InteropCommand::Open {
+                target: string(&["target", "path"])?,
+            })
         }
-        "fullscreen" | "pealayer.fullscreen.set" | "pealayer.player.fullscreen.set" => {
+        "fullscreen"
+        | "set_fullscreen"
+        | "pealayer.fullscreen.set"
+        | "pealayer.player.fullscreen.set" => {
             let enabled = request
                 .params
                 .get("enabled")
                 .and_then(Value::as_bool)
                 .ok_or_else(|| "missing boolean parameter: enabled".to_string())?;
-            Ok(Some(InteropCommand::SetFullscreen { enabled }))
+            Some(InteropCommand::SetFullscreen { enabled })
         }
         "toggle_fullscreen" | "pealayer.fullscreen.toggle" => {
-            Ok(Some(InteropCommand::ToggleFullscreen))
+            Some(InteropCommand::ToggleFullscreen)
         }
-        "workspace" | "pealayer.workspace.set" => {
-            let workspace = string(&["workspace", "value"])?;
-            match workspace.trim().to_ascii_lowercase().as_str() {
-                "nle" | "editor" => Ok(Some(InteropCommand::SetWorkspace { nle: true })),
-                "simple" | "player" => Ok(Some(InteropCommand::SetWorkspace { nle: false })),
-                _ => Err("workspace must be nle or simple".to_string()),
-            }
+        "activate" | "focus" | "pealayer.window.activate" => Some(InteropCommand::Activate),
+        "minimize" | "pealayer.window.minimize" => Some(InteropCommand::Minimize),
+        "maximize" | "pealayer.window.maximize" => Some(InteropCommand::Maximize),
+        "restore" | "pealayer.window.restore" => Some(InteropCommand::Restore),
+        "preferences" | "open_preferences" | "pealayer.window.preferences" => {
+            Some(InteropCommand::OpenPreferences)
         }
-        "get_status" | "player.status" | "pealayer.status" | "pealayer.player.status" => {
-            Ok(None)
+        "message" | "show_message" | "pealayer.message.show" => Some(InteropCommand::ShowMessage {
+            message: string(&["message", "text", "value"])?,
+        }),
+        "quit" | "exit" | "pealayer.quit" => Some(InteropCommand::Quit),
+        "workspace" | "set_workspace" | "pealayer.workspace.set" | "pealayer.workspace.restore" => {
+            Some(InteropCommand::SetWorkspace {
+                profile: string(&["profile", "workspace", "id", "value"])?
+                    .trim()
+                    .to_string(),
+            })
         }
-        method => Err(format!("unknown Pealayer JSON-RPC method: {method}")),
+        "workspace.create" | "pealayer.workspace.create" => {
+            Some(InteropCommand::CreateWorkspaceProfile {
+                name: string(&["name"])?,
+                icon: string(&["icon"])?,
+            })
+        }
+        "workspace.update" | "pealayer.workspace.update" => {
+            Some(InteropCommand::UpdateWorkspaceProfile {
+                id: string(&["id", "profile"])?,
+                name: string(&["name"])?,
+                icon: string(&["icon"])?,
+                capture: request
+                    .params
+                    .get("capture")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            })
+        }
+        "workspace.delete" | "pealayer.workspace.delete" => {
+            Some(InteropCommand::DeleteWorkspaceProfile {
+                id: string(&["id", "profile"])?,
+            })
+        }
+        "workspace.move" | "pealayer.workspace.move" => {
+            Some(InteropCommand::MoveWorkspaceProfile {
+                id: string(&["id", "profile"])?,
+                direction: request
+                    .params
+                    .get("direction")
+                    .and_then(Value::as_i64)
+                    .and_then(|value| i32::try_from(value).ok())
+                    .ok_or_else(|| "missing workspace move direction".to_string())?,
+            })
+        }
+        "effect_cue.add" | "pealayer.effect_cue.add" | "pealayer.timeline.effect.add" => {
+            Some(InteropCommand::AddEffectCue {
+                effect_id: string(&["effect_id", "effect"])?,
+                start_time_ms: request
+                    .params
+                    .get("start_time_ms")
+                    .or_else(|| request.params.get("time_ms"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+            })
+        }
+        "effect_cue.remove" | "pealayer.effect_cue.remove" | "pealayer.timeline.effect.remove" => {
+            Some(InteropCommand::RemoveEffectCue {
+                instance_id: string(&["instance_id", "cue_id"])?,
+            })
+        }
+        "controller_effect_cue.add" | "pealayer.controller_effect_cue.add" => {
+            Some(InteropCommand::AddControllerEffectCue {
+                reference: string(&["reference", "effect"])?,
+                start_time_ms: request
+                    .params
+                    .get("start_time_ms")
+                    .or_else(|| request.params.get("time_ms"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+            })
+        }
+        "controller_effect.play" | "pealayer.controller_effect.play" => {
+            Some(InteropCommand::PlayControllerEffect {
+                reference: string(&["reference", "effect"])?,
+            })
+        }
+        "controller_effect.stop" | "pealayer.controller_effect.stop" => {
+            Some(InteropCommand::StopControllerEffect)
+        }
+        "controller_effect.delete" | "pealayer.controller_effect.delete" => {
+            Some(InteropCommand::DeleteControllerEffect {
+                reference: string(&["reference", "effect"])?,
+            })
+        }
+        "controller_effect.save" | "pealayer.controller_effect.save" => {
+            let effect = serde_json::from_value::<WebControllerEffectDraft>(request.params.clone())
+                .map_err(|error| format!("invalid controller effect: {error}"))?;
+            Some(InteropCommand::SaveControllerEffect { effect })
+        }
+        "recording" | "recording.set" | "pealayer.recording.set" => {
+            let enabled = request
+                .params
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "missing boolean parameter: enabled".to_string())?;
+            Some(InteropCommand::SetRecording { enabled })
+        }
+        "estop" | "emergency_stop" | "pealayer.estop.set" | "pealayer.emergency_stop.set" => {
+            let active = request
+                .params
+                .get("active")
+                .or_else(|| request.params.get("enabled"))
+                .and_then(Value::as_bool)
+                .ok_or_else(|| "missing boolean parameter: active".to_string())?;
+            Some(InteropCommand::SetEmergencyStop { active })
+        }
+        "hardware.action.invoke" | "pealayer.hardware.action.invoke" => {
+            Some(InteropCommand::InvokeHardwareAction {
+                action_id: string(&["action_id", "action"])?,
+            })
+        }
+        "hardware.pwm.set" | "pealayer.hardware.pwm.set" => {
+            let channel = request
+                .params
+                .get("channel")
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .ok_or_else(|| "missing valid PWM channel".to_string())?;
+            Some(InteropCommand::SetHardwarePwm {
+                channel,
+                percent: number(&["percent", "value"])?,
+            })
+        }
+        "hardware.presentation.update" | "pealayer.hardware.presentation.update" => {
+            Some(InteropCommand::UpdateHardwarePresentation {
+                key: string(&["key", "channel"])?,
+                fields: request
+                    .params
+                    .get("fields")
+                    .cloned()
+                    .ok_or_else(|| "missing hardware presentation fields".to_string())?,
+            })
+        }
+        "hardware.strip.configure" | "pealayer.hardware.strip.configure" => {
+            let pixels = request
+                .params
+                .get("pixels")
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .ok_or_else(|| "missing valid addressable strip pixel count".to_string())?;
+            Some(InteropCommand::ConfigureAddressableStrip { pixels })
+        }
+        "hardware.strip.fill" | "pealayer.hardware.strip.fill" => {
+            let byte = |name: &str| {
+                request
+                    .params
+                    .get(name)
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u8::try_from(value).ok())
+                    .ok_or_else(|| format!("missing valid strip {name}"))
+            };
+            Some(InteropCommand::FillAddressableStrip {
+                red: byte("red")?,
+                green: byte("green")?,
+                blue: byte("blue")?,
+                brightness: byte("brightness")?,
+            })
+        }
+        "hardware.strip.clear" | "pealayer.hardware.strip.clear" => {
+            Some(InteropCommand::ClearAddressableStrip)
+        }
+        "hardware.front_panel.press" | "pealayer.hardware.front_panel.press" => {
+            Some(InteropCommand::PressFrontPanelKey {
+                key: string(&["key"])?,
+            })
+        }
+        "config.update" | "pealayer.config.update" => {
+            crate::config::AppConfig::validate_patch_shape(&request.params)?;
+            Some(InteropCommand::UpdateConfig {
+                values: request.params.clone(),
+            })
+        }
+        "config.reload" | "pealayer.config.reload" => Some(InteropCommand::ReloadConfig),
+        "get_status" | "player.status" | "pealayer.status" | "pealayer.player.status" => None,
+        method => return Err(format!("unknown Pealayer JSON-RPC method: {method}")),
+    };
+    if let Some(command) = &command {
+        command.validate()?;
     }
+    Ok(command)
 }
 
 pub fn json_rpc_result(id: &Value, result: Value) -> String {
@@ -250,11 +1019,12 @@ pub fn json_rpc_result(id: &Value, result: Value) -> String {
 }
 
 pub fn json_rpc_error(id: &Value, code: i32, message: &str) -> String {
-    serde_json::json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
-        .to_string()
+    serde_json::json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}}).to_string()
 }
 
 static LIVE_STATUS: std::sync::RwLock<Option<PlayerStatusResponse>> = std::sync::RwLock::new(None);
+static LIVE_CONFIG: std::sync::RwLock<Option<crate::config::AppConfig>> =
+    std::sync::RwLock::new(None);
 
 pub fn set_live_status(status: PlayerStatusResponse) {
     if let Ok(mut lock) = LIVE_STATUS.write() {
@@ -274,6 +1044,20 @@ pub fn get_live_status() -> PlayerStatusResponse {
     }
 }
 
+pub fn set_live_config(config: crate::config::AppConfig) {
+    if let Ok(mut lock) = LIVE_CONFIG.write() {
+        *lock = Some(config);
+    }
+}
+
+pub fn get_live_config() -> crate::config::AppConfig {
+    LIVE_CONFIG
+        .read()
+        .ok()
+        .and_then(|config| config.clone())
+        .unwrap_or_else(crate::config::AppConfig::load)
+}
+
 pub fn get_socket_path() -> PathBuf {
     if let Ok(path) = std::env::var("PEALAYER_SOCKET_PATH") {
         return PathBuf::from(path);
@@ -285,76 +1069,225 @@ pub fn get_socket_path() -> PathBuf {
     }
 }
 
-pub fn parse_interop_request(line: &str) -> Result<(Option<serde_json::Value>, InteropCommand), String> {
+fn local_endpoint_hash(identity: &str) -> u64 {
+    identity
+        .trim()
+        .to_lowercase()
+        .as_bytes()
+        .iter()
+        .fold(0xcbf29ce484222325_u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+        })
+}
+
+#[cfg(windows)]
+pub fn windows_pipe_name(application_identity: &str) -> String {
+    let session = crate::platform::windows::current_session_id().unwrap_or_default();
+    format!(
+        r"\\.\pipe\Pealayer.Control.{:016x}.{session}",
+        local_endpoint_hash(application_identity)
+    )
+}
+
+#[cfg(windows)]
+fn wide_null(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(windows)]
+fn send_windows_native_request(
+    payload: &str,
+    application_identity: &str,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
+    use windows::Win32::Foundation::GetLastError;
+    use windows::Win32::System::Pipes::CallNamedPipeW;
+    use windows::core::PCWSTR;
+
+    let pipe_name = windows_pipe_name(application_identity);
+    let pipe_name_wide = wide_null(&pipe_name);
+    let request = format!("{}\n", payload.trim());
+    let mut response = vec![0u8; 65_536];
+    let mut bytes_read = 0u32;
+    let timeout_ms = timeout.as_millis().clamp(1, u128::from(u32::MAX)) as u32;
+    let ok = unsafe {
+        CallNamedPipeW(
+            PCWSTR(pipe_name_wide.as_ptr()),
+            Some(request.as_ptr().cast()),
+            request.len() as u32,
+            Some(response.as_mut_ptr().cast()),
+            response.len() as u32,
+            &mut bytes_read,
+            timeout_ms,
+        )
+    };
+    if !ok.as_bool() {
+        return Err(format!(
+            "native Pealayer pipe {pipe_name} is unavailable: {:?}",
+            unsafe { GetLastError() }
+        ));
+    }
+    response.truncate(bytes_read as usize);
+    String::from_utf8(response)
+        .map(|value| value.trim().to_string())
+        .map_err(|error| format!("native Pealayer pipe returned invalid UTF-8: {error}"))
+}
+
+#[cfg(windows)]
+pub fn send_native_request(
+    payload: &str,
+    application_identity: &str,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
+    send_windows_native_request(payload, application_identity, timeout)
+}
+
+#[cfg(unix)]
+pub fn send_native_request(
+    payload: &str,
+    _application_identity: &str,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::net::UnixStream;
+
+    let mut stream = UnixStream::connect(get_socket_path())
+        .map_err(|error| format!("native Pealayer socket is unavailable: {error}"))?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|error| error.to_string())?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(|error| error.to_string())?;
+    stream
+        .write_all(format!("{}\n", payload.trim()).as_bytes())
+        .and_then(|_| stream.flush())
+        .map_err(|error| error.to_string())?;
+    let mut response = String::new();
+    BufReader::new(stream)
+        .read_line(&mut response)
+        .map_err(|error| error.to_string())?;
+    Ok(response.trim().to_string())
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn send_native_request(
+    _payload: &str,
+    _application_identity: &str,
+    _timeout: std::time::Duration,
+) -> Result<String, String> {
+    Err("native Pealayer IPC is not supported on this operating system".to_string())
+}
+
+#[cfg(windows)]
+fn spawn_windows_pipe_listener(
+    tx: std::sync::mpsc::Sender<InteropCommand>,
+    egui_ctx: eframe::egui::Context,
+    application_identity: String,
+) {
+    use windows::Win32::Foundation::{CloseHandle, ERROR_PIPE_CONNECTED, GetLastError};
+    use windows::Win32::Storage::FileSystem::{
+        FlushFileBuffers, PIPE_ACCESS_DUPLEX, ReadFile, WriteFile,
+    };
+    use windows::Win32::System::Pipes::{
+        ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_MESSAGE,
+        PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_MESSAGE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    };
+    use windows::core::PCWSTR;
+
+    let pipe_name = windows_pipe_name(&application_identity);
+    let pipe_name_wide = wide_null(&pipe_name);
+    let expected_session_id = crate::platform::windows::current_session_id().ok();
+    let receipts = Arc::new(Mutex::new(LaunchReceiptCache::default()));
+    thread::spawn(move || {
+        loop {
+            let handle = unsafe {
+                CreateNamedPipeW(
+                    PCWSTR(pipe_name_wide.as_ptr()),
+                    PIPE_ACCESS_DUPLEX,
+                    PIPE_TYPE_MESSAGE
+                        | PIPE_READMODE_MESSAGE
+                        | PIPE_WAIT
+                        | PIPE_REJECT_REMOTE_CLIENTS,
+                    PIPE_UNLIMITED_INSTANCES,
+                    65_536,
+                    65_536,
+                    1_000,
+                    None,
+                )
+            };
+            if handle.is_invalid() {
+                log::error!("Could not create native Pealayer pipe {pipe_name}");
+                thread::sleep(std::time::Duration::from_millis(250));
+                continue;
+            }
+            let connected = unsafe { ConnectNamedPipe(handle, None) }.is_ok()
+                || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
+            if connected {
+                let mut request = vec![0u8; 65_536];
+                let mut bytes_read = 0u32;
+                if unsafe { ReadFile(handle, Some(&mut request), Some(&mut bytes_read), None) }
+                    .is_ok()
+                {
+                    request.truncate(bytes_read as usize);
+                    let payload = String::from_utf8_lossy(&request);
+                    let response = dispatch_local_payload(
+                        payload.trim(),
+                        &tx,
+                        &egui_ctx,
+                        &receipts,
+                        &application_identity,
+                        expected_session_id,
+                    );
+                    let mut bytes_written = 0u32;
+                    let _ = unsafe {
+                        WriteFile(
+                            handle,
+                            Some(response.as_bytes()),
+                            Some(&mut bytes_written),
+                            None,
+                        )
+                    };
+                    let _ = unsafe { FlushFileBuffers(handle) };
+                }
+                let _ = unsafe { DisconnectNamedPipe(handle) };
+            }
+            let _ = unsafe { CloseHandle(handle) };
+        }
+    });
+}
+
+pub fn parse_interop_request(
+    line: &str,
+) -> Result<(Option<serde_json::Value>, InteropCommand), String> {
     let val: serde_json::Value = serde_json::from_str(line).map_err(|e| e.to_string())?;
 
     // Check if JSON-RPC 2.0 format
     if val.get("jsonrpc").and_then(|v| v.as_str()) == Some("2.0") || val.get("method").is_some() {
-        let id = val.get("id").cloned();
-        let method = val.get("method").and_then(|m| m.as_str()).ok_or("Missing method field")?;
-        let params = val.get("params");
-
-        let cmd = match method {
-            "play" => InteropCommand::Play,
-            "pause" => InteropCommand::Pause,
-            "toggle_pause" | "toggle" => InteropCommand::TogglePause,
-            "seek" => {
-                let seconds = params.and_then(|p| p.get("seconds")).and_then(|s| s.as_f64()).unwrap_or(0.0);
-                InteropCommand::Seek { seconds }
-            }
-            "seek_abs" => {
-                let percentage = params.and_then(|p| p.get("percentage")).and_then(|p| p.as_f64()).unwrap_or(0.0);
-                InteropCommand::SeekAbs { percentage }
-            }
-            "set_volume" | "volume" => {
-                let value = params.and_then(|p| p.get("value").or_else(|| p.get("level"))).and_then(|v| v.as_f64()).unwrap_or(100.0);
-                InteropCommand::SetVolume { value }
-            }
-            "open" | "open_video" => {
-                let target = params.and_then(|p| p.get("target").or_else(|| p.get("path"))).and_then(|t| t.as_str()).unwrap_or("").to_string();
-                InteropCommand::Open { target }
-            }
-            "fullscreen" | "set_fullscreen" => {
-                let enabled = params
-                    .and_then(|p| p.get("enabled"))
-                    .and_then(|value| value.as_bool())
-                    .ok_or("Missing enabled boolean")?;
-                InteropCommand::SetFullscreen { enabled }
-            }
-            "toggle_fullscreen" => InteropCommand::ToggleFullscreen,
-            "workspace" | "set_workspace" => {
-                let workspace = params
-                    .and_then(|p| p.get("workspace").or_else(|| p.get("value")))
-                    .and_then(|value| value.as_str())
-                    .ok_or("Missing workspace")?;
-                match workspace.trim().to_ascii_lowercase().as_str() {
-                    "nle" | "editor" => InteropCommand::SetWorkspace { nle: true },
-                    "simple" | "player" => InteropCommand::SetWorkspace { nle: false },
-                    _ => return Err("workspace must be nle or simple".to_string()),
-                }
-            }
-            "get_status" | "player.status" => InteropCommand::GetStatus,
-            other => return Err(format!("Unknown RPC method: {}", other)),
-        };
-
-        return Ok((id, cmd));
+        let request: JsonRpcRequest = serde_json::from_value(val).map_err(|e| e.to_string())?;
+        let id = Some(request.id.clone());
+        let command = command_from_json_rpc(&request)?.unwrap_or(InteropCommand::GetStatus);
+        return Ok((id, command));
     }
 
     // Fall back to standard InteropCommand deserialization
     let cmd: InteropCommand = serde_json::from_value(val).map_err(|e| e.to_string())?;
-    if let InteropCommand::Launch { request } = &cmd {
-        request.validate()?;
-    }
+    cmd.validate()?;
     Ok((None, cmd))
 }
 
-pub fn format_interop_response(id: Option<serde_json::Value>, result: &serde_json::Value) -> String {
+pub fn format_interop_response(
+    id: Option<serde_json::Value>,
+    result: &serde_json::Value,
+) -> String {
     if let Some(id_val) = id {
         serde_json::json!({
             "jsonrpc": "2.0",
             "id": id_val,
             "result": result
-        }).to_string() + "\n"
+        })
+        .to_string()
+            + "\n"
     } else {
         result.to_string() + "\n"
     }
@@ -369,13 +1302,70 @@ pub fn format_interop_error(id: Option<serde_json::Value>, code: i32, message: &
                 "code": code,
                 "message": message
             }
-        }).to_string() + "\n"
+        })
+        .to_string()
+            + "\n"
     } else {
         serde_json::json!({
             "status": "error",
             "message": message
-        }).to_string() + "\n"
+        })
+        .to_string()
+            + "\n"
     }
+}
+
+#[cfg(any(unix, windows, test))]
+fn dispatch_local_payload(
+    payload: &str,
+    tx: &std::sync::mpsc::Sender<InteropCommand>,
+    egui_ctx: &eframe::egui::Context,
+    launch_receipts: &Arc<Mutex<LaunchReceiptCache>>,
+    expected_identity: &str,
+    expected_session_id: Option<u32>,
+) -> String {
+    let (id, command) = match parse_interop_request(payload) {
+        Ok(parsed) => parsed,
+        Err(error) => return format_interop_error(None, -32600, &error),
+    };
+    if matches!(command, InteropCommand::GetStatus) {
+        let value = serde_json::to_value(get_live_status())
+            .unwrap_or_else(|_| serde_json::json!({"status":"initializing"}));
+        return format_interop_response(id, &value);
+    }
+    let operation_id = match &command {
+        InteropCommand::Launch { request } => {
+            if let Err(error) =
+                validate_launch_destination(request, expected_identity, expected_session_id)
+            {
+                return format_interop_error(id, -32600, &error);
+            }
+            Some(request.operation_id.clone())
+        }
+        _ => None,
+    };
+    if let Some(operation_id) = operation_id {
+        let mut receipts = match launch_receipts.lock() {
+            Ok(receipts) => receipts,
+            Err(_) => {
+                return format_interop_error(id, -32000, "launch receipt cache is unavailable");
+            }
+        };
+        if !receipts.claim(&operation_id) {
+            return format_interop_response(
+                id,
+                &serde_json::json!({"status":"accepted","duplicate":true}),
+            );
+        }
+        if tx.send(command).is_err() {
+            receipts.release(&operation_id);
+            return format_interop_error(id, -32000, "application dispatcher is unavailable");
+        }
+    } else if tx.send(command).is_err() {
+        return format_interop_error(id, -32000, "application dispatcher is unavailable");
+    }
+    egui_ctx.request_repaint();
+    format_interop_response(id, &serde_json::json!({"status":"accepted"}))
 }
 
 #[cfg(unix)]
@@ -395,76 +1385,16 @@ fn handle_client_connection<R: std::io::Read, W: Write>(
         }
         let trimmed = line.trim();
         if !trimmed.is_empty() {
-            match parse_interop_request(trimmed) {
-                Ok((id, InteropCommand::GetStatus)) => {
-                    let status = get_live_status();
-                    let resp_val = serde_json::to_value(&status).unwrap_or(serde_json::json!({"status": "ok"}));
-                    let resp = format_interop_response(id, &resp_val);
-                    let _ = writer.write_all(resp.as_bytes());
-                    let _ = writer.flush();
-                }
-                Ok((id, cmd)) => {
-                    let operation_id = match &cmd {
-                        InteropCommand::Launch { request } => {
-                            if let Err(error) = validate_launch_destination(
-                                request,
-                                &expected_identity,
-                                expected_session_id,
-                            ) {
-                                let response = format_interop_error(id, -32600, &error);
-                                let _ = writer.write_all(response.as_bytes());
-                                let _ = writer.flush();
-                                line.clear();
-                                continue;
-                            }
-                            Some(request.operation_id.clone())
-                        }
-                        _ => None,
-                    };
-                    let response = if let Some(operation_id) = operation_id {
-                        match launch_receipts.lock() {
-                            Ok(mut receipts) => {
-                                if !receipts.claim(&operation_id) {
-                                    format_interop_response(
-                                        id,
-                                        &serde_json::json!({"status": "accepted", "duplicate": true}),
-                                    )
-                                } else if tx.send(cmd).is_ok() {
-                                    egui_ctx.request_repaint();
-                                    format_interop_response(
-                                        id,
-                                        &serde_json::json!({"status": "accepted"}),
-                                    )
-                                } else {
-                                    receipts.release(&operation_id);
-                                    format_interop_error(
-                                        id,
-                                        -32000,
-                                        "application dispatcher is unavailable",
-                                    )
-                                }
-                            }
-                            Err(_) => format_interop_error(
-                                id,
-                                -32000,
-                                "launch receipt cache is unavailable",
-                            ),
-                        }
-                    } else if tx.send(cmd).is_ok() {
-                        egui_ctx.request_repaint();
-                        format_interop_response(id, &serde_json::json!({"status": "accepted"}))
-                    } else {
-                        format_interop_error(id, -32000, "application dispatcher is unavailable")
-                    };
-                    let _ = writer.write_all(response.as_bytes());
-                    let _ = writer.flush();
-                }
-                Err(err) => {
-                    let err_resp = format_interop_error(None, -32600, &err);
-                    let _ = writer.write_all(err_resp.as_bytes());
-                    let _ = writer.flush();
-                }
-            }
+            let response = dispatch_local_payload(
+                trimmed,
+                &tx,
+                &egui_ctx,
+                &launch_receipts,
+                &expected_identity,
+                expected_session_id,
+            );
+            let _ = writer.write_all(response.as_bytes());
+            let _ = writer.flush();
         }
         line.clear();
     }
@@ -508,7 +1438,7 @@ pub fn spawn_interop_listener(
                                     ctx_conn,
                                     receipts_conn,
                                     identity_conn,
-                                None,
+                                    None,
                                 );
                             }
                         });
@@ -517,14 +1447,15 @@ pub fn spawn_interop_listener(
             }
         });
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    spawn_windows_pipe_listener(tx, egui_ctx, application_identity);
+    #[cfg(not(any(unix, windows)))]
     let _ = (tx, egui_ctx, application_identity);
 }
 
 pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<InteropCommand> {
     let (tx, rx) = channel::<InteropCommand>();
-    let application_identity =
-        crate::config::resolved_app_name(&crate::config::AppConfig::load());
+    let application_identity = crate::cli::resolved_instance_identity();
     spawn_interop_listener(tx.clone(), egui_ctx.clone(), application_identity.clone());
     let state_tx = crate::server::spawn_control_server_configured(
         crate::config::control_port(),
@@ -534,6 +1465,7 @@ pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<Interop
             "en".to_string(),
             "ltr".to_string(),
             "system".to_string(),
+            [0, 120, 212],
         ),
         tx,
         application_identity,
@@ -544,7 +1476,7 @@ pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<Interop
     rx
 }
 
-const PCCONTROLLER_ACTIONS: &str = "pealayer.play,pealayer.pause,pealayer.toggle,pealayer.seek,pealayer.seek_absolute,pealayer.volume.set,pealayer.open,pealayer.fullscreen.set,pealayer.fullscreen.toggle,pealayer.workspace.set";
+const PCCONTROLLER_ACTIONS: &str = "pealayer.play,pealayer.pause,pealayer.toggle,pealayer.stop,pealayer.next,pealayer.previous,pealayer.seek,pealayer.seek_to,pealayer.seek_absolute,pealayer.volume.set,pealayer.mute.set,pealayer.mute.toggle,pealayer.rate.set,pealayer.open,pealayer.fullscreen.set,pealayer.fullscreen.toggle,pealayer.workspace.set,pealayer.window.activate,pealayer.window.minimize,pealayer.window.maximize,pealayer.window.restore,pealayer.quit";
 
 struct ControllerAction {
     command: Option<InteropCommand>,
@@ -595,6 +1527,9 @@ fn controller_action_from_event(event: &Value, instance_id: &str) -> Option<Cont
             "pealayer.play" => Some(InteropCommand::Play),
             "pealayer.pause" => Some(InteropCommand::Pause),
             "pealayer.toggle" => Some(InteropCommand::TogglePause),
+            "pealayer.stop" => Some(InteropCommand::Stop),
+            "pealayer.next" => Some(InteropCommand::Next),
+            "pealayer.previous" => Some(InteropCommand::Previous),
             "pealayer.seek" => value
                 .parse::<f64>()
                 .ok()
@@ -605,11 +1540,27 @@ fn controller_action_from_event(event: &Value, instance_id: &str) -> Option<Cont
                 .ok()
                 .filter(|percentage| percentage.is_finite() && (0.0..=100.0).contains(percentage))
                 .map(|percentage| InteropCommand::SeekAbs { percentage }),
+            "pealayer.seek_to" => value
+                .parse::<f64>()
+                .ok()
+                .filter(|seconds| seconds.is_finite())
+                .map(|seconds| InteropCommand::SeekTo { seconds }),
             "pealayer.volume.set" => value
                 .parse::<f64>()
                 .ok()
                 .filter(|value| value.is_finite() && (0.0..=130.0).contains(value))
                 .map(|value| InteropCommand::SetVolume { value }),
+            "pealayer.mute.set" => match value.to_ascii_lowercase().as_str() {
+                "true" | "1" | "on" | "yes" => Some(InteropCommand::SetMute { muted: true }),
+                "false" | "0" | "off" | "no" => Some(InteropCommand::SetMute { muted: false }),
+                _ => None,
+            },
+            "pealayer.mute.toggle" if value.is_empty() => Some(InteropCommand::ToggleMute),
+            "pealayer.rate.set" => value
+                .parse::<f64>()
+                .ok()
+                .filter(|rate| rate.is_finite() && (0.05..=16.0).contains(rate))
+                .map(|rate| InteropCommand::SetRate { rate }),
             "pealayer.open" if !value.is_empty() => Some(InteropCommand::Open {
                 target: value.to_string(),
             }),
@@ -625,11 +1576,16 @@ fn controller_action_from_event(event: &Value, instance_id: &str) -> Option<Cont
             "pealayer.fullscreen.toggle" if value.is_empty() => {
                 Some(InteropCommand::ToggleFullscreen)
             }
-            "pealayer.workspace.set" => match value.to_ascii_lowercase().as_str() {
-                "nle" | "editor" => Some(InteropCommand::SetWorkspace { nle: true }),
-                "simple" | "player" => Some(InteropCommand::SetWorkspace { nle: false }),
-                _ => None,
-            },
+            "pealayer.workspace.set" if valid_workspace_profile_id(value) => {
+                Some(InteropCommand::SetWorkspace {
+                    profile: value.to_string(),
+                })
+            }
+            "pealayer.window.activate" if value.is_empty() => Some(InteropCommand::Activate),
+            "pealayer.window.minimize" if value.is_empty() => Some(InteropCommand::Minimize),
+            "pealayer.window.maximize" if value.is_empty() => Some(InteropCommand::Maximize),
+            "pealayer.window.restore" if value.is_empty() => Some(InteropCommand::Restore),
+            "pealayer.quit" if value.is_empty() => Some(InteropCommand::Quit),
             _ => None,
         }
     };
@@ -670,9 +1626,7 @@ fn controller_rpc(id: u64, method: &str, params: Value) -> tungstenite::Message 
 }
 
 fn report_controller_instance(
-    socket: &mut tungstenite::WebSocket<
-        tungstenite::stream::MaybeTlsStream<std::net::TcpStream>,
-    >,
+    socket: &mut tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
     id: u64,
     instance_id: &str,
 ) -> Result<(), String> {
@@ -688,15 +1642,18 @@ fn report_controller_instance(
                 "lease_seconds": 45,
                 "self": {
                     "kind": "native",
+                    "pid": std::process::id(),
                     "vars": {
-                        "pid": std::process::id().to_string(),
                         "rpc": format!("http://127.0.0.1:{}/api/rpc", crate::config::control_port()),
                         "websocket": format!("ws://127.0.0.1:{}/ws", crate::config::control_port()),
                         "ipc": format!("http://127.0.0.1:{}/api/ipc", crate::config::control_port()),
+                        "web_ui": format!("http://127.0.0.1:{}/", crate::config::control_port()),
                     },
                 },
                 "values": {
                     "app_actions": PCCONTROLLER_ACTIONS,
+                    "control_contract": "pealayer.control",
+                    "control_transports": "native,http,websocket,json-rpc",
                     "coordinator": "pccontroller",
                     "serial_owner": "pccontroller",
                 },
@@ -706,9 +1663,7 @@ fn report_controller_instance(
 }
 
 fn send_action_ack(
-    socket: &mut tungstenite::WebSocket<
-        tungstenite::stream::MaybeTlsStream<std::net::TcpStream>,
-    >,
+    socket: &mut tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
     next_id: &mut u64,
     acknowledgement: Value,
 ) -> Result<(), String> {
@@ -806,7 +1761,8 @@ fn run_pccontroller_action_bridge(
     let mut subscription_ready = false;
     let mut pending_pre_ack = VecDeque::new();
     loop {
-        if !push_target.is_alive() || push_target.websocket_endpoint().as_deref() != Some(endpoint) {
+        if !push_target.is_alive() || push_target.websocket_endpoint().as_deref() != Some(endpoint)
+        {
             let _ = socket.close(None);
             return Ok(());
         }
@@ -823,13 +1779,14 @@ fn run_pccontroller_action_bridge(
                 let Ok(message) = serde_json::from_str::<Value>(&text) else {
                     continue;
                 };
+                let was_subscription_ready = subscription_ready;
                 let ready_messages = gate_controller_subscription_message(
                     message,
                     &mut subscription_ready,
                     &mut pending_pre_ack,
                     push_target,
                 )?;
-                if subscription_ready {
+                if subscription_ready && !was_subscription_ready {
                     egui_ctx.request_repaint();
                 }
                 for message in ready_messages {
@@ -868,11 +1825,7 @@ fn run_pccontroller_action_bridge(
                             })?;
                             egui_ctx.request_repaint();
                         } else {
-                            send_action_ack(
-                                &mut socket,
-                                &mut next_id,
-                                action.acknowledgement,
-                            )?;
+                            send_action_ack(&mut socket, &mut next_id, action.acknowledgement)?;
                         }
                     }
                 }
@@ -882,9 +1835,7 @@ fn run_pccontroller_action_bridge(
                     .send(Message::Pong(payload))
                     .map_err(|error| format!("answer PCController ping: {error}"))?;
             }
-            Ok(Message::Close(_)) => {
-                return Err("PCController action WebSocket closed".to_string())
-            }
+            Ok(Message::Close(_)) => return Err("PCController action WebSocket closed".to_string()),
             Ok(_) => {}
             Err(tungstenite::Error::Io(error))
                 if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
@@ -987,6 +1938,40 @@ mod tests {
         } else {
             panic!("Expected SetVolume command with aliases");
         }
+
+        assert_eq!(
+            parse_text_command("preferences").unwrap(),
+            InteropCommand::OpenPreferences
+        );
+        assert_eq!(
+            parse_text_command("message Render complete").unwrap(),
+            InteropCommand::ShowMessage {
+                message: "Render complete".to_string()
+            }
+        );
+        assert!(parse_text_command("message").is_err());
+        assert_eq!(
+            parse_text_command("estop on").unwrap(),
+            InteropCommand::SetEmergencyStop { active: true }
+        );
+        assert_eq!(
+            parse_text_command("emergency-stop off").unwrap(),
+            InteropCommand::SetEmergencyStop { active: false }
+        );
+    }
+
+    #[test]
+    fn json_rpc_exposes_the_same_emergency_stop_control() {
+        let request = JsonRpcRequest {
+            jsonrpc: Some("2.0".to_string()),
+            id: serde_json::json!(1),
+            method: "pealayer.estop.set".to_string(),
+            params: serde_json::json!({"active": true}),
+        };
+        assert_eq!(
+            command_from_json_rpc(&request).unwrap(),
+            Some(InteropCommand::SetEmergencyStop { active: true })
+        );
     }
 
     #[test]
@@ -1031,29 +2016,115 @@ mod tests {
     }
 
     #[test]
+    fn text_and_json_rpc_commands_share_the_same_model() {
+        let text = parse_text_command("seek-to 12.5").unwrap();
+        let request = JsonRpcRequest {
+            jsonrpc: Some("2.0".to_string()),
+            id: serde_json::json!(1),
+            method: "pealayer.seek_to".to_string(),
+            params: serde_json::json!({"seconds": 12.5}),
+        };
+        assert_eq!(command_from_json_rpc(&request).unwrap(), Some(text));
+        let message_request = JsonRpcRequest {
+            jsonrpc: Some("2.0".to_string()),
+            id: serde_json::json!(2),
+            method: "pealayer.message.show".to_string(),
+            params: serde_json::json!({"message": "Hardware ready"}),
+        };
+        assert_eq!(
+            command_from_json_rpc(&message_request).unwrap(),
+            Some(InteropCommand::ShowMessage {
+                message: "Hardware ready".to_string()
+            })
+        );
+        assert!(parse_text_command("volume 131").is_err());
+        assert!(parse_text_command("rate 0").is_err());
+        assert!(parse_text_command("seek-to -1").is_err());
+        assert!(
+            InteropCommand::UpdateConfig {
+                values: serde_json::json!({"not_a_setting": true}),
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn web_controller_effect_commands_are_typed_and_validated() {
+        let cue: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.controller_effect_cue.add","params":{"reference":"effect:lighting-primary","start_time_ms":1250}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&cue).unwrap(),
+            Some(InteropCommand::AddControllerEffectCue { reference, start_time_ms: 1250 })
+                if reference == "effect:lighting-primary"
+        ));
+
+        let save: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":2,"method":"controller_effect.save","params":{"id":"lighting-primary","name":"Lighting primary","icon":"lightning","category":"Lighting","kind":"strip-stream","program":{"primitive":"police"},"default_fps":30,"duration_ms":5000,"default_pixels":100,"is_new":true}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&save).unwrap(),
+            Some(InteropCommand::SaveControllerEffect { effect })
+                if effect.id == "lighting-primary"
+                    && effect.icon == "lightning"
+                    && effect.program["primitive"] == "police"
+        ));
+
+        let invalid: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":3,"method":"controller_effect.play","params":{"reference":"effect; delete all"}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&invalid).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_named_pipe_delivers_typed_commands() {
+        let identity = format!("Pealayer native IPC test {}", std::process::id());
+        let (tx, rx) = std::sync::mpsc::channel();
+        spawn_interop_listener(tx, eframe::egui::Context::default(), identity.clone());
+        let payload = serde_json::to_string(&InteropCommand::SetRate { rate: 1.25 }).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let response = loop {
+            match send_native_request(&payload, &identity, std::time::Duration::from_millis(250)) {
+                Ok(response) => break response,
+                Err(error) if std::time::Instant::now() < deadline => {
+                    let _ = error;
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(error) => panic!("native pipe did not become ready: {error}"),
+            }
+        };
+        assert!(response.contains("\"status\":\"accepted\""));
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap(),
+            InteropCommand::SetRate { rate: 1.25 }
+        );
+    }
+
+    #[test]
     fn launch_destination_rejects_other_identity_and_session() {
         let options = crate::cli::CliOptions {
             target: None,
             fullscreen: false,
             volume: None,
+            commands: vec![],
         };
         let request = crate::cli::launch_request(&options);
         let identity = request.application_identity.clone();
-        assert!(validate_launch_destination(
-            &request,
-            &identity,
-            request.sender_session_id,
-        )
-        .is_ok());
+        assert!(
+            validate_launch_destination(&request, &identity, request.sender_session_id,).is_ok()
+        );
 
         let mut other_identity = request.clone();
         other_identity.application_identity = "Different Player".to_string();
-        assert!(validate_launch_destination(
-            &other_identity,
-            &identity,
-            request.sender_session_id,
-        )
-        .is_err());
+        assert!(
+            validate_launch_destination(&other_identity, &identity, request.sender_session_id,)
+                .is_err()
+        );
 
         #[cfg(target_os = "windows")]
         {
@@ -1063,12 +2134,10 @@ mod tests {
                     .expect("current Windows session")
                     .wrapping_add(1),
             );
-            assert!(validate_launch_destination(
-                &other_session,
-                &identity,
-                request.sender_session_id,
-            )
-            .is_err());
+            assert!(
+                validate_launch_destination(&other_session, &identity, request.sender_session_id,)
+                    .is_err()
+            );
         }
     }
 
@@ -1086,6 +2155,7 @@ mod tests {
         let resp = PlayerStatusResponse {
             status: "ok".to_string(),
             playing: true,
+            estop_active: true,
             volume: 80.0,
             playback_time: 15.0,
             duration: 120.0,
@@ -1099,6 +2169,7 @@ mod tests {
         assert!(json.contains("\"playing\":true"));
         assert!(json.contains("\"volume\":80.0"));
         assert!(json.contains("\"fullscreen\":true"));
+        assert!(json.contains("\"estop_active\":true"));
     }
 
     #[test]
@@ -1120,7 +2191,8 @@ mod tests {
         }
 
         // JSON-RPC 2.0 set_volume
-        let vol_rpc = r#"{"jsonrpc":"2.0","id":"vol-1","method":"set_volume","params":{"value":75.0}}"#;
+        let vol_rpc =
+            r#"{"jsonrpc":"2.0","id":"vol-1","method":"set_volume","params":{"value":75.0}}"#;
         let (id, cmd) = parse_interop_request(vol_rpc).unwrap();
         assert_eq!(id, Some(serde_json::json!("vol-1")));
         if let InteropCommand::SetVolume { value } = cmd {
@@ -1140,8 +2212,85 @@ mod tests {
             command_from_json_rpc(&request).unwrap(),
             Some(InteropCommand::Seek { seconds: 12.5 })
         ));
-        assert!(json_rpc_result(&request.id, serde_json::json!({"ok":true}))
-            .contains("\"id\":7"));
+        assert!(json_rpc_result(&request.id, serde_json::json!({"ok":true})).contains("\"id\":7"));
+
+        let preferences: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":8,"method":"pealayer.window.preferences"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&preferences).unwrap(),
+            Some(InteropCommand::OpenPreferences)
+        );
+    }
+
+    #[test]
+    fn workspace_profile_rpc_uses_stable_ids_and_shared_crud_commands() {
+        let restore = JsonRpcRequest {
+            jsonrpc: Some("2.0".to_string()),
+            id: serde_json::json!(1),
+            method: "pealayer.workspace.restore".to_string(),
+            params: serde_json::json!({"profile":"workspace-cinema"}),
+        };
+        assert_eq!(
+            command_from_json_rpc(&restore).unwrap(),
+            Some(InteropCommand::SetWorkspace {
+                profile: "workspace-cinema".to_string()
+            })
+        );
+
+        let update = JsonRpcRequest {
+            jsonrpc: Some("2.0".to_string()),
+            id: serde_json::json!(2),
+            method: "pealayer.workspace.update".to_string(),
+            params: serde_json::json!({
+                "id":"workspace-cinema",
+                "name":"Cinema authoring",
+                "icon":"timeline",
+                "capture":true
+            }),
+        };
+        assert_eq!(
+            command_from_json_rpc(&update).unwrap(),
+            Some(InteropCommand::UpdateWorkspaceProfile {
+                id: "workspace-cinema".to_string(),
+                name: "Cinema authoring".to_string(),
+                icon: "timeline".to_string(),
+                capture: true,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_validated_config_json_rpc_commands() {
+        let update: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"preferences","method":"pealayer.config.update","params":{"theme":"dark","show_subseconds":false}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&update).unwrap(),
+            Some(InteropCommand::UpdateConfig { values })
+                if values["theme"] == "dark" && values["show_subseconds"] == false
+        ));
+
+        let reload: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"preferences","method":"pealayer.config.reload"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&reload).unwrap(),
+            Some(InteropCommand::ReloadConfig)
+        ));
+
+        let unknown: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"preferences","method":"pealayer.config.update","params":{"typo_setting":true}}"#,
+        )
+        .unwrap();
+        assert!(
+            command_from_json_rpc(&unknown)
+                .unwrap_err()
+                .contains("unknown configuration setting")
+        );
 
         let live_request: JsonRpcRequest = serde_json::from_str(
             r#"{"jsonrpc":"2.0","id":8,"method":"pealayer.open","params":{"target":"rtsp://camera.invalid/live"}}"#,
@@ -1150,6 +2299,19 @@ mod tests {
         assert!(matches!(
             command_from_json_rpc(&live_request).unwrap(),
             Some(InteropCommand::Open { target }) if target == "rtsp://camera.invalid/live"
+        ));
+    }
+
+    #[test]
+    fn parses_hardware_presentation_updates_for_web_channel_management() {
+        let request: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"channel","method":"hardware.presentation.update","params":{"key":"relay.5","fields":{"name":"Seat fan","order":2}}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&request).unwrap(),
+            Some(InteropCommand::UpdateHardwarePresentation { key, fields })
+                if key == "relay.5" && fields["name"] == "Seat fan" && fields["order"] == 2
         ));
     }
 
@@ -1169,7 +2331,10 @@ mod tests {
         assert_eq!(retrieved.playing, true);
         assert_eq!(retrieved.volume, 92.0);
         assert_eq!(retrieved.playback_time, 45.5);
-        assert_eq!(retrieved.current_video, Some("/path/sample.mkv".to_string()));
+        assert_eq!(
+            retrieved.current_video,
+            Some("/path/sample.mkv".to_string())
+        );
     }
 
     #[test]
@@ -1202,13 +2367,25 @@ mod tests {
                 "pealayer.play",
                 "pealayer.pause",
                 "pealayer.toggle",
+                "pealayer.stop",
+                "pealayer.next",
+                "pealayer.previous",
                 "pealayer.seek",
+                "pealayer.seek_to",
                 "pealayer.seek_absolute",
                 "pealayer.volume.set",
+                "pealayer.mute.set",
+                "pealayer.mute.toggle",
+                "pealayer.rate.set",
                 "pealayer.open",
                 "pealayer.fullscreen.set",
                 "pealayer.fullscreen.toggle",
                 "pealayer.workspace.set",
+                "pealayer.window.activate",
+                "pealayer.window.minimize",
+                "pealayer.window.maximize",
+                "pealayer.window.restore",
+                "pealayer.quit",
             ]
         );
 
@@ -1241,16 +2418,18 @@ mod tests {
             action("pealayer.fullscreen.toggle", "").command,
             Some(InteropCommand::ToggleFullscreen)
         ));
-        assert!(action("pealayer.fullscreen.toggle", "unexpected")
-            .command
-            .is_none());
+        assert!(
+            action("pealayer.fullscreen.toggle", "unexpected")
+                .command
+                .is_none()
+        );
         assert!(matches!(
             action("pealayer.workspace.set", "nle").command,
-            Some(InteropCommand::SetWorkspace { nle: true })
+            Some(InteropCommand::SetWorkspace { profile }) if profile == "nle"
         ));
         assert!(matches!(
             action("pealayer.workspace.set", "simple").command,
-            Some(InteropCommand::SetWorkspace { nle: false })
+            Some(InteropCommand::SetWorkspace { profile }) if profile == "simple"
         ));
         let invalid = action("pealayer.fullscreen.set", "sometimes");
         assert!(invalid.command.is_none());
@@ -1332,14 +2511,11 @@ mod tests {
             }
         });
 
-        assert!(gate_controller_subscription_message(
-            state,
-            &mut ready,
-            &mut pending,
-            &target,
-        )
-        .unwrap()
-        .is_empty());
+        assert!(
+            gate_controller_subscription_message(state, &mut ready, &mut pending, &target,)
+                .unwrap()
+                .is_empty()
+        );
         assert!(!ready);
         assert_eq!(pending.len(), 1);
         assert_eq!(

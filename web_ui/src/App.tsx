@@ -1,56 +1,231 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { ConfigProvider, theme, Layout, Menu } from 'antd';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
+import { ConfigProvider, theme, Layout, Menu, Spin } from 'antd';
 import {
+  AppstoreOutlined,
+  BulbOutlined,
   ControlOutlined,
+  DashboardOutlined,
   FolderOpenOutlined,
   InfoCircleOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
 import { HeaderBar } from './components/HeaderBar';
-import { RemoteControlTab, PlayerState } from './components/RemoteControlTab';
-import { MediaLibraryTab } from './components/MediaLibraryTab';
-import { PlayerInfoTab } from './components/PlayerInfoTab';
+import type { PlayerState } from './components/RemoteControlTab';
 import { tr } from './i18n';
+import './styles.css';
 
 const { Sider, Content } = Layout;
+const RemoteControlTab = React.lazy(() => import('./components/RemoteControlTab').then((module) => ({ default: module.RemoteControlTab })));
+const MediaLibraryTab = React.lazy(() => import('./components/MediaLibraryTab').then((module) => ({ default: module.MediaLibraryTab })));
+const PlayerInfoTab = React.lazy(() => import('./components/PlayerInfoTab').then((module) => ({ default: module.PlayerInfoTab })));
+const StudioTab = React.lazy(() => import('./components/StudioTab').then((module) => ({ default: module.StudioTab })));
+const PreferencesTab = React.lazy(() => import('./components/PreferencesTab').then((module) => ({ default: module.PreferencesTab })));
+const EffectsTab = React.lazy(() => import('./components/EffectsTab').then((module) => ({ default: module.EffectsTab })));
+const HardwareTab = React.lazy(() => import('./components/HardwareTab').then((module) => ({ default: module.HardwareTab })));
+
+const SURFACE_IDS = ['player', 'timeline', 'effects', 'hardware', 'library', 'about', 'preferences'] as const;
+type SurfaceId = typeof SURFACE_IDS[number];
+
+function surfaceFromLocation(): SurfaceId {
+  const requested = window.location.hash.replace(/^#\/?/, '') || window.localStorage.getItem('pealayer.webTab') || 'player';
+  return SURFACE_IDS.includes(requested as SurfaceId) ? requested as SurfaceId : 'player';
+}
 
 export interface RuntimeConfig {
   appName: string;
   version: string;
   websocketPath: string;
+  appIconPath: string;
   locale: 'en' | 'fa';
   direction: 'ltr' | 'rtl';
   theme: 'system' | 'light' | 'dark';
+  accentColor: string;
+}
+
+function resolvedAccent(runtime: RuntimeConfig | null, config: Record<string, any> | null): string {
+  switch (config?.accent_color) {
+    case 'pealayer_green': return '#38d27a';
+    case 'windows_blue': return '#0078d4';
+    case 'macos_blue': return '#0a84ff';
+    case 'custom': return /^#[0-9a-f]{6}$/i.test(config?.custom_accent_color ?? '')
+      ? config.custom_accent_color
+      : (runtime?.accentColor ?? '#0078d4');
+    default: return runtime?.accentColor ?? '#0078d4';
+  }
+}
+
+function accentForeground(accent: string): string {
+  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(accent);
+  if (!match) return '#ffffff';
+  const [red, green, blue] = match.slice(1).map((value) => Number.parseInt(value, 16));
+  return (red * 299 + green * 587 + blue * 114) > 150_000 ? '#141414' : '#ffffff';
 }
 
 const App: React.FC = () => {
-  const [collapsed, setCollapsed] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<string>('remote');
+  const [collapsed, setCollapsed] = useState<boolean>(() => window.localStorage.getItem('pealayer.sidebarCollapsed') === 'true');
+  const [activeTab, setActiveTabState] = useState<SurfaceId>(surfaceFromLocation);
   const [connected, setConnected] = useState<boolean>(false);
   const [connectionMode, setConnectionMode] = useState<'ws' | 'http'>('http');
   const [state, setState] = useState<PlayerState>({ status: 'initializing' });
   const [runtime, setRuntime] = useState<RuntimeConfig | null>(null);
+  const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('dark');
+  const [quickSeekSeconds, setQuickSeekSeconds] = useState<number>(10);
+  const [appConfig, setAppConfig] = useState<Record<string, any> | null>(null);
+  const [connectionTarget, setConnectionTarget] = useState<string>(() => {
+    const query = new URLSearchParams(window.location.search).get('connect');
+    return query ?? window.localStorage.getItem('pealayer.connectionTarget') ?? '';
+  });
 
   const wsRef = useRef<WebSocket | null>(null);
+  const siderRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    window.localStorage.setItem('pealayer.sidebarCollapsed', String(collapsed));
+  }, [collapsed]);
+
+  useEffect(() => {
+    const restoreScroll = () => {
+      const sider = siderRef.current;
+      const content = contentRef.current;
+      if (sider) {
+        sider.scrollTop = Number(window.localStorage.getItem('pealayer.scroll.sider') || 0);
+      }
+      if (content) {
+        content.scrollTop = Number(window.localStorage.getItem(`pealayer.scroll.${activeTab}.top`) || 0);
+        content.scrollLeft = Number(window.localStorage.getItem(`pealayer.scroll.${activeTab}.left`) || 0);
+      }
+    };
+    const frame = window.requestAnimationFrame(() => window.requestAnimationFrame(restoreScroll));
+    const afterLazySurface = window.setTimeout(restoreScroll, 100);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(afterLazySurface);
+    };
+  }, [activeTab]);
+
+  const setActiveTab = useCallback((requested: string) => {
+    const tab = SURFACE_IDS.includes(requested as SurfaceId) ? requested as SurfaceId : 'player';
+    setActiveTabState(tab);
+    window.localStorage.setItem('pealayer.webTab', tab);
+    const nextLocation = `${window.location.pathname}${window.location.search}#/${tab}`;
+    if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== nextLocation) {
+      window.history.pushState({ pealayerSurface: tab }, '', nextLocation);
+    }
+  }, []);
+
+  useEffect(() => {
+    const followLocation = () => {
+      const tab = surfaceFromLocation();
+      setActiveTabState(tab);
+      window.localStorage.setItem('pealayer.webTab', tab);
+    };
+    window.addEventListener('hashchange', followLocation);
+    window.addEventListener('popstate', followLocation);
+    return () => {
+      window.removeEventListener('hashchange', followLocation);
+      window.removeEventListener('popstate', followLocation);
+    };
+  }, []);
 
   useEffect(() => {
     if (!runtime) return;
     document.documentElement.lang = runtime.locale;
     document.documentElement.dir = runtime.direction;
-    document.title = `${runtime.appName} — ${tr(runtime.locale, 'Control Center')}`;
-  }, [runtime]);
+    const surfaceNames: Record<SurfaceId, string> = {
+      player: 'Player', timeline: 'Timeline', effects: 'Effects Library', hardware: 'Hardware Monitor',
+      library: 'Media Library', about: 'About and system', preferences: 'Preferences',
+    };
+    document.title = `${tr(runtime.locale, surfaceNames[activeTab])} — ${runtime.appName}`;
+    const media = window.matchMedia('(prefers-color-scheme: light)');
+    const applyTheme = () => {
+      const preference = appConfig?.theme ?? runtime.theme;
+      const nextTheme = preference === 'system'
+        ? (media.matches ? 'light' : 'dark')
+        : preference;
+      document.documentElement.dataset.theme = nextTheme;
+      setResolvedTheme(nextTheme);
+    };
+    applyTheme();
+    media.addEventListener('change', applyTheme);
+    return () => media.removeEventListener('change', applyTheme);
+  }, [runtime, appConfig?.theme, activeTab]);
 
-  const sendCmd = (command: string, payload: Record<string, any> = {}) => {
-    const body = JSON.stringify({ command, ...payload });
+  const accentColor = resolvedAccent(runtime, appConfig);
+  const accentTextColor = accentForeground(accentColor);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--accent', accentColor);
+    document.documentElement.style.setProperty('--accent-text', accentTextColor);
+    document.documentElement.style.setProperty('--accent-soft', `color-mix(in srgb, ${accentColor} 16%, transparent)`);
+  }, [accentColor, accentTextColor]);
+
+  const nextRequestId = useRef(1);
+  const sendCmd = useCallback((command: string, payload: Record<string, any> = {}) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(body);
+      const methodAliases: Record<string, string> = {
+        add_effect_cue: 'pealayer.timeline.effect.add',
+        remove_effect_cue: 'pealayer.timeline.effect.remove',
+        set_recording: 'pealayer.recording.set',
+      };
+      wsRef.current.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: nextRequestId.current++,
+        method: methodAliases[command] || command,
+        params: payload,
+      }));
     } else {
-      fetch('/api/player/command', {
+      const body = JSON.stringify({ command, ...payload });
+      let endpoint = '/api/player/command';
+      if (connectionTarget) {
+        try {
+          const target = new URL(connectionTarget.includes('://') ? connectionTarget : `http://${connectionTarget}`);
+          if (target.protocol === 'ws:') target.protocol = 'http:';
+          if (target.protocol === 'wss:') target.protocol = 'https:';
+          target.pathname = '/api/player/command';
+          target.search = '';
+          target.hash = '';
+          endpoint = target.toString();
+        } catch {
+          return;
+        }
+      }
+      fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,
       }).catch(() => {});
     }
-  };
+  }, [connectionTarget]);
+
+  const resolveWebSocketUrl = useCallback(() => {
+    const fallbackProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    if (!connectionTarget) {
+      return `${fallbackProtocol}//${window.location.host}${runtime?.websocketPath || '/ws'}`;
+    }
+    try {
+      const target = new URL(connectionTarget.includes('://') ? connectionTarget : `ws://${connectionTarget}`);
+      if (target.protocol === 'http:') target.protocol = 'ws:';
+      if (target.protocol === 'https:') target.protocol = 'wss:';
+      if (!target.pathname || target.pathname === '/') target.pathname = runtime?.websocketPath || '/ws';
+      return target.toString();
+    } catch {
+      return connectionTarget;
+    }
+  }, [connectionTarget, runtime]);
+
+  const apiBaseUrl = (() => {
+    try {
+      const url = new URL(resolveWebSocketUrl());
+      url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+      url.pathname = '';
+      url.search = '';
+      url.hash = '';
+      return url.toString().replace(/\/$/, '');
+    } catch {
+      return '';
+    }
+  })();
 
   useEffect(() => {
     let disposed = false;
@@ -70,40 +245,71 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!runtime) return;
+    let disposed = false;
+    fetch('/api/config')
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then((value) => {
+        if (!disposed && value && typeof value === 'object') setAppConfig(value);
+        const seconds = Number(value?.quick_seek_seconds);
+        if (!disposed && Number.isFinite(seconds) && seconds > 0) {
+          setQuickSeekSeconds(seconds);
+        }
+      })
+      .catch(() => {});
+    return () => { disposed = true; };
+  }, [runtime]);
+
+  useEffect(() => {
+    if (!runtime) return;
+    let disposed = false;
+    let reconnectTimer: number | undefined;
     const connectWS = () => {
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${proto}//${window.location.host}${runtime.websocketPath}`;
+      if (disposed) return;
+      const wsUrl = resolveWebSocketUrl();
 
       try {
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {
+          if (disposed) {
+            ws.close();
+            return;
+          }
           setConnected(true);
           setConnectionMode('ws');
         };
 
         ws.onclose = () => {
+          if (disposed) return;
+          setConnected(false);
           setConnectionMode('http');
-          setTimeout(connectWS, 3000);
+          reconnectTimer = window.setTimeout(connectWS, 3000);
         };
 
         ws.onmessage = (ev) => {
           try {
             const data = JSON.parse(ev.data);
-            setState((prev) => ({ ...prev, ...data }));
-            setConnected(true);
+            if (data && data.jsonrpc === '2.0') return;
+            const nextState = data?.type === 'state' ? data.state : data;
+            if (nextState && typeof nextState === 'object' && typeof nextState.status === 'string') {
+              setState((prev) => ({ ...prev, ...nextState }));
+              setConnected(true);
+            }
           } catch {}
         };
       } catch {
+        if (disposed) return;
+        setConnected(false);
         setConnectionMode('http');
+        reconnectTimer = window.setTimeout(connectWS, 3000);
       }
     };
 
     connectWS();
 
     const httpInterval = setInterval(async () => {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      if (connectionTarget || (wsRef.current && wsRef.current.readyState === WebSocket.OPEN)) {
         return; // Skip HTTP polling when WebSocket is connected
       }
       try {
@@ -114,21 +320,47 @@ const App: React.FC = () => {
           setConnected(true);
         }
       } catch {
-        if (connectionMode === 'http') setConnected(false);
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+          setConnected(false);
+        }
       }
     }, 500);
 
     return () => {
+      disposed = true;
       clearInterval(httpInterval);
+      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       if (wsRef.current) wsRef.current.close();
+      wsRef.current = null;
     };
-  }, [runtime]);
+  }, [runtime, connectionTarget, resolveWebSocketUrl]);
+
+  const changeConnectionTarget = (target: string) => {
+    setConnectionTarget(target);
+    if (target) window.localStorage.setItem('pealayer.connectionTarget', target);
+    else window.localStorage.removeItem('pealayer.connectionTarget');
+  };
 
   const menuItems = [
     {
-      key: 'remote',
+      key: 'player',
       icon: <ControlOutlined style={{ fontSize: 18 }} />,
-      label: tr(runtime?.locale || 'en', 'Remote Control'),
+      label: tr(runtime?.locale || 'en', 'Player'),
+    },
+    {
+      key: 'timeline',
+      icon: <AppstoreOutlined style={{ fontSize: 18 }} />,
+      label: tr(runtime?.locale || 'en', 'Timeline'),
+    },
+    {
+      key: 'effects',
+      icon: <BulbOutlined style={{ fontSize: 18 }} />,
+      label: tr(runtime?.locale || 'en', 'Effects Library'),
+    },
+    {
+      key: 'hardware',
+      icon: <DashboardOutlined style={{ fontSize: 18 }} />,
+      label: tr(runtime?.locale || 'en', 'Hardware Monitor'),
     },
     {
       key: 'library',
@@ -136,88 +368,127 @@ const App: React.FC = () => {
       label: tr(runtime?.locale || 'en', 'Media Library'),
     },
     {
-      key: 'info',
+      key: 'about',
       icon: <InfoCircleOutlined style={{ fontSize: 18 }} />,
-      label: tr(runtime?.locale || 'en', 'System Info'),
+      label: tr(runtime?.locale || 'en', 'About and system'),
+    },
+    {
+      key: 'preferences',
+      icon: <SettingOutlined style={{ fontSize: 18 }} />,
+      label: tr(runtime?.locale || 'en', 'Preferences'),
     },
   ];
 
   return (
     <ConfigProvider direction={runtime?.direction}
       theme={{
-        algorithm: runtime?.theme === 'light' ? theme.defaultAlgorithm : theme.darkAlgorithm,
+        algorithm: resolvedTheme === 'light' ? theme.defaultAlgorithm : theme.darkAlgorithm,
         token: {
-          colorPrimary: '#1d84b5',
-          colorBgContainer: '#132e32',
-          colorBgBase: '#0a2239',
-          colorBorder: 'rgba(23, 96, 135, 0.3)',
-          borderRadius: 12,
+          colorPrimary: accentColor,
+          colorTextLightSolid: accentTextColor,
+          colorInfo: '#68a7ff',
+          colorSuccess: '#38d27a',
+          colorWarning: '#f3b954',
+          colorError: '#ff5c68',
+          colorBgContainer: 'var(--surface-1)',
+          colorBgBase: 'var(--canvas)',
+          colorBorder: 'var(--line)',
+          colorText: 'var(--text)',
+          colorTextSecondary: 'var(--muted)',
+          borderRadius: 9,
           fontFamily: `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif`,
         },
       }}
     >
-      <Layout style={{ minHeight: '100vh', background: '#0a2239' }}>
+      <Layout className="app-shell">
         <HeaderBar
           collapsed={collapsed}
           onToggleCollapse={() => setCollapsed(!collapsed)}
           connected={connected}
           connectionMode={connectionMode}
           appName={runtime?.appName}
+          appIconPath={runtime?.appIconPath}
           locale={runtime?.locale || 'en'}
+          connectionTarget={connectionTarget}
+          onConnectionTargetChange={changeConnectionTarget}
         />
 
-        <Layout style={{ background: '#0a2239' }}>
+        <Layout className="app-body">
           <Sider
+            ref={siderRef}
             trigger={null}
             collapsible
             collapsed={collapsed}
             breakpoint="lg"
             onBreakpoint={(broken) => setCollapsed(broken)}
-            style={{
-              background: '#132e32',
-              borderRight: '1px solid rgba(23, 96, 135, 0.3)',
-            }}
+            className="app-sider"
             width={220}
+            onScroll={(event) => window.localStorage.setItem('pealayer.scroll.sider', String(event.currentTarget.scrollTop))}
           >
             <Menu
               mode="inline"
               selectedKeys={[activeTab]}
               onClick={({ key }) => setActiveTab(key)}
               items={menuItems}
-              style={{
-                background: 'transparent',
-                borderRight: 'none',
-                marginTop: 16,
-              }}
+              className="app-menu"
             />
           </Sider>
 
           <Content
-            style={{
-              padding: '24px 16px',
-              maxWidth: 1200,
-              margin: '0 auto',
-              width: '100%',
+            ref={contentRef}
+            className={`app-content ${activeTab === 'timeline' ? 'app-content--studio' : ''}`}
+            onScroll={(event) => {
+              window.localStorage.setItem(`pealayer.scroll.${activeTab}.top`, String(event.currentTarget.scrollTop));
+              window.localStorage.setItem(`pealayer.scroll.${activeTab}.left`, String(event.currentTarget.scrollLeft));
             }}
           >
-            {activeTab === 'remote' && (
+            <React.Suspense fallback={<div className="surface-loading"><Spin size="large" /></div>}>
+            {activeTab === 'timeline' && (
+              <StudioTab
+                state={state}
+                sendCmd={sendCmd}
+                locale={runtime?.locale || 'en'}
+                appName={runtime?.appName || 'Pealayer'}
+                quickSeekSeconds={quickSeekSeconds}
+                apiBaseUrl={apiBaseUrl}
+                surface="timeline"
+              />
+            )}
+            {activeTab === 'player' && (
               <RemoteControlTab
                 state={state}
                 sendCmd={sendCmd}
                 onOpenLibraryTab={() => setActiveTab('library')}
                 locale={runtime?.locale || 'en'}
+                quickSeekSeconds={quickSeekSeconds}
+                apiBaseUrl={apiBaseUrl}
               />
             )}
             {activeTab === 'library' && (
               <MediaLibraryTab
                 sendCmd={sendCmd}
-                onMediaPlayStarted={() => setActiveTab('remote')}
+                onMediaPlayStarted={() => setActiveTab('player')}
                 locale={runtime?.locale || 'en'}
+                apiBaseUrl={apiBaseUrl}
               />
             )}
-            {activeTab === 'info' && (
-              <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} locale={runtime?.locale || 'en'} />
+            {activeTab === 'effects' && <EffectsTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} />}
+            {activeTab === 'hardware' && <HardwareTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} />}
+            {activeTab === 'about' && (
+              <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} websocketUrl={resolveWebSocketUrl()} />
             )}
+            {activeTab === 'preferences' && (
+              <PreferencesTab
+                apiBaseUrl={apiBaseUrl}
+                locale={runtime?.locale || 'en'}
+                onConfigChange={(values) => {
+                  setAppConfig(values);
+                  const seconds = Number(values.quick_seek_seconds);
+                  if (Number.isFinite(seconds) && seconds > 0) setQuickSeekSeconds(seconds);
+                }}
+              />
+            )}
+            </React.Suspense>
           </Content>
         </Layout>
       </Layout>

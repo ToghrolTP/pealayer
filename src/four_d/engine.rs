@@ -118,10 +118,126 @@ impl HardwareTransport {
     ) -> Result<serde_json::Value, String> {
         match self {
             Self::Controller(client) => client.call(method, params),
-            Self::DirectSerial { .. } => Err(
-                "this hardware action requires the PCController coordinator".to_string(),
-            ),
+            Self::DirectSerial { .. } => {
+                Err("this hardware action requires the PCController coordinator".to_string())
+            }
         }
+    }
+}
+
+fn play_controller_effect(
+    transport: &mut HardwareTransport,
+    reference: &str,
+) -> Result<serde_json::Value, String> {
+    transport.call_controller(
+        "controller.command.execute",
+        serde_json::json!({"command": format!("effect play {reference}")}),
+    )
+}
+
+fn stop_controller_effect(
+    transport: &mut HardwareTransport,
+    reference: &str,
+) -> Result<serde_json::Value, String> {
+    transport.call_controller(
+        "controller.command.execute",
+        serde_json::json!({"command": format!("effect stop {reference}")}),
+    )
+}
+
+const EMERGENCY_STOP_CONTROLLER_COMMANDS: [&str; 5] = [
+    "effect cancel",
+    "effect stop",
+    "keyboard stop",
+    "relay side left stop",
+    "relay side right stop",
+];
+
+/// Releases physical outputs before and after cancelling every coordinator-side
+/// source that could reassert motion. Direct-serial diagnostics have no host
+/// coordinator to cancel, so the board-level all-relays-off path is issued
+/// twice there as well.
+fn enforce_emergency_stop(transport: &mut HardwareTransport) -> Result<(), String> {
+    let mut errors = Vec::new();
+    if matches!(transport, HardwareTransport::Controller(_)) {
+        if let Err(error) = transport.call_controller(
+            "controller.estop.set",
+            serde_json::json!({
+                "active": true,
+                "source": "pealayer",
+                "reason": "operator engaged E-STOP",
+            }),
+        ) {
+            errors.push(format!("engage PCController E-STOP contract: {error}"));
+        }
+    }
+    if let Err(error) = transport.send(Command::AllOff) {
+        errors.push(format!("initial output release: {error}"));
+    }
+    if matches!(transport, HardwareTransport::Controller(_)) {
+        for command in EMERGENCY_STOP_CONTROLLER_COMMANDS {
+            if let Err(error) = transport.call_controller(
+                "controller.command.execute",
+                serde_json::json!({"command": command}),
+            ) {
+                errors.push(format!("{command}: {error}"));
+            }
+        }
+    }
+    if let Err(error) = transport.send(Command::AllOff) {
+        errors.push(format!("final output release: {error}"));
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn controller_call_allowed_during_estop(method: &str, params: &serde_json::Value) -> bool {
+    // Presentation changes cannot energize hardware. Keeping rename, icon,
+    // visibility, and lock edits available while the output latch is active
+    // prevents an unrelated safety state from making configuration appear
+    // broken.
+    if method == "controller.peripheral.presentation.update" {
+        return true;
+    }
+    if method == "controller.estop.set" {
+        return params
+            .get("active")
+            .and_then(serde_json::Value::as_bool)
+            .is_some();
+    }
+    if method == "controller.pwm.off" {
+        return true;
+    }
+    if method != "controller.command.execute" {
+        return false;
+    }
+    let Some(command) = params.get("command").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    let words = command
+        .split_whitespace()
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    match words
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        ["relay", "off"]
+        | ["keyboard", "stop"]
+        | ["effect", "cancel"]
+        | ["effect", "stop"]
+        | ["strip", "stop"]
+        | ["strip", "clear"]
+        | ["strip", "status"]
+        | ["rgb", "effect", "stop"] => true,
+        ["effect", "stop", _] => true,
+        ["relay", "side", "left" | "right", "stop"] => true,
+        _ => false,
     }
 }
 
@@ -157,9 +273,16 @@ pub enum EngineMessage {
     UpdateControllerMacros(Vec<CompiledControllerMacro>),
     UpdateControllerStripEffects(Vec<CompiledControllerStripEffect>),
     UpdateAnalogTracks(Vec<crate::four_d::curve::AnalogTrack>),
-    LiveActuatorOverride { channel: u8, value: u8 },
+    LiveActuatorOverride {
+        channel: u8,
+        value: u8,
+    },
     Seek(u64), // Emitted when user seeks, to clear current active queue and reset hardware
     SendCommand(Command), // Manual override or direct hardware command
+    ReconfigureEndpoint {
+        endpoint: String,
+        connect: bool,
+    },
     ControllerCall {
         method: String,
         params: serde_json::Value,
@@ -171,14 +294,6 @@ pub enum EngineMessage {
     },
     InvokeControllerAction {
         action_id: String,
-    },
-    UpdatePeripheralPresentation {
-        key: String,
-        name: Option<String>,
-        icon: Option<String>,
-        group: Option<String>,
-        expected_revision: Option<String>,
-        fallback_names: std::collections::BTreeMap<String, String>,
     },
 }
 
@@ -204,6 +319,8 @@ pub struct EngineHandle {
 #[derive(Clone)]
 pub struct ControllerPushTarget {
     lifecycle: std::sync::Weak<()>,
+    estop_active: std::sync::Weak<AtomicBool>,
+    is_playing: std::sync::Weak<AtomicBool>,
     connection_requested: std::sync::Weak<AtomicBool>,
     serial_port: std::sync::Weak<Mutex<String>>,
     hardware_capabilities:
@@ -215,6 +332,8 @@ impl EngineHandle {
     pub fn controller_push_target(&self) -> ControllerPushTarget {
         ControllerPushTarget {
             lifecycle: Arc::downgrade(&self.lifecycle),
+            estop_active: Arc::downgrade(&self.estop_active),
+            is_playing: Arc::downgrade(&self.is_playing),
             connection_requested: Arc::downgrade(&self.connection_requested),
             serial_port: Arc::downgrade(&self.serial_port),
             hardware_capabilities: Arc::downgrade(&self.hardware_capabilities),
@@ -238,7 +357,29 @@ impl EngineHandle {
     }
 
     pub fn request_catalog_refresh(&self) {
-        self.catalog_refresh_requested.store(true, Ordering::Relaxed);
+        self.catalog_refresh_requested
+            .store(true, Ordering::Relaxed);
+    }
+
+    pub fn set_emergency_stop(&self, active: bool) {
+        self.estop_active.store(active, Ordering::SeqCst);
+        if active {
+            // Stop timeline dispatch immediately; the engine thread performs the
+            // acknowledged hardware release on its next (5 ms) pass.
+            self.is_playing.store(false, Ordering::SeqCst);
+        }
+        let _ = self.sender.send(EngineMessage::ControllerCall {
+            method: "controller.estop.set".to_string(),
+            params: serde_json::json!({
+                "active": active,
+                "source": "pealayer",
+                "reason": if active {
+                    "operator engaged E-STOP"
+                } else {
+                    "operator released E-STOP"
+                },
+            }),
+        });
     }
 }
 
@@ -267,8 +408,25 @@ impl ControllerPushTarget {
 
     pub(crate) fn apply_notification(&self, method: &str, params: &serde_json::Value) -> bool {
         if matches!(method, "controller.state" | "controller.event")
-            && params.get("kind").and_then(serde_json::Value::as_str)
-                == Some("peripherals.changed")
+            && params.get("kind").and_then(serde_json::Value::as_str) == Some("emergency_stop")
+        {
+            let active = params.get("state").and_then(|state| {
+                state.as_bool().or_else(|| {
+                    state
+                        .as_str()
+                        .and_then(|state| state.trim().parse::<bool>().ok())
+                })
+            });
+            if let (Some(active), Some(estop)) = (active, self.estop_active.upgrade()) {
+                let changed = estop.swap(active, Ordering::SeqCst) != active;
+                if active && let Some(is_playing) = self.is_playing.upgrade() {
+                    is_playing.store(false, Ordering::SeqCst);
+                }
+                return changed;
+            }
+        }
+        if matches!(method, "controller.state" | "controller.event")
+            && params.get("kind").and_then(serde_json::Value::as_str) == Some("peripherals.changed")
         {
             if let Some(refresh) = self.catalog_refresh_requested.upgrade() {
                 refresh.store(true, Ordering::Relaxed);
@@ -332,11 +490,6 @@ fn should_yield_direct_transport(
     is_direct && !diagnostic_override && coordinator_reachable
 }
 
-fn controller_method_is_unavailable(error: &str) -> bool {
-    let error = error.to_ascii_lowercase();
-    error.contains("-32601") || error.contains("method not found") || error.contains("unknown method")
-}
-
 pub fn spawn_engine() -> EngineHandle {
     let lifecycle = Arc::new(());
     let playback_time_ms = Arc::new(AtomicU64::new(0));
@@ -387,7 +540,7 @@ pub fn spawn_engine() -> EngineHandle {
         let mut active_transport: Option<HardwareTransport> = None;
 
         loop {
-            let estop_now = engine_estop.load(Ordering::Relaxed);
+            let estop_now = engine_estop.load(Ordering::SeqCst);
             let requested = engine_connection_requested.load(Ordering::Relaxed);
             let mut connected = active_transport.is_some();
             engine_connected.store(connected, Ordering::Relaxed);
@@ -430,10 +583,7 @@ pub fn spawn_engine() -> EngineHandle {
                 match transport {
                     Ok(transport) => {
                         let description = transport.description();
-                        println!(
-                            "[Engine] Connected hardware transport: {}",
-                            description
-                        );
+                        println!("[Engine] Connected hardware transport: {}", description);
                         if let Ok(mut guard) = engine_transport_description.lock() {
                             *guard = Some(description);
                         }
@@ -458,18 +608,56 @@ pub fn spawn_engine() -> EngineHandle {
                             // strip state; playback will issue the next cue.
                             let _ = transport.call_controller(
                                 "controller.command.execute",
-                                serde_json::json!({"command": "strip stop"}),
+                                serde_json::json!({"command": "effect stop"}),
                             );
+                            if matches!(transport, HardwareTransport::Controller(_)) {
+                                let local_active = engine_estop.load(Ordering::SeqCst);
+                                match transport
+                                    .call_controller("controller.estop.get", serde_json::json!({}))
+                                {
+                                    Ok(state)
+                                        if state
+                                            .get("active")
+                                            .and_then(serde_json::Value::as_bool)
+                                            == Some(true) =>
+                                    {
+                                        engine_estop.store(true, Ordering::SeqCst);
+                                        engine_playing.store(false, Ordering::SeqCst);
+                                    }
+                                    Ok(_) if local_active => {
+                                        if let Err(error) = transport.call_controller(
+                                            "controller.estop.set",
+                                            serde_json::json!({
+                                                "active": true,
+                                                "source": "pealayer",
+                                                "reason": "reassert local E-STOP after reconnect",
+                                            }),
+                                        ) && let Ok(mut guard) = engine_conn_error.lock()
+                                        {
+                                            *guard = Some(format!(
+                                                "synchronize PCController E-STOP: {error}"
+                                            ));
+                                        }
+                                    }
+                                    Ok(_) => {}
+                                    Err(error) => {
+                                        if let Ok(mut guard) = engine_conn_error.lock() {
+                                            *guard =
+                                                Some(format!("read PCController E-STOP: {error}"));
+                                        }
+                                    }
+                                }
+                            }
                             active_strip_effect = None;
                         }
                         engine_connected.store(true, Ordering::Relaxed);
                         connected = true;
                         let estop_reassert_error = engine_estop
-                            .load(Ordering::Relaxed)
+                            .load(Ordering::SeqCst)
                             .then(|| {
                                 active_transport
                                     .as_mut()
-                                    .and_then(|transport| transport.send(Command::AllOff).err())
+                                    .and_then(|transport| enforce_emergency_stop(transport).err())
                             })
                             .flatten();
                         if let Some(error) = estop_reassert_error {
@@ -505,11 +693,11 @@ pub fn spawn_engine() -> EngineHandle {
                 if let Some(ref mut transport) = active_transport {
                     let _ = transport.call_controller(
                         "controller.command.execute",
-                        serde_json::json!({"command": "macro cancel"}),
+                        serde_json::json!({"command": "effect cancel"}),
                     );
                     let _ = transport.call_controller(
                         "controller.command.execute",
-                        serde_json::json!({"command": "strip stop"}),
+                        serde_json::json!({"command": "effect stop"}),
                     );
                     let _ = transport.send(Command::AllOff);
                 }
@@ -525,6 +713,25 @@ pub fn spawn_engine() -> EngineHandle {
                 connected = false;
                 println!("[Engine] Disconnected hardware transport");
             }
+
+            if estop_now && !was_estop {
+                last_pwm_values.fill(0);
+                active_strip_effect = None;
+                if connected {
+                    if let Some(ref mut transport) = active_transport
+                        && let Err(error) = enforce_emergency_stop(transport)
+                        && let Ok(mut guard) = engine_conn_error.lock()
+                    {
+                        *guard = Some(format!("emergency stop: {error}"));
+                    }
+                    let port_name = {
+                        let guard = engine_port.lock().unwrap();
+                        guard.clone()
+                    };
+                    println!("[{}] ALL_OFF + MOTION_STOP (E-STOP)", port_name);
+                }
+            }
+            was_estop = estop_now;
 
             // Check for new messages (non-blocking)
             let mut channel_disconnected = false;
@@ -546,33 +753,25 @@ pub fn spawn_engine() -> EngineHandle {
                     EngineMessage::UpdateControllerMacros(new_queue) => {
                         controller_macros = new_queue;
                         let current_time = engine_time.load(Ordering::Relaxed);
-                        current_controller_macro_index = controller_macros
-                            .partition_point(|cue| cue.time_ms < current_time);
+                        current_controller_macro_index =
+                            controller_macros.partition_point(|cue| cue.time_ms < current_time);
                     }
                     EngineMessage::UpdateControllerStripEffects(new_queue) => {
                         let current_time = engine_time.load(Ordering::Relaxed);
-                        let playing = engine_playing.load(Ordering::Relaxed);
+                        let playing = engine_playing.load(Ordering::Relaxed)
+                            && !engine_estop.load(Ordering::SeqCst);
                         let desired = playing
                             .then(|| active_controller_strip_effect_at(&new_queue, current_time))
                             .flatten()
                             .map(str::to_owned);
                         if active_strip_effect != desired {
                             if let Some(ref mut transport) = active_transport {
-                                if active_strip_effect.is_some() {
-                                    let _ = transport.call_controller(
-                                        "controller.command.execute",
-                                        serde_json::json!({"command": "strip stop"}),
-                                    );
+                                if let Some(id) = active_strip_effect.as_deref() {
+                                    let _ = stop_controller_effect(transport, id);
                                 }
                                 active_strip_effect = None;
                                 if let Some(id) = desired.as_deref() {
-                                    if transport
-                                        .call_controller(
-                                            "controller.command.execute",
-                                            serde_json::json!({"command": format!("strip effect play {id}")}),
-                                        )
-                                        .is_ok()
-                                    {
+                                    if play_controller_effect(transport, id).is_ok() {
                                         active_strip_effect = Some(id.to_string());
                                     }
                                 }
@@ -592,6 +791,9 @@ pub fn spawn_engine() -> EngineHandle {
                         last_pwm_values.fill(0);
                     }
                     EngineMessage::LiveActuatorOverride { channel, value } => {
+                        if engine_estop.load(Ordering::SeqCst) {
+                            continue;
+                        }
                         let ch = channel as usize;
                         if ch < 16 && value != last_pwm_values[ch] {
                             last_pwm_values[ch] = value;
@@ -621,12 +823,11 @@ pub fn spawn_engine() -> EngineHandle {
                             if let Some(ref mut transport) = active_transport {
                                 let _ = transport.call_controller(
                                     "controller.command.execute",
-                                    serde_json::json!({"command": "macro cancel"}),
+                                    serde_json::json!({"command": "effect cancel"}),
                                 );
-                                let _ = transport.call_controller(
-                                    "controller.command.execute",
-                                    serde_json::json!({"command": "strip stop"}),
-                                );
+                                if let Some(id) = active_strip_effect.as_deref() {
+                                    let _ = stop_controller_effect(transport, id);
+                                }
                                 active_strip_effect = None;
                                 if let Err(e) = transport.send(Command::AllOff) {
                                     if let Ok(mut guard) = engine_conn_error.lock() {
@@ -638,13 +839,7 @@ pub fn spawn_engine() -> EngineHandle {
                                         &controller_strip_effects,
                                         time,
                                     ) {
-                                        if transport
-                                            .call_controller(
-                                                "controller.command.execute",
-                                                serde_json::json!({"command": format!("strip effect play {id}")}),
-                                            )
-                                            .is_ok()
-                                        {
+                                        if play_controller_effect(transport, id).is_ok() {
                                             active_strip_effect = Some(id.to_string());
                                         }
                                     }
@@ -667,6 +862,11 @@ pub fn spawn_engine() -> EngineHandle {
                         last_pwm_values.fill(0);
                     }
                     EngineMessage::SendCommand(cmd) => {
+                        if engine_estop.load(Ordering::SeqCst)
+                            && !matches!(cmd, Command::Ping | Command::AllOff)
+                        {
+                            continue;
+                        }
                         if connected {
                             if let Some(ref mut transport) = active_transport {
                                 if let Err(e) = transport.send(cmd) {
@@ -678,7 +878,39 @@ pub fn spawn_engine() -> EngineHandle {
                             }
                         }
                     }
+                    EngineMessage::ReconfigureEndpoint { endpoint, connect } => {
+                        if let Some(ref mut transport) = active_transport {
+                            let _ = transport.call_controller(
+                                "controller.command.execute",
+                                serde_json::json!({"command": "effect cancel"}),
+                            );
+                            if let Some(id) = active_strip_effect.as_deref() {
+                                let _ = stop_controller_effect(transport, id);
+                            }
+                            let _ = transport.send(Command::AllOff);
+                        }
+                        active_transport = None;
+                        active_strip_effect = None;
+                        connected = false;
+                        engine_connected.store(false, Ordering::Relaxed);
+                        if let Ok(mut guard) = engine_transport_description.lock() {
+                            *guard = None;
+                        }
+                        if let Ok(mut guard) = engine_capabilities.lock() {
+                            *guard = None;
+                        }
+                        if let Ok(mut guard) = engine_port.lock() {
+                            *guard = endpoint;
+                        }
+                        engine_connection_requested.store(connect, Ordering::Relaxed);
+                        last_connect_attempt = None;
+                    }
                     EngineMessage::ControllerCall { method, params } => {
+                        if engine_estop.load(Ordering::SeqCst)
+                            && !controller_call_allowed_during_estop(&method, &params)
+                        {
+                            continue;
+                        }
                         if connected {
                             if let Some(ref mut transport) = active_transport {
                                 if let Err(error) = transport.call_controller(&method, params) {
@@ -695,7 +927,11 @@ pub fn spawn_engine() -> EngineHandle {
                         method,
                         params,
                     } => {
-                        let result = if connected {
+                        let result = if engine_estop.load(Ordering::SeqCst)
+                            && !controller_call_allowed_during_estop(&method, &params)
+                        {
+                            Err("hardware command blocked while E-STOP is active".to_string())
+                        } else if connected {
                             active_transport
                                 .as_mut()
                                 .ok_or_else(|| "PCController transport is unavailable".to_string())
@@ -713,6 +949,14 @@ pub fn spawn_engine() -> EngineHandle {
                         }
                     }
                     EngineMessage::InvokeControllerAction { action_id } => {
+                        if engine_estop.load(Ordering::SeqCst) {
+                            if let Ok(mut guard) = engine_conn_error.lock() {
+                                *guard = Some(format!(
+                                    "controller action {action_id} blocked while E-STOP is active"
+                                ));
+                            }
+                            continue;
+                        }
                         if connected {
                             if let Some(ref mut transport) = active_transport {
                                 match transport.call_controller(
@@ -729,63 +973,8 @@ pub fn spawn_engine() -> EngineHandle {
                                     }
                                     Err(error) => {
                                         if let Ok(mut guard) = engine_conn_error.lock() {
-                                            *guard = Some(format!("invoke controller action: {error}"));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    EngineMessage::UpdatePeripheralPresentation {
-                        key,
-                        name,
-                        icon,
-                        group,
-                        expected_revision,
-                        fallback_names,
-                    } => {
-                        if connected {
-                            if let Some(ref mut transport) = active_transport {
-                                let mut params = serde_json::Map::new();
-                                params.insert("key".to_string(), serde_json::Value::String(key));
-                                if let Some(name) = name {
-                                    params.insert("name".to_string(), serde_json::Value::String(name));
-                                }
-                                if let Some(icon) = icon {
-                                    params.insert("icon".to_string(), serde_json::Value::String(icon));
-                                }
-                                if let Some(group) = group {
-                                    params.insert("group".to_string(), serde_json::Value::String(group));
-                                }
-                                if let Some(revision) = expected_revision {
-                                    params.insert(
-                                        "expected_revision".to_string(),
-                                        serde_json::Value::String(revision),
-                                    );
-                                }
-                                let update = transport.call_controller(
-                                    "controller.peripheral.presentation.update",
-                                    serde_json::Value::Object(params),
-                                );
-                                let update = match update {
-                                    Err(error) if controller_method_is_unavailable(&error) => {
-                                        transport.call_controller(
-                                            "controller.peripherals.set",
-                                            serde_json::json!({"peripheral_names": fallback_names}),
-                                        )
-                                    }
-                                    result => result,
-                                };
-                                match update {
-                                    Ok(_) => {
-                                        engine_catalog_refresh_requested
-                                            .store(true, Ordering::Relaxed);
-                                    }
-                                    Err(error) => {
-                                        if let Ok(mut guard) = engine_conn_error.lock() {
-                                            *guard = Some(format!(
-                                                "update peripheral presentation: {error}"
-                                            ));
+                                            *guard =
+                                                Some(format!("invoke controller action: {error}"));
                                         }
                                     }
                                 }
@@ -849,8 +1038,8 @@ pub fn spawn_engine() -> EngineHandle {
             // Clearing the flag before a connection exists can lose a
             // peripherals.changed notification and makes reconnection retain a
             // stale controller catalog.
-            let catalog_refresh_requested = connected
-                && engine_catalog_refresh_requested.swap(false, Ordering::Relaxed);
+            let catalog_refresh_requested =
+                connected && engine_catalog_refresh_requested.swap(false, Ordering::Relaxed);
             if connected
                 // Live relay, telemetry, and status-LED changes arrive on the
                 // controller WebSocket. This slow refresh is only a recovery
@@ -886,17 +1075,22 @@ pub fn spawn_engine() -> EngineHandle {
                 }
             }
 
+            let estop_now = engine_estop.load(Ordering::SeqCst);
             if estop_now && !was_estop {
                 last_pwm_values.fill(0);
+                active_strip_effect = None;
                 if connected {
-                    if let Some(ref mut transport) = active_transport {
-                        let _ = transport.send(Command::AllOff);
+                    if let Some(ref mut transport) = active_transport
+                        && let Err(error) = enforce_emergency_stop(transport)
+                        && let Ok(mut guard) = engine_conn_error.lock()
+                    {
+                        *guard = Some(format!("emergency stop: {error}"));
                     }
                     let port_name = {
                         let guard = engine_port.lock().unwrap();
                         guard.clone()
                     };
-                    println!("[{}] ALL_OFF (E-STOP)", port_name);
+                    println!("[{}] ALL_OFF + MOTION_STOP (E-STOP)", port_name);
                 }
             }
             was_estop = estop_now;
@@ -910,11 +1104,11 @@ pub fn spawn_engine() -> EngineHandle {
                     if let Some(ref mut transport) = active_transport {
                         let _ = transport.call_controller(
                             "controller.command.execute",
-                            serde_json::json!({"command": "macro cancel"}),
+                            serde_json::json!({"command": "effect cancel"}),
                         );
                         let _ = transport.call_controller(
                             "controller.command.execute",
-                            serde_json::json!({"command": "strip stop"}),
+                            serde_json::json!({"command": "effect stop"}),
                         );
                         active_strip_effect = None;
                         let _ = transport.send(Command::AllOff);
@@ -928,35 +1122,24 @@ pub fn spawn_engine() -> EngineHandle {
             }
             if !was_playing && is_playing_now {
                 let current_time = engine_time.load(Ordering::Relaxed);
-                let desired = active_controller_strip_effect_at(
-                    &controller_strip_effects,
-                    current_time,
-                )
-                .map(str::to_owned);
+                let desired =
+                    active_controller_strip_effect_at(&controller_strip_effects, current_time)
+                        .map(str::to_owned);
                 if active_strip_effect != desired {
                     if let Some(ref mut transport) = active_transport {
-                        if active_strip_effect.is_some() {
-                            let _ = transport.call_controller(
-                                "controller.command.execute",
-                                serde_json::json!({"command": "strip stop"}),
-                            );
+                        if let Some(id) = active_strip_effect.as_deref() {
+                            let _ = stop_controller_effect(transport, id);
                         }
                         active_strip_effect = None;
                         if let Some(id) = desired.as_deref() {
-                            if transport
-                                .call_controller(
-                                    "controller.command.execute",
-                                    serde_json::json!({"command": format!("strip effect play {id}")}),
-                                )
-                                .is_ok()
-                            {
+                            if play_controller_effect(transport, id).is_ok() {
                                 active_strip_effect = Some(id.to_string());
                             }
                         }
                     }
                 }
-                current_controller_strip_effect_index = controller_strip_effects
-                    .partition_point(|cue| cue.time_ms <= current_time);
+                current_controller_strip_effect_index =
+                    controller_strip_effects.partition_point(|cue| cue.time_ms <= current_time);
             }
             was_playing = is_playing_now;
 
@@ -970,13 +1153,16 @@ pub fn spawn_engine() -> EngineHandle {
                     }
                     if connected {
                         if let Some(ref mut transport) = active_transport {
-                            let command = format!("macro play {} {}", cue.id, cue.mode);
+                            let command = format!("effect play {} {}", cue.id, cue.mode);
                             if let Err(error) = transport.call_controller(
                                 "controller.command.execute",
                                 serde_json::json!({"command": command}),
                             ) {
                                 if let Ok(mut guard) = engine_conn_error.lock() {
-                                    *guard = Some(format!("start controller macro {}: {error}", cue.id));
+                                    *guard = Some(format!(
+                                        "start controller effect {}: {error}",
+                                        cue.id
+                                    ));
                                 }
                                 engine_connected.store(false, Ordering::Relaxed);
                             }
@@ -992,21 +1178,18 @@ pub fn spawn_engine() -> EngineHandle {
                     }
                     if connected {
                         if let Some(ref mut transport) = active_transport {
-                            if !cue.start
-                                && active_strip_effect.as_deref() != Some(cue.id.as_str())
+                            if !cue.start && active_strip_effect.as_deref() != Some(cue.id.as_str())
                             {
                                 current_controller_strip_effect_index += 1;
                                 continue;
                             }
-                            let command = if cue.start {
-                                format!("strip effect play {}", cue.id)
+                            let reference = cue.id.clone();
+                            let result = if cue.start {
+                                play_controller_effect(transport, &reference)
                             } else {
-                                "strip stop".to_string()
+                                stop_controller_effect(transport, &reference)
                             };
-                            if let Err(error) = transport.call_controller(
-                                "controller.command.execute",
-                                serde_json::json!({"command": command}),
-                            ) {
+                            if let Err(error) = result {
                                 if let Ok(mut guard) = engine_conn_error.lock() {
                                     *guard = Some(format!(
                                         "{} strip effect {}: {error}",
@@ -1236,9 +1419,7 @@ pub fn compile_controller_macros(timeline: &Timeline) -> Vec<CompiledControllerM
     compiled
 }
 
-pub fn compile_controller_strip_effects(
-    timeline: &Timeline,
-) -> Vec<CompiledControllerStripEffect> {
+pub fn compile_controller_strip_effects(timeline: &Timeline) -> Vec<CompiledControllerStripEffect> {
     let mut compiled = Vec::new();
     for instance in &timeline.instances {
         let Some(effect) = timeline
@@ -1260,7 +1441,9 @@ pub fn compile_controller_strip_effects(
             start: true,
         });
         compiled.push(CompiledControllerStripEffect {
-            time_ms: instance.start_time_ms.saturating_add(effect.duration_ms.max(1)),
+            time_ms: instance
+                .start_time_ms
+                .saturating_add(effect.duration_ms.max(1)),
             id: strip.id.clone(),
             start: false,
         });
@@ -1355,7 +1538,9 @@ mod tests {
         );
         let effect_id = effect.id;
         timeline.templates.push(effect);
-        timeline.instances.push(EffectInstance::new(effect_id, 2_250));
+        timeline
+            .instances
+            .push(EffectInstance::new(effect_id, 2_250));
 
         assert_eq!(
             compile_controller_macros(&timeline),
@@ -1370,52 +1555,77 @@ mod tests {
 
     #[test]
     fn compiles_advertised_strip_effect_into_bounded_start_and_stop_cues() {
+        // Effect identifiers are opaque, runtime-advertised values. Generate
+        // fixtures here so no PCController effect catalog is baked into Rust.
+        let primary_effect_id = uuid::Uuid::new_v4().simple().to_string();
+        let overlapping_effect_id = uuid::Uuid::new_v4().simple().to_string();
         let mut timeline = Timeline::new();
         let effect = Effect::controller_strip_effect(
-            "Police".to_string(),
+            "Advertised effect".to_string(),
             5_000,
-            "police".to_string(),
+            primary_effect_id.clone(),
         );
         let effect_id = effect.id;
         timeline.templates.push(effect);
-        timeline.instances.push(EffectInstance::new(effect_id, 2_250));
+        timeline
+            .instances
+            .push(EffectInstance::new(effect_id, 2_250));
 
         assert_eq!(
             compile_controller_strip_effects(&timeline),
             vec![
                 CompiledControllerStripEffect {
                     time_ms: 2_250,
-                    id: "police".to_string(),
+                    id: primary_effect_id.clone(),
                     start: true,
                 },
                 CompiledControllerStripEffect {
                     time_ms: 7_250,
-                    id: "police".to_string(),
+                    id: primary_effect_id.clone(),
                     start: false,
                 },
             ]
         );
         let compiled = compile_controller_strip_effects(&timeline);
         assert_eq!(active_controller_strip_effect_at(&compiled, 2_249), None);
-        assert_eq!(active_controller_strip_effect_at(&compiled, 2_250), Some("police"));
+        assert_eq!(
+            active_controller_strip_effect_at(&compiled, 2_250),
+            Some(primary_effect_id.as_str())
+        );
         assert_eq!(active_controller_strip_effect_at(&compiled, 7_250), None);
 
         let overlap = vec![
-            CompiledControllerStripEffect { time_ms: 0, id: "police".to_string(), start: true },
-            CompiledControllerStripEffect { time_ms: 50, id: "white-thunder".to_string(), start: true },
-            CompiledControllerStripEffect { time_ms: 100, id: "police".to_string(), start: false },
-            CompiledControllerStripEffect { time_ms: 150, id: "white-thunder".to_string(), start: false },
+            CompiledControllerStripEffect {
+                time_ms: 0,
+                id: primary_effect_id.clone(),
+                start: true,
+            },
+            CompiledControllerStripEffect {
+                time_ms: 50,
+                id: overlapping_effect_id.clone(),
+                start: true,
+            },
+            CompiledControllerStripEffect {
+                time_ms: 100,
+                id: primary_effect_id.clone(),
+                start: false,
+            },
+            CompiledControllerStripEffect {
+                time_ms: 150,
+                id: overlapping_effect_id.clone(),
+                start: false,
+            },
         ];
         assert_eq!(
             active_controller_strip_effect_at(&overlap, 100),
-            Some("white-thunder")
+            Some(overlapping_effect_id.as_str())
         );
         assert_eq!(active_controller_strip_effect_at(&overlap, 150), None);
 
         let unsafe_effect = Effect::controller_strip_effect(
             "Malformed".to_string(),
             5_000,
-            "police 100 30".to_string(),
+            format!("{primary_effect_id} 100 30"),
         );
         let unsafe_effect_id = unsafe_effect.id;
         timeline.templates.push(unsafe_effect);
@@ -1424,7 +1634,7 @@ mod tests {
             .push(EffectInstance::new(unsafe_effect_id, 10_000));
         let compiled = compile_controller_strip_effects(&timeline);
         assert_eq!(compiled.len(), 2);
-        assert!(compiled.iter().all(|cue| cue.id == "police"));
+        assert!(compiled.iter().all(|cue| cue.id == primary_effect_id));
     }
 
     #[test]
@@ -1625,6 +1835,105 @@ mod tests {
     }
 
     #[test]
+    fn emergency_stop_plan_releases_every_motion_source() {
+        assert_eq!(
+            EMERGENCY_STOP_CONTROLLER_COMMANDS,
+            [
+                "effect cancel",
+                "effect stop",
+                "keyboard stop",
+                "relay side left stop",
+                "relay side right stop",
+            ]
+        );
+    }
+
+    #[test]
+    fn emergency_stop_blocks_commands_that_can_reenergize_outputs() {
+        for (method, params) in [
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "relay 1 on"}),
+            ),
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "effect play seat-rise"}),
+            ),
+            (
+                "controller.pwm.set",
+                serde_json::json!({"channel": 0, "value": 4095}),
+            ),
+        ] {
+            assert!(!controller_call_allowed_during_estop(method, &params));
+        }
+        for (method, params) in [
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "relay off"}),
+            ),
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "relay side left stop"}),
+            ),
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "keyboard stop"}),
+            ),
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "strip clear"}),
+            ),
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "strip status"}),
+            ),
+            ("controller.pwm.off", serde_json::json!({})),
+            (
+                "controller.peripheral.presentation.update",
+                serde_json::json!({"key": "relay.5", "name": "Aisle lamp"}),
+            ),
+            ("controller.estop.set", serde_json::json!({"active": true})),
+            ("controller.estop.set", serde_json::json!({"active": false})),
+        ] {
+            assert!(controller_call_allowed_during_estop(method, &params));
+        }
+
+        assert!(!controller_call_allowed_during_estop(
+            "controller.estop.set",
+            &serde_json::json!({}),
+        ));
+    }
+
+    #[test]
+    fn emergency_stop_handle_latches_and_pauses_timeline_dispatch() {
+        let handle = spawn_engine();
+        handle.is_playing.store(true, Ordering::Relaxed);
+        handle.set_emergency_stop(true);
+        assert!(handle.estop_active.load(Ordering::SeqCst));
+        assert!(!handle.is_playing.load(Ordering::SeqCst));
+        handle.set_emergency_stop(false);
+        assert!(!handle.estop_active.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn controller_push_updates_the_shared_emergency_stop_latch() {
+        let handle = spawn_engine();
+        let target = handle.controller_push_target();
+        handle.is_playing.store(true, Ordering::SeqCst);
+        assert!(target.apply_notification(
+            "controller.event",
+            &serde_json::json!({"kind": "emergency_stop", "state": "true"}),
+        ));
+        assert!(handle.estop_active.load(Ordering::SeqCst));
+        assert!(!handle.is_playing.load(Ordering::SeqCst));
+        assert!(target.apply_notification(
+            "controller.event",
+            &serde_json::json!({"kind": "emergency_stop", "state": "false"}),
+        ));
+        assert!(!handle.estop_active.load(Ordering::SeqCst));
+    }
+
+    #[test]
     fn presentation_change_notification_requests_authoritative_catalog_refresh() {
         let handle = spawn_engine();
         let target = handle.controller_push_target();
@@ -1634,16 +1943,6 @@ mod tests {
             &serde_json::json!({"kind": "peripherals.changed", "action": "refresh"}),
         ));
         assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
-    }
-
-    #[test]
-    fn presentation_fallback_only_accepts_unknown_method_errors() {
-        assert!(controller_method_is_unavailable(
-            "PCController JSON-RPC error: {\"code\":-32601,\"message\":\"method not found\"}"
-        ));
-        assert!(!controller_method_is_unavailable(
-            "PCController JSON-RPC error: revision conflict"
-        ));
     }
 
     #[test]

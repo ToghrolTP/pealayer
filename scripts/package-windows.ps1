@@ -34,9 +34,16 @@ if ($Branding) {
 }
 $machineRustupHome = [Environment]::GetEnvironmentVariable('RUSTUP_HOME', 'Machine')
 if ($machineRustupHome) { $env:RUSTUP_HOME = $machineRustupHome }
-$systemRustBin = Join-Path $env:ProgramFiles 'Rust\bin'
-if (Test-Path -LiteralPath (Join-Path $systemRustBin 'cargo.exe')) {
-    $env:Path = $systemRustBin + ';' + $env:Path
+$userProfileDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+$rustBin = @(
+    (Join-Path $env:ProgramFiles 'Rust\bin')
+    (Join-Path $userProfileDirectory '.cargo\bin')
+) | Where-Object {
+    (Test-Path -LiteralPath (Join-Path $_ 'cargo.exe') -PathType Leaf) -and
+    (Test-Path -LiteralPath (Join-Path $_ 'rustc.exe') -PathType Leaf)
+} | Select-Object -First 1
+if ($rustBin) {
+    $env:Path = $rustBin + ';' + $env:Path
 }
 $cargoTargetDirectory = if ($env:CARGO_TARGET_DIR) {
     if ([System.IO.Path]::IsPathRooted($env:CARGO_TARGET_DIR)) {
@@ -55,23 +62,38 @@ $outputDirectory = if ((Split-Path -Leaf $sourceDirectory) -ieq 'source') {
 } else {
     Join-Path $repositoryRoot 'bin'
 }
-$libmpvDirectory = if ($env:LIBMPV_DIR) { $env:LIBMPV_DIR } else { Join-Path $env:ProgramFiles 'MPV' }
+$libmpvSourceDirectory = if ($env:LIBMPV_DIR) { $env:LIBMPV_DIR } else { Join-Path $env:ProgramFiles 'MPV' }
+$libmpvDirectory = $libmpvSourceDirectory
 $rustHost = (& rustc -vV | Select-String '^host:' | ForEach-Object { $_.Line.Substring(5).Trim() })
 if (-not $rustHost) { throw 'Could not determine the native Rust host triple.' }
 $importLibraryNames = if ($rustHost -like '*-msvc') { @('mpv.lib') } else { @('libmpv.dll.a', 'libmpv.a') }
 $libmpvImportLibrary = $importLibraryNames |
-    ForEach-Object { Join-Path $libmpvDirectory $_ } |
+    ForEach-Object { Join-Path $libmpvSourceDirectory $_ } |
     Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
     Select-Object -First 1
+if (-not $libmpvImportLibrary -and $rustHost -like '*-msvc') {
+    $gnuImportLibrary = Join-Path $libmpvSourceDirectory 'libmpv.dll.a'
+    if (Test-Path -LiteralPath $gnuImportLibrary -PathType Leaf) {
+        $libmpvDirectory = Join-Path $cargoTargetDirectory 'mpv-msvc-import'
+        New-Item -ItemType Directory -Force -Path $libmpvDirectory | Out-Null
+        $libmpvImportLibrary = Join-Path $libmpvDirectory 'mpv.lib'
+        Copy-Item -LiteralPath $gnuImportLibrary -Destination $libmpvImportLibrary -Force
+    }
+}
 if (-not $libmpvImportLibrary) {
-    throw "Required libmpv import library for $rustHost is missing. Expected one of: $($importLibraryNames -join ', ') in $libmpvDirectory"
+    throw "Required libmpv import library for $rustHost is missing. Expected one of: $($importLibraryNames -join ', ') in $libmpvSourceDirectory"
 }
 $libmpvRuntime = @('libmpv-2.dll', 'mpv-2.dll') |
-    ForEach-Object { Join-Path $libmpvDirectory $_ } |
+    ForEach-Object { Join-Path $libmpvSourceDirectory $_ } |
     Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
     Select-Object -First 1
 if (-not $libmpvRuntime) {
     throw "Required libmpv runtime is missing. Expected libmpv-2.dll or mpv-2.dll in $libmpvDirectory"
+}
+if ($libmpvDirectory -ne $libmpvSourceDirectory) {
+    $stagedRuntime = Join-Path $libmpvDirectory 'libmpv-2.dll'
+    Copy-Item -LiteralPath $libmpvRuntime -Destination $stagedRuntime -Force
+    $libmpvRuntime = $stagedRuntime
 }
 $env:Path = $libmpvDirectory + ';' + $env:Path
 $upxCommand = Get-Command upx.exe -ErrorAction SilentlyContinue
@@ -94,6 +116,21 @@ if (-not $SkipTests) {
     }
     & cargo test --locked --jobs 1
     if ($LASTEXITCODE -ne 0) { throw "cargo test failed with exit code $LASTEXITCODE" }
+}
+
+$webUiDirectory = Join-Path $repositoryRoot 'web_ui'
+$webUiPackage = Join-Path $webUiDirectory 'package.json'
+if (Test-Path -LiteralPath $webUiPackage -PathType Leaf) {
+    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if (-not $npm) { $npm = Get-Command npm -ErrorAction SilentlyContinue }
+    if (-not $npm) { throw 'npm is required to build the Pealayer Web UI.' }
+    Push-Location -LiteralPath $webUiDirectory
+    try {
+        & $npm.Source run build
+        if ($LASTEXITCODE -ne 0) { throw "Web UI build failed with exit code $LASTEXITCODE" }
+    } finally {
+        Pop-Location
+    }
 }
 
 & (Join-Path $PSScriptRoot 'run-windows.ps1') -BuildOnly
@@ -156,6 +193,17 @@ $webDistribution = Join-Path $repositoryRoot 'web_ui\dist'
 $webUiPackaged = $false
 if (Test-Path -LiteralPath (Join-Path $webDistribution 'index.html')) {
     $packagedWebDistribution = Join-Path $outputDirectory 'web_ui\dist'
+    $resolvedOutputDirectory = [System.IO.Path]::GetFullPath($outputDirectory).TrimEnd('\', '/')
+    $resolvedPackagedWebDistribution = [System.IO.Path]::GetFullPath($packagedWebDistribution)
+    if (-not $resolvedPackagedWebDistribution.StartsWith(
+        $resolvedOutputDirectory + [System.IO.Path]::DirectorySeparatorChar,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw 'Refusing to replace a Web UI package outside the canonical output directory.'
+    }
+    if (Test-Path -LiteralPath $resolvedPackagedWebDistribution) {
+        Remove-Item -LiteralPath $resolvedPackagedWebDistribution -Recurse -Force
+    }
     New-Item -ItemType Directory -Force -Path $packagedWebDistribution | Out-Null
     Copy-Item -Path (Join-Path $webDistribution '*') -Destination $packagedWebDistribution -Recurse -Force
     $webUiPackaged = $true

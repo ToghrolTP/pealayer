@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/pealayer-icon.png" alt="Pealayer Icon" width="128" height="128" />
+<img src="assets/pealayer-icon.png" alt="Pealayer Icon" width="128" height="128" />
 
 # Pealayer
 
@@ -38,13 +38,38 @@ Whether designing an immersive theme park ride, an experiential 4D theater, or h
 
 ## Key Features
 
+### PCController-owned effects
+
+Pealayer discovers one live effect library from PCController. Recorded seat or
+multi-peripheral sequences and host-rendered addressable-light streams use the
+same stable references and the same play/stop engine. Pealayer deliberately
+does not seed or persist an independent effect catalog.
+
+1. Connect Pealayer to a PCController endpoint and open **Effects Library**.
+2. Drag a live card onto the **Controller effects** timeline track. The card
+   stays under the pointer at the exact grab offset and drops at the selected
+   time.
+3. Right-click a card for **Manage** or **Run now**. The editor can
+   create, rename, regroup, inspect, run, duplicate, or delete definitions in
+   PCController.
+4. In **Hardware Monitor**, expand **Record effect**, choose
+   **PCController host** to capture all coordinator peripheral actions or
+   **Board RAM** for bounded live relay capture, operate the advertised
+   controls, then choose **Save and place**.
+5. Timeline playback calls `effect play sequence:ID` or
+   `effect play strip:ID`; lighting cues receive a matching `effect stop` at
+   their authored end. The stored definition remains solely in PCController.
+
+The PCController Web UI, TUI, CLI/IPC, and other Pealayer instances see edits
+from the same catalog on their next authoritative snapshot.
+
 ### 🎬 Cinema-Grade Video Core & OpenGL RTT
 * **Hardware-Accelerated Render-To-Texture (RTT)**: Decodes video frames via NVDEC, VA-API, or D3D11VA and renders directly into an offscreen OpenGL framebuffer texture inside egui's rendering context.
 * **Aspect-Ratio-Locked Viewport**: Automatically maintains pixel-perfect 16:9 letterboxing/pillarboxing with high-DPI scaling and zero frame stretching.
 * **Audio & Subtitle Track Switching**: On-the-fly stream selection with fine-grained ±600s delay compensation and subtitle font sizing.
 
 ### ⏱ Premiere-Inspired NLE Timeline Editor
-* **Multi-Track Sequence Workspace**: Dedicated tracks for Video, Audio, Relays R1–R8, and Analog PWM automation curves.
+* **Multi-Track Sequence Workspace**: Dedicated tracks for Video, Audio, relay outputs, and Analog PWM automation curves.
 * **Magnetic Snapping**: 5-pixel threshold snapping to the playhead, neighboring clip edges, and keyframe points.
 * **Interactive Edge Trimming & Scaling**: Drag clip edges left or right to trim duration with proportional time-scale pattern stretching.
 * **Template Isolation (Copy-on-Write)**: Modifying a placed cue automatically clones the template, protecting shared library presets from unintended edits.
@@ -73,12 +98,13 @@ Whether designing an immersive theme park ride, an experiential 4D theater, or h
 * **Live Actuator Telemetry**: Real-time status LEDs and manual "Force ON" overrides in the Hardware Monitor panel.
 
 ### 🌐 Built-In Web Remote Control & REST/WebSocket APIs
-* **Unified Control Server**: HTTP, REST, WebSocket, JSON-RPC, and CLI/single-instance IPC share one loopback-only listener at `127.0.0.1:8080`. Set `PEALAYER_PORT` to override the port, or `PEALAYER_WEB_BIND` to a specific interface address only when remote access is intended.
+* **Unified Control Contract**: HTTP, REST, WebSocket, JSON-RPC, CLI, and single-instance IPC dispatch the same typed player commands. Network automation uses the loopback-only listener at `127.0.0.1:8080`; local process launches prefer OS-native IPC and fall back to HTTP. Set `PEALAYER_PORT` to override the port, or `PEALAYER_WEB_BIND` to a specific interface address only when remote access is intended.
 * **Mobile-Responsive Remote Web App**: Standalone SPA built with **React 19**, **TypeScript**, **Vite**, and **Ant Design 6** (`web_ui/dist`). Control playback, seek, adjust volume, and trigger E-STOP from any phone, tablet, or secondary monitor.
 * **Remote Media Library & Thumbnail Caching**: Browse server directories, inspect media durations, and view dynamically cached video thumbnails over HTTP.
 
 ### 🖥 Operating System Integration & IPC
 * **Unix Domain Socket IPC**: Direct headless automation on Linux via `/tmp/pealayer.sock` or `$XDG_RUNTIME_DIR/pealayer.sock`.
+* **Windows Named-Pipe IPC**: Second-process launches and local commands use a per-application, per-session named pipe before trying the loopback HTTP fallback. Single-instance mode is enabled by default and can be changed in **Preferences → Advanced → Application instance**.
 * **Pealayer Automation Endpoint**: Pealayer's newline-compatible command transport is available at `POST http://127.0.0.1:8080/api/ipc`, while JSON-RPC 2.0 remains at `/api/rpc`. These are distinct from the PCController coordinator endpoint on `:8787`; `:8787` remains the controller fallback.
 * **Desktop File Associations**: 1-click registration as default system player for 9+ media formats (`.mp4`, `.mkv`, `.avi`, `.webm`, `.mov`, `.flv`, `.mp3`, `.flac`, `.wav`) via Windows Registry (`winreg`) and Linux FreeDesktop XDG desktop entries (`xdg-mime`).
 * **Automatic Sidecar Mounting**: Automatically discovers and loads `<video>.4d.json` timeline projects saved alongside movie files.
@@ -230,6 +256,7 @@ consume a TCP port.
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `GET` | `/api/player/status` | Returns playback state, including `duration`, `seekable`, `live`, `buffered_until`, and `buffering_percent` |
+| `GET` | `/api/player/commands` | Discovers the shared typed command contract and supported transports |
 | `POST` | `/api/player/command` | Dispatches player commands (JSON payload), including local files and remote media URLs |
 | `POST` | `/api/rpc` | JSON-RPC 2.0 methods such as `pealayer.play`, `pealayer.seek`, `pealayer.open`, and `pealayer.status` |
 | `POST` | `/api/ipc` | CLI and single-instance command transport; accepts legacy command JSON or newline-compatible JSON-RPC payloads |
@@ -259,6 +286,20 @@ Send and receive JSON command packets in real time:
 // Open an HTTP file, HLS manifest, or live feed (RTSP/RTMP/SRT/UDP/TCP)
 { "command": "open", "target": "rtsp://camera.example.invalid/live" }
 ```
+
+The same operations are available from the executable. Examples:
+
+```text
+pealayer movie.mkv --fullscreen --play
+pealayer --seek-to 90 --rate 1.25 --unmute
+pealayer --workspace nle --maximize
+pealayer --remote "seek -10"
+pealayer --command "{\"command\":\"set_volume\",\"value\":65}"
+```
+
+When single-instance mode is enabled, these switches are delivered in order to
+the active window rather than creating a second player. Run `pealayer --help`
+for the full switch list.
 
 Remote targets also appear in **Open Recent** and reopen through their original
 network protocol. Seek controls are enabled only when mpv reports the source as
@@ -429,7 +470,7 @@ cd ..
 pealayer/
 ├── Cargo.toml                  # Rust package manifest (2024 edition)
 ├── build.rs                    # Windows resource compiler (embeds app icon)
-├── assets/                     # Application icons (PNG, SVG, and multi-res Windows ICO)
+├── assets/                     # Canonical application icons (PNG, SVG, and multi-res Windows ICO)
 │   ├── pealayer-icon.png
 │   ├── pealayer-icon.svg
 │   └── icon.ico

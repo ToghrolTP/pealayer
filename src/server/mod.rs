@@ -63,20 +63,33 @@ pub struct WebRuntimeConfig {
     pub app_name: String,
     pub version: String,
     pub websocket_path: String,
+    pub app_icon_path: String,
     pub locale: String,
     pub direction: String,
     pub theme: String,
+    pub accent_color: String,
 }
 
 impl WebRuntimeConfig {
-    pub fn production(app_name: String, locale: String, direction: String, theme: String) -> Self {
+    pub fn production(
+        app_name: String,
+        locale: String,
+        direction: String,
+        theme: String,
+        accent_rgb: [u8; 3],
+    ) -> Self {
         Self {
             app_name,
             version: env!("CARGO_PKG_VERSION").to_string(),
             websocket_path: "/ws".to_string(),
+            app_icon_path: "/api/runtime/app-icon".to_string(),
             locale,
             direction,
             theme,
+            accent_color: format!(
+                "#{:02x}{:02x}{:02x}",
+                accent_rgb[0], accent_rgb[1], accent_rgb[2]
+            ),
         }
     }
 }
@@ -133,6 +146,7 @@ pub fn spawn_web_server(
             "en".to_string(),
             "ltr".to_string(),
             "system".to_string(),
+            [0, 120, 212],
         ),
     )
 }
@@ -259,8 +273,12 @@ fn handle_connection(mut stream: TcpStream, state: ControlState) {
 }
 
 fn handle_websocket(stream: TcpStream, state: ControlState) {
-    let Ok(mut websocket) = tungstenite::accept(stream) else {
-        return;
+    let mut websocket = match tungstenite::accept(stream) {
+        Ok(websocket) => websocket,
+        Err(error) => {
+            log::warn!("Reject Pealayer WebSocket upgrade: {error}");
+            return;
+        }
     };
     let (client_tx, client_rx) = channel::<String>();
     if let Ok(mut clients) = state.websocket_clients.lock() {
@@ -445,7 +463,7 @@ impl HttpResponse {
 fn write_http_response(stream: &mut TcpStream, response: HttpResponse) -> std::io::Result<()> {
     write!(
         stream,
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\n\r\n",
         response.status,
         response.reason,
         response.content_type,
@@ -458,14 +476,34 @@ fn write_http_response(stream: &mut TcpStream, response: HttpResponse) -> std::i
 fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
     let path = request.target.split('?').next().unwrap_or("/");
     match (request.method.as_str(), path) {
+        ("OPTIONS", _) => HttpResponse::text(204, "No Content", ""),
         ("GET", "/healthz") => HttpResponse::json(
             200,
             "OK",
-            r#"{"status":"ok","service":"pealayer","rpc":"2.0","transport":"unified"}"#,
+            r#"{"status":"ok","service":"pealayer","rpc":"2.0"}"#,
         ),
         ("GET", "/api/runtime/config") => {
             HttpResponse::json(200, "OK", state.runtime_config_json.to_string())
         }
+        ("GET", "/api/runtime/app-icon") => runtime_app_icon_response(),
+        ("GET", "/api/runtime/app-icon-192.png") => runtime_pwa_icon_response(192),
+        ("GET", "/api/runtime/app-icon-512.png") => runtime_pwa_icon_response(512),
+        ("GET", "/manifest.webmanifest") => pwa_manifest_response(state),
+        ("GET", "/api/config") => HttpResponse::json(
+            200,
+            "OK",
+            serde_json::to_string_pretty(&crate::platform::interop::get_live_config())
+                .unwrap_or_else(|_| "{}".to_string()),
+        ),
+        ("GET", "/api/preferences") => HttpResponse::json(
+            200,
+            "OK",
+            serde_json::to_string_pretty(&crate::preferences_contract::preferences_contract(
+                &crate::platform::interop::get_live_config(),
+            ))
+            .unwrap_or_else(|_| "{}".to_string()),
+        ),
+        ("POST", "/api/config") => config_update_response(&request.body, state),
         ("GET", "/api/player/status") => {
             match state
                 .latest_status
@@ -479,6 +517,11 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
                 }
             }
         }
+        ("GET", "/api/player/commands") => HttpResponse::json(
+            200,
+            "OK",
+            crate::platform::interop::command_catalog().to_string(),
+        ),
         ("POST", "/api/rpc") => json_rpc_response(&request.body, state),
         ("POST", "/api/player/command") => player_command_response(&request.body, state),
         ("POST", "/api/ipc") => HttpResponse::json(
@@ -496,8 +539,106 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
     }
 }
 
+fn runtime_app_icon_response() -> HttpResponse {
+    let config = crate::platform::interop::get_live_config();
+    if let Some(path) = crate::config::resolved_app_icon(&config)
+        && let Ok(bytes) = std::fs::read(&path)
+    {
+        return HttpResponse::bytes(200, "OK", mime_for_path(&path), bytes);
+    }
+    HttpResponse::bytes(
+        200,
+        "OK",
+        "image/png",
+        include_bytes!("../../assets/pealayer-icon.png").to_vec(),
+    )
+}
+
+fn runtime_pwa_icon_response(size: u32) -> HttpResponse {
+    let config = crate::platform::interop::get_live_config();
+    let configured = crate::config::resolved_app_icon(&config)
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| image::load_from_memory(&bytes).ok());
+    let source = configured
+        .or_else(|| image::load_from_memory(include_bytes!("../../assets/pealayer-icon.png")).ok());
+    let Some(source) = source else {
+        return HttpResponse::text(500, "Internal Server Error", "Application icon unavailable");
+    };
+    let resized = source.resize_exact(size, size, image::imageops::FilterType::Lanczos3);
+    let mut png = std::io::Cursor::new(Vec::new());
+    if resized.write_to(&mut png, image::ImageFormat::Png).is_err() {
+        return HttpResponse::text(500, "Internal Server Error", "Application icon unavailable");
+    }
+    HttpResponse::bytes(200, "OK", "image/png", png.into_inner())
+}
+
+fn pwa_manifest_response(state: &ControlState) -> HttpResponse {
+    let runtime = serde_json::from_str::<serde_json::Value>(&state.runtime_config_json)
+        .unwrap_or_else(|_| serde_json::json!({}));
+    let app_name = runtime
+        .get("appName")
+        .and_then(serde_json::Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("Pealayer");
+    let theme_color = runtime
+        .get("accentColor")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("#0078d4");
+    HttpResponse::bytes(
+        200,
+        "OK",
+        "application/manifest+json; charset=utf-8",
+        serde_json::json!({
+            "name": app_name,
+            "short_name": app_name,
+            "description": "Media, timeline, effects, and live PCController hardware workspace",
+            "start_url": "/#/player",
+            "scope": "/",
+            "display": "standalone",
+            "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+            "background_color": "#080a0e",
+            "theme_color": theme_color,
+            "orientation": "any",
+            "icons": [
+                {
+                    "src": "/api/runtime/app-icon-192.png",
+                    "sizes": "192x192",
+                    "type": "image/png",
+                    "purpose": "any"
+                },
+                {
+                    "src": "/api/runtime/app-icon-512.png",
+                    "sizes": "512x512",
+                    "type": "image/png",
+                    "purpose": "any"
+                }
+            ],
+            "shortcuts": [
+                {"name": "Player", "url": "/#/player"},
+                {"name": "Timeline", "url": "/#/timeline"},
+                {"name": "Effects", "url": "/#/effects"},
+                {"name": "Hardware", "url": "/#/hardware"}
+            ]
+        })
+        .to_string()
+        .into_bytes(),
+    )
+}
+
 fn json_rpc_response(body: &[u8], state: &ControlState) -> HttpResponse {
     let response = match serde_json::from_slice::<crate::platform::interop::JsonRpcRequest>(body) {
+        Ok(request)
+            if matches!(
+                request.method.as_str(),
+                "config.get" | "pealayer.config.get"
+            ) =>
+        {
+            crate::platform::interop::json_rpc_result(
+                &request.id,
+                serde_json::to_value(crate::platform::interop::get_live_config())
+                    .unwrap_or_else(|_| serde_json::json!({})),
+            )
+        }
         Ok(request) => match crate::platform::interop::command_from_json_rpc(&request) {
             Ok(Some(command)) => {
                 let accepted = state.command_tx.send(command).is_ok();
@@ -531,17 +672,86 @@ fn json_rpc_response(body: &[u8], state: &ControlState) -> HttpResponse {
     HttpResponse::json(200, "OK", response)
 }
 
-fn player_command_response(body: &[u8], state: &ControlState) -> HttpResponse {
-    match serde_json::from_slice::<crate::platform::interop::InteropCommand>(body) {
-        Ok(command) => match state.command_tx.send(command) {
-            Ok(()) => {
+fn config_update_response(body: &[u8], state: &ControlState) -> HttpResponse {
+    let parsed = serde_json::from_slice::<serde_json::Value>(body)
+        .map_err(|error| format!("invalid configuration JSON: {error}"))
+        .and_then(|values| {
+            crate::config::AppConfig::validate_patch_shape(&values)?;
+            crate::platform::interop::get_live_config().apply_patch(&values)?;
+            Ok(values)
+        });
+    match parsed {
+        Ok(values) => {
+            let accepted = state
+                .command_tx
+                .send(crate::platform::interop::InteropCommand::UpdateConfig { values })
+                .is_ok();
+            if accepted {
                 state.egui_ctx.request_repaint();
-                HttpResponse::json(200, "OK", r#"{"status":"ok"}"#)
+                HttpResponse::json(202, "Accepted", r#"{"accepted":true}"#)
+            } else {
+                HttpResponse::text(503, "Service Unavailable", "Dispatcher unavailable")
             }
-            Err(_) => HttpResponse::text(503, "Service Unavailable", "Dispatcher unavailable"),
-        },
-        _ => HttpResponse::text(400, "Bad Request", "Bad Command"),
+        }
+        Err(error) => HttpResponse::json(
+            400,
+            "Bad Request",
+            serde_json::json!({"error": error}).to_string(),
+        ),
     }
+}
+
+fn player_command_response(body: &[u8], state: &ControlState) -> HttpResponse {
+    match parse_player_command(body) {
+        Ok(command) => match command.validate() {
+            Err(error) => HttpResponse::json(
+                400,
+                "Bad Request",
+                serde_json::json!({"error": error}).to_string(),
+            ),
+            Ok(()) => match state.command_tx.send(command) {
+                Ok(()) => {
+                    state.egui_ctx.request_repaint();
+                    HttpResponse::json(200, "OK", r#"{"status":"ok"}"#)
+                }
+                Err(_) => HttpResponse::text(503, "Service Unavailable", "Dispatcher unavailable"),
+            },
+        },
+        Err(error) => HttpResponse::json(
+            400,
+            "Bad Request",
+            serde_json::json!({"error": format!("invalid command: {error}")}).to_string(),
+        ),
+    }
+}
+
+fn parse_player_command(body: &[u8]) -> Result<crate::platform::interop::InteropCommand, String> {
+    let value = serde_json::from_slice::<serde_json::Value>(body)
+        .map_err(|error| format!("invalid command JSON: {error}"))?;
+    if let Ok(command) = serde_json::from_value(value.clone()) {
+        return Ok(command);
+    }
+
+    // The SPA uses the exact same dotted method names over WebSocket and the
+    // HTTP fallback. Accept those names here as JSON-RPC-shaped commands so a
+    // transient WebSocket outage cannot silently remove hardware/effect
+    // capabilities from the web surface.
+    let mut params = value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "command body must be a JSON object".to_string())?;
+    let method = params
+        .remove("command")
+        .and_then(|value| value.as_str().map(str::to_string))
+        .ok_or_else(|| "command body is missing a command name".to_string())?;
+    let request = crate::platform::interop::JsonRpcRequest {
+        jsonrpc: Some("2.0".to_string()),
+        id: serde_json::Value::Null,
+        method,
+        params: serde_json::Value::Object(params),
+    };
+    crate::platform::interop::command_from_json_rpc(&request)?
+        .ok_or_else(|| "status queries must use the status endpoint".to_string())
 }
 
 fn dispatch_ipc_payload(state: &ControlState, payload: &str) -> String {
@@ -746,8 +956,10 @@ fn mime_for_path(path: &std::path::Path) -> &'static str {
         Some("css") => "text/css; charset=utf-8",
         Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
+        Some("ico") => "image/x-icon",
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("json") => "application/json",
+        Some("webmanifest") => "application/manifest+json",
         Some("woff2") => "font/woff2",
         _ => "application/octet-stream",
     }
@@ -796,5 +1008,76 @@ mod tests {
         assert!(web_asset_path(root, "/../Cargo.toml").is_none());
         #[cfg(windows)]
         assert!(web_asset_path(root, "C:/Windows/win.ini").is_none());
+    }
+
+    #[test]
+    fn runtime_icon_mime_supports_native_windows_icons() {
+        assert_eq!(
+            mime_for_path(std::path::Path::new("brand.ico")),
+            "image/x-icon"
+        );
+        assert_eq!(
+            mime_for_path(std::path::Path::new("brand.svg")),
+            "image/svg+xml"
+        );
+        assert_eq!(
+            mime_for_path(std::path::Path::new("brand.png")),
+            "image/png"
+        );
+    }
+
+    #[test]
+    fn runtime_contract_carries_the_resolved_desktop_accent() {
+        let runtime = WebRuntimeConfig::production(
+            "Pealayer".to_string(),
+            "en".to_string(),
+            "ltr".to_string(),
+            "system".to_string(),
+            [56, 210, 122],
+        );
+        let value = serde_json::to_value(runtime).unwrap();
+        assert_eq!(value["accentColor"], "#38d27a");
+    }
+
+    #[test]
+    fn static_mime_table_recognizes_installable_web_manifests() {
+        assert_eq!(
+            mime_for_path(std::path::Path::new("manifest.webmanifest")),
+            "application/manifest+json"
+        );
+    }
+
+    #[test]
+    fn pwa_icons_are_served_as_real_square_png_sizes() {
+        for size in [192, 512] {
+            let response = runtime_pwa_icon_response(size);
+            assert_eq!(response.status, 200);
+            assert_eq!(response.content_type, "image/png");
+            let icon = image::load_from_memory(&response.body).unwrap();
+            assert_eq!((icon.width(), icon.height()), (size, size));
+        }
+    }
+
+    #[test]
+    fn http_fallback_accepts_the_same_dotted_hardware_method_as_websocket() {
+        let command = parse_player_command(
+            br#"{"command":"hardware.action.invoke","action_id":"relay.5.on"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command,
+            crate::platform::interop::InteropCommand::InvokeHardwareAction {
+                action_id: "relay.5.on".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn http_fallback_preserves_native_command_encoding() {
+        let command = parse_player_command(br#"{"command":"set_volume","value":42}"#).unwrap();
+        assert_eq!(
+            command,
+            crate::platform::interop::InteropCommand::SetVolume { value: 42.0 }
+        );
     }
 }

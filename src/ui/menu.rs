@@ -1,21 +1,35 @@
 use crate::app::PealayerApp;
 use eframe::egui;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TrackMenuState {
+    submenu_enabled: bool,
+    none_enabled: bool,
+}
+
+fn track_menu_state(media_loaded: bool, discovered_track_count: usize) -> TrackMenuState {
+    TrackMenuState {
+        submenu_enabled: media_loaded,
+        none_enabled: media_loaded && discovered_track_count > 0,
+    }
+}
+
 fn estop_button(
     ui: &mut egui::Ui,
     active: bool,
     language: crate::config::AppLanguage,
 ) -> egui::Response {
-    let (label, fill, help) = if active {
+    let label = crate::ui::i18n::tr(language, "E-STOP");
+    let (fill, stroke, help) = if active {
         (
-            crate::ui::i18n::tr(language, "RESET E-STOP"),
-            egui::Color32::from_rgb(231, 76, 60),
-            "Reset the active emergency stop",
+            egui::Color32::from_rgb(127, 29, 29),
+            egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(69, 10, 10)),
+            "E-STOP is active; click to release",
         )
     } else {
         (
-            crate::ui::i18n::tr(language, "E-STOP"),
             egui::Color32::from_rgb(192, 57, 43),
+            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(110, 20, 20)),
             "Emergency stop: pause playback and stop hardware output",
         )
     };
@@ -23,14 +37,16 @@ fn estop_button(
     // The stop mark is painted as a vector octagon instead of relying on an
     // emoji glyph, whose appearance and availability vary by platform/font.
     let response = ui.add_sized(
-        egui::vec2(if active { 132.0 } else { 104.0 }, 26.0),
+        egui::vec2(104.0, 26.0),
         egui::Button::new(
             egui::RichText::new(format!("      {label}"))
                 .color(egui::Color32::WHITE)
                 .strong()
                 .size(11.0),
         )
-        .fill(fill),
+        .fill(fill)
+        .stroke(stroke)
+        .selected(active),
     );
     let center = egui::pos2(response.rect.left() + 15.0, response.rect.center().y);
     let radius = 8.0;
@@ -55,6 +71,116 @@ fn estop_button(
     response.on_hover_text(help)
 }
 
+pub(crate) fn draw_estop_release_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    if !app.show_estop_release_dialog {
+        return;
+    }
+
+    // If another interface already released the shared PCController latch,
+    // the local confirmation is no longer actionable.
+    if !app.estop_active {
+        app.show_estop_release_dialog = false;
+        return;
+    }
+
+    let title = app.tr("Release E-STOP?");
+    let message = app.tr("Hardware outputs and effects will be allowed again.");
+    let skip_label = app.tr("Do not ask again");
+    let cancel_label = app.tr("Cancel");
+    let release_label = app.tr("Release E-STOP");
+    let rtl = app.rtl;
+
+    let modal = egui::Modal::new(egui::Id::new("estop_release_confirmation_v1"))
+        .frame(
+            egui::Frame::popup(ui.style())
+                .inner_margin(egui::Margin::same(18))
+                .corner_radius(10),
+        )
+        .show(ui.ctx(), |ui| {
+            ui.set_min_width(360.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(crate::ui::icons::WARNING)
+                        .size(24.0)
+                        .color(egui::Color32::from_rgb(220, 74, 62)),
+                );
+                ui.heading(title);
+            });
+            ui.add_space(6.0);
+            ui.label(message);
+            ui.add_space(10.0);
+            ui.checkbox(&mut app.skip_estop_release_confirmation_draft, skip_label);
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(6.0);
+
+            let mut release = false;
+            let mut cancel = false;
+            crate::ui::dialog::action_row(ui, rtl, |ui| {
+                if crate::ui::dialog::primary_action_button(
+                    ui,
+                    crate::ui::icons::POWER,
+                    &release_label,
+                )
+                .clicked()
+                {
+                    release = true;
+                }
+                if crate::ui::dialog::action_button(ui, crate::ui::icons::X, &cancel_label)
+                    .clicked()
+                {
+                    cancel = true;
+                }
+            });
+            (release, cancel)
+        });
+
+    let (release, cancel) = modal.inner;
+    if release {
+        app.show_estop_release_dialog = false;
+        if app.skip_estop_release_confirmation_draft {
+            app.confirm_estop_release = false;
+            app.save_config();
+        }
+        app.set_emergency_stop(false);
+    } else if cancel || modal.should_close() {
+        app.show_estop_release_dialog = false;
+        app.skip_estop_release_confirmation_draft = false;
+    }
+}
+
+/// Switch sibling menus on hover while the menubar is active, matching the
+/// interaction of native Windows menu bars. egui's root menu buttons otherwise
+/// only toggle on click.
+fn top_menu_button<R>(
+    ui: &mut egui::Ui,
+    title: String,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    let state_id = egui::Id::new("pealayer_top_menu_hover_state");
+    let active_popup = ui.ctx().data(|data| data.get_temp::<egui::Id>(state_id));
+    let another_heading_is_open =
+        active_popup.is_some_and(|popup_id| egui::Popup::is_id_open(ui.ctx(), popup_id));
+
+    let result = ui.menu_button(title, add_contents);
+    let popup_id = egui::Popup::default_response_id(&result.response);
+
+    if result.response.hovered() && another_heading_is_open && active_popup != Some(popup_id) {
+        // Opening one popup closes the previously open root popup.
+        egui::Popup::open_id(ui.ctx(), popup_id);
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(state_id, popup_id));
+        ui.ctx().request_repaint();
+    } else if egui::Popup::is_id_open(ui.ctx(), popup_id) {
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(state_id, popup_id));
+    } else if active_popup == Some(popup_id) {
+        ui.ctx().data_mut(|data| data.remove::<egui::Id>(state_id));
+    }
+
+    result
+}
+
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let language = app.language;
@@ -63,7 +189,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     egui::Panel::top("menu_bar").show_inside(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.with_layout(crate::ui::i18n::layout(rtl, egui::Align::Center), |ui| {
-                ui.menu_button(app.tr("File"), |ui| {
+                top_menu_button(ui, app.tr("File"), |ui| {
                     if ui.button(app.tr("Open Video File...")).clicked() {
                         ui.close();
                         if let Some(path) = rfd::FileDialog::new()
@@ -79,7 +205,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         app.show_open_url_dialog = true;
                     }
 
-                    ui.menu_button(app.tr("Open Recent"), |ui| {
+                    crate::ui::icons::submenu(ui, app.tr("Open Recent"), |ui| {
                         if app.recent_media.is_empty() {
                             ui.label(app.tr("No recent media"));
                         } else {
@@ -168,27 +294,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
 
                     ui.separator();
-                    if ui
-                        .button(format!(
-                            "{} {}", crate::ui::icons::GEAR,
-                            app.tr("Register as Default Media Player...")
-                        ))
-                        .clicked()
-                    {
-                        ui.close();
-                        match crate::platform::association::register_as_default_player() {
-                            Ok(msg) => app.set_osd(msg),
-                            Err(err) => app.show_error = Some(err),
-                        }
-                    }
-
-                    ui.separator();
                     if ui.button(app.tr("Quit")).clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
 
-                ui.menu_button(app.tr("Edit"), |ui| {
+                top_menu_button(ui, app.tr("Edit"), |ui| {
                     if ui
                         .button(format!("{} {}", crate::ui::icons::GEAR, app.tr("Preferences...")))
                         .clicked()
@@ -210,31 +321,39 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
                 });
 
-                ui.menu_button(app.tr("Audio"), |ui| {
-                    ui.menu_button(app.tr("Audio Track"), |ui| {
-                        if ui
-                            .selectable_label(app.current_aid == "no", app.tr("None"))
-                            .clicked()
-                        {
-                            let _ = app.mpv.set_property("aid", "no");
-                            ui.close();
-                        }
-                        for track in &app.audio_tracks {
-                            let track_id_str = track.id.to_string();
-                            let label = format_track_label(
-                                track.id,
-                                track.lang.as_deref(),
-                                track.title.as_deref(),
-                            );
+                top_menu_button(ui, app.tr("Audio"), |ui| {
+                    let state = track_menu_state(
+                        app.current_video_path.is_some(),
+                        app.audio_tracks.len(),
+                    );
+                    ui.add_enabled_ui(state.submenu_enabled, |ui| {
+                        crate::ui::icons::submenu(ui, app.tr("Audio Track"), |ui| {
+                            ui.add_enabled_ui(state.none_enabled, |ui| {
+                                if ui
+                                    .selectable_label(app.current_aid == "no", app.tr("None"))
+                                    .clicked()
+                                {
+                                    let _ = app.mpv.set_property("aid", "no");
+                                    ui.close();
+                                }
+                            });
+                            for track in &app.audio_tracks {
+                                let track_id_str = track.id.to_string();
+                                let label = format_track_label(
+                                    track.id,
+                                    track.lang.as_deref(),
+                                    track.title.as_deref(),
+                                );
 
-                            if ui
-                                .selectable_label(app.current_aid == track_id_str, label)
-                                .clicked()
-                            {
-                                let _ = app.mpv.set_property("aid", track_id_str);
-                                ui.close();
+                                if ui
+                                    .selectable_label(app.current_aid == track_id_str, label)
+                                    .clicked()
+                                {
+                                    let _ = app.mpv.set_property("aid", track_id_str);
+                                    ui.close();
+                                }
                             }
-                        }
+                        });
                     });
 
                     ui.separator();
@@ -246,31 +365,39 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 });
 
                 // Subtitles menu
-                ui.menu_button(app.tr("Subtitles"), |ui| {
-                    ui.menu_button(app.tr("Subtitle Track"), |ui| {
-                        if ui
-                            .selectable_label(app.current_sid == "no", app.tr("None"))
-                            .clicked()
-                        {
-                            let _ = app.mpv.set_property("sid", "no");
-                            ui.close();
-                        }
-                        for track in &app.sub_tracks {
-                            let track_id_str = track.id.to_string();
-                            let label = format_track_label(
-                                track.id,
-                                track.lang.as_deref(),
-                                track.title.as_deref(),
-                            );
+                top_menu_button(ui, app.tr("Subtitles"), |ui| {
+                    let state = track_menu_state(
+                        app.current_video_path.is_some(),
+                        app.sub_tracks.len(),
+                    );
+                    ui.add_enabled_ui(state.submenu_enabled, |ui| {
+                        crate::ui::icons::submenu(ui, app.tr("Subtitle Track"), |ui| {
+                            ui.add_enabled_ui(state.none_enabled, |ui| {
+                                if ui
+                                    .selectable_label(app.current_sid == "no", app.tr("None"))
+                                    .clicked()
+                                {
+                                    let _ = app.mpv.set_property("sid", "no");
+                                    ui.close();
+                                }
+                            });
+                            for track in &app.sub_tracks {
+                                let track_id_str = track.id.to_string();
+                                let label = format_track_label(
+                                    track.id,
+                                    track.lang.as_deref(),
+                                    track.title.as_deref(),
+                                );
 
-                            if ui
-                                .selectable_label(app.current_sid == track_id_str, label)
-                                .clicked()
-                            {
-                                let _ = app.mpv.set_property("sid", track_id_str);
-                                ui.close();
+                                if ui
+                                    .selectable_label(app.current_sid == track_id_str, label)
+                                    .clicked()
+                                {
+                                    let _ = app.mpv.set_property("sid", track_id_str);
+                                    ui.close();
+                                }
                             }
-                        }
+                        });
                     });
 
                     ui.separator();
@@ -290,38 +417,40 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 });
 
                 // Workspace switcher
-                ui.menu_button(app.tr("Workspace"), |ui| {
-                    if ui
-                        .selectable_label(app.show_four_d_editor, app.tr("NLE Layout (Docked)"))
-                        .clicked()
-                    {
-                        app.show_four_d_editor = true;
-                        ui.close();
+                top_menu_button(ui, app.tr("Workspace"), |ui| {
+                    for (id, profile) in app.ordered_workspace_profiles() {
+                        let active = app.active_workspace_profile.as_deref() == Some(id.as_str());
+                        let label = format!(
+                            "{}  {}",
+                            crate::ui::icons::workspace_icon(&profile.icon),
+                            profile.name
+                        );
+                        if ui.selectable_label(active, label).clicked() {
+                            app.restore_workspace_profile(ui.ctx(), &id);
+                            ui.close();
+                        }
                     }
-                    if ui
-                        .selectable_label(!app.show_four_d_editor, app.tr("Simple Player"))
-                        .clicked()
-                    {
-                        app.show_four_d_editor = false;
-                        ui.close();
-                    }
+                    ui.separator();
+                    crate::ui::icons::submenu(
+                        ui,
+                        format!("{} {}", crate::ui::icons::TABS, app.tr("Panels")),
+                        |ui| crate::ui::layout::draw_workspace_tab_menu(app, ui),
+                    );
                     ui.separator();
                     if ui
                         .button(format!(
-                            "{} {}",
-                            crate::ui::icons::TABS,
-                            app.tr("Restore all workspace tabs")
+                            "{}  {}",
+                            crate::ui::icons::FLOPPY_DISK,
+                            app.tr("Manage workspaces...")
                         ))
                         .clicked()
                     {
-                        app.dock_state = crate::ui::layout::create_initial_layout();
-                        app.save_dock_layout();
-                        app.show_four_d_editor = true;
+                        app.show_workspace_profiles_dialog = true;
                         ui.close();
                     }
                 });
 
-                ui.menu_button(app.tr("Window"), |ui| {
+                top_menu_button(ui, app.tr("Window"), |ui| {
                     ui.label(egui::RichText::new(app.tr("Panels")).strong());
                     ui.separator();
 
@@ -354,8 +483,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 });
 
                 // Add right-aligned E-STOP and Serial controls
-                ui.menu_button(app.tr("Help"), |ui| {
-                    ui.menu_button(app.tr("Language"), |ui| {
+                top_menu_button(ui, app.tr("Help"), |ui| {
+                    crate::ui::icons::submenu(ui, app.tr("Language"), |ui| {
                         for (preference, label) in [
                             (
                                 crate::config::AppLanguage::System,
@@ -373,7 +502,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             }
                         }
                     });
-                    ui.menu_button(app.tr("Direction"), |ui| {
+                    crate::ui::icons::submenu(ui, app.tr("Direction"), |ui| {
                         for (preference, label) in [
                             (crate::config::AppDirection::Auto, app.tr("Automatic")),
                             (crate::config::AppDirection::Ltr, app.tr("Left to right")),
@@ -408,30 +537,42 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(8.0);
 
-                    // 1. E-STOP Kill Switch Button
-                    let board_ready = app
-                        .advertised_hardware()
-                        .is_some_and(|capabilities| capabilities.board_connected);
-                    let btn = ui
-                        .add_enabled_ui(board_ready, |ui| {
-                            estop_button(ui, app.estop_active, language)
-                        })
-                        .inner
-                        .on_disabled_hover_text(app.tr("E-STOP is available when a live board is connected"));
+                    // 1. E-STOP toggle and its divider are one visibility
+                    // cluster so hiding the control leaves no orphaned rule.
+                    if app.show_estop_control {
+                        let board_ready = app
+                            .advertised_hardware()
+                            .is_some_and(|capabilities| capabilities.board_connected);
+                        let btn = ui
+                            .add_enabled_ui(board_ready || app.estop_active, |ui| {
+                                estop_button(ui, app.estop_active, language)
+                            })
+                            .inner
+                            .on_disabled_hover_text(
+                                app.tr("E-STOP is available when a live board is connected"),
+                            );
 
-                    if btn.clicked() {
-                        app.estop_active = !app.estop_active;
-                        app.engine_handle
-                            .estop_active
-                            .store(app.estop_active, std::sync::atomic::Ordering::Relaxed);
+                        btn.context_menu(|ui| {
+                            if ui
+                                .button(format!(
+                                    "{} {}",
+                                    crate::ui::icons::EYE_SLASH,
+                                    app.tr("Hide E-STOP")
+                                ))
+                                .clicked()
+                            {
+                                app.show_estop_control = false;
+                                app.save_config();
+                                ui.close();
+                            }
+                        });
 
-                        if app.estop_active {
-                            // Pause video playback immediately
-                            app.pause();
+                        if btn.clicked() {
+                            app.request_emergency_stop_change(!app.estop_active);
                         }
-                    }
 
-                    ui.separator();
+                        ui.separator();
+                    }
 
                     // 2. Coordinator/direct-diagnostic connection toggle & dropdown
                     let connection_requested = app
@@ -488,10 +629,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     // paths are valid even when they are not visible to the local enumerator.
                     let mut endpoint_changed = false;
                     ui.add_enabled_ui(!app.is_connected && !connection_requested, |ui| {
-                        ui.allocate_ui(egui::vec2(188.0, 20.0), |ui| {
+                        ui.allocate_ui(egui::vec2(154.0, 20.0), |ui| {
                             egui::ComboBox::from_id_salt("hardware_endpoint_select")
                                 .selected_text(&app.serial_port)
-                                .width(240.0)
+                                .width(154.0)
                                 .height(240.0)
                                 .show_ui(ui, |ui| {
                                     for endpoint in crate::four_d::controller::available_endpoints()
@@ -543,7 +684,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                     let status_lbl = if app.is_connected {
                         if crate::four_d::controller::is_controller_endpoint(&app.serial_port) {
-                            app.tr("PCController coordinator connected").to_string()
+                            app.advertised_hardware()
+                                .filter(|capabilities| capabilities.board_connected)
+                                .map(|capabilities| app.display_text(&capabilities.board_name))
+                                .filter(|name| !name.trim().is_empty())
+                                .unwrap_or_else(|| app.tr("PCController"))
                         } else {
                             format!("{} direct diagnostic connection", app.serial_port)
                         }
@@ -552,7 +697,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     } else {
                         app.tr("Hardware Disconnected").to_string()
                     };
-                    ui.label(egui::RichText::new(status_lbl).size(10.0).weak());
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(status_lbl).size(10.0).weak())
+                            .truncate(),
+                    )
+                    .on_hover_text(&app.serial_port);
                 });
             });
         });
@@ -575,6 +724,31 @@ pub fn format_track_label(id: i64, lang: Option<&str>, title: Option<&str>) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn track_menu_is_contextual_to_media_and_discovered_tracks() {
+        assert_eq!(
+            track_menu_state(false, 0),
+            TrackMenuState {
+                submenu_enabled: false,
+                none_enabled: false,
+            }
+        );
+        assert_eq!(
+            track_menu_state(true, 0),
+            TrackMenuState {
+                submenu_enabled: true,
+                none_enabled: false,
+            }
+        );
+        assert_eq!(
+            track_menu_state(true, 1),
+            TrackMenuState {
+                submenu_enabled: true,
+                none_enabled: true,
+            }
+        );
+    }
 
     #[test]
     fn test_format_track_label_variations() {

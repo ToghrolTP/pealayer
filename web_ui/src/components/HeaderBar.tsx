@@ -1,9 +1,10 @@
 import React from 'react';
-import { Layout, Typography, Space, Tag, Button } from 'antd';
+import { Layout, Typography, Space, Tag, Button, Input, Modal, Tooltip } from 'antd';
 import {
-  SyncOutlined,
+  ApiOutlined,
   CheckCircleOutlined,
   DisconnectOutlined,
+  GlobalOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
 } from '@ant-design/icons';
@@ -18,7 +19,10 @@ interface HeaderBarProps {
   connected: boolean;
   connectionMode: 'ws' | 'http';
   appName?: string;
+  appIconPath?: string;
   locale: UiLocale;
+  connectionTarget: string;
+  onConnectionTargetChange: (target: string) => void;
 }
 
 export const HeaderBar: React.FC<HeaderBarProps> = ({
@@ -27,61 +31,97 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   connected,
   connectionMode,
   appName,
+  appIconPath,
   locale,
+  connectionTarget,
+  onConnectionTargetChange,
 }) => {
+  const [connectionOpen, setConnectionOpen] = React.useState(false);
+  const [draftTarget, setDraftTarget] = React.useState(connectionTarget);
+
+  React.useEffect(() => setDraftTarget(connectionTarget), [connectionTarget]);
+
   return (
-    <Header
-      style={{
-        padding: '0 24px',
-        background: '#0a2239',
-        borderBottom: '1px solid rgba(23, 96, 135, 0.4)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        position: 'sticky',
-        top: 0,
-        zIndex: 100,
-        height: 64,
-      }}
-    >
-      <Space size="large">
+    <Header className="studio-header">
+      <Space size={14} className="studio-header__leading">
         <Button
           type="text"
           icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
           onClick={onToggleCollapse}
-          style={{ fontSize: 18, color: '#53a2be' }}
+          className="studio-header__menu-button"
         />
-        <Space size="middle" align="center">
-          <img
-            src="/pealayer-icon.svg"
-            alt={appName ? `${appName} ${tr(locale, 'Application logo')}` : tr(locale, 'Application logo')}
-            style={{ width: 28, height: 28, borderRadius: 6, objectFit: 'contain' }}
-          />
-          <Title level={4} style={{ margin: 0, color: '#f8fafc', fontWeight: 700 }}>
-            {appName ? `${appName} — ${tr(locale, 'Control Center')}` : tr(locale, 'Control Center')}
-          </Title>
+        <Space size={10} align="center" className="studio-brand">
+          <span className="studio-brand__mark">
+            <img
+              src={appIconPath || '/api/runtime/app-icon'}
+              alt={appName ? `${appName} ${tr(locale, 'Application logo')}` : tr(locale, 'Application logo')}
+            />
+          </span>
+          <div className="studio-brand__copy">
+            <Title level={4}>{appName || 'Pealayer'}</Title>
+            <span>{connected ? tr(locale, 'Connected workspace') : tr(locale, 'Connecting')}</span>
+          </div>
         </Space>
       </Space>
 
-      <div>
+      <div className="connection-cluster" aria-live="polite">
+        <Tooltip title={tr(locale, 'Connect to another Pealayer')}>
+          <Button
+            type="text"
+            icon={<GlobalOutlined />}
+            className="connection-target-button"
+            onClick={() => setConnectionOpen(true)}
+          />
+        </Tooltip>
         {connected ? (
           <Tag
-            icon={connectionMode === 'ws' ? <SyncOutlined spin /> : <CheckCircleOutlined />}
-            color="success"
-            style={{ borderRadius: 12, padding: '4px 12px', fontSize: 13 }}
+            icon={connectionMode === 'ws' ? <ApiOutlined /> : <CheckCircleOutlined />}
+            className="connection-pill connection-pill--online"
           >
-            {connectionMode === 'ws' ? tr(locale, 'WebSocket Live') : tr(locale, 'HTTP Polling')}
+            {connectionMode === 'ws' ? tr(locale, 'Live') : tr(locale, 'Polling')}
           </Tag>
         ) : (
           <Tag
             icon={<DisconnectOutlined />}
-            color="error"
-            style={{ borderRadius: 12, padding: '4px 12px', fontSize: 13 }}
+            className="connection-pill connection-pill--offline"
           >
             {tr(locale, 'Offline')}
           </Tag>
         )}
       </div>
+
+      <Modal
+        title={tr(locale, 'Pealayer connection')}
+        open={connectionOpen}
+        onCancel={() => setConnectionOpen(false)}
+        okText={tr(locale, 'Connect')}
+        onOk={() => {
+          onConnectionTargetChange(draftTarget.trim());
+          setConnectionOpen(false);
+        }}
+        destroyOnClose={false}
+      >
+        <label className="connection-target-field">
+          <span>{tr(locale, 'WebSocket endpoint')}</span>
+          <Input
+            value={draftTarget}
+            onChange={(event) => setDraftTarget(event.target.value)}
+            placeholder="ws://host:port/ws"
+            allowClear
+            onPressEnter={() => {
+              onConnectionTargetChange(draftTarget.trim());
+              setConnectionOpen(false);
+            }}
+          />
+        </label>
+        <button
+          type="button"
+          className="connection-target-local"
+          onClick={() => setDraftTarget('')}
+        >
+          {tr(locale, 'Use this instance')}
+        </button>
+      </Modal>
     </Header>
   );
 };

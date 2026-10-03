@@ -3,11 +3,12 @@
 pub mod app;
 pub mod cli;
 pub mod config;
-pub mod effects_library;
+pub mod duration;
 pub mod four_d;
 pub mod media;
 pub mod mpv;
 pub mod platform;
+pub mod preferences_contract;
 pub mod server;
 pub mod ui;
 
@@ -40,7 +41,11 @@ fn subtitle_font_directory() -> Option<std::path::PathBuf> {
 }
 
 fn main() -> eframe::Result {
-    if std::env::args().any(|argument| argument == "--smoke-test") {
+    let startup_args: Vec<String> = std::env::args().collect();
+    if startup_args
+        .iter()
+        .any(|argument| argument == "--smoke-test")
+    {
         match Mpv::new() {
             Ok(_) => std::process::exit(0),
             Err(error) => {
@@ -52,11 +57,14 @@ fn main() -> eframe::Result {
 
     env_logger::init();
 
-    #[cfg(target_os = "windows")]
-    let gui_ownership;
+    if let Some(owner_hwnd) = crate::ui::preferences::preferences_helper_owner(&startup_args) {
+        return crate::ui::preferences::run_native_preferences(owner_hwnd);
+    }
 
-    let args: Vec<String> = std::env::args().collect();
-    let cli_options = match crate::cli::parse_cli_args(args) {
+    #[cfg(target_os = "windows")]
+    let mut gui_ownership = None;
+
+    let cli_options = match crate::cli::parse_cli_args(startup_args) {
         Ok(crate::cli::CliAction::PrintHelp(msg)) => {
             println!("{}", msg);
             return Ok(());
@@ -106,27 +114,20 @@ fn main() -> eframe::Result {
             }
         }
         Ok(crate::cli::CliAction::RunGui(opts)) => {
+            let config = crate::config::AppConfig::load();
             let launch_request = crate::cli::launch_request(&opts);
-            if crate::cli::try_forward_launch_request(&launch_request) {
+            if config.single_instance && crate::cli::try_forward_launch_request(&launch_request) {
                 println!("Forwarded launch request to active Pealayer instance.");
                 return Ok(());
             }
             #[cfg(target_os = "windows")]
-            {
-                let config = crate::config::AppConfig::load();
-                let mut app_identity = crate::config::resolved_app_name(&config);
-                if let Ok(instance_id) = std::env::var("PEALAYER_INSTANCE_ID") {
-                    let instance_id = instance_id.trim();
-                    if !instance_id.is_empty() {
-                        app_identity.push(':');
-                        app_identity.push_str(instance_id);
-                    }
-                }
+            if config.single_instance {
+                let app_identity = crate::cli::resolved_instance_identity();
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
                 loop {
                     match crate::platform::windows::acquire_gui_ownership(&app_identity) {
                         Ok(crate::platform::windows::GuiOwnership::Primary(owner)) => {
-                            gui_ownership = owner;
+                            gui_ownership = Some(owner);
                             break;
                         }
                         Ok(crate::platform::windows::GuiOwnership::Existing) => {
@@ -161,11 +162,16 @@ fn main() -> eframe::Result {
     let _gui_ownership = gui_ownership;
 
     let launch_config = crate::config::AppConfig::load();
+    crate::platform::interop::set_live_config(launch_config.clone());
     let app_name = crate::config::resolved_app_name(&launch_config);
     let language_preference = crate::config::resolved_language_preference(&launch_config);
     let language = crate::config::resolve_language(language_preference);
     let direction_preference = crate::config::resolved_direction_preference(&launch_config);
     let rtl = crate::config::resolve_rtl(direction_preference, language);
+    crate::platform::windows::configure_window_composition(
+        launch_config.windows_dwm_theming,
+        launch_config.windows_mica_backdrop,
+    );
     let initial_window_title = app_name.clone();
     let icon_data = crate::config::resolved_app_icon(&launch_config)
         .and_then(|path| std::fs::read(path).ok())
@@ -174,7 +180,20 @@ fn main() -> eframe::Result {
             eframe::icon_data::from_png_bytes(include_bytes!("../assets/pealayer-icon.png")).ok()
         });
 
-    let mut viewport = egui::ViewportBuilder::default().with_inner_size([800.0, 600.0]);
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([800.0, 600.0])
+        .with_clamp_size_to_monitor_size(true);
+    if let Some(geometry) = launch_config
+        .workspace_session
+        .window_geometry
+        .or(launch_config.window_geometry)
+        .filter(|geometry| geometry.is_valid())
+    {
+        viewport = viewport
+            .with_inner_size([geometry.width, geometry.height])
+            .with_position([geometry.x, geometry.y])
+            .with_maximized(geometry.maximized);
+    }
     if cli_options.fullscreen {
         viewport = viewport.with_fullscreen(true);
     }
@@ -185,6 +204,13 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Glow,
+        persistence_path: Some(
+            crate::config::AppConfig::get_config_path().with_file_name("workspace-state.ron"),
+        ),
+        glow_options: eframe::egui_glow::GlowConfiguration {
+            vsync: launch_config.opengl_vsync,
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -203,12 +229,7 @@ fn main() -> eframe::Result {
                 crate::config::AppTheme::Dark => egui::ThemePreference::Dark,
             };
             cc.egui_ctx.set_theme(theme_preference);
-            let mut dark_visuals = egui::Visuals::dark();
-            dark_visuals.panel_fill = egui::Color32::from_rgb(33, 33, 33);
-            dark_visuals.window_fill = egui::Color32::from_rgb(26, 26, 26);
-            cc.egui_ctx.set_visuals_of(egui::Theme::Dark, dark_visuals);
-            cc.egui_ctx
-                .set_visuals_of(egui::Theme::Light, egui::Visuals::light());
+            crate::ui::configure_native_visuals(&cc.egui_ctx, &loaded_config);
             crate::platform::windows::set_window_theme(
                 cc.egui_ctx.global_style().visuals.dark_mode,
             );
@@ -230,6 +251,14 @@ fn main() -> eframe::Result {
             let mpv = Mpv::with_initializer(|init| {
                 init.set_property("vo", "libmpv")?;
                 init.set_property("keep-open", "always")?;
+                crate::mpv::proxy::apply_before_initialize(
+                    &init,
+                    loaded_config.open_url_use_proxy,
+                    loaded_config
+                        .open_url_proxy_url
+                        .as_deref()
+                        .unwrap_or_default(),
+                )?;
 
                 // Set up Arabic/Farsi Vazirmatn font for subtitles
                 if let Some(font_dir_str) = subtitle_font_directory
@@ -315,6 +344,9 @@ fn main() -> eframe::Result {
             mpv_client
                 .observe_property("cache-buffering-state", libmpv2::Format::Int64, 16)
                 .unwrap();
+            mpv_client
+                .observe_property("speed", libmpv2::Format::Double, 17)
+                .unwrap();
 
             let egui_ctx2 = cc.egui_ctx.clone();
             mpv_client.set_wakeup_callback(move || {
@@ -330,7 +362,7 @@ fn main() -> eframe::Result {
             crate::platform::interop::spawn_interop_listener(
                 interop_tx.clone(),
                 cc.egui_ctx.clone(),
-                app_name.clone(),
+                crate::cli::resolved_instance_identity(),
             );
 
             let control_port = crate::config::control_port();
@@ -348,13 +380,14 @@ fn main() -> eframe::Result {
                     crate::config::AppTheme::System => "system",
                 }
                 .to_string(),
+                crate::ui::platform_accent_rgb(&loaded_config),
             );
             let web_state_tx = crate::server::spawn_control_server_configured(
                 control_port,
                 cc.egui_ctx.clone(),
                 web_runtime,
                 interop_tx.clone(),
-                app_name.clone(),
+                crate::cli::resolved_instance_identity(),
             );
             let (_web_cmd_tx, web_cmd_rx) = std::sync::mpsc::channel();
             let engine_handle = crate::four_d::engine::spawn_engine();
@@ -364,20 +397,39 @@ fn main() -> eframe::Result {
             );
 
             let dock_state = loaded_config
-                .workspace_dock_layout
+                .workspace_session
+                .dock_layout
                 .as_deref()
+                .or(loaded_config.workspace_dock_layout.as_deref())
                 .and_then(|json| {
-                    let mut ds = serde_json::from_str::<egui_dock::DockState<crate::ui::layout::PealayerTab>>(json).ok()?;
+                    let mut ds = serde_json::from_str::<
+                        egui_dock::DockState<crate::ui::layout::PealayerTab>,
+                    >(json)
+                    .ok()?;
                     crate::ui::layout::sanitize_dock_rects(&mut ds);
                     Some(ds)
                 })
                 .unwrap_or_else(crate::ui::layout::create_initial_layout);
+            let mut workspace_profiles = loaded_config.workspace_profiles.clone();
+            let default_dock_layout =
+                serde_json::to_string(&crate::ui::layout::create_initial_layout()).ok();
+            for id in ["simple", "nle"] {
+                if let Some(profile) = workspace_profiles.get_mut(id)
+                    && profile.dock_layout.is_none()
+                {
+                    profile.dock_layout = default_dock_layout.clone();
+                }
+            }
 
             let mut app = PealayerApp {
                 app_name: app_name.clone(),
                 app_publisher: crate::config::resolved_app_publisher(&loaded_config),
                 app_copyright: crate::config::resolved_app_copyright(&loaded_config),
                 last_window_title: String::new(),
+                window_geometry: loaded_config
+                    .workspace_session
+                    .window_geometry
+                    .or(loaded_config.window_geometry),
                 language_preference,
                 language,
                 direction_preference,
@@ -389,6 +441,7 @@ fn main() -> eframe::Result {
                 playback_time: 0.0,
                 duration: 0.0,
                 is_seekable: false,
+                media_metadata_loaded: false,
                 cache_duration: None,
                 cache_buffering_percent: None,
                 media_fps: 0.0,
@@ -396,13 +449,14 @@ fn main() -> eframe::Result {
                 is_eof: false,
                 volume: initial_volume,
                 is_muted: loaded_config.is_muted,
-                show_sub_settings: false,
+                playback_rate: 1.0,
+                show_sub_settings: loaded_config.workspace_session.dialogs.subtitles,
                 sub_visibility: true,
                 sub_font_size: 55.0,
                 sub_delay: 0.0,
                 current_sid: "no".to_string(),
                 sub_tracks: Vec::new(),
-                show_audio_settings: false,
+                show_audio_settings: loaded_config.workspace_session.dialogs.audio,
                 audio_delay: 0.0,
                 current_aid: "no".to_string(),
                 audio_tracks: Vec::new(),
@@ -415,7 +469,7 @@ fn main() -> eframe::Result {
                 last_mouse_activity: std::time::Instant::now(),
                 pin_controls: loaded_config.pin_controls,
                 show_error: None,
-                show_four_d_editor: true,
+                show_four_d_editor: loaded_config.workspace_session.nle,
 
                 timeline: crate::four_d::models::Timeline::new(),
                 engine_handle,
@@ -434,20 +488,28 @@ fn main() -> eframe::Result {
                 })),
                 selected_instance_ids: std::collections::HashSet::new(),
                 selected_keyframes: std::collections::HashSet::new(),
+                selected_timeline_keyframe: None,
                 active_keyframe_drag: None,
                 timeline_zoom: 100.0,
                 undo_stack: crate::four_d::history::UndoStack::default(),
-                relay_overrides: std::collections::BTreeSet::new(),
                 effects_search_query: String::new(),
-                user_strip_effects: crate::effects_library::load_or_seed(),
-                show_effect_library_editor: false,
-                effect_library_selection: None,
-                effect_library_draft: crate::effects_library::UserStripEffectPreset::default(),
+                show_effect_library_editor: loaded_config.workspace_session.dialogs.effects_manager,
+                effect_library_selection: loaded_config
+                    .workspace_session
+                    .dialogs
+                    .effects_selection
+                    .clone(),
+                effect_library_draft: crate::app::ControllerEffectDraft::default(),
+                effect_group_draft: None,
                 track_muted: std::collections::BTreeSet::new(),
                 track_soloed: std::collections::BTreeSet::new(),
                 track_locked: std::collections::BTreeSet::new(),
                 active_drag: None,
                 estop_active: false,
+                show_estop_control: loaded_config.show_estop_control,
+                confirm_estop_release: loaded_config.confirm_estop_release,
+                show_estop_release_dialog: false,
+                skip_estop_release_confirmation_draft: false,
                 serial_port: loaded_config
                     .hardware_endpoint
                     .clone()
@@ -457,26 +519,100 @@ fn main() -> eframe::Result {
                 lasso_rect: None,
                 current_video_path: None,
                 show_remaining_time: loaded_config.show_remaining_time,
+                editing_elapsed_time: false,
+                elapsed_time_input: String::new(),
+                elapsed_edit_focus_requested: false,
                 osd_message: None,
                 recent_media: loaded_config.recent_media.clone(),
-                show_open_url_dialog: false,
+                show_open_url_dialog: loaded_config.workspace_session.dialogs.open_location,
                 url_input_buffer: String::new(),
+                open_url_multiline: loaded_config.open_url_multiline,
+                open_url_history_expanded: loaded_config.open_url_history_expanded,
+                open_url_recent_click_edits: loaded_config.open_url_recent_click_edits,
+                open_url_fetch_remote_info: loaded_config.open_url_fetch_remote_info,
+                open_url_fetch_remote_thumbnail: loaded_config.open_url_fetch_remote_thumbnail,
+                open_url_use_proxy: loaded_config.open_url_use_proxy,
+                open_url_proxy_url: loaded_config.open_url_proxy_url.clone().unwrap_or_default(),
+                url_inspector: crate::ui::open_url::UrlInspector::default(),
                 is_window_operating: false,
-                show_shortcuts_dialog: false,
-                show_about_dialog: false,
-                show_preferences_dialog: false,
-                preferences_tab: 0,
+                show_shortcuts_dialog: loaded_config.workspace_session.dialogs.shortcuts,
+                show_about_dialog: loaded_config.workspace_session.dialogs.about,
+                about_tab: loaded_config.workspace_session.dialogs.about_tab,
+                about_icon: None,
+                show_preferences_dialog: loaded_config.workspace_session.dialogs.preferences,
+                preferences_tab: loaded_config.workspace_session.dialogs.preferences_tab,
+                preferences_draft: None,
+                show_board_info_dialog: loaded_config.workspace_session.dialogs.board_information,
+                board_info_tab: loaded_config
+                    .workspace_session
+                    .dialogs
+                    .board_information_tab,
+                board_name_draft: String::new(),
+                show_hardware_channels_dialog: loaded_config
+                    .workspace_session
+                    .dialogs
+                    .channel_manager,
+                show_workspace_profiles_dialog: loaded_config
+                    .workspace_session
+                    .dialogs
+                    .workspace_profiles,
+                workspace_profile_name_draft: String::new(),
+                workspace_profile_icon_draft: "window".to_string(),
+                workspace_profiles,
+                active_workspace_profile: loaded_config.active_workspace_profile.clone(),
+                hardware_control_dialog_key: loaded_config
+                    .workspace_session
+                    .dialogs
+                    .hardware_control_key
+                    .clone(),
+                hardware_channel_detail_active: loaded_config
+                    .workspace_session
+                    .dialogs
+                    .hardware_channel_detail_active,
+                hardware_control_name_draft: String::new(),
+                hardware_control_group_draft: String::new(),
+                hardware_control_icon_draft: String::new(),
+                hardware_control_icon_search: String::new(),
+                hardware_control_color_draft: String::new(),
+                hardware_control_pwm_percent: 0.0,
+                board_operation: None,
+                board_operation_status: String::new(),
+                board_settings_draft: None,
+                board_settings_dirty: false,
+                board_reboot_armed: false,
                 pause_on_hardware_disconnect: loaded_config.pause_on_hardware_disconnect,
                 auto_connect_hardware: loaded_config.auto_connect_hardware,
                 click_player_to_toggle: loaded_config.click_player_to_toggle,
                 show_subseconds: loaded_config.show_subseconds,
+                quick_seek_seconds: loaded_config.quick_seek_seconds,
+                frame_step_count: loaded_config.frame_step_count,
                 wheel_seek_seconds: loaded_config.wheel_seek_seconds,
                 osd_position: loaded_config.osd_position,
                 osd_timeout_seconds: loaded_config.osd_timeout_seconds,
                 paused_drag_action: loaded_config.paused_drag_action,
                 playing_drag_action: loaded_config.playing_drag_action,
                 fullscreen_video_background: loaded_config.fullscreen_video_background,
+                motion_control_mode: loaded_config.motion_control_mode,
+                held_motion_action: None,
+                compact_hardware_controls: loaded_config.compact_hardware_controls,
+                non_user_control_visibility: loaded_config.non_user_control_visibility,
+                prefix_relay_identifiers: loaded_config.prefix_relay_identifiers,
+                live_pwm_updates: loaded_config.live_pwm_updates,
+                hardware_actions_on_press: loaded_config.hardware_actions_on_press,
+                single_instance: loaded_config.single_instance,
+                windows_mica_backdrop: loaded_config.windows_mica_backdrop,
+                windows_dwm_theming: loaded_config.windows_dwm_theming,
+                opengl_vsync: loaded_config.opengl_vsync,
+                native_dialog_windows: loaded_config.native_dialog_windows,
+                native_preferences: None,
                 status_bar: loaded_config.status_bar,
+                config_fingerprint: crate::config::AppConfig::fingerprint(
+                    &crate::config::AppConfig::get_config_path(),
+                )
+                .ok(),
+                config_watcher: None,
+                config_reload_due: None,
+                config_status: String::new(),
                 was_hardware_connected: false,
                 was_board_connected: false,
                 connection_notice: None,
@@ -494,15 +630,16 @@ fn main() -> eframe::Result {
                 media_cmd_tx: interop_tx,
                 window_handle: None,
                 shell_initialized: false,
+                last_taskbar_state: None,
+                last_thumbnail_button_state: None,
             };
 
             if app.auto_connect_hardware {
                 let configured_endpoint = app.serial_port.clone();
-                let selected_endpoint =
-                    crate::four_d::controller::select_autoconnect_endpoint(
-                        &configured_endpoint,
-                        std::time::Duration::from_millis(250),
-                    );
+                let selected_endpoint = crate::four_d::controller::select_autoconnect_endpoint(
+                    &configured_endpoint,
+                    std::time::Duration::from_millis(250),
+                );
                 if let Some(endpoint) = selected_endpoint {
                     app.serial_port = endpoint.clone();
                     if let Ok(mut selected) = app.engine_handle.serial_port.lock() {
@@ -516,6 +653,9 @@ fn main() -> eframe::Result {
 
             if let Some(target) = cli_options.target {
                 app.load_media_target(&target);
+            }
+            for command in cli_options.commands {
+                app.apply_interop_command(&cc.egui_ctx, command, "Command line");
             }
 
             Ok(Box::new(app))

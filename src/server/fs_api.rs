@@ -56,7 +56,11 @@ pub fn browse_directory(dir_path: Option<&str>) -> Result<DirectoryBrowseRespons
                 }
 
                 let is_dir = path.is_dir();
-                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
                 let is_media = !is_dir && MEDIA_EXTENSIONS.contains(&ext.as_str());
 
                 let size_bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
@@ -101,8 +105,7 @@ pub fn rename_file(old_path_str: &str, new_name: &str) -> Result<String, String>
         return Err("Target filename already exists".to_string());
     }
 
-    fs::rename(old_path, &new_path)
-        .map_err(|e| format!("Rename failed: {}", e))?;
+    fs::rename(old_path, &new_path).map_err(|e| format!("Rename failed: {}", e))?;
 
     Ok(new_path.to_string_lossy().to_string())
 }
