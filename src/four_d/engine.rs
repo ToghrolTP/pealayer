@@ -286,16 +286,6 @@ pub enum EngineMessage {
     InvokeControllerAction {
         action_id: String,
     },
-    UpdatePeripheralPresentation {
-        key: String,
-        name: Option<String>,
-        icon: Option<String>,
-        group: Option<String>,
-        hidden: Option<bool>,
-        locked: Option<bool>,
-        expected_revision: Option<String>,
-        fallback_names: std::collections::BTreeMap<String, String>,
-    },
 }
 
 pub struct EngineHandle {
@@ -489,13 +479,6 @@ fn should_yield_direct_transport(
     coordinator_reachable: bool,
 ) -> bool {
     is_direct && !diagnostic_override && coordinator_reachable
-}
-
-fn controller_method_is_unavailable(error: &str) -> bool {
-    let error = error.to_ascii_lowercase();
-    error.contains("-32601")
-        || error.contains("method not found")
-        || error.contains("unknown method")
 }
 
 pub fn spawn_engine() -> EngineHandle {
@@ -983,89 +966,6 @@ pub fn spawn_engine() -> EngineHandle {
                                         if let Ok(mut guard) = engine_conn_error.lock() {
                                             *guard =
                                                 Some(format!("invoke controller action: {error}"));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    EngineMessage::UpdatePeripheralPresentation {
-                        key,
-                        name,
-                        icon,
-                        group,
-                        hidden,
-                        locked,
-                        expected_revision,
-                        fallback_names,
-                    } => {
-                        if connected {
-                            if let Some(ref mut transport) = active_transport {
-                                let mut params = serde_json::Map::new();
-                                params.insert("key".to_string(), serde_json::Value::String(key));
-                                if let Some(name) = name {
-                                    params.insert(
-                                        "name".to_string(),
-                                        serde_json::Value::String(name),
-                                    );
-                                }
-                                if let Some(icon) = icon {
-                                    params.insert(
-                                        "icon".to_string(),
-                                        serde_json::Value::String(icon),
-                                    );
-                                }
-                                if let Some(group) = group {
-                                    params.insert(
-                                        "group".to_string(),
-                                        serde_json::Value::String(group),
-                                    );
-                                }
-                                if let Some(hidden) = hidden {
-                                    params.insert(
-                                        "hidden".to_string(),
-                                        serde_json::Value::Bool(hidden),
-                                    );
-                                }
-                                if let Some(locked) = locked {
-                                    params.insert(
-                                        "locked".to_string(),
-                                        serde_json::Value::Bool(locked),
-                                    );
-                                }
-                                if let Some(revision) = expected_revision {
-                                    params.insert(
-                                        "expected_revision".to_string(),
-                                        serde_json::Value::String(revision),
-                                    );
-                                }
-                                let update = transport.call_controller(
-                                    "controller.peripheral.presentation.update",
-                                    serde_json::Value::Object(params),
-                                );
-                                let presentation_has_policy = hidden.is_some() || locked.is_some();
-                                let update = match update {
-                                    Err(error)
-                                        if !presentation_has_policy
-                                            && controller_method_is_unavailable(&error) =>
-                                    {
-                                        transport.call_controller(
-                                            "controller.peripherals.set",
-                                            serde_json::json!({"peripheral_names": fallback_names}),
-                                        )
-                                    }
-                                    result => result,
-                                };
-                                match update {
-                                    Ok(_) => {
-                                        engine_catalog_refresh_requested
-                                            .store(true, Ordering::Relaxed);
-                                    }
-                                    Err(error) => {
-                                        if let Ok(mut guard) = engine_conn_error.lock() {
-                                            *guard = Some(format!(
-                                                "update peripheral presentation: {error}"
-                                            ));
                                         }
                                     }
                                 }
@@ -2022,16 +1922,6 @@ mod tests {
             &serde_json::json!({"kind": "peripherals.changed", "action": "refresh"}),
         ));
         assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
-    }
-
-    #[test]
-    fn presentation_fallback_only_accepts_unknown_method_errors() {
-        assert!(controller_method_is_unavailable(
-            "PCController JSON-RPC error: {\"code\":-32601,\"message\":\"method not found\"}"
-        ));
-        assert!(!controller_method_is_unavailable(
-            "PCController JSON-RPC error: revision conflict"
-        ));
     }
 
     #[test]

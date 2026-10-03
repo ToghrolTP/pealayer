@@ -61,8 +61,8 @@ enum HardwareActionDispatch {
 fn action_dispatch(control: &HardwareControl, action: &HardwareAction) -> HardwareActionDispatch {
     if control.control.eq_ignore_ascii_case("raw-motion") {
         let side = match control.key.as_str() {
-            "seat.left" | "seat.a" => Some("left"),
-            "seat.right" | "seat.b" => Some("right"),
+            "seat.a" => Some("left"),
+            "seat.b" => Some("right"),
             _ => None,
         };
         let verb = action.verb.to_ascii_lowercase();
@@ -470,32 +470,32 @@ mod tests {
     #[test]
     fn semantic_controls_keep_their_advertised_action_contract() {
         let control = HardwareControl {
-            key: "seat.left".to_string(),
+            key: "seat.a".to_string(),
             kind: "motion".to_string(),
             ..Default::default()
         };
         let up = HardwareAction {
-            id: "seat.left.up".to_string(),
+            id: "seat.a.up".to_string(),
             verb: "up".to_string(),
             name: "Up".to_string(),
             ..Default::default()
         };
         assert_eq!(
             action_dispatch(&control, &up),
-            HardwareActionDispatch::Advertised("seat.left.up".to_string())
+            HardwareActionDispatch::Advertised("seat.a.up".to_string())
         );
     }
 
     #[test]
     fn unconfigured_raw_motion_routes_through_interlocked_side_command() {
         let control = HardwareControl {
-            key: "seat.left".to_string(),
+            key: "seat.a".to_string(),
             kind: "motion".to_string(),
             control: "raw-motion".to_string(),
             ..HardwareControl::default()
         };
         let action = HardwareAction {
-            id: "raw-motion.left.up".to_string(),
+            id: "seat.a.up".to_string(),
             verb: "up".to_string(),
             name: "Up".to_string(),
             ..HardwareAction::default()

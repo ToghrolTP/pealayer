@@ -887,7 +887,7 @@ fn draw_board_card_context_menu(
 }
 
 pub(crate) fn update_control_name(
-    app: &PealayerApp,
+    app: &mut PealayerApp,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
     requested_name: String,
@@ -895,84 +895,94 @@ pub(crate) fn update_control_name(
     let requested_name = requested_name.trim().to_string();
     let restore_default = requested_name.is_empty()
         || (!control.default_name.is_empty() && requested_name == control.default_name);
-    let mut fallback_names = capabilities.peripheral_names.clone();
-    if restore_default {
-        fallback_names.remove(&control.key);
-    } else {
-        fallback_names.insert(control.key.clone(), requested_name.clone());
-    }
-    let expected_revision = capabilities
-        .board_profile
-        .as_ref()
-        .map(|profile| profile.revision.clone())
-        .filter(|revision| !revision.is_empty());
-    let _ = app.engine_handle.sender.send(
-        crate::four_d::engine::EngineMessage::UpdatePeripheralPresentation {
-            key: control.key.clone(),
-            name: Some(if restore_default {
-                String::new()
-            } else {
-                requested_name
-            }),
-            icon: None,
-            group: None,
-            hidden: None,
-            locked: None,
-            expected_revision,
-            fallback_names,
-        },
+    request_control_presentation_update(
+        app,
+        capabilities,
+        control,
+        "presentation-name",
+        serde_json::json!({
+            "name": if restore_default { String::new() } else { requested_name },
+        }),
     );
 }
 
 pub(crate) fn update_control_group(
-    app: &PealayerApp,
+    app: &mut PealayerApp,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
     requested_group: String,
 ) {
-    let expected_revision = capabilities
-        .board_profile
-        .as_ref()
-        .map(|profile| profile.revision.clone())
-        .filter(|revision| !revision.is_empty());
-    let _ = app.engine_handle.sender.send(
-        crate::four_d::engine::EngineMessage::UpdatePeripheralPresentation {
-            key: control.key.clone(),
-            name: None,
-            icon: None,
-            group: Some(requested_group.trim().to_string()),
-            hidden: None,
-            locked: None,
-            expected_revision,
-            fallback_names: capabilities.peripheral_names.clone(),
-        },
+    request_control_presentation_update(
+        app,
+        capabilities,
+        control,
+        "presentation-group",
+        serde_json::json!({"group": requested_group.trim()}),
     );
 }
 
 pub(crate) fn update_control_presentation_flags(
-    app: &PealayerApp,
+    app: &mut PealayerApp,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
     hidden: Option<bool>,
     locked: Option<bool>,
 ) {
+    let mut fields = serde_json::Map::new();
+    if let Some(hidden) = hidden {
+        fields.insert("hidden".to_string(), serde_json::Value::Bool(hidden));
+    }
+    if let Some(locked) = locked {
+        fields.insert("locked".to_string(), serde_json::Value::Bool(locked));
+    }
+    request_control_presentation_update(
+        app,
+        capabilities,
+        control,
+        "presentation-policy",
+        serde_json::Value::Object(fields),
+    );
+}
+
+fn request_control_presentation_update(
+    app: &mut PealayerApp,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+    operation: &str,
+    fields: serde_json::Value,
+) {
+    let params = control_presentation_update_params(capabilities, control, fields);
+    if let Err(error) = app.engine_handle.request_controller_call(
+        format!("{operation}:{}", control.key),
+        "controller.peripheral.presentation.update",
+        params,
+    ) {
+        app.set_osd(error);
+    }
+}
+
+fn control_presentation_update_params(
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+    fields: serde_json::Value,
+) -> serde_json::Value {
+    let mut params = fields.as_object().cloned().unwrap_or_default();
+    params.insert(
+        "key".to_string(),
+        serde_json::Value::String(control.key.clone()),
+    );
     let expected_revision = capabilities
         .board_profile
         .as_ref()
         .map(|profile| profile.revision.clone())
         .filter(|revision| !revision.is_empty());
-    let _ = app.engine_handle.sender.send(
-        crate::four_d::engine::EngineMessage::UpdatePeripheralPresentation {
-            key: control.key.clone(),
-            name: None,
-            icon: None,
-            group: None,
-            hidden,
-            locked,
-            expected_revision,
-            fallback_names: capabilities.peripheral_names.clone(),
-        },
-    );
+    if let Some(revision) = expected_revision {
+        params.insert(
+            "expected_revision".to_string(),
+            serde_json::Value::String(revision),
+        );
+    }
+    serde_json::Value::Object(params)
 }
 
 fn control_supports_presentation_policy(
@@ -2603,6 +2613,35 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn presentation_update_uses_canonical_seat_key_and_profile_revision() {
+        let capabilities = crate::four_d::controller::HardwareCapabilities {
+            board_profile: Some(crate::four_d::controller::HardwareBoardProfile {
+                revision: "profile-revision".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let control = crate::four_d::controller::HardwareControl {
+            key: "seat.a".to_string(),
+            name: "Seat A".to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            control_presentation_update_params(
+                &capabilities,
+                &control,
+                serde_json::json!({"name": "VIP Seat A"}),
+            ),
+            serde_json::json!({
+                "key": "seat.a",
+                "name": "VIP Seat A",
+                "expected_revision": "profile-revision",
+            })
+        );
+    }
+
+    #[test]
     fn hardware_cards_keep_one_exact_width_across_cards_and_frames() {
         let context = egui::Context::default();
         let expected_width = 318.0;
@@ -2779,15 +2818,15 @@ mod timeline_row_tests {
     #[test]
     fn hold_motion_captures_press_and_stops_only_on_physical_release() {
         assert_eq!(
-            hold_motion_transition(None, "seat.left.up", true, true),
+            hold_motion_transition(None, "seat.a.up", true, true),
             HoldMotionTransition::Start
         );
         assert_eq!(
-            hold_motion_transition(Some("seat.left.up"), "seat.left.up", false, true),
+            hold_motion_transition(Some("seat.a.up"), "seat.a.up", false, true),
             HoldMotionTransition::None
         );
         assert_eq!(
-            hold_motion_transition(Some("seat.left.up"), "seat.left.up", false, false),
+            hold_motion_transition(Some("seat.a.up"), "seat.a.up", false, false),
             HoldMotionTransition::Stop
         );
     }
@@ -2819,7 +2858,7 @@ mod timeline_row_tests {
             },
         ];
         let left = crate::four_d::controller::HardwareControl {
-            key: "seat.left".into(),
+            key: "seat.a".into(),
             kind: "motion".into(),
             ..Default::default()
         };
@@ -2836,7 +2875,7 @@ mod timeline_row_tests {
     fn seat_stop_is_inline_and_only_present_while_that_seat_is_active() {
         let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
         let control = crate::four_d::controller::HardwareControl {
-            key: "seat.left".into(),
+            key: "seat.a".into(),
             kind: "motion".into(),
             control: "raw-motion".into(),
             actions: ["up", "down", "stop"]
@@ -3574,7 +3613,7 @@ mod timeline_row_tests {
             ControlIndicatorState::Active
         );
         assert_eq!(
-            control_indicator_state(&capabilities, &control("seat.left", "motion")),
+            control_indicator_state(&capabilities, &control("seat.a", "motion")),
             ControlIndicatorState::Inactive
         );
         assert_eq!(

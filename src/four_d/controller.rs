@@ -1088,8 +1088,8 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
             })
         };
         for (side, direction, enable, order, name) in [
-            ("left", 1_u8, 2_u8, 1_u16, "Seat A"),
-            ("right", 3_u8, 4_u8, 2_u16, "Seat B"),
+            ("a", 1_u8, 2_u8, 1_u16, "Seat A"),
+            ("b", 3_u8, 4_u8, 2_u16, "Seat B"),
         ] {
             if has_raw_pair(direction, enable) {
                 controls.push(HardwareControl {
@@ -1106,7 +1106,7 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
                     actions: ["up", "down", "stop"]
                         .into_iter()
                         .map(|verb| HardwareAction {
-                            id: format!("raw-motion.{side}.{verb}"),
+                            id: format!("seat.{side}.{verb}"),
                             verb: verb.to_string(),
                             name: match verb {
                                 "up" => "Up",
@@ -1740,7 +1740,7 @@ mod tests {
                 {"key":"relay.4","kind":"relay","role":"motion-right-down","index":4,"default_name":"Raw relay 4","control":"relay"}
             ],
             "controls": [
-                {"key":"seat.left","kind":"motion","default_name":"Left seat","control":"seat","actions":[]}
+                {"key":"seat.a","kind":"motion","default_name":"Seat A","control":"seat","actions":[]}
             ]
         });
         let parsed = parse_hardware_capabilities(&snapshot, &catalog);
@@ -1792,15 +1792,25 @@ mod tests {
             .filter(|control| control.control == "raw-motion")
             .collect::<Vec<_>>();
         assert_eq!(seats.len(), 2);
-        assert_eq!(seats[0].key, "seat.left");
-        assert_eq!(seats[1].key, "seat.right");
+        assert_eq!(seats[0].key, "seat.a");
+        assert_eq!(seats[1].key, "seat.b");
+        assert_eq!(seats[0].name, "Seat A");
+        assert_eq!(seats[1].name, "Seat B");
         assert_eq!(
             seats[0]
                 .actions
                 .iter()
-                .map(|action| action.verb.as_str())
+                .map(|action| action.id.as_str())
                 .collect::<Vec<_>>(),
-            ["up", "down", "stop"]
+            ["seat.a.up", "seat.a.down", "seat.a.stop"]
+        );
+        assert_eq!(
+            seats[1]
+                .actions
+                .iter()
+                .map(|action| action.id.as_str())
+                .collect::<Vec<_>>(),
+            ["seat.b.up", "seat.b.down", "seat.b.stop"]
         );
         assert!(!parsed.board_profile.as_ref().unwrap().expose_raw_relays);
     }

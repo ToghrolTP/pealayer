@@ -1578,10 +1578,11 @@ impl PealayerApp {
             .unwrap_or_default();
         for result in results {
             let is_board_operation = result.operation.starts_with("board-");
+            let is_presentation_operation = result.operation.starts_with("presentation-");
             if is_board_operation {
                 self.board_operation = None;
                 self.board_reboot_armed = false;
-            } else {
+            } else if !is_presentation_operation {
                 self.hardware_effect_authoring.pending_operation = None;
             }
             match result.result {
@@ -1589,7 +1590,11 @@ impl PealayerApp {
                     let output = value
                         .get("output")
                         .and_then(serde_json::Value::as_str)
-                        .unwrap_or("PCController accepted the operation")
+                        .unwrap_or(if is_presentation_operation {
+                            "Channel presentation saved"
+                        } else {
+                            "PCController accepted the operation"
+                        })
                         .to_string();
                     match result.operation.as_str() {
                         "macro-start" => self.hardware_effect_authoring.active = true,
@@ -1620,9 +1625,12 @@ impl PealayerApp {
                         }
                         _ => {}
                     }
+                    if is_presentation_operation {
+                        self.engine_handle.request_catalog_refresh();
+                    }
                     if is_board_operation {
                         self.board_operation_status = output.clone();
-                    } else {
+                    } else if !is_presentation_operation {
                         self.hardware_effect_authoring.status = output.clone();
                     }
                     self.set_osd(output);
@@ -1633,7 +1641,7 @@ impl PealayerApp {
                     }
                     if is_board_operation {
                         self.board_operation_status = error.clone();
-                    } else {
+                    } else if !is_presentation_operation {
                         self.hardware_effect_authoring.status = error.clone();
                     }
                     self.set_osd(error);
