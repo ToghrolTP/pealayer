@@ -559,7 +559,7 @@ fn pwm_percent(raw: u16) -> f64 {
     f64::from(raw.min(4095)) * 100.0 / 4095.0
 }
 
-fn pwm_raw(percent: f64) -> u16 {
+pub(crate) fn pwm_raw(percent: f64) -> u16 {
     (percent.clamp(0.0, 100.0) * 4095.0 / 100.0).round() as u16
 }
 
@@ -567,6 +567,7 @@ fn pwm_raw(percent: f64) -> u16 {
 pub(crate) struct PwmEditorResponse {
     changed: bool,
     committed: bool,
+    dragging: bool,
 }
 
 fn pwm_editor_widths(row_width: f32, gap: f32) -> (f32, f32) {
@@ -683,6 +684,7 @@ fn draw_pwm_editor_row_sized(
                 })
                 .inner;
             outcome.changed = slider.changed() || value.changed() || wheel_steps != 0.0;
+            outcome.dragging = slider.dragged();
             outcome.committed = slider.drag_stopped()
                 || value.lost_focus()
                 || (value.changed() && ui.input(|input| input.key_pressed(egui::Key::Enter)))
@@ -728,6 +730,57 @@ fn send_pwm_raw(app: &PealayerApp, channel: u8, raw: u16) {
         });
 }
 
+const PWM_LIVE_INTERVAL: std::time::Duration = std::time::Duration::from_micros(33_334);
+const PWM_STALE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(300);
+
+fn pwm_transmit_due(
+    response: PwmEditorResponse,
+    live_updates: bool,
+    elapsed: Option<std::time::Duration>,
+    value_changed: bool,
+) -> bool {
+    if response.committed && !response.dragging {
+        return true;
+    }
+    if !live_updates || !response.changed {
+        return false;
+    }
+    let elapsed = elapsed.unwrap_or(PWM_STALE_INTERVAL);
+    (value_changed && elapsed >= PWM_LIVE_INTERVAL) || elapsed >= PWM_STALE_INTERVAL
+}
+
+pub(crate) fn transmit_pwm_editor_response(
+    app: &PealayerApp,
+    ui: &mut egui::Ui,
+    channel: u8,
+    raw: u16,
+    response: PwmEditorResponse,
+) {
+    let sent_id = ui.make_persistent_id(("pwm_sent_value", channel));
+    let last_send_id = ui.make_persistent_id(("pwm_last_send", channel));
+    let now = std::time::Instant::now();
+    let last_sent = ui.data_mut(|data| data.get_temp::<u16>(sent_id));
+    let last_send = ui.data_mut(|data| data.get_temp::<std::time::Instant>(last_send_id));
+    let due = pwm_transmit_due(
+        response,
+        app.live_pwm_updates,
+        last_send.map(|last| now.duration_since(last)),
+        last_sent != Some(raw),
+    );
+    // A release/commit is deliberately exempt from throttling, even when the
+    // rounded value matches the last live tick. That final acknowledged write
+    // makes the board converge on exactly what the user sees.
+    if due {
+        send_pwm_raw(app, channel, raw);
+        ui.data_mut(|data| {
+            data.insert_temp(sent_id, raw);
+            data.insert_temp(last_send_id, now);
+        });
+    } else if response.changed {
+        ui.ctx().request_repaint_after(PWM_LIVE_INTERVAL);
+    }
+}
+
 fn draw_pwm_card_editor(
     app: &PealayerApp,
     ui: &mut egui::Ui,
@@ -738,17 +791,28 @@ fn draw_pwm_card_editor(
 ) {
     let value_id = ui.make_persistent_id(("pwm_value", channel.id));
     let sent_id = ui.make_persistent_id(("pwm_sent_value", channel.id));
-    let telemetry_raw = if capabilities.telemetry.pwm_channel == Some(channel.id) {
-        capabilities.telemetry.pwm_value.unwrap_or(0)
+    let last_send_id = ui.make_persistent_id(("pwm_last_send", channel.id));
+    let telemetry_raw = capabilities
+        .telemetry
+        .pwm_values
+        .get(usize::from(channel.id))
+        .copied()
+        .flatten()
+        .or_else(|| {
+            (capabilities.telemetry.pwm_channel == Some(channel.id))
+                .then_some(capabilities.telemetry.pwm_value.unwrap_or(0))
+        })
+        .unwrap_or(0);
+    let local_raw = ui.data_mut(|data| data.get_temp::<u16>(value_id));
+    let last_sent = ui.data_mut(|data| data.get_temp::<u16>(sent_id));
+    let last_send = ui.data_mut(|data| data.get_temp::<std::time::Instant>(last_send_id));
+    let awaiting_readback = last_sent.is_some_and(|sent| sent != telemetry_raw)
+        && last_send.is_some_and(|sent_at| sent_at.elapsed() < std::time::Duration::from_secs(1));
+    let displayed_raw = if awaiting_readback {
+        local_raw.unwrap_or(telemetry_raw)
     } else {
-        0
+        telemetry_raw
     };
-    let displayed_raw = ui
-        .data_mut(|data| data.get_temp::<u16>(value_id))
-        .unwrap_or(telemetry_raw);
-    let last_sent = ui
-        .data_mut(|data| data.get_temp::<u16>(sent_id))
-        .unwrap_or(telemetry_raw);
     let mut percent = pwm_percent(displayed_raw);
     let response = draw_pwm_editor_row_sized(ui, &mut percent, !control.locked, row_width);
     let raw = pwm_raw(percent);
@@ -756,10 +820,7 @@ fn draw_pwm_card_editor(
     if response.changed {
         ui.ctx().request_repaint();
     }
-    if response.should_transmit(app.live_pwm_updates) && raw != last_sent {
-        send_pwm_raw(app, channel.id, raw);
-        ui.data_mut(|data| data.insert_temp(sent_id, raw));
-    }
+    transmit_pwm_editor_response(app, ui, channel.id, raw, response);
 }
 
 fn begin_effect_drag(ctx: &egui::Context, payload: EffectDragPayload) {
@@ -1238,6 +1299,35 @@ fn is_pwm_control(control: &crate::four_d::controller::HardwareControl) -> bool 
     matches!(control.kind.as_str(), "mosfet" | "pwm") || control.key.starts_with("pwm.")
 }
 
+fn pwm_channel_for<'a>(
+    capabilities: &'a crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+) -> Option<&'a crate::four_d::controller::HardwareOutput> {
+    capabilities
+        .pwm_channels
+        .iter()
+        .find(|channel| channel.key == control.key)
+}
+
+fn status_rgb_component(
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+) -> Option<(u8, egui::Color32)> {
+    let role = pwm_channel_for(capabilities, control)?
+        .role
+        .to_ascii_lowercase();
+    let status = capabilities.status_led.as_ref()?;
+    if role.contains("status") && role.contains("red") {
+        Some((status.red, egui::Color32::from_rgb(239, 68, 68)))
+    } else if role.contains("status") && role.contains("green") {
+        Some((status.green, egui::Color32::from_rgb(34, 197, 94)))
+    } else if role.contains("status") && role.contains("blue") {
+        Some((status.blue, egui::Color32::from_rgb(59, 130, 246)))
+    } else {
+        None
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ControlIndicatorState {
     Active,
@@ -1257,21 +1347,33 @@ fn control_indicator_state(
         };
     }
     if is_pwm_control(control) {
-        let channel = capabilities
-            .pwm_channels
-            .iter()
-            .find(|channel| channel.key == control.key)
-            .map(|channel| channel.id);
-        return match channel {
-            Some(channel) if capabilities.telemetry.pwm_channel == Some(channel) => {
-                if capabilities.telemetry.pwm_value.unwrap_or(0) > 0 {
+        if let Some((value, _)) = status_rgb_component(capabilities, control) {
+            return if value > 0 {
+                ControlIndicatorState::Active
+            } else {
+                ControlIndicatorState::Inactive
+            };
+        }
+        let Some(channel) = pwm_channel_for(capabilities, control).map(|channel| channel.id) else {
+            return ControlIndicatorState::Unknown;
+        };
+        return capabilities
+            .telemetry
+            .pwm_values
+            .get(usize::from(channel))
+            .copied()
+            .flatten()
+            .or_else(|| {
+                (capabilities.telemetry.pwm_channel == Some(channel))
+                    .then_some(capabilities.telemetry.pwm_value.unwrap_or(0))
+            })
+            .map_or(ControlIndicatorState::Unknown, |value| {
+                if value > 0 {
                     ControlIndicatorState::Active
                 } else {
                     ControlIndicatorState::Inactive
                 }
-            }
-            _ => ControlIndicatorState::Unknown,
-        };
+            });
     }
     if is_motion_control(control) {
         return if motion_control_is_active(capabilities, control) {
@@ -1348,16 +1450,35 @@ fn pwm_control_intensity(
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
 ) -> Option<f32> {
-    let channel = capabilities
-        .pwm_channels
-        .iter()
-        .find(|channel| channel.key == control.key)?;
+    if let Some((value, _)) = status_rgb_component(capabilities, control) {
+        return Some(f32::from(value) / 255.0);
+    }
+    let channel = pwm_channel_for(capabilities, control)?;
     let value_id = ui.make_persistent_id(("pwm_value", channel.id));
     let local = ui.data_mut(|data| data.get_temp::<u16>(value_id));
-    let raw = local.or_else(|| {
-        (capabilities.telemetry.pwm_channel == Some(channel.id))
-            .then_some(capabilities.telemetry.pwm_value.unwrap_or(0))
-    })?;
+    let authoritative = capabilities
+        .telemetry
+        .pwm_values
+        .get(usize::from(channel.id))
+        .copied()
+        .flatten()
+        .or_else(|| {
+            (capabilities.telemetry.pwm_channel == Some(channel.id))
+                .then_some(capabilities.telemetry.pwm_value.unwrap_or(0))
+        });
+    let sent_id = ui.make_persistent_id(("pwm_sent_value", channel.id));
+    let last_send_id = ui.make_persistent_id(("pwm_last_send", channel.id));
+    let last_sent = ui.data_mut(|data| data.get_temp::<u16>(sent_id));
+    let last_send = ui.data_mut(|data| data.get_temp::<std::time::Instant>(last_send_id));
+    let awaiting_readback = last_sent
+        .zip(authoritative)
+        .is_some_and(|(sent, observed)| sent != observed)
+        && last_send.is_some_and(|sent_at| sent_at.elapsed() < std::time::Duration::from_secs(1));
+    let raw = if awaiting_readback {
+        local.or(authoritative)
+    } else {
+        authoritative.or(local)
+    }?;
     Some(f32::from(raw.min(4095)) / 4095.0)
 }
 
@@ -1448,6 +1569,8 @@ fn active_control_indicator_color(
 ) -> egui::Color32 {
     if is_motion_control(control) {
         motion_direction_color(control, motion_control_direction(capabilities, control))
+    } else if let Some((_, color)) = status_rgb_component(capabilities, control) {
+        color
     } else {
         control_indicator_color(control)
     }
@@ -3197,6 +3320,7 @@ fn draw_compact_control_card(
     let group_edit_id = ui.make_persistent_id(("control-group-editing", control.key.as_str()));
     let group_draft_id = ui.make_persistent_id(("control-group-draft", control.key.as_str()));
     let relay_id = relay_id_from_control_key(&control.key);
+    let pwm_id = pwm_channel_for(capabilities, control).map(|channel| channel.id);
     let indicator_intensity = pwm_control_intensity(ui, capabilities, control);
     let indicator_state = indicator_intensity.map_or_else(
         || control_indicator_state(capabilities, control),
@@ -3265,6 +3389,9 @@ fn draw_compact_control_card(
                             .monospace()
                             .weak(),
                     );
+                }
+                if let Some(id) = pwm_id {
+                    ui.label(egui::RichText::new(format!("P{}", id + 1)).monospace().weak());
                 }
                 if control.locked {
                     ui.label(egui::RichText::new(crate::ui::icons::LOCK).weak())
@@ -3520,6 +3647,7 @@ fn draw_control_card(
     let group_edit_id = ui.make_persistent_id(("control-group-editing", control.key.as_str()));
     let group_draft_id = ui.make_persistent_id(("control-group-draft", control.key.as_str()));
     let relay_id = relay_id_from_control_key(&control.key);
+    let pwm_id = pwm_channel_for(capabilities, control).map(|channel| channel.id);
     let indicator_intensity = pwm_control_intensity(ui, capabilities, control);
     let indicator_state = indicator_intensity.map_or_else(
         || control_indicator_state(capabilities, control),
@@ -3593,6 +3721,13 @@ fn draw_control_card(
                         {
                             ui.label(
                                 egui::RichText::new(relay_identifier_label(id))
+                                    .monospace()
+                                    .weak(),
+                            );
+                        }
+                        if let Some(id) = pwm_id {
+                            ui.label(
+                                egui::RichText::new(format!("P{}", id + 1))
                                     .monospace()
                                     .weak(),
                             );
@@ -5006,6 +5141,7 @@ mod timeline_row_tests {
         let changing = PwmEditorResponse {
             changed: true,
             committed: false,
+            dragging: true,
         };
         assert!(changing.should_transmit(true));
         assert!(!changing.should_transmit(false));
@@ -5013,9 +5149,94 @@ mod timeline_row_tests {
         let committed = PwmEditorResponse {
             changed: false,
             committed: true,
+            dragging: false,
         };
         assert!(!committed.should_transmit(true));
         assert!(committed.should_transmit(false));
+    }
+
+    #[test]
+    fn pwm_drag_is_capped_at_thirty_hz_with_an_unthrottled_final_write() {
+        let dragging = PwmEditorResponse {
+            changed: true,
+            committed: false,
+            dragging: true,
+        };
+        assert!(!pwm_transmit_due(
+            dragging,
+            true,
+            Some(std::time::Duration::from_millis(10)),
+            true,
+        ));
+        assert!(pwm_transmit_due(
+            dragging,
+            true,
+            Some(PWM_LIVE_INTERVAL),
+            true,
+        ));
+        assert!(pwm_transmit_due(
+            dragging,
+            true,
+            Some(PWM_STALE_INTERVAL),
+            false,
+        ));
+        let release = PwmEditorResponse {
+            changed: false,
+            committed: true,
+            dragging: false,
+        };
+        assert!(pwm_transmit_due(
+            release,
+            false,
+            Some(std::time::Duration::ZERO),
+            false,
+        ));
+    }
+
+    #[test]
+    fn status_rgb_channels_use_live_components_and_primary_indicator_colors() {
+        let mut capabilities = crate::four_d::controller::HardwareCapabilities {
+            status_led: Some(crate::four_d::controller::HardwareStatusLed {
+                red: 18,
+                green: 52,
+                blue: 86,
+                brightness: 120,
+                effect: 0,
+                condition: 0,
+            }),
+            ..Default::default()
+        };
+        capabilities.pwm_channels = [
+            (13, "pwm.13", "status-red"),
+            (14, "pwm.14", "status-green"),
+            (15, "pwm.15", "status-blue"),
+        ]
+        .into_iter()
+        .map(
+            |(id, key, role)| crate::four_d::controller::HardwareOutput {
+                id,
+                key: key.to_string(),
+                name: role.to_string(),
+                role: role.to_string(),
+                control: "role-specific".to_string(),
+            },
+        )
+        .collect();
+        for (key, value, color) in [
+            ("pwm.13", 18, egui::Color32::from_rgb(239, 68, 68)),
+            ("pwm.14", 52, egui::Color32::from_rgb(34, 197, 94)),
+            ("pwm.15", 86, egui::Color32::from_rgb(59, 130, 246)),
+        ] {
+            let control = crate::four_d::controller::HardwareControl {
+                key: key.to_string(),
+                kind: "pwm".to_string(),
+                ..Default::default()
+            };
+            assert_eq!(
+                status_rgb_component(&capabilities, &control),
+                Some((value, color))
+            );
+        }
     }
 
     #[test]

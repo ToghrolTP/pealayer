@@ -599,6 +599,56 @@ fn settings(
                     );
                 });
             });
+            ui.add_space(6.0);
+            let enabled_id = ui.make_persistent_id("status_led_custom_override_enabled");
+            let color_id = ui.make_persistent_id("status_led_custom_override_color");
+            let mut override_enabled = ui
+                .data_mut(|data| data.get_temp::<bool>(enabled_id))
+                .unwrap_or(false);
+            let fallback = capabilities
+                .status_led
+                .as_ref()
+                .map(|status| [status.red, status.green, status.blue])
+                .unwrap_or([34, 197, 94]);
+            let mut override_color = ui
+                .data_mut(|data| data.get_temp::<[u8; 3]>(color_id))
+                .unwrap_or(fallback);
+            ui.horizontal(|ui| {
+                let changed = ui
+                    .checkbox(&mut override_enabled, app.tr("Override with custom color"))
+                    .changed();
+                ui.add_enabled_ui(override_enabled, |ui| {
+                    ui.color_edit_button_srgb(&mut override_color)
+                        .on_hover_text(app.tr("Choose the live status-light color"));
+                });
+                let busy = app.board_operation.is_some();
+                if ui
+                    .add_enabled(
+                        override_enabled && !busy,
+                        egui::Button::new(format!(
+                            "{} {}",
+                            crate::ui::icons::CHECK,
+                            app.tr("Apply")
+                        )),
+                    )
+                    .clicked()
+                    && let Err(error) =
+                        app.set_status_led_override(override_color, settings.status_brightness)
+                {
+                    app.set_osd(error);
+                }
+                if changed
+                    && !override_enabled
+                    && !busy
+                    && let Err(error) = app.release_status_led_override()
+                {
+                    app.set_osd(error);
+                }
+            });
+            ui.data_mut(|data| {
+                data.insert_temp(enabled_id, override_enabled);
+                data.insert_temp(color_id, override_color);
+            });
         });
     }
 

@@ -1322,9 +1322,13 @@ fn draw_channel_detail_page(
                     &mut app.hardware_control_pwm_percent,
                     !control.locked,
                 );
-                if pwm_response.should_transmit(app.live_pwm_updates) {
-                    set_pwm(app, channel, app.hardware_control_pwm_percent);
-                }
+                crate::ui::layout::transmit_pwm_editor_response(
+                    app,
+                    ui,
+                    channel,
+                    super::layout::pwm_raw(app.hardware_control_pwm_percent),
+                    pwm_response,
+                );
                 ui.horizontal_wrapped(|ui| {
                     for percent in [0.0, 25.0, 50.0, 75.0, 100.0] {
                         if ui

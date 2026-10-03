@@ -1957,6 +1957,31 @@ impl PealayerApp {
         )
     }
 
+    pub(crate) fn set_status_led_override(
+        &mut self,
+        color: [u8; 3],
+        brightness: u8,
+    ) -> Result<(), String> {
+        self.request_board_operation(
+            "board-status-led-override",
+            "controller.status_led.set",
+            serde_json::json!({
+                "red": color[0],
+                "green": color[1],
+                "blue": color[2],
+                "brightness": brightness,
+            }),
+        )
+    }
+
+    pub(crate) fn release_status_led_override(&mut self) -> Result<(), String> {
+        self.request_board_operation(
+            "board-status-led-release",
+            "controller.status_led.release",
+            serde_json::json!({}),
+        )
+    }
+
     pub(crate) fn press_front_panel_key(&mut self, key: &str) -> Result<(), String> {
         if !matches!(key, "K1" | "K2" | "K3" | "K4") {
             return Err("front-panel key must be K1, K2, K3, or K4".to_string());
@@ -2047,6 +2072,8 @@ impl PealayerApp {
                         }
                         "board-name"
                         | "board-settings"
+                        | "board-status-led-override"
+                        | "board-status-led-release"
                         | "board-reboot"
                         | "board-front-panel-key" => {
                             if result.operation == "board-settings" {

@@ -356,6 +356,9 @@ pub struct HardwareTelemetry {
     pub audio_temperature_centi_c: Option<i32>,
     pub pwm_channel: Option<u8>,
     pub pwm_value: Option<u16>,
+    /// Authoritative all-channel PWM readback indexed by the native logical
+    /// channel number. `None` means PCController has not sampled that channel.
+    pub pwm_values: Vec<Option<u16>>,
     pub door_open: Option<bool>,
 }
 
@@ -482,7 +485,14 @@ impl HardwareCapabilities {
         if let Some(mask) = status.get("active_relays").and_then(Value::as_u64) {
             self.active_relays = active_relays_from_mask(&self.relays, mask);
         }
-        self.telemetry = telemetry_from_status(status, self.board_connected);
+        let mut next_telemetry = telemetry_from_status(status, self.board_connected);
+        next_telemetry.pwm_values = before_telemetry.pwm_values.clone();
+        if let (Some(channel), Some(value)) = (next_telemetry.pwm_channel, next_telemetry.pwm_value)
+            && let Some(slot) = next_telemetry.pwm_values.get_mut(usize::from(channel))
+        {
+            *slot = Some(value);
+        }
+        self.telemetry = next_telemetry;
 
         !was_board_connected
             || self.active_relays != before_relays
@@ -494,6 +504,27 @@ impl HardwareCapabilities {
     /// compositor has applied priority, brightness, and procedural effects.
     pub(crate) fn apply_state_notification(&mut self, event: &Value) -> bool {
         match event.get("kind").and_then(Value::as_str) {
+            Some("pwm.changed") => {
+                let Some(metadata) = event.get("metadata").filter(|value| value.is_object()) else {
+                    return false;
+                };
+                let mut next = vec![None; 16];
+                let mut sampled = false;
+                for (channel, slot) in next.iter_mut().enumerate() {
+                    *slot = metadata
+                        .get(format!("pwm.{channel}"))
+                        .and_then(value_as_u64)
+                        .and_then(|value| u16::try_from(value).ok())
+                        .map(|value| value.min(4095));
+                    sampled |= slot.is_some();
+                }
+                if !sampled || next == self.telemetry.pwm_values {
+                    false
+                } else {
+                    self.telemetry.pwm_values = next;
+                    true
+                }
+            }
             Some("status_led.changed") => {
                 let Some(metadata) = event.get("metadata").filter(|value| value.is_object()) else {
                     return false;
@@ -679,6 +710,7 @@ fn telemetry_from_status(status: &Value, board_connected: bool) -> HardwareTelem
             .and_then(Value::as_bool)
             .unwrap_or(false)
             .then(|| status.get("pwm_value").and_then(Value::as_u64).unwrap_or(0) as u16),
+        pwm_values: Vec::new(),
         door_open: board_connected.then(|| {
             status
                 .get("door_open")
@@ -899,16 +931,41 @@ impl ControllerClient {
     pub fn hardware_capabilities(&mut self) -> Result<HardwareCapabilities, String> {
         let snapshot = self.call("controller.snapshot", json!({}))?;
         let peripherals = self.call("controller.peripherals.get", json!({}))?;
+        let pwm_values = self.call("controller.pwm.values", json!({})).ok();
         // controller.snapshot already carries the latest authoritative
         // front-panel state. A synchronous controller.front_panel call waits
         // for another board transaction and can exceed the RPC timeout on a
         // busy serial link, poisoning an otherwise healthy persistent stream.
         // Live updates continue over the controller WebSocket.
-        Ok(parse_hardware_capabilities_with_front_panel(
-            &snapshot,
-            &peripherals,
-            None,
-        ))
+        let mut capabilities =
+            parse_hardware_capabilities_with_front_panel(&snapshot, &peripherals, None);
+        if let Some(values) = pwm_values.as_ref() {
+            apply_pwm_values(&mut capabilities.telemetry, values);
+        }
+        Ok(capabilities)
+    }
+}
+
+fn apply_pwm_values(telemetry: &mut HardwareTelemetry, values: &Value) -> bool {
+    let Some(raw_values) = values.get("values").and_then(Value::as_array) else {
+        return false;
+    };
+    let next = raw_values
+        .iter()
+        .take(16)
+        .map(|value| {
+            value_as_u64(value)
+                .and_then(|value| u16::try_from(value).ok())
+                .map(|value| value.min(4095))
+        })
+        .chain(std::iter::repeat(None))
+        .take(16)
+        .collect::<Vec<_>>();
+    if next == telemetry.pwm_values {
+        false
+    } else {
+        telemetry.pwm_values = next;
+        true
     }
 }
 
@@ -2731,6 +2788,21 @@ mod tests {
             "device": {"type": 11}
         })));
         assert!(capabilities.active_relays.is_empty());
+    }
+
+    #[test]
+    fn pushed_pwm_state_updates_every_sampled_channel() {
+        let mut capabilities = HardwareCapabilities::default();
+        let metadata = (0..16)
+            .map(|channel| (format!("pwm.{channel}"), json!(channel * 100)))
+            .collect::<serde_json::Map<String, Value>>();
+        assert!(capabilities.apply_state_notification(&json!({
+            "kind": "pwm.changed",
+            "metadata": metadata,
+        })));
+        assert_eq!(capabilities.telemetry.pwm_values.len(), 16);
+        assert_eq!(capabilities.telemetry.pwm_values[0], Some(0));
+        assert_eq!(capabilities.telemetry.pwm_values[15], Some(1500));
     }
 
     #[test]
