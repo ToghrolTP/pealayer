@@ -48,6 +48,8 @@ pub struct HardwareControl {
     pub control: String,
     pub icon: String,
     pub color: String,
+    pub up_color: String,
+    pub down_color: String,
     pub group: String,
     pub hidden: bool,
     pub locked: bool,
@@ -1445,6 +1447,16 @@ fn parse_hardware_capabilities_with_front_panel(
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
+                up_color: entry
+                    .get("up_color")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                down_color: entry
+                    .get("down_color")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
                 group: entry
                     .get("group")
                     .and_then(Value::as_str)
@@ -1506,6 +1518,8 @@ fn parse_hardware_capabilities_with_front_panel(
                     control: "raw-motion".to_string(),
                     icon: "seat".to_string(),
                     color: String::new(),
+                    up_color: String::new(),
+                    down_color: String::new(),
                     group: "Motion / seat".to_string(),
                     hidden: false,
                     locked: false,
@@ -2166,6 +2180,7 @@ mod tests {
             "controls": [{
                 "key": "seat.a", "kind": "side", "order": 1,
                 "name": "Left pair", "control": "motion", "icon": "seat", "color": "#A142F4",
+                "up_color": "#F59E0B", "down_color": "#3B82F6",
                 "group": "auditorium-a", "hidden": true, "locked": true,
                 "actions": [
                     {"id": "seat.a.up", "verb": "up", "name": "Up", "icon": "arrow-up"},
@@ -2189,6 +2204,8 @@ mod tests {
         assert_eq!(control.default_name, "Side A motion");
         assert_eq!(control.icon, "seat");
         assert_eq!(control.color, "#A142F4");
+        assert_eq!(control.up_color, "#F59E0B");
+        assert_eq!(control.down_color, "#3B82F6");
         assert_eq!(control.group, "auditorium-a");
         assert!(control.hidden);
         assert!(control.locked);

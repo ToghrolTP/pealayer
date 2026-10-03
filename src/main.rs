@@ -574,6 +574,8 @@ fn main() -> eframe::Result {
                 hardware_control_icon_draft: String::new(),
                 hardware_control_icon_search: String::new(),
                 hardware_control_color_draft: String::new(),
+                hardware_control_up_color_draft: String::new(),
+                hardware_control_down_color_draft: String::new(),
                 hardware_control_pwm_percent: 0.0,
                 board_operation: None,
                 board_operation_status: String::new(),

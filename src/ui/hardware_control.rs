@@ -264,6 +264,16 @@ fn open_detail(
     } else {
         control.color.clone()
     };
+    app.hardware_control_up_color_draft = if control.up_color.trim().is_empty() {
+        "#F59E0B".to_string()
+    } else {
+        control.up_color.clone()
+    };
+    app.hardware_control_down_color_draft = if control.down_color.trim().is_empty() {
+        "#3B82F6".to_string()
+    } else {
+        control.down_color.clone()
+    };
     app.hardware_control_pwm_percent = capabilities
         .pwm_channels
         .iter()
@@ -525,7 +535,17 @@ fn draw_channel_manager_page(
                         egui::Layout::left_to_right(egui::Align::Center),
                         |ui| {
                             let indicator_color = if channel_is_active(&capabilities, control) {
-                                egui::Color32::from_rgb(52, 211, 153)
+                                if matches!(control.kind.as_str(), "seat" | "motion") {
+                                    crate::ui::layout::motion_direction_color(
+                                        control,
+                                        crate::ui::layout::motion_control_direction(
+                                            &capabilities,
+                                            control,
+                                        ),
+                                    )
+                                } else {
+                                    egui::Color32::from_rgb(52, 211, 153)
+                                }
                             } else {
                                 ui.visuals().widgets.noninteractive.bg_stroke.color
                             };
@@ -995,6 +1015,37 @@ fn draw_channel_detail_page(
                         });
                         ui.end_row();
                     }
+                    if matches!(control.kind.as_str(), "seat" | "motion") {
+                        let moving_up_color = app.tr("Moving up color");
+                        let moving_down_color = app.tr("Moving down color");
+                        for (label, draft, fallback) in [
+                            (
+                                moving_up_color,
+                                &mut app.hardware_control_up_color_draft,
+                                [245, 158, 11],
+                            ),
+                            (
+                                moving_down_color,
+                                &mut app.hardware_control_down_color_draft,
+                                [59, 130, 246],
+                            ),
+                        ] {
+                            ui.label(label);
+                            ui.horizontal(|ui| {
+                                let mut rgb =
+                                    crate::config::parse_rgb_hex(draft).unwrap_or(fallback);
+                                if ui.color_edit_button_srgb(&mut rgb).changed() {
+                                    *draft = format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
+                                }
+                                ui.add(
+                                    egui::TextEdit::singleline(draft)
+                                        .desired_width(92.0)
+                                        .char_limit(7),
+                                );
+                            });
+                            ui.end_row();
+                        }
+                    }
                     if relay_id(&control.key).is_some()
                         || matches!(control.kind.as_str(), "mosfet" | "pwm")
                     {
@@ -1081,6 +1132,14 @@ fn draw_channel_detail_page(
                             app.hardware_control_color_draft.trim().to_string(),
                         );
                     }
+                    if matches!(control.kind.as_str(), "seat" | "motion") {
+                        fields["up_color"] = serde_json::Value::String(
+                            app.hardware_control_up_color_draft.trim().to_string(),
+                        );
+                        fields["down_color"] = serde_json::Value::String(
+                            app.hardware_control_down_color_draft.trim().to_string(),
+                        );
+                    }
                     crate::ui::layout::update_control_presentation(
                         app,
                         &capabilities,
@@ -1102,6 +1161,8 @@ fn draw_channel_detail_page(
                     app.hardware_control_icon_draft.clear();
                     app.hardware_control_icon_search.clear();
                     app.hardware_control_color_draft.clear();
+                    app.hardware_control_up_color_draft.clear();
+                    app.hardware_control_down_color_draft.clear();
                     crate::ui::layout::update_control_presentation(
                         app,
                         &capabilities,
@@ -1112,6 +1173,8 @@ fn draw_channel_detail_page(
                             "group": "",
                             "icon": "",
                             "color": "",
+                            "up_color": "",
+                            "down_color": "",
                         }),
                     );
                 }

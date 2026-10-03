@@ -417,6 +417,8 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Update PWM outputs while dragging" => "به‌روزرسانی زندهٔ خروجی‌های PWM هنگام کشیدن",
         "Activate output buttons when pressed" => "فعال‌سازی دکمه‌های خروجی هنگام فشردن",
         "Motion / seat controls" => "کنترل حرکت / صندلی",
+        "Moving up color" => "رنگ حرکت رو به بالا",
+        "Moving down color" => "رنگ حرکت رو به پایین",
         "Button behavior" => "رفتار دکمه",
         "Hold" => "نگه‌داشتن",
         "Push" => "فشاری",

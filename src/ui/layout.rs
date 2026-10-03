@@ -1285,6 +1285,92 @@ fn control_indicator_color(control: &crate::four_d::controller::HardwareControl)
         .unwrap_or_else(|| egui::Color32::from_rgb(34, 197, 94))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MotionDirectionState {
+    Stopped,
+    Up,
+    Down,
+    Unknown,
+}
+
+pub(crate) fn motion_control_direction(
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+) -> MotionDirectionState {
+    if !is_motion_control(control) {
+        return MotionDirectionState::Unknown;
+    }
+    let key = control.key.to_ascii_lowercase();
+    let side = if key.contains("left") || key.ends_with(".a") {
+        Some((1_u8, 2_u8, ["left", "motion-a", "seat-a"]))
+    } else if key.contains("right") || key.ends_with(".b") {
+        Some((3_u8, 4_u8, ["right", "motion-b", "seat-b"]))
+    } else {
+        None
+    };
+    let Some((direction_relay, enable_relay, aliases)) = side else {
+        return MotionDirectionState::Unknown;
+    };
+
+    let mut up = false;
+    let mut down = false;
+    for relay in &capabilities.relays {
+        if !capabilities.active_relays.contains(&relay.id) {
+            continue;
+        }
+        let role = relay.role.to_ascii_lowercase();
+        if !aliases.iter().any(|alias| role.contains(alias)) {
+            continue;
+        }
+        up |= role.contains("up");
+        down |= role.contains("down");
+    }
+    match (up, down) {
+        (true, false) => return MotionDirectionState::Up,
+        (false, true) => return MotionDirectionState::Down,
+        (true, true) => return MotionDirectionState::Unknown,
+        (false, false) => {}
+    }
+    if capabilities.active_relays.contains(&enable_relay) {
+        if capabilities.active_relays.contains(&direction_relay) {
+            MotionDirectionState::Down
+        } else {
+            MotionDirectionState::Up
+        }
+    } else {
+        MotionDirectionState::Stopped
+    }
+}
+
+pub(crate) fn motion_direction_color(
+    control: &crate::four_d::controller::HardwareControl,
+    direction: MotionDirectionState,
+) -> egui::Color32 {
+    let configured = match direction {
+        MotionDirectionState::Up => &control.up_color,
+        MotionDirectionState::Down => &control.down_color,
+        MotionDirectionState::Stopped | MotionDirectionState::Unknown => "",
+    };
+    let fallback = match direction {
+        MotionDirectionState::Up => [245, 158, 11],
+        MotionDirectionState::Down => [59, 130, 246],
+        MotionDirectionState::Stopped | MotionDirectionState::Unknown => [34, 197, 94],
+    };
+    let [red, green, blue] = crate::config::parse_rgb_hex(configured).unwrap_or(fallback);
+    egui::Color32::from_rgb(red, green, blue)
+}
+
+fn active_control_indicator_color(
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+) -> egui::Color32 {
+    if is_motion_control(control) {
+        motion_direction_color(control, motion_control_direction(capabilities, control))
+    } else {
+        control_indicator_color(control)
+    }
+}
+
 fn control_grid_columns(available_width: f32) -> usize {
     if available_width >= 620.0 { 2 } else { 1 }
 }
@@ -1917,8 +2003,10 @@ fn control_supports_presentation_policy(
 }
 
 fn is_motion_control(control: &crate::four_d::controller::HardwareControl) -> bool {
-    control.kind.eq_ignore_ascii_case("motion")
-        || control.control.to_ascii_lowercase().contains("motion")
+    matches!(
+        control.kind.to_ascii_lowercase().as_str(),
+        "motion" | "seat"
+    ) || control.control.to_ascii_lowercase().contains("motion")
         || control.actions.iter().any(|action| {
             matches!(
                 action.verb.to_ascii_lowercase().as_str(),
@@ -2082,6 +2170,16 @@ fn open_control_dialog(
         "#38D27A".to_string()
     } else {
         control.color.clone()
+    };
+    app.hardware_control_up_color_draft = if control.up_color.trim().is_empty() {
+        "#F59E0B".to_string()
+    } else {
+        control.up_color.clone()
+    };
+    app.hardware_control_down_color_draft = if control.down_color.trim().is_empty() {
+        "#3B82F6".to_string()
+    } else {
+        control.down_color.clone()
     };
     app.hardware_control_pwm_percent = capabilities
         .pwm_channels
@@ -3081,7 +3179,7 @@ fn draw_compact_control_card(
                     ui,
                     indicator_state,
                     relay_id.is_some() && !control.locked,
-                    control_indicator_color(control),
+                    active_control_indicator_color(capabilities, control),
                     indicator_intensity,
                 );
                 if hardware_control_activated(app, ui, &indicator)
@@ -3403,7 +3501,7 @@ fn draw_control_card(
                             ui,
                             indicator_state,
                             relay_id.is_some() && !control.locked,
-                            control_indicator_color(control),
+                            active_control_indicator_color(capabilities, control),
                             indicator_intensity,
                         );
                         if hardware_control_activated(app, ui, &indicator)
@@ -4869,6 +4967,40 @@ mod timeline_row_tests {
         assert!(!motion_control_is_active(&capabilities, &left));
         capabilities.active_relays.insert(1);
         assert!(motion_control_is_active(&capabilities, &left));
+    }
+
+    #[test]
+    fn seat_indicator_reports_up_or_down_from_live_interlocked_relays() {
+        let control = crate::four_d::controller::HardwareControl {
+            key: "seat.a".into(),
+            kind: "seat".into(),
+            up_color: "#FF8800".into(),
+            down_color: "#0088FF".into(),
+            ..Default::default()
+        };
+        let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
+        assert_eq!(
+            motion_control_direction(&capabilities, &control),
+            MotionDirectionState::Stopped
+        );
+        capabilities.active_relays.insert(2);
+        assert_eq!(
+            motion_control_direction(&capabilities, &control),
+            MotionDirectionState::Up
+        );
+        assert_eq!(
+            motion_direction_color(&control, MotionDirectionState::Up),
+            egui::Color32::from_rgb(255, 136, 0)
+        );
+        capabilities.active_relays.insert(1);
+        assert_eq!(
+            motion_control_direction(&capabilities, &control),
+            MotionDirectionState::Down
+        );
+        assert_eq!(
+            motion_direction_color(&control, MotionDirectionState::Down),
+            egui::Color32::from_rgb(0, 136, 255)
+        );
     }
 
     #[test]
