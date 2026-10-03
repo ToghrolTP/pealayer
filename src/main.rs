@@ -472,6 +472,7 @@ fn main() -> eframe::Result {
                 show_effect_library_editor: false,
                 effect_library_selection: None,
                 effect_library_draft: crate::app::ControllerEffectDraft::default(),
+                effect_group_draft: None,
                 track_muted: std::collections::BTreeSet::new(),
                 track_soloed: std::collections::BTreeSet::new(),
                 track_locked: std::collections::BTreeSet::new(),

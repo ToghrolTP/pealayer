@@ -219,6 +219,8 @@ pub struct HardwareMacro {
     pub id: u64,
     pub name: String,
     pub category: String,
+    pub icon: String,
+    pub group_icon: String,
     pub mode: String,
     pub duration_ms: u64,
     pub steps: Vec<HardwareMacroStep>,
@@ -229,6 +231,8 @@ pub struct HardwareStripEffect {
     pub id: String,
     pub name: String,
     pub category: String,
+    pub icon: String,
+    pub group_icon: String,
     pub description: String,
     pub program: Value,
     pub engine: String,
@@ -806,6 +810,16 @@ fn parse_strip_effects(value: &Value) -> Vec<HardwareStripEffect> {
                     .and_then(Value::as_str)
                     .unwrap_or("Lighting")
                     .to_string(),
+                icon: entry
+                    .get("icon")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                group_icon: entry
+                    .get("group_icon")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
                 description: entry
                     .get("description")
                     .and_then(Value::as_str)
@@ -822,7 +836,10 @@ fn parse_strip_effects(value: &Value) -> Vec<HardwareStripEffect> {
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
                 default_fps: byte(entry, "default_fps"),
-                default_duration_ms: entry.get("default_duration_ms").and_then(Value::as_u64),
+                default_duration_ms: entry
+                    .get("default_duration_ms")
+                    .or_else(|| entry.get("duration_ms"))
+                    .and_then(Value::as_u64),
                 default_pixels: word(entry, "default_pixels"),
                 minimum_fps: byte(entry, "minimum_fps").or_else(|| byte(entry, "min_fps")),
                 maximum_fps: byte(entry, "maximum_fps").or_else(|| byte(entry, "max_fps")),
@@ -1469,13 +1486,19 @@ fn parse_hardware_capabilities_with_front_panel(
                 .to_string(),
         })
         .collect();
-    let strip_effects = snapshot
-        .get("strip_effects")
-        .map(parse_strip_effects)
+    // PCController's living effect contract is the single authoritative
+    // catalog. Split macro/strip fields remain a fallback only for a host that
+    // has not yet refreshed its snapshot after startup.
+    let unified_effects = snapshot.get("effects").and_then(Value::as_array);
+    let strip_effects = unified_effects
+        .map(|effects| parse_strip_effects(&Value::Array(effects.clone())))
+        .or_else(|| snapshot.get("strip_effects").map(parse_strip_effects))
         .unwrap_or_default();
-    let sequence_entries = snapshot
-        .pointer("/macros/library")
-        .and_then(Value::as_array);
+    let sequence_entries = unified_effects.or_else(|| {
+        snapshot
+            .pointer("/macros/library")
+            .and_then(Value::as_array)
+    });
     let macros = sequence_entries
         .into_iter()
         .flatten()
@@ -1542,6 +1565,16 @@ fn parse_hardware_capabilities_with_front_panel(
                 id,
                 name,
                 category,
+                icon: entry
+                    .get("icon")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                group_icon: entry
+                    .get("group_icon")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
                 mode,
                 duration_ms,
                 steps,
@@ -1779,11 +1812,13 @@ mod tests {
         let snapshot = json!({
             "connected": true,
             "hello": {"capabilities": CAPABILITY_ADDRESSABLE_LED},
-            "strip_effects": [
+            "effects": [
             {
                 "id": "lighting-primary",
                 "name": "Primary lighting",
                 "kind": "strip-stream",
+                "icon": "lightbulb",
+                "group_icon": "lamp",
                 "description": "Red and blue sweep",
                 "program": {"primitive":"alternating-zones","primary":{"red":255,"green":0,"blue":0},"secondary":{"red":0,"green":0,"blue":255},"period_ms":800},
                 "default_fps": 20,
@@ -1804,6 +1839,8 @@ mod tests {
         assert_eq!(parsed.strip_effects.len(), 1);
         assert_eq!(parsed.strip_effects[0].id, "lighting-primary");
         assert_eq!(parsed.strip_effects[0].maximum_pixels, Some(100));
+        assert_eq!(parsed.strip_effects[0].icon, "lightbulb");
+        assert_eq!(parsed.strip_effects[0].group_icon, "lamp");
 
         let mut disconnected_snapshot = snapshot;
         disconnected_snapshot["connected"] = json!(false);

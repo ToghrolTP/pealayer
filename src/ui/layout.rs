@@ -1575,6 +1575,16 @@ fn board_tool_card(ui: &mut egui::Ui, icon: &str, title: &str, body: impl FnOnce
         });
 }
 
+fn default_display_text_target(segments_available: bool, lcd_available: bool) -> &'static str {
+    if segments_available {
+        "segments"
+    } else if lcd_available {
+        "lcd"
+    } else {
+        "segments"
+    }
+}
+
 fn draw_display_text_tool(
     app: &PealayerApp,
     ui: &mut egui::Ui,
@@ -1584,14 +1594,13 @@ fn draw_display_text_tool(
     let target_id = ui.make_persistent_id("hardware_display_target");
     let duration_id = ui.make_persistent_id("hardware_display_duration");
     let mut text = ui.data_mut(|data| data.get_temp::<String>(text_id).unwrap_or_default());
-    let default_target =
-        if capabilities.supports_segment_display && capabilities.supports_lcd_display {
-            "both"
-        } else if capabilities.supports_lcd_display {
-            "lcd"
-        } else {
-            "segments"
-        };
+    // The front-panel segments are the primary board-facing display. Keep LCD
+    // and the combined target available, but never surprise a new Display Text
+    // action by broadcasting to both displays.
+    let default_target = default_display_text_target(
+        capabilities.supports_segment_display,
+        capabilities.supports_lcd_display,
+    );
     let mut target = ui.data_mut(|data| {
         data.get_temp::<String>(target_id)
             .unwrap_or_else(|| default_target.to_string())
@@ -1650,12 +1659,11 @@ fn draw_display_text_tool(
                     );
                 }
                 ui.label(app.tr("Duration"));
-                ui.add(
-                    egui::DragValue::new(&mut duration_ms)
-                        .range(250..=60_000)
-                        .speed(250.0)
-                        .suffix(" ms"),
-                );
+                ui.add(crate::duration::time_value_drag(
+                    &mut duration_ms,
+                    250..=60_000,
+                    250.0,
+                ));
                 if ui
                     .add_enabled(
                         !text.trim().is_empty(),
@@ -2717,6 +2725,13 @@ mod timeline_row_tests {
     use super::*;
 
     #[test]
+    fn display_text_prefers_segments_when_both_displays_are_available() {
+        assert_eq!(default_display_text_target(true, true), "segments");
+        assert_eq!(default_display_text_target(true, false), "segments");
+        assert_eq!(default_display_text_target(false, true), "lcd");
+    }
+
+    #[test]
     fn dynamic_rows_map_only_explicit_relays() {
         let rows = vec![
             TimelineTrackRow {
@@ -3523,6 +3538,7 @@ mod timeline_row_tests {
     fn controller_effect_reference_is_stable_when_view_models_are_rebuilt() {
         let first = crate::app::EffectPreset {
             category: "Cinema".to_string(),
+            group_icon: String::new(),
             source: crate::app::EffectPresetSource::ControllerMacro(7),
             effect: crate::four_d::models::Effect::controller_macro(
                 "Seat rise".to_string(),
@@ -3534,6 +3550,7 @@ mod timeline_row_tests {
         };
         let second = crate::app::EffectPreset {
             category: "Cinema".to_string(),
+            group_icon: String::new(),
             source: crate::app::EffectPresetSource::ControllerMacro(7),
             effect: crate::four_d::models::Effect::controller_macro(
                 "Seat rise".to_string(),
@@ -4378,16 +4395,20 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
                                         });
 
-                                        let mut duration_ms = template.duration_ms as f64;
+                                        let mut duration_ms = template.duration_ms;
                                         ui.horizontal(|ui| {
                                             ui.label(&duration_label);
-                                            let slider = ui.add(egui::Slider::new(&mut duration_ms, 50.0..=60000.0).suffix("ms"));
-                                            if slider.drag_started() || (slider.changed() && !slider.dragged()) {
+                                            let editor = ui.add(crate::duration::time_value_drag(
+                                                &mut duration_ms,
+                                                50..=60_000,
+                                                50.0,
+                                            ));
+                                            if editor.drag_started() || (editor.changed() && !editor.dragged()) {
                                                 push_undo = true;
                                             }
-                                            if slider.changed() {
+                                            if editor.changed() {
                                                 isolate_instance = true;
-                                                update_duration_to = Some(duration_ms as u64);
+                                                update_duration_to = Some(duration_ms);
                                                 timeline_dirty = true;
                                             }
                                         });
@@ -4666,6 +4687,16 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             display_language,
                                             &category,
                                         );
+                                        let group_icon_name = presets
+                                            .iter()
+                                            .map(|preset| preset.group_icon.trim())
+                                            .find(|icon| !icon.is_empty())
+                                            .unwrap_or_default()
+                                            .to_string();
+                                        let group_icon = crate::ui::icons::named_control_icon(
+                                            &group_icon_name,
+                                        )
+                                        .unwrap_or(crate::ui::icons::FOLDER_OPEN);
                                         let group_header = effect_group_header(
                                             ui,
                                             effects_width,
@@ -4676,7 +4707,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     } else {
                                                         crate::ui::icons::CARET_RIGHT
                                                     });
-                                                    ui.label(crate::ui::icons::FOLDER_OPEN);
+                                                    ui.label(group_icon);
                                                     ui.label(
                                                         egui::RichText::new(displayed_category)
                                                             .strong(),
@@ -4719,6 +4750,23 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 &category,
                                             ));
                                             ui.separator();
+                                            if ui
+                                                .button(format!(
+                                                    "{} {}",
+                                                    crate::ui::icons::PENCIL_SIMPLE,
+                                                    self.app.tr("Manage group")
+                                                ))
+                                                .clicked()
+                                            {
+                                                self.app.effect_group_draft = Some(
+                                                    crate::app::ControllerEffectGroupDraft {
+                                                        original_name: category.clone(),
+                                                        name: category.clone(),
+                                                        icon: group_icon_name.clone(),
+                                                    },
+                                                );
+                                                ui.close();
+                                            }
                                             if ui
                                                 .button(format!(
                                                     "{} {}",
@@ -4821,9 +4869,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                     ui.add_sized(
                                                                         [20.0, 24.0],
                                                                         egui::Label::new(
-                                                                        egui::RichText::new(
-                                                                            crate::ui::icons::SPARKLE,
-                                                                        )
+                                                                        egui::RichText::new(&preset.effect.icon)
                                                                         .size(16.0),
                                                                         ),
                                                                     );
@@ -5003,6 +5049,117 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         ui.add_space(7.0);
                                     }
                                 });
+
+                            let mut keep_group_editor_open = self.app.effect_group_draft.is_some();
+                            let mut save_group = false;
+                            let mut cancel_group = false;
+                            let group_editor_title = format!(
+                                "{} {}",
+                                crate::ui::icons::FOLDER_OPEN,
+                                self.app.tr("Manage effect group")
+                            );
+                            let group_name_label = self.app.tr("Name");
+                            let group_icon_label = self.app.tr("Icon");
+                            let presets_label = self.app.tr("Presets");
+                            let save_group_label = self.app.tr("Save to PCController");
+                            let cancel_group_label = self.app.tr("Cancel");
+                            if let Some(draft) = self.app.effect_group_draft.as_mut() {
+                                egui::Window::new(group_editor_title)
+                                .id(egui::Id::new("effect_group_editor"))
+                                .open(&mut keep_group_editor_open)
+                                .resizable(false)
+                                .collapsible(false)
+                                .show(ui.ctx(), |ui| {
+                                    egui::Grid::new("effect_group_editor_grid")
+                                        .num_columns(2)
+                                        .spacing([14.0, 10.0])
+                                        .show(ui, |ui| {
+                                            ui.label(&group_name_label);
+                                            ui.add(
+                                                egui::TextEdit::singleline(&mut draft.name)
+                                                    .desired_width(250.0),
+                                            );
+                                            ui.end_row();
+                                            ui.label(&group_icon_label);
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    crate::ui::icons::named_control_icon(&draft.icon)
+                                                        .unwrap_or(
+                                                            crate::ui::icons::FOLDER_OPEN,
+                                                        ),
+                                                );
+                                                ui.add(
+                                                    egui::TextEdit::singleline(&mut draft.icon)
+                                                        .desired_width(130.0)
+                                                        .hint_text("folder"),
+                                                );
+                                                egui::ComboBox::from_id_salt(
+                                                    "effect_group_icon_preset",
+                                                )
+                                                .selected_text(&presets_label)
+                                                .show_ui(ui, |ui| {
+                                                    for (key, label, glyph) in
+                                                        crate::ui::icons::CONTROL_ICON_PRESETS
+                                                    {
+                                                        if ui
+                                                            .selectable_label(
+                                                                draft
+                                                                    .icon
+                                                                    .eq_ignore_ascii_case(key),
+                                                                format!("{glyph}  {label}"),
+                                                            )
+                                                            .clicked()
+                                                        {
+                                                            draft.icon = (*key).to_string();
+                                                        }
+                                                    }
+                                                });
+                                            });
+                                            ui.end_row();
+                                        });
+                                    ui.add_space(10.0);
+                                    ui.horizontal(|ui| {
+                                        if ui
+                                            .add_enabled(
+                                                !draft.name.trim().is_empty(),
+                                                egui::Button::new(format!(
+                                                    "{} {}",
+                                                    crate::ui::icons::FLOPPY_DISK,
+                                                    save_group_label
+                                                )),
+                                            )
+                                            .clicked()
+                                        {
+                                            save_group = true;
+                                        }
+                                        if ui
+                                            .button(format!(
+                                                "{} {}",
+                                                crate::ui::icons::X,
+                                                cancel_group_label
+                                            ))
+                                            .clicked()
+                                        {
+                                            cancel_group = true;
+                                        }
+                                    });
+                                });
+                            }
+                            if cancel_group {
+                                keep_group_editor_open = false;
+                            }
+                            if save_group {
+                                if let Some(draft) = self.app.effect_group_draft.clone() {
+                                    if let Err(error) = self.app.save_controller_effect_group(draft) {
+                                        self.app.set_osd(error);
+                                    } else {
+                                        keep_group_editor_open = false;
+                                    }
+                                }
+                            }
+                            if !keep_group_editor_open {
+                                self.app.effect_group_draft = None;
+                            }
                         }
                     }
                     PealayerTab::HardwareMonitor => {

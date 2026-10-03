@@ -492,12 +492,11 @@ fn settings(
                 &mut settings.relay_audio_enabled,
             );
             setting_control(ui, &app.tr("Telemetry period"), |ui| {
-                ui.add(
-                    egui::DragValue::new(&mut settings.stream_period_ms)
-                        .range(0..=u16::MAX as u64)
-                        .speed(10.0)
-                        .suffix(" ms"),
-                )
+                ui.add(crate::duration::time_value_drag(
+                    &mut settings.stream_period_ms,
+                    0..=u16::MAX as u64,
+                    10.0,
+                ))
                 .on_hover_text(app.tr("Use 0 to disable periodic telemetry"));
             });
         });
@@ -622,9 +621,11 @@ fn settings(
                 });
                 if capabilities.supports_motion_break_setting {
                     setting_control(ui, &app.tr("Motion break"), |ui| {
-                        ui.add(
-                            egui::Slider::new(&mut settings.motion_break_ms, 1..=255).suffix(" ms"),
-                        );
+                        ui.add(crate::duration::time_value_drag(
+                            &mut settings.motion_break_ms,
+                            1..=255,
+                            1.0,
+                        ));
                     });
                 }
             });

@@ -44,6 +44,7 @@ pub(crate) fn select_sequence(
         id: effect.id.to_string(),
         name: effect.name.clone(),
         category: effect.category.clone(),
+        icon: effect.icon.clone(),
         description: String::new(),
         kind: "sequence".to_string(),
         program_json: String::new(),
@@ -66,6 +67,7 @@ pub(crate) fn select_strip(
         id: effect.id.clone(),
         name: effect.name.clone(),
         category: effect.category.clone(),
+        icon: effect.icon.clone(),
         description: effect.description.clone(),
         kind: "strip-stream".to_string(),
         program_json: serde_json::to_string_pretty(&effect.program).unwrap_or_default(),
@@ -434,10 +436,10 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 app.tr("Stable ID"),
                                 app.tr("Name"),
                                 app.tr("Category"),
+                                app.tr("Icon"),
                                 app.tr("Frame rate"),
                                 app.tr("LED count"),
                                 app.tr("Duration"),
-                                app.tr("milliseconds"),
                             );
                             let draft = &mut app.effect_library_draft;
                             egui::Grid::new("controller_effect_definition_grid")
@@ -470,39 +472,56 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                             .desired_width(320.0),
                                     );
                                     ui.end_row();
+                                    ui.label(&labels.6);
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            crate::ui::icons::named_control_icon(&draft.icon)
+                                                .unwrap_or(crate::ui::icons::SPARKLE),
+                                        );
+                                        ui.add(
+                                            egui::TextEdit::singleline(&mut draft.icon)
+                                                .desired_width(150.0)
+                                                .hint_text("sparkle"),
+                                        );
+                                        egui::ComboBox::from_id_salt("effect_icon_preset")
+                                            .selected_text("Presets")
+                                            .show_ui(ui, |ui| {
+                                                for (key, label, glyph) in
+                                                    crate::ui::icons::CONTROL_ICON_PRESETS
+                                                {
+                                                    if ui
+                                                        .selectable_label(
+                                                            draft.icon.eq_ignore_ascii_case(key),
+                                                            format!("{glyph}  {label}"),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        draft.icon = (*key).to_string();
+                                                    }
+                                                }
+                                            });
+                                    });
+                                    ui.end_row();
                                     if draft.kind != "sequence" {
-                                        ui.label(&labels.6);
+                                        ui.label(&labels.7);
                                         ui.add(
                                             egui::DragValue::new(&mut draft.default_fps)
                                                 .range(1..=30),
                                         );
                                         ui.end_row();
-                                        ui.label(&labels.7);
+                                        ui.label(&labels.8);
                                         ui.add(
                                             egui::DragValue::new(&mut draft.default_pixels)
                                                 .range(1..=100),
                                         );
                                         ui.end_row();
                                     }
-                                    ui.label(&labels.8);
-                                    ui.horizontal(|ui| {
-                                        ui.add(
-                                            egui::DragValue::new(&mut draft.duration_ms)
-                                                .range(1..=3_600_000)
-                                                .speed(100.0),
-                                        );
-                                        ui.label(&labels.9);
-                                        ui.label(
-                                            egui::RichText::new(format!(
-                                                "({})",
-                                                crate::duration::format_effect_duration_for_language(
-                                                    display_language,
-                                                    draft.duration_ms
-                                                )
-                                            ))
-                                            .weak(),
-                                        );
-                                    });
+                                    ui.label(&labels.9);
+                                    ui.add(crate::duration::time_value_drag(
+                                        &mut draft.duration_ms,
+                                        1..=3_600_000,
+                                        100.0,
+                                    ));
                                     ui.end_row();
                                 });
                             if app.effect_library_draft.kind != "sequence" {

@@ -54,6 +54,7 @@ pub struct ActiveDragState {
 #[derive(Debug, Clone)]
 pub struct EffectPreset {
     pub category: String,
+    pub group_icon: String,
     pub effect: crate::four_d::models::Effect,
     pub source: EffectPresetSource,
 }
@@ -70,6 +71,7 @@ pub struct ControllerEffectDraft {
     pub id: String,
     pub name: String,
     pub category: String,
+    pub icon: String,
     pub description: String,
     pub kind: String,
     pub program_json: String,
@@ -80,6 +82,13 @@ pub struct ControllerEffectDraft {
     pub is_new: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControllerEffectGroupDraft {
+    pub original_name: String,
+    pub name: String,
+    pub icon: String,
+}
+
 impl Default for ControllerEffectDraft {
     fn default() -> Self {
         Self {
@@ -87,6 +96,7 @@ impl Default for ControllerEffectDraft {
             id: String::new(),
             name: String::new(),
             category: "Lighting".to_string(),
+            icon: "sparkle".to_string(),
             description: String::new(),
             kind: "strip-stream".to_string(),
             program_json: String::new(),
@@ -241,6 +251,7 @@ pub struct PealayerApp {
     pub(crate) show_effect_library_editor: bool,
     pub(crate) effect_library_selection: Option<String>,
     pub(crate) effect_library_draft: ControllerEffectDraft,
+    pub(crate) effect_group_draft: Option<ControllerEffectGroupDraft>,
     pub(crate) track_muted: std::collections::BTreeSet<u8>,
     pub(crate) track_soloed: std::collections::BTreeSet<u8>,
     pub(crate) track_locked: std::collections::BTreeSet<u8>,
@@ -1518,6 +1529,14 @@ impl PealayerApp {
             "Effect category must use 1–64 letters, numbers, spaces, dashes, or underscores"
                 .to_string()
         })?;
+        let icon = if draft.icon.trim().is_empty() {
+            "-".to_string()
+        } else {
+            Self::controller_command_argument(&draft.icon).ok_or_else(|| {
+                "Effect icon must use 1–64 letters, numbers, spaces, dashes, or underscores"
+                    .to_string()
+            })?
+        };
         let command = if draft.kind == "sequence" {
             if draft.is_new {
                 let id = draft
@@ -1525,13 +1544,13 @@ impl PealayerApp {
                     .parse::<u8>()
                     .map_err(|_| "Sequence ID must be 0–255".to_string())?;
                 format!(
-                    "effect create sequence {id} {name} {category} {}",
-                    draft.color
+                    "effect create sequence {id} {name} {category} {} {icon}",
+                    draft.color,
                 )
             } else {
                 format!(
-                    "effect update {} {name} {category} {}",
-                    draft.id, draft.color
+                    "effect update {} {name} {category} {} {icon}",
+                    draft.id, draft.color,
                 )
             }
         } else {
@@ -1549,13 +1568,13 @@ impl PealayerApp {
             };
             if draft.is_new {
                 format!(
-                    "effect create strip-json {id} {name} {category} {description} {program_hex} {} {} {}",
-                    draft.default_fps, draft.duration_ms, draft.default_pixels
+                    "effect create strip-json {id} {name} {category} {description} {program_hex} {} {} {} {icon}",
+                    draft.default_fps, draft.duration_ms, draft.default_pixels,
                 )
             } else {
                 format!(
-                    "effect update-json {id} {name} {category} {description} {program_hex} {} {} {}",
-                    draft.default_fps, draft.duration_ms, draft.default_pixels
+                    "effect update-json {id} {name} {category} {description} {program_hex} {} {} {} {icon}",
+                    draft.default_fps, draft.duration_ms, draft.default_pixels,
                 )
             }
         };
@@ -1568,6 +1587,30 @@ impl PealayerApp {
             return Err("Select a saved PCController effect first".to_string());
         }
         self.request_hardware_effect_command("effect-delete", format!("effect delete {reference}"))
+    }
+
+    pub(crate) fn save_controller_effect_group(
+        &mut self,
+        draft: ControllerEffectGroupDraft,
+    ) -> Result<(), String> {
+        let original = Self::controller_command_argument(&draft.original_name)
+            .ok_or_else(|| "The original effect group name is invalid".to_string())?;
+        let name = Self::controller_command_argument(&draft.name).ok_or_else(|| {
+            "Effect group name must use 1–64 letters, numbers, spaces, dashes, or underscores"
+                .to_string()
+        })?;
+        let icon = if draft.icon.trim().is_empty() {
+            "-".to_string()
+        } else {
+            Self::controller_command_argument(&draft.icon).ok_or_else(|| {
+                "Effect group icon must use 1–64 letters, numbers, spaces, dashes, or underscores"
+                    .to_string()
+            })?
+        };
+        self.request_hardware_effect_command(
+            "effect-group-save",
+            format!("effect group update {original} {name} {icon}"),
+        )
     }
 
     pub(crate) fn play_controller_effect(&mut self, reference: &str) -> Result<(), String> {
@@ -2007,6 +2050,7 @@ impl PealayerApp {
                     id: effect.id,
                     name: effect.name,
                     category: effect.category,
+                    icon: String::new(),
                     description: effect.description,
                     kind: effect.kind,
                     program_json: serde_json::to_string_pretty(&effect.program)
@@ -3192,30 +3236,40 @@ impl PealayerApp {
 fn controller_macro_effect_preset(
     hardware_macro: &crate::four_d::controller::HardwareMacro,
 ) -> EffectPreset {
+    let mut effect = crate::four_d::models::Effect::controller_macro(
+        hardware_macro.name.clone(),
+        String::new(),
+        hardware_macro.duration_ms,
+        hardware_macro.id,
+        hardware_macro.mode.clone(),
+    );
+    effect.icon = crate::ui::icons::named_control_icon(&hardware_macro.icon)
+        .unwrap_or(crate::ui::icons::SPARKLE)
+        .to_string();
     EffectPreset {
         category: hardware_macro.category.clone(),
+        group_icon: hardware_macro.group_icon.clone(),
         source: EffectPresetSource::ControllerMacro(hardware_macro.id),
-        effect: crate::four_d::models::Effect::controller_macro(
-            hardware_macro.name.clone(),
-            String::new(),
-            hardware_macro.duration_ms,
-            hardware_macro.id,
-            hardware_macro.mode.clone(),
-        ),
+        effect,
     }
 }
 
 fn controller_strip_effect_preset(
     strip_effect: &crate::four_d::controller::HardwareStripEffect,
 ) -> EffectPreset {
+    let mut effect = crate::four_d::models::Effect::controller_strip_effect(
+        strip_effect.name.clone(),
+        strip_effect.default_duration_ms.unwrap_or(5_000),
+        strip_effect.id.clone(),
+    );
+    effect.icon = crate::ui::icons::named_control_icon(&strip_effect.icon)
+        .unwrap_or(crate::ui::icons::SPARKLE)
+        .to_string();
     EffectPreset {
         category: strip_effect.category.clone(),
+        group_icon: strip_effect.group_icon.clone(),
         source: EffectPresetSource::ControllerStrip,
-        effect: crate::four_d::models::Effect::controller_strip_effect(
-            strip_effect.name.clone(),
-            strip_effect.default_duration_ms.unwrap_or(5_000),
-            strip_effect.id.clone(),
-        ),
+        effect,
     }
 }
 
@@ -3340,6 +3394,7 @@ impl Default for PealayerApp {
             show_effect_library_editor: false,
             effect_library_selection: None,
             effect_library_draft: ControllerEffectDraft::default(),
+            effect_group_draft: None,
             track_muted: std::collections::BTreeSet::new(),
             track_soloed: std::collections::BTreeSet::new(),
             track_locked: std::collections::BTreeSet::new(),
@@ -3820,6 +3875,8 @@ mod tests {
             id: 12,
             name: "Live Air Burst".to_string(),
             category: "Cinema".to_string(),
+            icon: String::new(),
+            group_icon: String::new(),
             mode: "mcu".to_string(),
             duration_ms: 250,
             steps: vec![
@@ -3854,6 +3911,8 @@ mod tests {
             id: 7,
             name: "Display only".to_string(),
             category: "Display".to_string(),
+            icon: String::new(),
+            group_icon: String::new(),
             mode: "host".to_string(),
             duration_ms: 1,
             steps: vec![crate::four_d::controller::HardwareMacroStep {

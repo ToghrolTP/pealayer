@@ -165,8 +165,12 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         ui.text_edit_singleline(&mut icon);
                         ui.end_row();
 
-                        ui.label(app.tr("Duration (ms):"));
-                        ui.add(egui::Slider::new(&mut duration_ms, 50..=10000).suffix("ms"));
+                        ui.label(app.tr("Duration:"));
+                        ui.add(crate::duration::time_value_drag(
+                            &mut duration_ms,
+                            50..=10_000,
+                            50.0,
+                        ));
                         ui.end_row();
 
                         ui.label(app.tr("Output:"));
