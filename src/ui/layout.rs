@@ -50,6 +50,7 @@ const EFFECT_CARD_MIN_WIDTH: f32 = 140.0;
 const EFFECT_CARD_HORIZONTAL_MARGIN: i8 = 9;
 const EFFECT_CARD_STROKE_WIDTH: f32 = 1.0;
 const EFFECT_CARD_ACTION_GUTTER: f32 = 100.0;
+const EFFECT_CARD_ACTION_BUTTONS_WIDTH: f32 = 72.0;
 
 fn effects_panel_content_width(available_width: f32) -> f32 {
     (available_width - EFFECTS_PANEL_RIGHT_GUTTER).max(EFFECT_CARD_MIN_WIDTH)
@@ -58,6 +59,16 @@ fn effects_panel_content_width(available_width: f32) -> f32 {
 fn effects_frame_content_width(outer_width: f32) -> f32 {
     (outer_width - (f32::from(EFFECT_CARD_HORIZONTAL_MARGIN) + EFFECT_CARD_STROKE_WIDTH) * 2.0)
         .max(1.0)
+}
+
+fn effect_card_header_widths(available_after_icon: f32, item_spacing: f32) -> (f32, f32) {
+    // Three 24 px action buttons plus the two gaps between them. The title and
+    // action container are separate horizontal-layout items, so their own gap
+    // must also be removed from the title budget. Omitting that final gap made
+    // every child card one spacing unit wider than its group header.
+    let actions_width = EFFECT_CARD_ACTION_BUTTONS_WIDTH + item_spacing * 2.0;
+    let title_width = (available_after_icon - actions_width - item_spacing).max(1.0);
+    (title_width, actions_width)
 }
 
 fn effect_card<R>(
@@ -2593,6 +2604,73 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn production_effect_action_row_stays_within_the_card_width() {
+        let spacing = 8.0;
+        for available in [112.0, 180.0, 297.0] {
+            let (title, actions) = effect_card_header_widths(available, spacing);
+            assert!(title + spacing + actions <= available + f32::EPSILON);
+            assert_eq!(actions, 88.0);
+        }
+
+        let context = egui::Context::default();
+        let widths = std::cell::Cell::new((0.0_f32, 0.0_f32));
+        let output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(327.0, 220.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let outer = effects_panel_content_width(ui.available_width());
+                    let header = effect_group_header(ui, outer, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(crate::ui::icons::CARET_DOWN);
+                            ui.label(crate::ui::icons::FOLDER_OPEN);
+                            ui.label("Cinema");
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label("3");
+                                },
+                            );
+                        });
+                    });
+                    let card = effect_card(ui, outer, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.add_sized([20.0, 24.0], egui::Label::new("effect"));
+                            let spacing = ui.spacing().item_spacing.x;
+                            let (title, actions) =
+                                effect_card_header_widths(ui.available_width(), spacing);
+                            ui.add_sized([title, 24.0], egui::Label::new("Seat rise").truncate());
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(actions, 24.0),
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    for label in ["more", "add", "play"] {
+                                        ui.add_sized([24.0, 24.0], egui::Button::new(label));
+                                    }
+                                },
+                            );
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Timed multi-peripheral sequence");
+                            ui.label("1 min 30 sec");
+                        });
+                    });
+                    widths.set((header.response.rect.width(), card.response.rect.width()));
+                    ui.allocate_space(egui::vec2(1.0, 400.0));
+                });
+            },
+        );
+        drop(output);
+        let (header, card) = widths.get();
+        assert_eq!(header, card);
+    }
+
+    #[test]
     fn effect_card_action_click_survives_the_drag_surface() {
         let context = egui::Context::default();
         let payload = EffectDragPayload {
@@ -4143,10 +4221,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                         ),
                                                                     );
                                                                     let action_spacing = ui.spacing().item_spacing.x;
-                                                                    let reserved_actions = 72.0 + action_spacing * 2.0;
-                                                                    let title_width = (ui.available_width()
-                                                                        - reserved_actions)
-                                                                        .max(28.0);
+                                                                    let (title_width, reserved_actions) =
+                                                                        effect_card_header_widths(
+                                                                            ui.available_width(),
+                                                                            action_spacing,
+                                                                        );
                                                                     ui.add_sized(
                                                                         [title_width, 24.0],
                                                                         egui::Label::new(
@@ -4200,7 +4279,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                     );
                                                                 });
                                                                 ui.add_space(5.0);
-                                                                ui.horizontal(|ui| {
+                                                                ui.horizontal_wrapped(|ui| {
                                                                     for text in [
                                                                         target_label.clone(),
                                                                         crate::duration::format_effect_duration_for_language(
