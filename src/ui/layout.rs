@@ -4122,40 +4122,20 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         self.app.playback_time = 0.0;
                                         self.app.seek_pos = None;
                                     }
-                                    let frame_back = ui
-                                        .add_sized(
-                                            [30.0, 22.0],
-                                            egui::Button::new(crate::ui::icons::SKIP_BACK),
-                                        )
-                                        .on_hover_text(format!(
-                                            "{} {} {} ([)",
-                                            self.app.tr("Back"),
-                                            self.app.frame_step_count,
-                                            self.app.tr("frames")
-                                        ));
-                                    frame_back.context_menu(|ui| {
-                                        crate::ui::controls::transport_context_menu(self.app, ui)
-                                    });
-                                    if frame_back.clicked() {
-                                        self.app.step_frames(-1);
-                                    }
-                                    let frame_forward = ui
-                                        .add_sized(
-                                            [30.0, 22.0],
-                                            egui::Button::new(crate::ui::icons::SKIP_FORWARD),
-                                        )
-                                        .on_hover_text(format!(
-                                            "{} {} {} (])",
-                                            self.app.tr("Forward"),
-                                            self.app.frame_step_count,
-                                            self.app.tr("frames")
-                                        ));
-                                    frame_forward.context_menu(|ui| {
-                                        crate::ui::controls::transport_context_menu(self.app, ui)
-                                    });
-                                    if frame_forward.clicked() {
-                                        self.app.step_frames(1);
-                                    }
+                                    crate::ui::controls::draw_contextual_transport_nudge(
+                                        self.app,
+                                        ui,
+                                        ui.make_persistent_id("nle-transport-back"),
+                                        -1,
+                                        crate::ui::controls::TransportNudgeDensity::Compact,
+                                    );
+                                    crate::ui::controls::draw_contextual_transport_nudge(
+                                        self.app,
+                                        ui,
+                                        ui.make_persistent_id("nle-transport-forward"),
+                                        1,
+                                        crate::ui::controls::TransportNudgeDensity::Compact,
+                                    );
                                     ui.separator();
 
                                     let elapsed = self.app.seek_pos.unwrap_or(self.app.playback_time);

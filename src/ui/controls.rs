@@ -18,6 +18,146 @@ fn compact_number(value: f64) -> String {
     rendered
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransportNudgeMode {
+    Seek,
+    FrameStep,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportNudgeDensity {
+    Compact,
+    Labeled,
+}
+
+const fn transport_nudge_mode(is_paused: bool) -> TransportNudgeMode {
+    if is_paused {
+        TransportNudgeMode::FrameStep
+    } else {
+        TransportNudgeMode::Seek
+    }
+}
+
+const fn transport_nudge_width(density: TransportNudgeDensity) -> f32 {
+    match density {
+        TransportNudgeDensity::Compact => 44.0,
+        TransportNudgeDensity::Labeled => 72.0,
+    }
+}
+
+/// Draw one transport nudge whose purpose follows playback state.
+///
+/// While playing it seeks by the configured quick-seek interval. While
+/// paused it steps by the configured frame count. Both captions occupy one
+/// stable button and crossfade/slide between states, avoiding duplicate
+/// controls and layout jumps.
+pub fn draw_contextual_transport_nudge(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    direction: i32,
+    density: TransportNudgeDensity,
+) -> egui::Response {
+    let mode = transport_nudge_mode(app.is_paused);
+    let paused_t = ui.ctx().animate_bool_with_time_and_easing(
+        id.with("paused-mode"),
+        matches!(mode, TransportNudgeMode::FrameStep),
+        0.18,
+        egui::emath::easing::cubic_out,
+    );
+    let backwards = direction < 0;
+    let quick_text = compact_number(app.quick_seek_seconds);
+    let seek_icon = if backwards {
+        crate::ui::icons::REWIND
+    } else {
+        crate::ui::icons::FAST_FORWARD
+    };
+    let frame_icon = if backwards {
+        crate::ui::icons::SKIP_BACK
+    } else {
+        crate::ui::icons::SKIP_FORWARD
+    };
+    let width = transport_nudge_width(density);
+    let (seek_caption, frame_caption, font_size) = match density {
+        TransportNudgeDensity::Compact => (
+            format!("{seek_icon} {quick_text}"),
+            frame_icon.to_string(),
+            11.5,
+        ),
+        TransportNudgeDensity::Labeled => (
+            format!("{seek_icon} {quick_text} {}", app.tr("sec")),
+            format!("{frame_icon} {}", app.frame_step_count),
+            11.0,
+        ),
+    };
+
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 22.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&response);
+        ui.painter().rect(
+            rect,
+            visuals.corner_radius,
+            visuals.weak_bg_fill,
+            visuals.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+        let font = egui::FontId::proportional(font_size);
+        let text_color = visuals.text_color();
+        let travel = 4.0;
+        ui.painter().text(
+            rect.center() - egui::vec2(0.0, travel * paused_t),
+            egui::Align2::CENTER_CENTER,
+            seek_caption,
+            font.clone(),
+            text_color.gamma_multiply(1.0 - paused_t),
+        );
+        ui.painter().text(
+            rect.center() + egui::vec2(0.0, travel * (1.0 - paused_t)),
+            egui::Align2::CENTER_CENTER,
+            frame_caption,
+            font,
+            text_color.gamma_multiply(paused_t),
+        );
+    }
+
+    let action_name = if backwards {
+        app.tr("Back")
+    } else {
+        app.tr("Forward")
+    };
+    let tooltip = match mode {
+        TransportNudgeMode::Seek => format!(
+            "{} {} {} ({})",
+            if backwards {
+                app.tr("Seek backward")
+            } else {
+                app.tr("Seek forward")
+            },
+            quick_text,
+            app.tr("seconds"),
+            if backwards { "←" } else { "→" }
+        ),
+        TransportNudgeMode::FrameStep => format!(
+            "{} {} {} ({})",
+            action_name,
+            app.frame_step_count,
+            app.tr("frames"),
+            if backwards { "[" } else { "]" }
+        ),
+    };
+    let response = response.on_hover_text(tooltip);
+    response.context_menu(|ui| transport_context_menu(app, ui));
+    if response.clicked() {
+        match mode {
+            TransportNudgeMode::Seek => {
+                app.seek_relative(direction as f64 * app.quick_seek_seconds)
+            }
+            TransportNudgeMode::FrameStep => app.step_frames(direction),
+        }
+    }
+    response
+}
+
 pub fn begin_elapsed_edit(app: &mut PealayerApp) {
     let elapsed = resolve_display_time(app.seek_pos, app.playback_time);
     app.elapsed_time_input = format_player_time(elapsed, app.duration >= 3600.0, true);
@@ -119,33 +259,67 @@ pub fn transport_context_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
         }
     });
     ui.separator();
+    if app.is_paused {
+        ui.add_enabled_ui(has_video, |ui| {
+            if ui
+                .button(format!(
+                    "{} {} {} {}",
+                    crate::ui::icons::SKIP_BACK,
+                    app.tr("Back"),
+                    frames,
+                    app.tr("frames")
+                ))
+                .clicked()
+            {
+                app.step_frames(-1);
+                ui.close();
+            }
+            if ui
+                .button(format!(
+                    "{} {} {} {}",
+                    crate::ui::icons::SKIP_FORWARD,
+                    app.tr("Forward"),
+                    frames,
+                    app.tr("frames")
+                ))
+                .clicked()
+            {
+                app.step_frames(1);
+                ui.close();
+            }
+        });
+    } else {
+        ui.add_enabled_ui(can_seek, |ui| {
+            if ui
+                .button(format!(
+                    "{} {} {} {}",
+                    crate::ui::icons::REWIND,
+                    app.tr("Back"),
+                    quick_text,
+                    app.tr("seconds")
+                ))
+                .clicked()
+            {
+                app.seek_relative(-quick);
+                ui.close();
+            }
+            if ui
+                .button(format!(
+                    "{} {} {} {}",
+                    crate::ui::icons::FAST_FORWARD,
+                    app.tr("Forward"),
+                    quick_text,
+                    app.tr("seconds")
+                ))
+                .clicked()
+            {
+                app.seek_relative(quick);
+                ui.close();
+            }
+        });
+    }
+    ui.separator();
     ui.add_enabled_ui(can_seek, |ui| {
-        if ui
-            .button(format!(
-                "{} {} {} {}",
-                crate::ui::icons::REWIND,
-                app.tr("Back"),
-                quick_text,
-                app.tr("seconds")
-            ))
-            .clicked()
-        {
-            app.seek_relative(-quick);
-            ui.close();
-        }
-        if ui
-            .button(format!(
-                "{} {} {} {}",
-                crate::ui::icons::FAST_FORWARD,
-                app.tr("Forward"),
-                quick_text,
-                app.tr("seconds")
-            ))
-            .clicked()
-        {
-            app.seek_relative(quick);
-            ui.close();
-        }
         if ui
             .button(format!(
                 "{} {}",
@@ -166,35 +340,6 @@ pub fn transport_context_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .clicked()
         {
             app.seek_absolute(0.0);
-            ui.close();
-        }
-    });
-    ui.separator();
-    ui.add_enabled_ui(has_video, |ui| {
-        if ui
-            .button(format!(
-                "{} {} {} {}",
-                crate::ui::icons::SKIP_BACK,
-                app.tr("Back"),
-                frames,
-                app.tr("frames")
-            ))
-            .clicked()
-        {
-            app.step_frames(-1);
-            ui.close();
-        }
-        if ui
-            .button(format!(
-                "{} {} {} {}",
-                crate::ui::icons::SKIP_FORWARD,
-                app.tr("Forward"),
-                frames,
-                app.tr("frames")
-            ))
-            .clicked()
-        {
-            app.step_frames(1);
             ui.close();
         }
     });
@@ -344,24 +489,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     ui,
                     |ui| {
                         ui.add_enabled_ui(has_video, |ui| {
-                            let quick_text = compact_number(app.quick_seek_seconds);
-                            let back_response = ui
-                                .button(format!(
-                                    "{} {} {}",
-                                    crate::ui::icons::REWIND,
-                                    quick_text,
-                                    app.tr("sec")
-                                ))
-                                .on_hover_text(format!(
-                                    "{} {} {} (←)",
-                                    app.tr("Seek backward"),
-                                    quick_text,
-                                    app.tr("seconds")
-                                ));
-                            back_response.context_menu(|ui| transport_context_menu(app, ui));
-                            if back_response.clicked() {
-                                app.seek_relative(-app.quick_seek_seconds);
-                            }
+                            let mut toggle_playback_requested = false;
+                            draw_contextual_transport_nudge(
+                                app,
+                                ui,
+                                ui.make_persistent_id("simple-transport-back"),
+                                -1,
+                                TransportNudgeDensity::Labeled,
+                            );
 
                             let play_icon = if app.is_playback_finished() {
                                 crate::ui::icons::ARROW_COUNTER_CLOCKWISE
@@ -382,57 +517,20 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 .on_hover_text(play_tooltip);
                             play_response.context_menu(|ui| transport_context_menu(app, ui));
                             if play_response.clicked() {
+                                // Apply after both contextual buttons are drawn
+                                // so one frame cannot render mismatched modes.
+                                toggle_playback_requested = true;
+                            }
+
+                            draw_contextual_transport_nudge(
+                                app,
+                                ui,
+                                ui.make_persistent_id("simple-transport-forward"),
+                                1,
+                                TransportNudgeDensity::Labeled,
+                            );
+                            if toggle_playback_requested {
                                 app.toggle_playback();
-                            }
-
-                            let forward_response = ui
-                                .button(format!(
-                                    "{} {} {}",
-                                    quick_text,
-                                    app.tr("sec"),
-                                    crate::ui::icons::FAST_FORWARD
-                                ))
-                                .on_hover_text(format!(
-                                    "{} {} {} (→)",
-                                    app.tr("Seek forward"),
-                                    quick_text,
-                                    app.tr("seconds")
-                                ));
-                            forward_response.context_menu(|ui| transport_context_menu(app, ui));
-                            if forward_response.clicked() {
-                                app.seek_relative(app.quick_seek_seconds);
-                            }
-
-                            let frame_back = ui
-                                .add_sized(
-                                    [30.0, 22.0],
-                                    egui::Button::new(crate::ui::icons::SKIP_BACK),
-                                )
-                                .on_hover_text(format!(
-                                    "{} {} {} ([)",
-                                    app.tr("Back"),
-                                    app.frame_step_count,
-                                    app.tr("frames")
-                                ));
-                            frame_back.context_menu(|ui| transport_context_menu(app, ui));
-                            if frame_back.clicked() {
-                                app.step_frames(-1);
-                            }
-
-                            let frame_forward = ui
-                                .add_sized(
-                                    [30.0, 22.0],
-                                    egui::Button::new(crate::ui::icons::SKIP_FORWARD),
-                                )
-                                .on_hover_text(format!(
-                                    "{} {} {} (])",
-                                    app.tr("Forward"),
-                                    app.frame_step_count,
-                                    app.tr("frames")
-                                ));
-                            frame_forward.context_menu(|ui| transport_context_menu(app, ui));
-                            if frame_forward.clicked() {
-                                app.step_frames(1);
                             }
                         });
 
@@ -793,6 +891,18 @@ mod tests {
         let button_size = egui::vec2(30.0, 22.0);
         assert_eq!(button_size.x, 30.0);
         assert_eq!(button_size.y, 22.0);
+    }
+
+    #[test]
+    fn contextual_nudges_seek_while_playing_and_step_while_paused() {
+        assert_eq!(transport_nudge_mode(false), TransportNudgeMode::Seek);
+        assert_eq!(transport_nudge_mode(true), TransportNudgeMode::FrameStep);
+    }
+
+    #[test]
+    fn contextual_nudge_slots_keep_stable_geometry_during_transition() {
+        assert_eq!(transport_nudge_width(TransportNudgeDensity::Compact), 44.0);
+        assert_eq!(transport_nudge_width(TransportNudgeDensity::Labeled), 72.0);
     }
 
     #[test]
