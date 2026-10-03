@@ -141,17 +141,24 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
   );
   const groups = useMemo(() => Array.from(new Set(controls.map((control) => control.group))), [controls]);
 
-  const updatePath = async (key: string, storedValue: any) => {
+  const updatePaths = async (updates: Array<{ key: string; value: any }>) => {
     if (!contract) return;
-    const nextValues = valueWithPath(contract.values, key, storedValue === '' ? null : storedValue);
+    const nextValues = updates.reduce(
+      (values, update) => valueWithPath(values, update.key, update.value === '' ? null : update.value),
+      contract.values,
+    );
     setContract({ ...contract, values: nextValues });
-    setSaving(key);
+    setSaving(updates[0]?.key ?? null);
     setStatus(null);
     try {
+      const patch = updates.reduce(
+        (body, update) => ({ ...body, ...patchForPath(nextValues, update.key) }),
+        {} as JsonObject,
+      );
       const response = await fetch(`${apiBaseUrl}/api/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patchForPath(nextValues, key)),
+        body: JSON.stringify(patch),
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
@@ -165,6 +172,10 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
     } finally {
       setSaving(null);
     }
+  };
+
+  const updatePath = async (key: string, storedValue: any) => {
+    await updatePaths([{ key, value: storedValue }]);
   };
 
   const update = async (control: PreferenceControl, displayedValue: any) => {
@@ -186,12 +197,8 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
       const customHex = String(valueAtPath(contract?.values ?? {}, customKey) ?? '#0078d4');
       const accentOptions = (control.options ?? []).map((option) => ({
         value: option.value,
-        label: (
-          <span className="accent-option">
-            <span className="accent-option__swatch" style={{ backgroundColor: option.color || 'transparent' }} />
-            <span>{tr(locale, option.label)}</span>
-          </span>
-        ),
+        label: tr(locale, option.label),
+        color: option.value === 'custom' ? customHex : option.color,
       }));
       return (
         <label className="preference-control" key={control.key}>
@@ -201,23 +208,61 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
               value={value}
               options={accentOptions}
               onChange={(next) => void update(control, next)}
+              labelRender={({ label }) => <span>{label}</span>}
+              optionRender={(option) => {
+                const isCustom = option.value === 'custom';
+                return (
+                  <span className={`accent-option${isCustom ? ' accent-option--custom' : ''}`}>
+                    {!isCustom && (
+                      <span
+                        className="accent-option__swatch"
+                        style={{ backgroundColor: String(option.data.color || 'transparent') }}
+                      />
+                    )}
+                    <span className="accent-option__label">{option.label}</span>
+                    {isCustom && (
+                      <span
+                        className="accent-option__editor"
+                        onMouseDown={(event) => event.stopPropagation()}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <ColorPicker
+                          value={customHex}
+                          disabledAlpha
+                          onChangeComplete={(color) => {
+                            void updatePaths([
+                              { key: control.key, value: 'custom' },
+                              { key: customKey, value: color.toHexString().toUpperCase() },
+                            ]);
+                          }}
+                        />
+                        <Input
+                          key={customHex}
+                          className="preference-control__hex"
+                          defaultValue={customHex.toUpperCase()}
+                          maxLength={7}
+                          aria-label={tr(locale, 'Custom accent')}
+                          onPressEnter={(event) => {
+                            void updatePaths([
+                              { key: control.key, value: 'custom' },
+                              { key: customKey, value: event.currentTarget.value.trim() },
+                            ]);
+                          }}
+                          onBlur={(event) => {
+                            if (event.currentTarget.value !== customHex) {
+                              void updatePaths([
+                                { key: control.key, value: 'custom' },
+                                { key: customKey, value: event.currentTarget.value.trim() },
+                              ]);
+                            }
+                          }}
+                        />
+                      </span>
+                    )}
+                  </span>
+                );
+              }}
             />
-            {value === 'custom' && <>
-              <ColorPicker
-                value={customHex}
-                disabledAlpha
-                onChangeComplete={(color) => void updatePath(customKey, color.toHexString().toUpperCase())}
-              />
-              <Input
-                key={customHex}
-                className="preference-control__hex"
-                defaultValue={customHex.toUpperCase()}
-                maxLength={7}
-                aria-label={tr(locale, 'Custom accent')}
-                onPressEnter={(event) => void updatePath(customKey, event.currentTarget.value.trim())}
-                onBlur={(event) => event.currentTarget.value !== customHex && void updatePath(customKey, event.currentTarget.value.trim())}
-              />
-            </>}
           </div>
         </label>
       );

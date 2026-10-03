@@ -140,11 +140,6 @@ impl PreferenceControl {
                 color: Some("#38d27a".to_string()),
             },
             PreferenceOption {
-                value: serde_json::json!("windows_blue"),
-                label: "Windows blue",
-                color: Some("#0078d4".to_string()),
-            },
-            PreferenceOption {
                 value: serde_json::json!("macos_blue"),
                 label: "macOS blue",
                 color: Some("#0a84ff".to_string()),
@@ -606,6 +601,13 @@ mod tests {
             .expect("accent control");
         assert!(matches!(accent.kind, PreferenceControlKind::Accent));
         assert_eq!(accent.custom_key, Some("custom_accent_color"));
+        assert!(
+            accent
+                .options
+                .iter()
+                .all(|option| option.value != serde_json::json!("windows_blue")),
+            "Windows blue must not be offered as an accent preset"
+        );
         assert_eq!(
             accent
                 .options

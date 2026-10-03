@@ -581,79 +581,81 @@ fn render_contract_control(
                     egui::vec2(control_width, PREFERENCE_ROW_HEIGHT),
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        if let Some(color) = control
-                            .options
-                            .iter()
-                            .find(|option| option.value.as_str() == Some(selected))
-                            .and_then(|option| option.color.as_deref())
-                            .and_then(crate::config::parse_rgb_hex)
-                        {
-                            color_swatch(ui, color);
-                        }
-                        let reserve_custom = if selected == "custom" { 128.0 } else { 0.0 };
                         egui::ComboBox::from_id_salt(("preference-accent", control.key))
-                            .width((ui.available_width() - reserve_custom).max(108.0))
+                            .width(ui.available_width().max(108.0))
                             .selected_text(selected_label)
                             .show_ui(ui, |ui| {
+                                ui.set_min_width(310.0);
                                 for option in &control.options {
                                     ui.horizontal(|ui| {
-                                        if let Some(color) = option
-                                            .color
-                                            .as_deref()
-                                            .and_then(crate::config::parse_rgb_hex)
-                                        {
+                                        let is_custom = option.value.as_str() == Some("custom");
+                                        let custom_key =
+                                            control.custom_key.unwrap_or("custom_accent_color");
+                                        let mut custom_hex = value_at_path(values, custom_key)
+                                            .and_then(serde_json::Value::as_str)
+                                            .unwrap_or("#0078d4")
+                                            .to_string();
+                                        let option_color = if is_custom {
+                                            crate::config::parse_rgb_hex(&custom_hex)
+                                        } else {
+                                            option
+                                                .color
+                                                .as_deref()
+                                                .and_then(crate::config::parse_rgb_hex)
+                                        };
+                                        if !is_custom && let Some(color) = option_color {
                                             color_swatch(ui, color);
                                         }
-                                        if ui
+                                        let label_clicked = ui
                                             .selectable_label(
                                                 option.value == current,
                                                 tr(option.label),
                                             )
-                                            .clicked()
-                                        {
+                                            .clicked();
+
+                                        if is_custom {
+                                            ui.add_space(6.0);
+                                            let mut rgb = crate::config::parse_rgb_hex(&custom_hex)
+                                                .unwrap_or([0, 120, 212]);
+                                            if ui.color_edit_button_srgb(&mut rgb).changed() {
+                                                custom_hex = format!(
+                                                    "#{:02X}{:02X}{:02X}",
+                                                    rgb[0], rgb[1], rgb[2]
+                                                );
+                                                companion_changed |= set_value_at_path(
+                                                    values,
+                                                    custom_key,
+                                                    serde_json::Value::String(custom_hex.clone()),
+                                                )
+                                                .is_ok();
+                                                replacement = Some(option.value.clone());
+                                            }
+                                            let response = ui.add(
+                                                egui::TextEdit::singleline(&mut custom_hex)
+                                                    .desired_width(84.0)
+                                                    .char_limit(7)
+                                                    .hint_text("#0078D4"),
+                                            );
+                                            if response.changed() {
+                                                companion_changed |= set_value_at_path(
+                                                    values,
+                                                    custom_key,
+                                                    serde_json::Value::String(
+                                                        custom_hex.trim().to_string(),
+                                                    ),
+                                                )
+                                                .is_ok();
+                                                replacement = Some(option.value.clone());
+                                            }
+                                        }
+
+                                        if label_clicked {
                                             replacement = Some(option.value.clone());
                                             ui.close();
                                         }
                                     });
                                 }
                             });
-
-                        let custom_selected = selected == "custom"
-                            || replacement.as_ref().and_then(serde_json::Value::as_str)
-                                == Some("custom");
-                        if custom_selected {
-                            let custom_key = control.custom_key.unwrap_or("custom_accent_color");
-                            let mut hex = value_at_path(values, custom_key)
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or("#0078d4")
-                                .to_string();
-                            let mut rgb =
-                                crate::config::parse_rgb_hex(&hex).unwrap_or([0, 120, 212]);
-                            if ui.color_edit_button_srgb(&mut rgb).changed() {
-                                hex = format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
-                                companion_changed |= set_value_at_path(
-                                    values,
-                                    custom_key,
-                                    serde_json::Value::String(hex.clone()),
-                                )
-                                .is_ok();
-                            }
-                            let response = ui.add(
-                                egui::TextEdit::singleline(&mut hex)
-                                    .desired_width(88.0)
-                                    .char_limit(7)
-                                    .hint_text("#0078D4"),
-                            );
-                            if response.changed() {
-                                companion_changed |= set_value_at_path(
-                                    values,
-                                    custom_key,
-                                    serde_json::Value::String(hex.trim().to_string()),
-                                )
-                                .is_ok();
-                            }
-                        }
                     },
                 );
             });
