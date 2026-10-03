@@ -1,6 +1,19 @@
 use crate::app::PealayerApp;
 use eframe::egui;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TrackMenuState {
+    submenu_enabled: bool,
+    none_enabled: bool,
+}
+
+fn track_menu_state(media_loaded: bool, discovered_track_count: usize) -> TrackMenuState {
+    TrackMenuState {
+        submenu_enabled: media_loaded,
+        none_enabled: media_loaded && discovered_track_count > 0,
+    }
+}
+
 fn estop_button(
     ui: &mut egui::Ui,
     active: bool,
@@ -309,30 +322,38 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 });
 
                 top_menu_button(ui, app.tr("Audio"), |ui| {
-                    crate::ui::icons::submenu(ui, app.tr("Audio Track"), |ui| {
-                        if ui
-                            .selectable_label(app.current_aid == "no", app.tr("None"))
-                            .clicked()
-                        {
-                            let _ = app.mpv.set_property("aid", "no");
-                            ui.close();
-                        }
-                        for track in &app.audio_tracks {
-                            let track_id_str = track.id.to_string();
-                            let label = format_track_label(
-                                track.id,
-                                track.lang.as_deref(),
-                                track.title.as_deref(),
-                            );
+                    let state = track_menu_state(
+                        app.current_video_path.is_some(),
+                        app.audio_tracks.len(),
+                    );
+                    ui.add_enabled_ui(state.submenu_enabled, |ui| {
+                        crate::ui::icons::submenu(ui, app.tr("Audio Track"), |ui| {
+                            ui.add_enabled_ui(state.none_enabled, |ui| {
+                                if ui
+                                    .selectable_label(app.current_aid == "no", app.tr("None"))
+                                    .clicked()
+                                {
+                                    let _ = app.mpv.set_property("aid", "no");
+                                    ui.close();
+                                }
+                            });
+                            for track in &app.audio_tracks {
+                                let track_id_str = track.id.to_string();
+                                let label = format_track_label(
+                                    track.id,
+                                    track.lang.as_deref(),
+                                    track.title.as_deref(),
+                                );
 
-                            if ui
-                                .selectable_label(app.current_aid == track_id_str, label)
-                                .clicked()
-                            {
-                                let _ = app.mpv.set_property("aid", track_id_str);
-                                ui.close();
+                                if ui
+                                    .selectable_label(app.current_aid == track_id_str, label)
+                                    .clicked()
+                                {
+                                    let _ = app.mpv.set_property("aid", track_id_str);
+                                    ui.close();
+                                }
                             }
-                        }
+                        });
                     });
 
                     ui.separator();
@@ -345,30 +366,38 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                 // Subtitles menu
                 top_menu_button(ui, app.tr("Subtitles"), |ui| {
-                    crate::ui::icons::submenu(ui, app.tr("Subtitle Track"), |ui| {
-                        if ui
-                            .selectable_label(app.current_sid == "no", app.tr("None"))
-                            .clicked()
-                        {
-                            let _ = app.mpv.set_property("sid", "no");
-                            ui.close();
-                        }
-                        for track in &app.sub_tracks {
-                            let track_id_str = track.id.to_string();
-                            let label = format_track_label(
-                                track.id,
-                                track.lang.as_deref(),
-                                track.title.as_deref(),
-                            );
+                    let state = track_menu_state(
+                        app.current_video_path.is_some(),
+                        app.sub_tracks.len(),
+                    );
+                    ui.add_enabled_ui(state.submenu_enabled, |ui| {
+                        crate::ui::icons::submenu(ui, app.tr("Subtitle Track"), |ui| {
+                            ui.add_enabled_ui(state.none_enabled, |ui| {
+                                if ui
+                                    .selectable_label(app.current_sid == "no", app.tr("None"))
+                                    .clicked()
+                                {
+                                    let _ = app.mpv.set_property("sid", "no");
+                                    ui.close();
+                                }
+                            });
+                            for track in &app.sub_tracks {
+                                let track_id_str = track.id.to_string();
+                                let label = format_track_label(
+                                    track.id,
+                                    track.lang.as_deref(),
+                                    track.title.as_deref(),
+                                );
 
-                            if ui
-                                .selectable_label(app.current_sid == track_id_str, label)
-                                .clicked()
-                            {
-                                let _ = app.mpv.set_property("sid", track_id_str);
-                                ui.close();
+                                if ui
+                                    .selectable_label(app.current_sid == track_id_str, label)
+                                    .clicked()
+                                {
+                                    let _ = app.mpv.set_property("sid", track_id_str);
+                                    ui.close();
+                                }
                             }
-                        }
+                        });
                     });
 
                     ui.separator();
@@ -685,6 +714,31 @@ pub fn format_track_label(id: i64, lang: Option<&str>, title: Option<&str>) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn track_menu_is_contextual_to_media_and_discovered_tracks() {
+        assert_eq!(
+            track_menu_state(false, 0),
+            TrackMenuState {
+                submenu_enabled: false,
+                none_enabled: false,
+            }
+        );
+        assert_eq!(
+            track_menu_state(true, 0),
+            TrackMenuState {
+                submenu_enabled: true,
+                none_enabled: false,
+            }
+        );
+        assert_eq!(
+            track_menu_state(true, 1),
+            TrackMenuState {
+                submenu_enabled: true,
+                none_enabled: true,
+            }
+        );
+    }
 
     #[test]
     fn test_format_track_label_variations() {
