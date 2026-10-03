@@ -443,7 +443,23 @@ impl ControllerPushTarget {
             return false;
         };
         match method {
-            "controller.status" => capabilities.apply_status_notification(params),
+            "controller.status" => {
+                // A status push proves that the coordinator can hear the board,
+                // but it does not carry the board identity or capability
+                // catalog.  After a disconnect, publishing it as connected here
+                // creates a short, contradictory UI frame: connected=true with
+                // an empty name and zero controls.  Keep the cached board
+                // unavailable until the engine atomically installs the complete
+                // authoritative snapshot requested below.
+                if !capabilities.board_connected {
+                    if let Some(refresh) = self.catalog_refresh_requested.upgrade() {
+                        refresh.store(true, Ordering::Relaxed);
+                    }
+                    false
+                } else {
+                    capabilities.apply_status_notification(params)
+                }
+            }
             "controller.state" | "controller.event" => {
                 capabilities.apply_state_notification(params)
             }
@@ -2037,6 +2053,41 @@ mod tests {
         let capabilities = capabilities.as_ref().unwrap();
         assert!(!capabilities.board_connected);
         assert!(capabilities.status_led.is_none());
+        assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn status_push_does_not_publish_a_partial_board_during_recovery() {
+        let handle = spawn_engine();
+        *handle.hardware_capabilities.lock().unwrap() =
+            Some(crate::four_d::controller::HardwareCapabilities {
+                board_connected: false,
+                board_name: "PCController".to_string(),
+                relays: vec![crate::four_d::controller::HardwareOutput {
+                    id: 5,
+                    key: "relay.5".to_string(),
+                    name: "User relay 5".to_string(),
+                    role: "user".to_string(),
+                    control: "relay".to_string(),
+                }],
+                ..Default::default()
+            });
+        let target = handle.controller_push_target();
+
+        assert!(!target.apply_notification(
+            "controller.status",
+            &serde_json::json!({
+                "status": {
+                    "active_relays": 16,
+                    "sensors": {"voltage_mv": 12200}
+                }
+            }),
+        ));
+
+        let capabilities = handle.hardware_capabilities.lock().unwrap();
+        let capabilities = capabilities.as_ref().unwrap();
+        assert!(!capabilities.board_connected);
+        assert!(capabilities.active_relays.is_empty());
         assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
     }
 
