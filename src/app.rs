@@ -282,6 +282,9 @@ pub struct PealayerApp {
     pub(crate) hardware_control_dialog_key: Option<String>,
     pub(crate) hardware_control_name_draft: String,
     pub(crate) hardware_control_group_draft: String,
+    pub(crate) hardware_control_icon_draft: String,
+    pub(crate) hardware_control_icon_search: String,
+    pub(crate) hardware_control_color_draft: String,
     pub(crate) hardware_control_pwm_percent: f64,
     pub(crate) board_operation: Option<String>,
     pub(crate) board_operation_status: String,
@@ -301,7 +304,7 @@ pub struct PealayerApp {
     pub(crate) motion_control_mode: crate::config::MotionControlMode,
     pub(crate) held_motion_action: Option<(String, String)>,
     pub(crate) compact_hardware_controls: bool,
-    pub(crate) show_raw_relays: bool,
+    pub(crate) non_user_control_visibility: crate::config::NonUserControlVisibility,
     pub(crate) prefix_relay_identifiers: bool,
     pub(crate) live_pwm_updates: bool,
     pub(crate) hardware_actions_on_press: bool,
@@ -2666,7 +2669,7 @@ impl PealayerApp {
         cfg.fullscreen_video_background = self.fullscreen_video_background;
         cfg.motion_control_mode = self.motion_control_mode;
         cfg.compact_hardware_controls = self.compact_hardware_controls;
-        cfg.show_raw_relays = self.show_raw_relays;
+        cfg.non_user_control_visibility = self.non_user_control_visibility;
         cfg.prefix_relay_identifiers = self.prefix_relay_identifiers;
         cfg.live_pwm_updates = self.live_pwm_updates;
         cfg.hardware_actions_on_press = self.hardware_actions_on_press;
@@ -2753,7 +2756,7 @@ impl PealayerApp {
         self.fullscreen_video_background = config.fullscreen_video_background;
         self.motion_control_mode = config.motion_control_mode;
         self.compact_hardware_controls = config.compact_hardware_controls;
-        self.show_raw_relays = config.show_raw_relays;
+        self.non_user_control_visibility = config.non_user_control_visibility;
         self.prefix_relay_identifiers = config.prefix_relay_identifiers;
         self.live_pwm_updates = config.live_pwm_updates;
         self.hardware_actions_on_press = config.hardware_actions_on_press;
@@ -3262,6 +3265,9 @@ impl Default for PealayerApp {
             hardware_control_dialog_key: None,
             hardware_control_name_draft: String::new(),
             hardware_control_group_draft: String::new(),
+            hardware_control_icon_draft: String::new(),
+            hardware_control_icon_search: String::new(),
+            hardware_control_color_draft: String::new(),
             hardware_control_pwm_percent: 0.0,
             board_operation: None,
             board_operation_status: String::new(),
@@ -3281,7 +3287,7 @@ impl Default for PealayerApp {
             motion_control_mode: crate::config::MotionControlMode::Hold,
             held_motion_action: None,
             compact_hardware_controls: false,
-            show_raw_relays: true,
+            non_user_control_visibility: crate::config::NonUserControlVisibility::Dimmed,
             prefix_relay_identifiers: true,
             live_pwm_updates: true,
             hardware_actions_on_press: true,

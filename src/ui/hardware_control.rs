@@ -218,6 +218,72 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         .desired_width(ui.available_width().max(180.0)),
                 );
                 ui.end_row();
+                ui.label(app.tr("Icon"));
+                let selected_icon =
+                    crate::ui::icons::named_control_icon(&app.hardware_control_icon_draft)
+                        .unwrap_or_else(|| crate::ui::icons::control(&control.kind, ""));
+                let selected_name =
+                    crate::ui::icons::control_icon_name(&app.hardware_control_icon_draft)
+                        .unwrap_or("Use channel default");
+                egui::ComboBox::from_id_salt(("hardware-control-icon", &control.key))
+                    .width(ui.available_width().max(180.0))
+                    .selected_text(format!("{selected_icon}  {}", app.tr(selected_name)))
+                    .show_ui(ui, |ui| {
+                        let search_hint = app.tr("Search icons");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut app.hardware_control_icon_search)
+                                .hint_text(search_hint)
+                                .desired_width(ui.available_width()),
+                        );
+                        if ui
+                            .selectable_label(
+                                app.hardware_control_icon_draft.is_empty(),
+                                app.tr("Use channel default"),
+                            )
+                            .clicked()
+                        {
+                            app.hardware_control_icon_draft.clear();
+                        }
+                        ui.separator();
+                        let query = app.hardware_control_icon_search.trim().to_ascii_lowercase();
+                        for (key, label, glyph) in crate::ui::icons::CONTROL_ICON_PRESETS {
+                            if !query.is_empty()
+                                && !key.contains(&query)
+                                && !label.to_ascii_lowercase().contains(&query)
+                            {
+                                continue;
+                            }
+                            if ui
+                                .selectable_label(
+                                    app.hardware_control_icon_draft == *key,
+                                    format!("{glyph}  {}", app.tr(label)),
+                                )
+                                .clicked()
+                            {
+                                app.hardware_control_icon_draft = (*key).to_string();
+                            }
+                        }
+                    });
+                ui.end_row();
+                if matches!(control.kind.as_str(), "mosfet" | "pwm") {
+                    ui.label(app.tr("Indicator color"));
+                    ui.horizontal(|ui| {
+                        let mut rgb =
+                            crate::config::parse_rgb_hex(&app.hardware_control_color_draft)
+                                .unwrap_or([56, 210, 122]);
+                        if ui.color_edit_button_srgb(&mut rgb).changed() {
+                            app.hardware_control_color_draft =
+                                format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
+                        }
+                        ui.add(
+                            egui::TextEdit::singleline(&mut app.hardware_control_color_draft)
+                                .desired_width(92.0)
+                                .char_limit(7)
+                                .hint_text("#38D27A"),
+                        );
+                    });
+                    ui.end_row();
+                }
                 if relay_id(&control.key).is_some()
                     || matches!(control.kind.as_str(), "mosfet" | "pwm")
                 {
@@ -262,17 +328,28 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 ))
                 .clicked()
             {
-                crate::ui::layout::update_control_name(
+                let requested_name = app.hardware_control_name_draft.trim();
+                let name = if requested_name.is_empty() || requested_name == control.default_name {
+                    String::new()
+                } else {
+                    requested_name.to_string()
+                };
+                let mut fields = serde_json::json!({
+                    "name": name,
+                    "group": app.hardware_control_group_draft.trim(),
+                    "icon": app.hardware_control_icon_draft.trim(),
+                });
+                if matches!(control.kind.as_str(), "mosfet" | "pwm") {
+                    fields["color"] = serde_json::Value::String(
+                        app.hardware_control_color_draft.trim().to_string(),
+                    );
+                }
+                crate::ui::layout::update_control_presentation(
                     app,
                     &capabilities,
                     &control,
-                    app.hardware_control_name_draft.clone(),
-                );
-                crate::ui::layout::update_control_group(
-                    app,
-                    &capabilities,
-                    &control,
-                    app.hardware_control_group_draft.clone(),
+                    "presentation-manage",
+                    fields,
                 );
             }
             if ui
@@ -285,12 +362,20 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             {
                 app.hardware_control_name_draft = control.default_name.clone();
                 app.hardware_control_group_draft.clear();
-                crate::ui::layout::update_control_name(app, &capabilities, &control, String::new());
-                crate::ui::layout::update_control_group(
+                app.hardware_control_icon_draft.clear();
+                app.hardware_control_icon_search.clear();
+                app.hardware_control_color_draft.clear();
+                crate::ui::layout::update_control_presentation(
                     app,
                     &capabilities,
                     &control,
-                    String::new(),
+                    "presentation-restore",
+                    serde_json::json!({
+                        "name": "",
+                        "group": "",
+                        "icon": "",
+                        "color": "",
+                    }),
                 );
             }
         });

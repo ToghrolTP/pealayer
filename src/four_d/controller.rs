@@ -41,6 +41,7 @@ pub struct HardwareControl {
     pub default_name: String,
     pub control: String,
     pub icon: String,
+    pub color: String,
     pub group: String,
     pub hidden: bool,
     pub locked: bool,
@@ -1040,6 +1041,11 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
+                color: entry
+                    .get("color")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
                 group: entry
                     .get("group")
                     .and_then(Value::as_str)
@@ -1100,6 +1106,7 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
                     default_name: name.to_string(),
                     control: "raw-motion".to_string(),
                     icon: "seat".to_string(),
+                    color: String::new(),
                     group: "Motion / seat".to_string(),
                     hidden: false,
                     locked: false,
@@ -1139,7 +1146,7 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
     let pwm_channels = if board_connected && capability_bits & CAPABILITY_PWM != 0 {
         outputs
             .iter()
-            .filter(|(kind, output)| kind == "pwm" && output.control == "pwm-user")
+            .filter(|(kind, _)| kind == "pwm")
             .map(|(_, output)| output.clone())
             .collect()
     } else {
@@ -1551,7 +1558,7 @@ mod tests {
             }],
             "controls": [{
                 "key": "seat.a", "kind": "side", "order": 1,
-                "name": "Left pair", "control": "motion", "icon": "seat",
+                "name": "Left pair", "control": "motion", "icon": "seat", "color": "#A142F4",
                 "group": "auditorium-a", "hidden": true, "locked": true,
                 "actions": [
                     {"id": "seat.a.up", "verb": "up", "name": "Up", "icon": "arrow-up"},
@@ -1574,6 +1581,7 @@ mod tests {
         assert_eq!(control.key, "seat.a");
         assert_eq!(control.default_name, "Side A motion");
         assert_eq!(control.icon, "seat");
+        assert_eq!(control.color, "#A142F4");
         assert_eq!(control.group, "auditorium-a");
         assert!(control.hidden);
         assert!(control.locked);
@@ -1720,7 +1728,8 @@ mod tests {
         assert_eq!(parsed.board_name, "Cinema");
         assert_eq!(parsed.relays[0].name, "Left Air");
         assert!(parsed.active_relays.contains(&5));
-        assert_eq!(parsed.pwm_channels.len(), 1);
+        assert_eq!(parsed.pwm_channels.len(), 2);
+        assert!(parsed.pwm_channels.iter().any(|channel| channel.id == 15));
         assert_eq!(parsed.macros[0].name, "Thunder");
         assert_eq!(parsed.macros[0].id, 3);
         assert_eq!(parsed.macros[0].duration_ms, 250);

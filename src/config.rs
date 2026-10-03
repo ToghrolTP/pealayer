@@ -82,6 +82,15 @@ pub enum MotionControlMode {
     Hold,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NonUserControlVisibility {
+    Hidden,
+    #[default]
+    Dimmed,
+    Shown,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct StatusBarConfig {
@@ -165,8 +174,7 @@ pub struct AppConfig {
     pub fullscreen_video_background: VideoBackground,
     pub motion_control_mode: MotionControlMode,
     pub compact_hardware_controls: bool,
-    #[serde(alias = "show_raw_motion_relays")]
-    pub show_raw_relays: bool,
+    pub non_user_control_visibility: NonUserControlVisibility,
     #[serde(alias = "prefix_relay_numbers")]
     pub prefix_relay_identifiers: bool,
     pub live_pwm_updates: bool,
@@ -222,7 +230,7 @@ impl Default for AppConfig {
             fullscreen_video_background: VideoBackground::Black,
             motion_control_mode: MotionControlMode::Hold,
             compact_hardware_controls: false,
-            show_raw_relays: true,
+            non_user_control_visibility: NonUserControlVisibility::Dimmed,
             prefix_relay_identifiers: true,
             live_pwm_updates: true,
             hardware_actions_on_press: true,
@@ -1017,7 +1025,7 @@ mod tests {
                 "pause_on_hardware_disconnect": false,
                 "motion_control_mode": "hold",
                 "compact_hardware_controls": true,
-                "show_raw_relays": false,
+                "non_user_control_visibility": "hidden",
                 "prefix_relay_identifiers": false,
                 "status_bar": {
                     "media_rate": false,
@@ -1037,7 +1045,10 @@ mod tests {
         assert!(!updated.pause_on_hardware_disconnect);
         assert_eq!(updated.motion_control_mode, MotionControlMode::Hold);
         assert!(updated.compact_hardware_controls);
-        assert!(!updated.show_raw_relays);
+        assert_eq!(
+            updated.non_user_control_visibility,
+            NonUserControlVisibility::Hidden
+        );
         assert!(!updated.prefix_relay_identifiers);
         assert!(!updated.status_bar.media_rate);
         assert!(!updated.status_bar.workspace);
@@ -1063,32 +1074,21 @@ mod tests {
     }
 
     #[test]
-    fn renamed_relay_presentation_settings_migrate_from_existing_config() {
-        let mut value = serde_json::to_value(AppConfig::default()).unwrap();
-        let object = value.as_object_mut().unwrap();
-        object.remove("show_raw_relays");
-        object.remove("prefix_relay_identifiers");
-        object.insert(
-            "show_raw_motion_relays".to_string(),
-            serde_json::json!(false),
-        );
-        object.insert("prefix_relay_numbers".to_string(), serde_json::json!(false));
-
-        let migrated: AppConfig = serde_json::from_value(value).unwrap();
-        assert!(!migrated.show_raw_relays);
-        assert!(!migrated.prefix_relay_identifiers);
-
-        let serialized = serde_json::to_value(migrated).unwrap();
+    fn non_user_control_visibility_round_trips_as_one_policy() {
+        let config = AppConfig {
+            non_user_control_visibility: NonUserControlVisibility::Shown,
+            ..AppConfig::default()
+        };
+        let serialized = serde_json::to_value(config).unwrap();
         assert_eq!(
-            serialized.get("show_raw_relays"),
-            Some(&serde_json::json!(false))
+            serialized.get("non_user_control_visibility"),
+            Some(&serde_json::json!("shown"))
         );
+        let restored: AppConfig = serde_json::from_value(serialized).unwrap();
         assert_eq!(
-            serialized.get("prefix_relay_identifiers"),
-            Some(&serde_json::json!(false))
+            restored.non_user_control_visibility,
+            NonUserControlVisibility::Shown
         );
-        assert!(serialized.get("show_raw_motion_relays").is_none());
-        assert!(serialized.get("prefix_relay_numbers").is_none());
     }
 
     #[test]

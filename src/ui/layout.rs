@@ -313,6 +313,9 @@ fn draw_pwm_card_editor(
     let response = draw_pwm_editor_row_sized(ui, &mut percent, !control.locked, row_width);
     let raw = pwm_raw(percent);
     ui.data_mut(|data| data.insert_temp(value_id, raw));
+    if response.changed {
+        ui.ctx().request_repaint();
+    }
     if response.should_transmit(app.live_pwm_updates) && raw != last_sent {
         send_pwm_raw(app, channel.id, raw);
         ui.data_mut(|data| data.insert_temp(sent_id, raw));
@@ -585,6 +588,90 @@ fn control_indicator_state(
     ControlIndicatorState::Unknown
 }
 
+fn is_non_user_control(
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+) -> bool {
+    if relay_id_from_control_key(&control.key).is_some_and(|relay| relay <= 4) {
+        return true;
+    }
+    if is_pwm_control(control) {
+        return capabilities
+            .pwm_channels
+            .iter()
+            .find(|channel| channel.key == control.key)
+            .is_some_and(|channel| channel.control != "pwm-user" || channel.role != "user-output");
+    }
+    false
+}
+
+fn global_control_is_visible(
+    app: &PealayerApp,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+) -> bool {
+    !is_non_user_control(capabilities, control)
+        || app.non_user_control_visibility != crate::config::NonUserControlVisibility::Hidden
+}
+
+fn draw_non_user_visibility_choices(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    let mut changed = false;
+    for (value, icon, label, help) in [
+        (
+            crate::config::NonUserControlVisibility::Hidden,
+            crate::ui::icons::EYE_SLASH,
+            "Hide non-user controls",
+            "Keep diagnostic relays and system PWM channels out of the monitor",
+        ),
+        (
+            crate::config::NonUserControlVisibility::Dimmed,
+            crate::ui::icons::EYE,
+            "Dim non-user controls",
+            "Show diagnostic and system channels with reduced emphasis",
+        ),
+        (
+            crate::config::NonUserControlVisibility::Shown,
+            crate::ui::icons::GAUGE,
+            "Show non-user controls",
+            "Show diagnostic and system channels like user outputs",
+        ),
+    ] {
+        let option_label = format!("{icon} {}", app.tr(label));
+        let option_help = app.tr(help);
+        changed |= ui
+            .radio_value(&mut app.non_user_control_visibility, value, option_label)
+            .on_hover_text(option_help)
+            .changed();
+    }
+    if changed {
+        app.save_config();
+    }
+}
+
+fn pwm_control_intensity(
+    ui: &egui::Ui,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+) -> Option<f32> {
+    let channel = capabilities
+        .pwm_channels
+        .iter()
+        .find(|channel| channel.key == control.key)?;
+    let value_id = ui.make_persistent_id(("pwm_value", channel.id));
+    let local = ui.data_mut(|data| data.get_temp::<u16>(value_id));
+    let raw = local.or_else(|| {
+        (capabilities.telemetry.pwm_channel == Some(channel.id))
+            .then_some(capabilities.telemetry.pwm_value.unwrap_or(0))
+    })?;
+    Some(f32::from(raw.min(4095)) / 4095.0)
+}
+
+fn control_indicator_color(control: &crate::four_d::controller::HardwareControl) -> egui::Color32 {
+    crate::config::parse_rgb_hex(&control.color)
+        .map(|[red, green, blue]| egui::Color32::from_rgb(red, green, blue))
+        .unwrap_or_else(|| egui::Color32::from_rgb(34, 197, 94))
+}
+
 fn control_grid_columns(available_width: f32) -> usize {
     if available_width >= 620.0 { 2 } else { 1 }
 }
@@ -603,8 +690,9 @@ fn draw_control_indicator(
     ui: &mut egui::Ui,
     state: ControlIndicatorState,
     interactive: bool,
+    color: egui::Color32,
+    intensity: Option<f32>,
 ) -> egui::Response {
-    let green = egui::Color32::from_rgb(34, 197, 94);
     let neutral = ui
         .visuals()
         .widgets
@@ -621,9 +709,11 @@ fn draw_control_indicator(
     let center = rect.center();
     match state {
         ControlIndicatorState::Active => {
+            let intensity = intensity.unwrap_or(1.0).clamp(0.0, 1.0);
             ui.painter()
-                .circle_filled(center, 7.0, green.gamma_multiply(0.18));
-            ui.painter().circle_filled(center, 4.5, green);
+                .circle_filled(center, 7.0, color.gamma_multiply(0.10 + intensity * 0.18));
+            ui.painter()
+                .circle_filled(center, 4.5, color.gamma_multiply(0.28 + intensity * 0.72));
         }
         ControlIndicatorState::Unknown => {
             ui.painter()
@@ -638,10 +728,16 @@ fn draw_control_indicator(
                 .circle_stroke(center, 5.0, egui::Stroke::new(1.4_f32, neutral));
         }
     }
-    let status = match state {
-        ControlIndicatorState::Active => app.tr("Board reports ON"),
-        ControlIndicatorState::Unknown => app.tr("State not sampled by the board"),
-        ControlIndicatorState::Inactive => app.tr("Board reports OFF"),
+    let status = match (state, intensity) {
+        (ControlIndicatorState::Active, Some(intensity)) => {
+            format!("{} {:.1}%", app.tr("Output level"), intensity * 100.0)
+        }
+        (ControlIndicatorState::Active, None) => app.tr("Board reports ON"),
+        (ControlIndicatorState::Unknown, _) => app.tr("State not sampled by the board"),
+        (ControlIndicatorState::Inactive, Some(_)) => {
+            format!("{} 0%", app.tr("Output level"))
+        }
+        (ControlIndicatorState::Inactive, None) => app.tr("Board reports OFF"),
     };
     response.on_hover_text(if interactive {
         format!("{status} · {}", app.tr("Click to toggle"))
@@ -824,14 +920,10 @@ fn draw_board_card_context_menu(
         format!("{} {}", crate::ui::icons::EYE, app.tr("View options")),
         |ui| {
             let compact_label = app.tr("Compact controls");
-            let raw_relays_label = app.tr("Show raw relays");
             let relay_prefix_label = app.tr("Prefix relay identifiers");
             let mut changed = false;
             changed |= ui
                 .checkbox(&mut app.compact_hardware_controls, compact_label)
-                .changed();
-            changed |= ui
-                .checkbox(&mut app.show_raw_relays, raw_relays_label)
                 .changed();
             changed |= ui
                 .checkbox(&mut app.prefix_relay_identifiers, relay_prefix_label)
@@ -839,6 +931,9 @@ fn draw_board_card_context_menu(
             if changed {
                 app.save_config();
             }
+            ui.separator();
+            ui.label(egui::RichText::new(app.tr("Non-user controls")).strong());
+            draw_non_user_visibility_choices(app, ui);
         },
     );
     crate::ui::icons::submenu(
@@ -890,7 +985,7 @@ pub(crate) fn update_control_name(
     let requested_name = requested_name.trim().to_string();
     let restore_default = requested_name.is_empty()
         || (!control.default_name.is_empty() && requested_name == control.default_name);
-    request_control_presentation_update(
+    update_control_presentation(
         app,
         capabilities,
         control,
@@ -907,7 +1002,7 @@ pub(crate) fn update_control_group(
     control: &crate::four_d::controller::HardwareControl,
     requested_group: String,
 ) {
-    request_control_presentation_update(
+    update_control_presentation(
         app,
         capabilities,
         control,
@@ -930,7 +1025,7 @@ pub(crate) fn update_control_presentation_flags(
     if let Some(locked) = locked {
         fields.insert("locked".to_string(), serde_json::Value::Bool(locked));
     }
-    request_control_presentation_update(
+    update_control_presentation(
         app,
         capabilities,
         control,
@@ -939,7 +1034,7 @@ pub(crate) fn update_control_presentation_flags(
     );
 }
 
-fn request_control_presentation_update(
+pub(crate) fn update_control_presentation(
     app: &mut PealayerApp,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
@@ -1144,6 +1239,13 @@ fn open_control_dialog(
     app.hardware_control_dialog_key = Some(control.key.clone());
     app.hardware_control_name_draft = control.name.clone();
     app.hardware_control_group_draft = control.group.clone();
+    app.hardware_control_icon_draft = control.icon.clone();
+    app.hardware_control_icon_search.clear();
+    app.hardware_control_color_draft = if control.color.trim().is_empty() {
+        "#38D27A".to_string()
+    } else {
+        control.color.clone()
+    };
     app.hardware_control_pwm_percent = capabilities
         .pwm_channels
         .iter()
@@ -1270,22 +1372,11 @@ fn draw_control_context_menu(
                 }
             },
         );
-        let mut show_raw_relays = app.show_raw_relays;
-        if ui
-            .checkbox(
-                &mut show_raw_relays,
-                format!(
-                    "{} {}",
-                    crate::ui::icons::PLUG,
-                    app.tr("Show raw relay controls")
-                ),
-            )
-            .changed()
-        {
-            app.show_raw_relays = show_raw_relays;
-            app.save_config();
-            ui.close();
-        }
+        crate::ui::icons::submenu(
+            ui,
+            format!("{} {}", crate::ui::icons::EYE, app.tr("Non-user controls")),
+            |ui| draw_non_user_visibility_choices(app, ui),
+        );
     }
 
     ui.separator();
@@ -1679,7 +1770,17 @@ fn draw_compact_control_card(
     let group_edit_id = ui.make_persistent_id(("control-group-editing", control.key.as_str()));
     let group_draft_id = ui.make_persistent_id(("control-group-draft", control.key.as_str()));
     let relay_id = relay_id_from_control_key(&control.key);
-    let indicator_state = control_indicator_state(capabilities, control);
+    let indicator_intensity = pwm_control_intensity(ui, capabilities, control);
+    let indicator_state = indicator_intensity.map_or_else(
+        || control_indicator_state(capabilities, control),
+        |intensity| {
+            if intensity > 0.0 {
+                ControlIndicatorState::Active
+            } else {
+                ControlIndicatorState::Inactive
+            }
+        },
+    );
     let card_outer_width = ui.available_width();
     let card_content_width = hardware_frame_content_width(card_outer_width, 9);
     ui.set_width(card_outer_width);
@@ -1702,6 +1803,8 @@ fn draw_compact_control_card(
                     ui,
                     indicator_state,
                     relay_id.is_some() && !control.locked,
+                    control_indicator_color(control),
+                    indicator_intensity,
                 );
                 if hardware_control_activated(app, ui, &indicator)
                     && !control.locked
@@ -1961,7 +2064,17 @@ fn draw_control_card(
     let group_edit_id = ui.make_persistent_id(("control-group-editing", control.key.as_str()));
     let group_draft_id = ui.make_persistent_id(("control-group-draft", control.key.as_str()));
     let relay_id = relay_id_from_control_key(&control.key);
-    let indicator_state = control_indicator_state(capabilities, control);
+    let indicator_intensity = pwm_control_intensity(ui, capabilities, control);
+    let indicator_state = indicator_intensity.map_or_else(
+        || control_indicator_state(capabilities, control),
+        |intensity| {
+            if intensity > 0.0 {
+                ControlIndicatorState::Active
+            } else {
+                ControlIndicatorState::Inactive
+            }
+        },
+    );
     let card_outer_width = ui.available_width();
     let card_content_width = hardware_frame_content_width(card_outer_width, 12);
     ui.set_width(card_outer_width);
@@ -1985,6 +2098,8 @@ fn draw_control_card(
                     ui,
                     indicator_state,
                     relay_id.is_some() && !control.locked,
+                    control_indicator_color(control),
+                    indicator_intensity,
                 );
                 if hardware_control_activated(app, ui, &indicator)
                     && !control.locked
@@ -2524,7 +2639,11 @@ fn draw_control_card_grid(
         ui.add_space(4.0);
     }
     let mut groups: Vec<(String, Vec<&crate::four_d::controller::HardwareControl>)> = Vec::new();
-    for control in controls.iter().filter(|control| !control.hidden) {
+    for control in controls
+        .iter()
+        .filter(|control| !control.hidden)
+        .filter(|control| global_control_is_visible(app, capabilities, control))
+    {
         let group = control.group.trim();
         if let Some((_, members)) = groups.iter_mut().find(|(name, _)| name == group) {
             members.push(control);
@@ -2544,7 +2663,17 @@ fn draw_control_card_grid(
                 .iter()
                 .all(|control| relay_id_from_control_key(&control.key).is_some())
         {
-            draw_compact_relay_group(app, ui, capabilities, &group, &members);
+            let dimmed = app.non_user_control_visibility
+                == crate::config::NonUserControlVisibility::Dimmed
+                && members
+                    .iter()
+                    .all(|control| is_non_user_control(capabilities, control));
+            ui.scope(|ui| {
+                if dimmed {
+                    ui.set_opacity(0.58);
+                }
+                draw_compact_relay_group(app, ui, capabilities, &group, &members);
+            });
             ui.add_space(6.0);
             continue;
         }
@@ -2564,7 +2693,15 @@ fn draw_control_card_grid(
         for row in members.chunks(columns) {
             ui.columns(columns, |uis| {
                 for (index, control) in row.iter().enumerate() {
-                    draw_control_card(app, &mut uis[index], capabilities, control);
+                    let dimmed = app.non_user_control_visibility
+                        == crate::config::NonUserControlVisibility::Dimmed
+                        && is_non_user_control(capabilities, control);
+                    uis[index].scope(|ui| {
+                        if dimmed {
+                            ui.set_opacity(0.58);
+                        }
+                        draw_control_card(app, ui, capabilities, control);
+                    });
                 }
             });
             ui.add_space(8.0);
@@ -2634,13 +2771,83 @@ mod timeline_row_tests {
             control_presentation_update_params(
                 &capabilities,
                 &control,
-                serde_json::json!({"name": "VIP Seat A"}),
+                serde_json::json!({
+                    "name": "VIP Seat A",
+                    "icon": "seat",
+                    "color": "#A142F4",
+                }),
             ),
             serde_json::json!({
                 "key": "seat.a",
                 "name": "VIP Seat A",
+                "icon": "seat",
+                "color": "#A142F4",
                 "expected_revision": "profile-revision",
             })
+        );
+    }
+
+    #[test]
+    fn non_user_controls_include_raw_relays_and_role_specific_pwm() {
+        let capabilities = crate::four_d::controller::HardwareCapabilities {
+            pwm_channels: vec![crate::four_d::controller::HardwareOutput {
+                id: 11,
+                key: "pwm.11".to_string(),
+                name: "Enclosure light".to_string(),
+                role: "illumination".to_string(),
+                control: "role-specific".to_string(),
+            }],
+            ..Default::default()
+        };
+        let raw_relay = crate::four_d::controller::HardwareControl {
+            key: "relay.1".to_string(),
+            kind: "relay".to_string(),
+            ..Default::default()
+        };
+        let enclosure = crate::four_d::controller::HardwareControl {
+            key: "pwm.11".to_string(),
+            kind: "mosfet".to_string(),
+            ..Default::default()
+        };
+        let user_pwm = crate::four_d::controller::HardwareControl {
+            key: "pwm.0".to_string(),
+            kind: "mosfet".to_string(),
+            ..Default::default()
+        };
+        assert!(is_non_user_control(&capabilities, &raw_relay));
+        assert!(is_non_user_control(&capabilities, &enclosure));
+        assert!(!is_non_user_control(&capabilities, &user_pwm));
+    }
+
+    #[test]
+    fn pwm_indicator_reads_the_live_slider_value_and_custom_color() {
+        let context = egui::Context::default();
+        let capabilities = crate::four_d::controller::HardwareCapabilities {
+            pwm_channels: vec![crate::four_d::controller::HardwareOutput {
+                id: 11,
+                key: "pwm.11".to_string(),
+                name: "Enclosure light".to_string(),
+                role: "illumination".to_string(),
+                control: "role-specific".to_string(),
+            }],
+            ..Default::default()
+        };
+        let control = crate::four_d::controller::HardwareControl {
+            key: "pwm.11".to_string(),
+            kind: "mosfet".to_string(),
+            color: "#A142F4".to_string(),
+            ..Default::default()
+        };
+        let sampled = std::cell::Cell::new(None);
+        let _ = context.run_ui(Default::default(), |ui| {
+            let value_id = ui.make_persistent_id(("pwm_value", 11_u8));
+            ui.data_mut(|data| data.insert_temp(value_id, 2048_u16));
+            sampled.set(pwm_control_intensity(ui, &capabilities, &control));
+        });
+        assert!((sampled.get().unwrap() - 0.5).abs() < 0.001);
+        assert_eq!(
+            control_indicator_color(&control),
+            egui::Color32::from_rgb(0xA1, 0x42, 0xF4)
         );
     }
 
@@ -5211,9 +5418,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                             if !capabilities.relays.is_empty() {
                                 let relay_controls = capabilities.relays.iter()
-                                    .filter(|relay| {
-                                        self.app.show_raw_relays || relay.id > 4
-                                    })
                                     .map(|relay| {
                                         capabilities.controls.iter()
                                             .find(|control| control.key == relay.key)
@@ -5232,6 +5436,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 ..Default::default()
                                             })
                                     })
+                                    .filter(|control| global_control_is_visible(self.app, &capabilities, control))
                                     .collect::<Vec<_>>();
                                 if !relay_controls.is_empty() {
                                     let title = format!(
@@ -5273,6 +5478,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 ..Default::default()
                                             })
                                     })
+                                    .filter(|control| global_control_is_visible(self.app, &capabilities, control))
                                     .collect::<Vec<_>>();
                                 let title = format!(
                                     "{} ({})",

@@ -378,11 +378,16 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Motion controls",
             "Use one-row compact hardware controls",
         ),
-        PreferenceControl::boolean(
-            "show_raw_relays",
+        PreferenceControl::select(
+            "non_user_control_visibility",
             "hardware",
-            "Motion controls",
-            "Show raw relay controls below seat controls",
+            "Hardware channels",
+            "Non-user and diagnostic controls",
+            &[
+                ("hidden", "Hide unless explicitly requested"),
+                ("dimmed", "Show with reduced emphasis"),
+                ("shown", "Show like user controls"),
+            ],
         ),
         PreferenceControl::boolean(
             "prefix_relay_identifiers",
@@ -602,6 +607,24 @@ mod tests {
                 .iter()
                 .all(|control| control.key != "custom_accent_color"),
             "the custom hex value belongs inline with the accent picker"
+        );
+    }
+
+    #[test]
+    fn non_user_controls_have_one_explicit_three_state_policy() {
+        let controls = preference_controls(&crate::config::AppConfig::default());
+        let visibility = controls
+            .iter()
+            .find(|control| control.key == "non_user_control_visibility")
+            .expect("non-user control visibility preference");
+        assert!(matches!(visibility.kind, PreferenceControlKind::Select));
+        assert_eq!(
+            visibility
+                .options
+                .iter()
+                .map(|option| option.value.as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["hidden", "dimmed", "shown"]
         );
     }
 }

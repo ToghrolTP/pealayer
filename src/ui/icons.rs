@@ -3,18 +3,56 @@
 
 pub use egui_phosphor::regular::{
     APP_WINDOW, ARROW_CLOCKWISE, ARROW_COUNTER_CLOCKWISE, ARROW_DOWN, ARROW_SQUARE_OUT, ARROW_UP,
-    ARROWS_IN, ARROWS_OUT, BROADCAST, CARET_DOWN, CARET_RIGHT, CHECK, CHECK_SQUARE, CIRCUITRY,
-    CLIPBOARD, CLOCK, CLOCK_COUNTER_CLOCKWISE, COPY, CPU, DOT_OUTLINE, DOTS_THREE, ERASER, EYE,
-    EYE_SLASH, FAST_FORWARD, FILE_VIDEO, FLOPPY_DISK, FOLDER_OPEN, FRAME_CORNERS, GAUGE, GEAR,
-    GLOBE, HOURGLASS_MEDIUM, INFO, KEYBOARD, LIGHTBULB, LIGHTNING, LINK, LINK_SIMPLE, LIST_CHECKS,
-    LOCK, MAGNIFYING_GLASS, MONITOR_PLAY, MUSIC_NOTE, PALETTE, PAPER_PLANE_TILT, PAUSE,
-    PENCIL_SIMPLE, PLAY, PLUG, PLUS, POWER, PUSH_PIN, PUSH_PIN_SLASH, RADIO, RECORD, REWIND,
-    SCISSORS, SEAT, SELECTION_ALL, SKIP_BACK, SKIP_FORWARD, SLIDERS_HORIZONTAL, SPARKLE,
-    SPEAKER_HIGH, SPEAKER_NONE, SPEAKER_SLASH, STOP_CIRCLE, SUBTITLES, TABS, TEXT_ALIGN_LEFT,
-    TRASH, WARNING, WAVEFORM, X,
+    ARROWS_IN, ARROWS_OUT, BELL, BROADCAST, CAR, CARET_DOWN, CARET_RIGHT, CHECK, CHECK_SQUARE,
+    CIRCUITRY, CLIPBOARD, CLOCK, CLOCK_COUNTER_CLOCKWISE, COPY, CPU, DOOR, DOT_OUTLINE, DOTS_THREE,
+    ERASER, EYE, EYE_SLASH, FAN, FAST_FORWARD, FILE_VIDEO, FIRE, FLOPPY_DISK, FOLDER_OPEN,
+    FRAME_CORNERS, GAUGE, GEAR, GLOBE, HOURGLASS_MEDIUM, INFO, KEYBOARD, LAMP, LIGHTBULB,
+    LIGHTNING, LINK, LINK_SIMPLE, LIST_CHECKS, LOCK, MAGNIFYING_GLASS, MONITOR_PLAY, MUSIC_NOTE,
+    PALETTE, PAPER_PLANE_TILT, PAUSE, PENCIL_SIMPLE, PLAY, PLUG, PLUS, POWER, PUSH_PIN,
+    PUSH_PIN_SLASH, RADIO, RECORD, REWIND, SCISSORS, SEAT, SELECTION_ALL, SKIP_BACK, SKIP_FORWARD,
+    SLIDERS_HORIZONTAL, SNOWFLAKE, SPARKLE, SPEAKER_HIGH, SPEAKER_NONE, SPEAKER_SLASH, STOP_CIRCLE,
+    SUBTITLES, TABS, TEXT_ALIGN_LEFT, THERMOMETER, TRASH, WARNING, WAVEFORM, X,
 };
 
+pub const CONTROL_ICON_PRESETS: &[(&str, &str, &str)] = &[
+    ("plug", "Plug", PLUG),
+    ("lightning", "Lightning", LIGHTNING),
+    ("lightbulb", "Light bulb", LIGHTBULB),
+    ("lamp", "Lamp", LAMP),
+    ("fan", "Fan", FAN),
+    ("power", "Power", POWER),
+    ("speaker", "Speaker", SPEAKER_HIGH),
+    ("radio", "Radio", RADIO),
+    ("seat", "Seat", SEAT),
+    ("car", "Car", CAR),
+    ("door", "Door", DOOR),
+    ("bell", "Bell", BELL),
+    ("fire", "Fire", FIRE),
+    ("snowflake", "Snowflake", SNOWFLAKE),
+    ("thermometer", "Thermometer", THERMOMETER),
+    ("waveform", "Waveform", WAVEFORM),
+    ("circuitry", "Circuitry", CIRCUITRY),
+    ("gear", "Gear", GEAR),
+];
+
+pub fn named_control_icon(name: &str) -> Option<&'static str> {
+    CONTROL_ICON_PRESETS
+        .iter()
+        .find(|(key, _, _)| key.eq_ignore_ascii_case(name.trim()))
+        .map(|(_, _, glyph)| *glyph)
+}
+
+pub fn control_icon_name(name: &str) -> Option<&'static str> {
+    CONTROL_ICON_PRESETS
+        .iter()
+        .find(|(key, _, _)| key.eq_ignore_ascii_case(name.trim()))
+        .map(|(_, label, _)| *label)
+}
+
 pub fn control(kind: &str, advertised: &str) -> &'static str {
+    if let Some(icon) = named_control_icon(advertised) {
+        return icon;
+    }
     match advertised.trim().to_ascii_lowercase().as_str() {
         "armchair" | "seat" => SEAT,
         "lightbulb" | "light" => LIGHTBULB,
@@ -71,4 +109,22 @@ pub fn submenu(
 ) {
     let button = eframe::egui::Button::new(label).right_text(CARET_RIGHT);
     let _ = eframe::egui::containers::menu::SubMenuButton::from_button(button).ui(ui, add_contents);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn control_icon_presets_are_searchable_by_stable_name() {
+        assert_eq!(named_control_icon("  LAMP "), Some(LAMP));
+        assert_eq!(control_icon_name("seat"), Some("Seat"));
+        assert_eq!(named_control_icon("not-a-preset"), None);
+    }
+
+    #[test]
+    fn control_icon_uses_kind_fallback_for_unknown_saved_names() {
+        assert_eq!(control("relay", "custom-future-icon"), PLUG);
+        assert_eq!(control("mosfet", ""), LIGHTBULB);
+    }
 }
