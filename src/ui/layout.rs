@@ -52,6 +52,10 @@ const EFFECT_CARD_STROKE_WIDTH: f32 = 1.0;
 const EFFECT_CARD_ACTION_GUTTER: f32 = 100.0;
 const EFFECT_CARD_ACTION_BUTTONS_WIDTH: f32 = 72.0;
 const HARDWARE_CARD_STROKE_WIDTH: f32 = 1.0;
+const BOARD_IDENTITY_TWO_LINE_HEIGHT: f32 = 42.0;
+const BOARD_IDENTITY_TITLE_HEIGHT: f32 = 20.0;
+const BOARD_IDENTITY_SUBTITLE_HEIGHT: f32 = 15.0;
+const BOARD_IDENTITY_LINE_GAP: f32 = 0.0;
 const EFFECT_CONTROLS_RIGHT_GUTTER: f32 = 8.0;
 const EFFECT_CONTROLS_CARD_MARGIN: i8 = 10;
 
@@ -3927,6 +3931,17 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn board_identity_multiline_block_is_tight_and_vertically_centered() {
+        let text_height =
+            BOARD_IDENTITY_TITLE_HEIGHT + BOARD_IDENTITY_LINE_GAP + BOARD_IDENTITY_SUBTITLE_HEIGHT;
+        let top_inset = (BOARD_IDENTITY_TWO_LINE_HEIGHT - text_height) / 2.0;
+        let bottom_inset = BOARD_IDENTITY_TWO_LINE_HEIGHT - text_height - top_inset;
+        assert_eq!(BOARD_IDENTITY_LINE_GAP, 0.0);
+        assert!(top_inset > 0.0);
+        assert_eq!(top_inset, bottom_inset);
+    }
+
+    #[test]
     fn board_card_uses_distinct_profile_as_a_muted_second_line() {
         let mut capabilities = crate::four_d::controller::HardwareCapabilities {
             board_name: "Cinema controller".to_string(),
@@ -6983,7 +6998,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     configure_hardware_card_controls(ui);
                                     ui.set_width(hardware_frame_content_width(board_card_width, 14));
                                     let row_height = if board_card_subtitle.is_some() {
-                                        42.0
+                                        BOARD_IDENTITY_TWO_LINE_HEIGHT
                                     } else {
                                         28.0
                                     };
@@ -7011,11 +7026,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     egui::vec2(identity_width, row_height),
                                                     egui::Layout::top_down(egui::Align::Min),
                                                     |ui| {
-                                                        ui.spacing_mut().item_spacing.y = 1.0;
+                                                        ui.spacing_mut().item_spacing.y =
+                                                            BOARD_IDENTITY_LINE_GAP;
+                                                        if board_card_subtitle.is_some() {
+                                                            let text_height =
+                                                                BOARD_IDENTITY_TITLE_HEIGHT
+                                                                    + BOARD_IDENTITY_LINE_GAP
+                                                                    + BOARD_IDENTITY_SUBTITLE_HEIGHT;
+                                                            ui.add_space(
+                                                                ((row_height - text_height) / 2.0)
+                                                                    .max(0.0),
+                                                            );
+                                                        }
                                                         let title_height = if board_card_subtitle
                                                             .is_some()
                                                         {
-                                                            23.0
+                                                            BOARD_IDENTITY_TITLE_HEIGHT
                                                         } else {
                                                             row_height
                                                         };
@@ -7036,7 +7062,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                             board_card_subtitle.as_deref()
                                                         {
                                                             ui.add_sized(
-                                                                [identity_width, 18.0],
+                                                                [
+                                                                    identity_width,
+                                                                    BOARD_IDENTITY_SUBTITLE_HEIGHT,
+                                                                ],
                                                                 egui::Label::new(
                                                                     egui::RichText::new(subtitle)
                                                                         .small()
