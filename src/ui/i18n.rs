@@ -169,6 +169,15 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Hardware Monitor Dashboard" => "داشبورد پایش سخت‌افزار",
         "Hardware control" => "کنترل سخت‌افزار",
         "Manage..." => "مدیریت…",
+        "Manage channels" => "مدیریت کانال‌ها",
+        "All board channels" => "همهٔ کانال‌های برد",
+        "Order" => "ترتیب",
+        "Move up" => "انتقال به بالا",
+        "Move down" => "انتقال به پایین",
+        "Other controls" => "کنترل‌های دیگر",
+        "Rename, control, and reorder every advertised board channel" => {
+            "تغییر نام، کنترل و مرتب‌سازی همهٔ کانال‌های اعلام‌شدهٔ برد"
+        }
         "Presentation" => "نحوهٔ نمایش",
         "Save presentation" => "ذخیرهٔ نحوهٔ نمایش",
         "Restore defaults" => "بازگردانی پیش‌فرض‌ها",
@@ -385,6 +394,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Motion / seat controls" => "کنترل حرکت / صندلی",
         "Button behavior" => "رفتار دکمه",
         "Hold" => "نگه‌داشتن",
+        "Push" => "فشاری",
         "Toggle" => "تغییر حالت",
         "Move only while the button is held" => "حرکت فقط هنگام نگه‌داشتن دکمه",
         "Keep moving until Stop is pressed" => "ادامهٔ حرکت تا فشردن توقف",

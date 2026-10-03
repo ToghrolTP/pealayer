@@ -204,6 +204,10 @@ pub enum InteropCommand {
         channel: u8,
         percent: f64,
     },
+    UpdateHardwarePresentation {
+        key: String,
+        fields: Value,
+    },
     ConfigureAddressableStrip {
         pixels: u16,
     },
@@ -261,6 +265,16 @@ impl InteropCommand {
                     }) =>
             {
                 Err("hardware action ID is invalid".to_string())
+            }
+            Self::UpdateHardwarePresentation { key, fields }
+                if key.trim().is_empty()
+                    || key.len() > 128
+                    || !key.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+                    })
+                    || !fields.is_object() =>
+            {
+                Err("hardware presentation update is invalid".to_string())
             }
             Self::PressFrontPanelKey { key }
                 if !matches!(key.to_ascii_uppercase().as_str(), "K1" | "K2" | "K3" | "K4") =>
@@ -836,6 +850,16 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
             Some(InteropCommand::SetHardwarePwm {
                 channel,
                 percent: number(&["percent", "value"])?,
+            })
+        }
+        "hardware.presentation.update" | "pealayer.hardware.presentation.update" => {
+            Some(InteropCommand::UpdateHardwarePresentation {
+                key: string(&["key", "channel"])?,
+                fields: request
+                    .params
+                    .get("fields")
+                    .cloned()
+                    .ok_or_else(|| "missing hardware presentation fields".to_string())?,
             })
         }
         "hardware.strip.configure" | "pealayer.hardware.strip.configure" => {
@@ -2135,6 +2159,19 @@ mod tests {
         assert!(matches!(
             command_from_json_rpc(&live_request).unwrap(),
             Some(InteropCommand::Open { target }) if target == "rtsp://camera.invalid/live"
+        ));
+    }
+
+    #[test]
+    fn parses_hardware_presentation_updates_for_web_channel_management() {
+        let request: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"channel","method":"hardware.presentation.update","params":{"key":"relay.5","fields":{"name":"Seat fan","order":2}}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&request).unwrap(),
+            Some(InteropCommand::UpdateHardwarePresentation { key, fields })
+                if key == "relay.5" && fields["name"] == "Seat fan" && fields["order"] == 2
         ));
     }
 

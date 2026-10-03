@@ -90,6 +90,11 @@ $libmpvRuntime = @('libmpv-2.dll', 'mpv-2.dll') |
 if (-not $libmpvRuntime) {
     throw "Required libmpv runtime is missing. Expected libmpv-2.dll or mpv-2.dll in $libmpvDirectory"
 }
+if ($libmpvDirectory -ne $libmpvSourceDirectory) {
+    $stagedRuntime = Join-Path $libmpvDirectory 'libmpv-2.dll'
+    Copy-Item -LiteralPath $libmpvRuntime -Destination $stagedRuntime -Force
+    $libmpvRuntime = $stagedRuntime
+}
 $env:Path = $libmpvDirectory + ';' + $env:Path
 $upxCommand = Get-Command upx.exe -ErrorAction SilentlyContinue
 $upxPath = if ($upxCommand) { $upxCommand.Source } else { $null }

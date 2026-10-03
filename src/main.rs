@@ -521,6 +521,7 @@ fn main() -> eframe::Result {
                 show_board_info_dialog: false,
                 board_info_tab: 0,
                 board_name_draft: String::new(),
+                show_hardware_channels_dialog: false,
                 hardware_control_dialog_key: None,
                 hardware_control_name_draft: String::new(),
                 hardware_control_group_draft: String::new(),

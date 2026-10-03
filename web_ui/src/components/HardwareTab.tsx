@@ -5,8 +5,13 @@ import {
   Card,
   ColorPicker,
   Collapse,
+  Divider,
+  Dropdown,
   Empty,
+  Input,
   InputNumber,
+  Modal,
+  Segmented,
   Slider,
   Space,
   Tag,
@@ -15,13 +20,24 @@ import {
 } from 'antd';
 import {
   AlertOutlined,
+  ArrowLeftOutlined,
+  ArrowDownOutlined,
+  ArrowUpOutlined,
   BulbOutlined,
   DashboardOutlined,
   DesktopOutlined,
   DisconnectOutlined,
   ExperimentOutlined,
+  MenuOutlined,
+  MoreOutlined,
+  EyeInvisibleOutlined,
+  EyeOutlined,
+  LockOutlined,
+  PushpinOutlined,
+  UnlockOutlined,
   PoweroffOutlined,
   ThunderboltOutlined,
+  ToolOutlined,
   UsbOutlined,
 } from '@ant-design/icons';
 import type { PlayerState } from './RemoteControlTab';
@@ -57,6 +73,17 @@ const controlCaption = (
   return control.kind.replace(/-/g, ' ');
 };
 
+const controlIdentity = (
+  control: NonNullable<PlayerState['hardware_details']>['controls'][number],
+) => {
+  if (/relay/i.test(control.kind) && control.channel != null) return `R${control.channel}`;
+  if (/pwm|mosfet/i.test(control.kind) && control.channel != null) return `CH${control.channel}`;
+  if (control.key === 'seat.a') return 'A';
+  if (control.key === 'seat.b') return 'B';
+  const parts = control.key.split('.');
+  return parts[parts.length - 1]?.toUpperCase() || control.key;
+};
+
 const telemetryValue = (value: number | boolean | null | undefined, unit = '') => {
   if (value === null || value === undefined) return '—';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
@@ -69,6 +96,33 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
   const [stripColor, setStripColor] = useState('#38D27A');
   const [stripBrightness, setStripBrightness] = useState(255);
   const [pwmDrafts, setPwmDrafts] = useState<Record<string, number>>({});
+  const [managerOpen, setManagerOpen] = useState(false);
+  const [detailKey, setDetailKey] = useState<string | null>(null);
+  const [renamingKey, setRenamingKey] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [dropKey, setDropKey] = useState<string | null>(null);
+  const controls = useMemo(
+    () => [...(details?.controls ?? [])].sort((left, right) => left.order - right.order || left.key.localeCompare(right.key)),
+    [details],
+  );
+  const updatePresentation = (key: string, fields: Record<string, unknown>) =>
+    sendCmd('hardware.presentation.update', { key, fields });
+  const moveControl = (key: string, delta: number) => {
+    const source = controls.find((control) => control.key === key);
+    if (!source) return;
+    const peers = controls.filter((control) => control.kind === source.kind);
+    const index = peers.findIndex((control) => control.key === key);
+    const next = Math.max(0, Math.min(peers.length - 1, index + delta));
+    if (index !== next) updatePresentation(key, { order: next });
+  };
+  const dropControl = (sourceKey: string, targetKey: string) => {
+    const source = controls.find((control) => control.key === sourceKey);
+    const target = controls.find((control) => control.key === targetKey);
+    if (!source || !target || source.kind !== target.kind || source.key === target.key) return;
+    const peers = controls.filter((control) => control.kind === source.kind);
+    updatePresentation(sourceKey, { order: peers.findIndex((control) => control.key === targetKey) });
+  };
   const grouped = useMemo(() => {
     const result = new Map<string, { label: string; order: number; controls: NonNullable<typeof details>['controls'] }>();
     for (const control of details?.controls ?? []) {
@@ -85,8 +139,43 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
         {section.controls.sort((left, right) => left.order - right.order).map((control) => {
           const isPwm = /pwm|mosfet/i.test(control.kind);
           const value = pwmDrafts[control.key] ?? control.percent ?? 0;
-          return <article className={`hardware-control ${control.locked ? 'is-locked' : ''}`} key={control.key}>
+          return <article
+            className={`hardware-control ${control.locked ? 'is-locked' : ''} ${dragKey === control.key ? 'is-dragging' : ''} ${dropKey === control.key ? 'is-drop-target' : ''}`}
+            key={control.key}
+            onDragOver={(event) => {
+              if (dragKey && dragKey !== control.key) {
+                event.preventDefault();
+                setDropKey(control.key);
+              }
+            }}
+            onDragLeave={() => setDropKey((current) => current === control.key ? null : current)}
+            onDrop={(event) => {
+              event.preventDefault();
+              if (dragKey) dropControl(dragKey, control.key);
+              setDragKey(null);
+              setDropKey(null);
+            }}
+          >
             <span className="hardware-control__icon">{controlIcon(control.kind)}</span>
+            <span
+              className="hardware-control__drag"
+              draggable
+              title={tr(locale, 'Drag to reorder channel')}
+              onDragStart={(event) => {
+                const card = event.currentTarget.closest<HTMLElement>('.hardware-control');
+                if (card) {
+                  const rect = card.getBoundingClientRect();
+                  event.dataTransfer.setDragImage(card, event.clientX - rect.left, event.clientY - rect.top);
+                }
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', control.key);
+                setDragKey(control.key);
+              }}
+              onDragEnd={() => {
+                setDragKey(null);
+                setDropKey(null);
+              }}
+            ><MenuOutlined /></span>
             <div className="hardware-control__identity">
               <strong>{control.name || control.default_name}</strong>
               <span>{controlCaption(control, locale)}</span>
@@ -125,7 +214,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
         })}
       </div>,
     }));
-  }, [details, locale, pwmDrafts, sendCmd, state.estop_active, state.hardware_connected]);
+  }, [details, locale, pwmDrafts, sendCmd, state.estop_active, state.hardware_connected, dragKey, dropKey, controls]);
 
   if (!details || !state.controller_connected) {
     return <section className="surface-page hardware-page">
@@ -151,6 +240,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
         </Typography.Text>
       </div>
       <Space>
+        <Button icon={<ToolOutlined />} onClick={() => setManagerOpen(true)}>{tr(locale, 'Manage channels')}</Button>
         <Tag color={state.hardware_connected ? 'success' : 'warning'}>{state.hardware_connected ? tr(locale, 'Connected') : tr(locale, 'Board unavailable')}</Tag>
         <Button
           danger
@@ -160,6 +250,161 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
         >{tr(locale, 'E-STOP')}</Button>
       </Space>
     </header>
+
+    <Modal
+      className="channel-manager-modal"
+      title={detailKey
+        ? <Space><Button type="text" size="small" icon={<ArrowLeftOutlined />} aria-label={tr(locale, 'All board channels')} onClick={() => setDetailKey(null)} /><ToolOutlined />{tr(locale, 'Manage')}</Space>
+        : <Space><ToolOutlined />{tr(locale, 'Manage channels')}</Space>}
+      open={managerOpen}
+      width={860}
+      footer={null}
+      onCancel={() => {
+        setDetailKey(null);
+        setManagerOpen(false);
+      }}
+    >
+      {detailKey ? controls.filter((control) => control.key === detailKey).map((control) => <div className="channel-detail" key={control.key}>
+        <div className="channel-detail__identity"><span>{controlIcon(control.kind)}</span><div><strong>{control.name || control.default_name}</strong><code>{controlIdentity(control)}</code></div></div>
+        <label><span>{tr(locale, 'Name')}</span><Input defaultValue={control.name || control.default_name} onPressEnter={(event) => updatePresentation(control.key, { name: event.currentTarget.value.trim() })} /></label>
+        <dl className="detail-list">
+          <div><dt>{tr(locale, 'Order')}</dt><dd>{control.order + 1}</dd></div>
+          <div><dt>{tr(locale, 'Type')}</dt><dd>{control.kind}</dd></div>
+          <div><dt>{tr(locale, 'Control')}</dt><dd>{control.control}</dd></div>
+          <div><dt>{tr(locale, 'Stable key')}</dt><dd><code>{control.key}</code></dd></div>
+        </dl>
+        <Space wrap>{control.actions.map((action) => <Button key={action.id} disabled={control.locked || state.estop_active} onClick={() => sendCmd('hardware.action.invoke', { action_id: action.id })}>{action.name || action.verb}</Button>)}</Space>
+      </div>) : <>
+        <div className="channel-manager__summary">
+          <strong>{details.board_name || tr(locale, 'PCController')}</strong>
+          <Typography.Text type="secondary">{tr(locale, 'All board channels')} · {controls.length}</Typography.Text>
+        </div>
+        <div className="channel-manager__list">
+          {[...new Set(controls.map((control) => semanticSection(control.kind, locale).key))].map((sectionKey) => {
+            const peers = controls.filter((control) => semanticSection(control.kind, locale).key === sectionKey);
+            const kind = peers[0]?.kind ?? sectionKey;
+            return <section className="channel-manager__group" key={sectionKey}>
+              <header>
+                <span>{controlIcon(kind)}</span><strong>{semanticSection(kind, locale).label}</strong><Tag>{peers.length}</Tag>
+                {sectionKey === 'motion' && <Segmented
+                  size="small"
+                  value={details.motion_control_mode ?? 'hold'}
+                  options={[
+                    { label: tr(locale, 'Push'), value: 'hold' },
+                    { label: tr(locale, 'Toggle'), value: 'toggle' },
+                  ]}
+                  onChange={(value) => sendCmd('pealayer.config.update', { motion_control_mode: value })}
+                />}
+              </header>
+              {peers.map((control, index) => {
+                const active = Boolean(control.active);
+                const onAction = control.actions.find((action) => action.verb.toLowerCase() === 'on');
+                const offAction = control.actions.find((action) => action.verb.toLowerCase() === 'off');
+                const liveActions = onAction && offAction
+                  ? [onAction, offAction]
+                  : control.actions.filter((action) => action.verb.toLowerCase() !== 'stop').slice(0, 2);
+                return <React.Fragment key={control.key}>
+                  <div
+                    className={`channel-manager__row ${control.hidden ? 'is-hidden' : ''} ${dragKey === control.key ? 'is-dragging' : ''} ${dropKey === control.key ? 'is-drop-target' : ''}`}
+                    onDragOver={(event) => {
+                      if (dragKey && dragKey !== control.key) {
+                        event.preventDefault();
+                        setDropKey(control.key);
+                      }
+                    }}
+                    onDragLeave={() => setDropKey((current) => current === control.key ? null : current)}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      if (dragKey) dropControl(dragKey, control.key);
+                      setDragKey(null);
+                      setDropKey(null);
+                    }}
+                  >
+                    <span className={`hardware-control__indicator ${active ? 'is-on' : ''}`} />
+                    <span
+                      className="channel-manager__drag"
+                      draggable
+                      title={tr(locale, 'Drag to reorder channel')}
+                      onDragStart={(event) => {
+                        const row = event.currentTarget.closest<HTMLElement>('.channel-manager__row');
+                        if (row) {
+                          const rect = row.getBoundingClientRect();
+                          event.dataTransfer.setDragImage(row, event.clientX - rect.left, event.clientY - rect.top);
+                        }
+                        event.dataTransfer.effectAllowed = 'move';
+                        event.dataTransfer.setData('text/plain', control.key);
+                        setDragKey(control.key);
+                      }}
+                      onDragEnd={() => {
+                        setDragKey(null);
+                        setDropKey(null);
+                      }}
+                    ><MenuOutlined /></span>
+                    <span className="channel-manager__identity" title={control.key}>{controlIdentity(control)}</span>
+                    {renamingKey === control.key ? <Input
+                      autoFocus
+                      size="small"
+                      value={renameDraft}
+                      onChange={(event) => setRenameDraft(event.target.value)}
+                      onPressEnter={() => {
+                        updatePresentation(control.key, { name: renameDraft.trim() });
+                        setRenamingKey(null);
+                      }}
+                      onBlur={() => {
+                        if (renameDraft.trim() && renameDraft.trim() !== control.name) {
+                          updatePresentation(control.key, { name: renameDraft.trim() });
+                        }
+                        setRenamingKey(null);
+                      }}
+                    /> : <button
+                      type="button"
+                      className="channel-manager__name"
+                      onClick={() => {
+                        setRenameDraft(control.name || control.default_name);
+                        setRenamingKey(control.key);
+                      }}
+                    >{control.name || control.default_name}</button>}
+                    <Space.Compact className="channel-manager__live">
+                      {liveActions.map((action) => {
+                        const verb = action.verb.toLowerCase();
+                        const selected = (verb === 'on' && active) || (verb === 'off' && !active);
+                        const icon = /up/.test(verb) ? <ArrowUpOutlined /> : /down/.test(verb) ? <ArrowDownOutlined /> : verb === 'on' ? <ThunderboltOutlined /> : <PoweroffOutlined />;
+                        const label = verb === 'on' ? tr(locale, 'On') : verb === 'off' ? tr(locale, 'Off') : action.name || action.verb;
+                        return <Tooltip title={action.name || action.verb} key={action.id}><Button size="small" icon={icon} type={selected ? 'primary' : 'default'} disabled={control.locked || state.estop_active} onClick={() => sendCmd('hardware.action.invoke', { action_id: action.id })}>{label}</Button></Tooltip>;
+                      })}
+                    </Space.Compact>
+                    <div className="channel-manager__ordering">
+                      <InputNumber size="small" controls={false} min={1} max={peers.length} value={control.order + 1} aria-label={tr(locale, 'Order')} onChange={(value) => value != null && updatePresentation(control.key, { order: value - 1 })} />
+                      <Tooltip title={tr(locale, 'Move up')}><Button size="small" icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => moveControl(control.key, -1)} /></Tooltip>
+                      <Tooltip title={tr(locale, 'Move down')}><Button size="small" icon={<ArrowDownOutlined />} disabled={index + 1 === peers.length} onClick={() => moveControl(control.key, 1)} /></Tooltip>
+                    </div>
+                    <Dropdown
+                      trigger={['click']}
+                      menu={{
+                        items: [
+                          { key: 'manage', icon: <ToolOutlined />, label: tr(locale, 'Manage') },
+                          { key: 'pin', icon: <PushpinOutlined />, label: tr(locale, 'Pin to top') },
+                          { type: 'divider' },
+                          { key: 'visibility', icon: control.hidden ? <EyeOutlined /> : <EyeInvisibleOutlined />, label: tr(locale, control.hidden ? 'Show in Hardware Monitor' : 'Hide from Hardware Monitor') },
+                          { key: 'lock', icon: control.locked ? <UnlockOutlined /> : <LockOutlined />, label: tr(locale, control.locked ? 'Unlock channel' : 'Lock channel') },
+                        ],
+                        onClick: ({ key }) => {
+                          if (key === 'manage') setDetailKey(control.key);
+                          if (key === 'pin') updatePresentation(control.key, { order: 0 });
+                          if (key === 'visibility') updatePresentation(control.key, { hidden: !control.hidden });
+                          if (key === 'lock') updatePresentation(control.key, { locked: !control.locked });
+                        },
+                      }}
+                    ><Button size="small" icon={<MoreOutlined />} aria-label={tr(locale, 'Channel actions')} /></Dropdown>
+                  </div>
+                  {index + 1 < peers.length && <Divider />}
+                </React.Fragment>;
+              })}
+            </section>;
+          })}
+        </div>
+      </>}
+    </Modal>
 
     {(details.warnings ?? []).map((warning) => <Alert
       key={`${warning.code}:${warning.message}`}

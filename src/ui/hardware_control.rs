@@ -154,7 +154,689 @@ fn set_pwm(app: &PealayerApp, channel: u8, percent: f64) {
         });
 }
 
+fn managed_controls(capabilities: &HardwareCapabilities) -> Vec<HardwareControl> {
+    let mut controls = capabilities.controls.clone();
+    for output in &capabilities.relays {
+        if !controls.iter().any(|control| control.key == output.key) {
+            controls.push(HardwareControl {
+                key: output.key.clone(),
+                kind: "relay".to_string(),
+                name: output.name.clone(),
+                default_name: output.name.clone(),
+                control: output.control.clone(),
+                group: output.role.clone(),
+                ..Default::default()
+            });
+        }
+    }
+    for output in &capabilities.pwm_channels {
+        if !controls.iter().any(|control| control.key == output.key) {
+            controls.push(HardwareControl {
+                key: output.key.clone(),
+                kind: "pwm".to_string(),
+                name: output.name.clone(),
+                default_name: output.name.clone(),
+                control: output.control.clone(),
+                group: output.role.clone(),
+                ..Default::default()
+            });
+        }
+    }
+    controls.sort_by(|left, right| {
+        channel_kind_rank(&left.kind)
+            .cmp(&channel_kind_rank(&right.kind))
+            .then_with(|| left.kind.cmp(&right.kind))
+            .then_with(|| left.order.cmp(&right.order))
+            .then_with(|| left.key.cmp(&right.key))
+    });
+    controls
+}
+
+fn channel_kind_rank(kind: &str) -> u8 {
+    match kind.to_ascii_lowercase().as_str() {
+        "seat" | "motion" => 0,
+        "relay" => 1,
+        "pwm" | "mosfet" => 2,
+        _ => 3,
+    }
+}
+
+fn channel_kind_label(app: &PealayerApp, kind: &str) -> String {
+    match kind.to_ascii_lowercase().as_str() {
+        "seat" | "motion" => app.tr("Motion / seat controls"),
+        "relay" => app.tr("Relay outputs"),
+        "pwm" | "mosfet" => app.tr("PWM outputs"),
+        _ => app.tr("Other controls"),
+    }
+}
+
+fn channel_section_key(kind: &str) -> &'static str {
+    match kind.to_ascii_lowercase().as_str() {
+        "seat" | "motion" => "motion",
+        "relay" => "relay",
+        "pwm" | "mosfet" => "pwm",
+        _ => "other",
+    }
+}
+
+fn channel_identity(capabilities: &HardwareCapabilities, control: &HardwareControl) -> String {
+    if let Some(relay) = relay_id(&control.key) {
+        return format!("R{relay}");
+    }
+    if let Some(channel) = pwm_channel(capabilities, &control.key) {
+        return format!("CH{channel}");
+    }
+    match control.key.as_str() {
+        "seat.a" => "A".to_string(),
+        "seat.b" => "B".to_string(),
+        _ => control
+            .key
+            .rsplit_once('.')
+            .map(|(_, tail)| tail.to_ascii_uppercase())
+            .unwrap_or_else(|| control.key.clone()),
+    }
+}
+
+fn channel_is_active(capabilities: &HardwareCapabilities, control: &HardwareControl) -> bool {
+    if let Some(relay) = relay_id(&control.key) {
+        return capabilities.active_relays.contains(&relay);
+    }
+    crate::ui::layout::motion_control_is_active(capabilities, control)
+}
+
+fn open_detail(
+    app: &mut PealayerApp,
+    capabilities: &HardwareCapabilities,
+    control: &HardwareControl,
+) {
+    app.hardware_control_dialog_key = Some(control.key.clone());
+    app.hardware_control_name_draft = control.name.clone();
+    app.hardware_control_group_draft = control.group.clone();
+    app.hardware_control_icon_draft = control.icon.clone();
+    app.hardware_control_icon_search.clear();
+    app.hardware_control_color_draft = if control.color.trim().is_empty() {
+        "#38D27A".to_string()
+    } else {
+        control.color.clone()
+    };
+    app.hardware_control_pwm_percent = capabilities
+        .pwm_channels
+        .iter()
+        .find(|channel| channel.key == control.key)
+        .and_then(|channel| {
+            (capabilities.telemetry.pwm_channel == Some(channel.id))
+                .then_some(capabilities.telemetry.pwm_value.unwrap_or(0))
+        })
+        .map(|value| f64::from(value) * 100.0 / 4095.0)
+        .unwrap_or(0.0);
+}
+
+fn draw_manager_live_action(
+    app: &PealayerApp,
+    ui: &mut egui::Ui,
+    capabilities: &HardwareCapabilities,
+    control: &HardwareControl,
+) {
+    let enabled = !app.estop_active && !control.locked;
+    let on = channel_is_active(capabilities, control);
+    let advertised = |verb: &str| {
+        control
+            .actions
+            .iter()
+            .find(|action| action.verb.eq_ignore_ascii_case(verb))
+    };
+    if let (Some(on_action), Some(off_action)) = (advertised("on"), advertised("off")) {
+        for (selected, action) in [(on, on_action), (!on, off_action)] {
+            let caption = if action.verb.eq_ignore_ascii_case("on") {
+                app.tr("On")
+            } else {
+                app.tr("Off")
+            };
+            let response = ui
+                .add_enabled(
+                    enabled,
+                    egui::Button::new(format!(
+                        "{} {caption}",
+                        crate::ui::icons::action(&action.verb)
+                    ))
+                    .selected(selected)
+                    .min_size(egui::vec2(56.0, 25.0)),
+                )
+                .on_hover_text(crate::ui::i18n::visual_text(app.language, &action.name));
+            if crate::ui::layout::hardware_control_activated(app, ui, &response) {
+                invoke_action(app, control, action);
+            }
+        }
+    } else if let Some(relay) = relay_id(&control.key) {
+        for (state, icon, label) in [
+            (true, crate::ui::icons::LIGHTNING, app.tr("Turn on")),
+            (false, crate::ui::icons::STOP_CIRCLE, app.tr("Turn off")),
+        ] {
+            let response = ui
+                .add_enabled(
+                    enabled,
+                    egui::Button::new(format!(
+                        "{icon} {}",
+                        if state { app.tr("On") } else { app.tr("Off") }
+                    ))
+                    .selected(on == state)
+                    .min_size(egui::vec2(56.0, 25.0)),
+                )
+                .on_hover_text(label);
+            if crate::ui::layout::hardware_control_activated(app, ui, &response) {
+                set_relay(app, relay, state);
+            }
+        }
+    } else if let Some(channel) = pwm_channel(capabilities, &control.key) {
+        for (percent, icon, label) in [
+            (100.0, crate::ui::icons::LIGHTNING, app.tr("Turn on")),
+            (0.0, crate::ui::icons::STOP_CIRCLE, app.tr("Turn off")),
+        ] {
+            if ui
+                .add_enabled(
+                    enabled,
+                    egui::Button::new(format!(
+                        "{icon} {}",
+                        if percent > 0.0 {
+                            app.tr("On")
+                        } else {
+                            app.tr("Off")
+                        }
+                    ))
+                    .min_size(egui::vec2(56.0, 25.0)),
+                )
+                .on_hover_text(label)
+                .clicked()
+            {
+                set_pwm(app, channel, percent);
+            }
+        }
+    } else {
+        for action in control
+            .actions
+            .iter()
+            .filter(|action| !action.verb.eq_ignore_ascii_case("stop"))
+            .take(2)
+        {
+            if ui
+                .add_enabled(
+                    enabled,
+                    egui::Button::new(format!(
+                        "{} {}",
+                        crate::ui::icons::action(&action.verb),
+                        crate::ui::i18n::visual_text(app.language, &action.name)
+                    ))
+                    .min_size(egui::vec2(56.0, 25.0)),
+                )
+                .on_hover_text(crate::ui::i18n::visual_text(app.language, &action.name))
+                .clicked()
+            {
+                invoke_action(app, control, action);
+            }
+        }
+    }
+}
+
+fn draw_motion_mode_selector(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    let previous = app.motion_control_mode;
+    let hold = format!("{} {}", crate::ui::icons::HAND_TAP, app.tr("Push"));
+    let toggle = format!("{} {}", crate::ui::icons::TOGGLE_RIGHT, app.tr("Toggle"));
+    let hold_help = app.tr("Move only while the button is held");
+    let toggle_help = app.tr("Keep moving until Stop is pressed");
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 3.0;
+        ui.selectable_value(
+            &mut app.motion_control_mode,
+            crate::config::MotionControlMode::Toggle,
+            toggle,
+        )
+        .on_hover_text(toggle_help);
+        // This selector is hosted in a right-to-left action slot. Paint Toggle
+        // first so the user-facing order remains Push, then Toggle.
+        ui.selectable_value(
+            &mut app.motion_control_mode,
+            crate::config::MotionControlMode::Hold,
+            hold,
+        )
+        .on_hover_text(hold_help);
+    });
+    if app.motion_control_mode != previous {
+        app.save_config();
+    }
+}
+
+fn draw_channel_manager(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    if !app.show_hardware_channels_dialog {
+        return;
+    }
+    let Some(capabilities) = app
+        .advertised_hardware()
+        .filter(|capabilities| capabilities.board_connected)
+    else {
+        app.show_hardware_channels_dialog = false;
+        return;
+    };
+    let controls = managed_controls(&capabilities);
+    let mut close_requested = false;
+    let bounds = ui.ctx().content_rect().shrink(24.0);
+    let default_size = egui::vec2(bounds.width().min(860.0), bounds.height().min(720.0));
+    let window_fill = ui.visuals().window_fill();
+    let opaque_window_fill =
+        egui::Color32::from_rgb(window_fill.r(), window_fill.g(), window_fill.b());
+    let window_id = egui::Id::new("hardware_channels_manager");
+    egui::Window::new(format!(
+        "{} {}",
+        crate::ui::icons::SLIDERS_HORIZONTAL,
+        app.tr("Manage channels")
+    ))
+    .id(window_id)
+    .fixed_size(default_size)
+    .order(egui::Order::Foreground)
+    .frame(egui::Frame::window(ui.style()).fill(opaque_window_fill))
+    .constrain_to(bounds)
+    .title_bar(false)
+    .collapsible(false)
+    .show(ui.ctx(), |ui| {
+        ui.set_width((default_size.x - 20.0).max(600.0));
+        ui.horizontal(|ui| {
+            ui.strong(format!(
+                "{} {}",
+                crate::ui::icons::SLIDERS_HORIZONTAL,
+                app.tr("Manage channels")
+            ));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .button(crate::ui::icons::X)
+                    .on_hover_text(app.tr("Close"))
+                    .clicked()
+                {
+                    close_requested = true;
+                }
+            });
+        });
+        ui.separator();
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(crate::ui::icons::CIRCUITRY)
+                    .size(28.0)
+                    .color(ui.visuals().selection.bg_fill),
+            );
+            ui.vertical(|ui| {
+                ui.heading(crate::ui::i18n::visual_text(
+                    app.language,
+                    &capabilities.board_name,
+                ));
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} · {}",
+                        app.tr("All board channels"),
+                        controls.len()
+                    ))
+                    .weak(),
+                );
+            });
+        });
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(4.0);
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let mut current_section = String::new();
+                for control in &controls {
+                    let section = channel_section_key(&control.kind);
+                    if current_section != section {
+                        if !current_section.is_empty() {
+                            ui.add_space(7.0);
+                        }
+                        current_section = section.to_string();
+                        let count = controls
+                            .iter()
+                            .filter(|candidate| channel_section_key(&candidate.kind) == section)
+                            .count();
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(crate::ui::icons::control(
+                                    &control.kind,
+                                    &control.icon,
+                                ))
+                                .color(ui.visuals().selection.bg_fill),
+                            );
+                            ui.strong(channel_kind_label(app, &control.kind));
+                            ui.label(egui::RichText::new(count.to_string()).small().weak());
+                            if section == "motion" {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| draw_motion_mode_selector(app, ui),
+                                );
+                            }
+                        });
+                        ui.separator();
+                    }
+
+                    let edit_id = ui.make_persistent_id(("manager-channel-edit", &control.key));
+                    let draft_id = ui.make_persistent_id(("manager-channel-draft", &control.key));
+                    let focus_pending_id =
+                        ui.make_persistent_id(("manager-channel-focus", &control.key));
+                    let text_edit_id =
+                        ui.make_persistent_id(("manager-channel-input", &control.key));
+                    let order_draft_id =
+                        ui.make_persistent_id(("manager-channel-order", &control.key));
+                    let order_edit_id =
+                        ui.make_persistent_id(("manager-channel-order-input", &control.key));
+                    let editing =
+                        ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
+                    let row_height = 32.0;
+                    let row_width = ui.available_width();
+                    let predicted_rect = egui::Rect::from_min_size(
+                        ui.next_widget_position(),
+                        egui::vec2(row_width, row_height),
+                    );
+                    let row_hovered = ui
+                        .ctx()
+                        .pointer_hover_pos()
+                        .is_some_and(|pointer| predicted_rect.contains(pointer));
+                    let order_focused = ui.memory(|memory| memory.has_focus(order_edit_id));
+                    let order_alpha = ui.ctx().animate_bool(
+                        egui::Id::new(("manager-order-visible", &control.key)),
+                        row_hovered || order_focused,
+                    );
+                    let layer_id = egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::new(("hardware-channel-manager-row", &control.key)),
+                    );
+                    let dragging =
+                        crate::ui::layout::hardware_channel_is_dragging(ui, &control.key);
+                    let row = ui.scope_builder(egui::UiBuilder::new().layer_id(layer_id), |ui| {
+                        if dragging {
+                            ui.set_opacity(0.58);
+                        }
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(row_width, row_height),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                let indicator_color = if channel_is_active(&capabilities, control) {
+                                    egui::Color32::from_rgb(52, 211, 153)
+                                } else {
+                                    ui.visuals().widgets.noninteractive.bg_stroke.color
+                                };
+                                let (indicator_rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(12.0, 12.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().circle_filled(
+                                    indicator_rect.center(),
+                                    4.5,
+                                    indicator_color,
+                                );
+                                crate::ui::layout::hardware_channel_drag_handle(app, ui, control);
+                                ui.label(crate::ui::icons::control(&control.kind, &control.icon));
+                                ui.add_sized(
+                                    [38.0, 25.0],
+                                    egui::Label::new(
+                                        egui::RichText::new(channel_identity(
+                                            &capabilities,
+                                            control,
+                                        ))
+                                        .monospace()
+                                        .weak(),
+                                    ),
+                                )
+                                .on_hover_text(app.tr("Board channel"));
+
+                                if editing {
+                                    let mut draft = ui.data_mut(|data| {
+                                        data.get_temp::<String>(draft_id)
+                                            .unwrap_or_else(|| control.name.clone())
+                                    });
+                                    let edit = ui.add_sized(
+                                        [(ui.available_width() - 324.0).max(130.0), 27.0],
+                                        egui::TextEdit::singleline(&mut draft).id(text_edit_id),
+                                    );
+                                    if ui.data_mut(|data| {
+                                        data.remove_temp::<bool>(focus_pending_id).unwrap_or(false)
+                                    }) {
+                                        edit.request_focus();
+                                    }
+                                    if edit.changed() {
+                                        ui.data_mut(|data| {
+                                            data.insert_temp(draft_id, draft.clone())
+                                        });
+                                    }
+                                    if ui.button(crate::ui::icons::CHECK).clicked()
+                                        || (edit.lost_focus()
+                                            && ui
+                                                .input(|input| input.key_pressed(egui::Key::Enter)))
+                                    {
+                                        crate::ui::layout::update_control_name(
+                                            app,
+                                            &capabilities,
+                                            control,
+                                            draft,
+                                        );
+                                        ui.data_mut(|data| data.insert_temp(edit_id, false));
+                                    }
+                                    if ui.button(crate::ui::icons::X).clicked() {
+                                        ui.data_mut(|data| data.insert_temp(edit_id, false));
+                                    }
+                                } else {
+                                    let name =
+                                        crate::ui::i18n::visual_text(app.language, &control.name);
+                                    let response = crate::ui::layout::left_aligned_click_label(
+                                        ui,
+                                        &name,
+                                        (ui.available_width() - 324.0).max(130.0),
+                                        27.0,
+                                        13.0,
+                                    );
+                                    if response.clicked()
+                                        || ui
+                                            .button(crate::ui::icons::PENCIL_SIMPLE)
+                                            .on_hover_text(app.tr("Rename"))
+                                            .clicked()
+                                    {
+                                        ui.data_mut(|data| {
+                                            data.insert_temp(draft_id, control.name.clone());
+                                            data.insert_temp(edit_id, true);
+                                            data.insert_temp(focus_pending_id, true);
+                                        });
+                                    }
+                                }
+
+                                draw_manager_live_action(app, ui, &capabilities, control);
+                                let peers = controls
+                                    .iter()
+                                    .filter(|candidate| candidate.kind == control.kind)
+                                    .collect::<Vec<_>>();
+                                let position = peers
+                                    .iter()
+                                    .position(|candidate| candidate.key == control.key)
+                                    .unwrap_or_default();
+                                ui.scope(|ui| {
+                                    ui.set_opacity(order_alpha);
+                                    ui.add_enabled_ui(row_hovered || order_focused, |ui| {
+                                        ui.spacing_mut().item_spacing.x = 3.0;
+                                        let mut order_draft = ui.data_mut(|data| {
+                                            data.get_temp::<String>(order_draft_id)
+                                                .unwrap_or_else(|| (control.order + 1).to_string())
+                                        });
+                                        let order_edit = ui
+                                            .add_sized(
+                                                [38.0, 25.0],
+                                                egui::TextEdit::singleline(&mut order_draft)
+                                                    .id(order_edit_id)
+                                                    .horizontal_align(egui::Align::Center)
+                                                    .font(egui::TextStyle::Monospace),
+                                            )
+                                            .on_hover_text(app.tr("Order"));
+                                        if order_edit.changed() {
+                                            ui.data_mut(|data| {
+                                                data.insert_temp(
+                                                    order_draft_id,
+                                                    order_draft.clone(),
+                                                )
+                                            });
+                                        }
+                                        let commit_order = order_edit.lost_focus()
+                                            || (order_edit.has_focus()
+                                                && ui.input(|input| {
+                                                    input.key_pressed(egui::Key::Enter)
+                                                }));
+                                        if commit_order
+                                            && let Ok(value) = order_draft.trim().parse::<u16>()
+                                        {
+                                            crate::ui::layout::set_control_order(
+                                                app,
+                                                &capabilities,
+                                                &control.key,
+                                                value.saturating_sub(1),
+                                            );
+                                            ui.data_mut(|data| {
+                                                data.remove_temp::<String>(order_draft_id);
+                                            });
+                                        }
+                                        if ui
+                                            .add_enabled(
+                                                position > 0,
+                                                egui::Button::new(crate::ui::icons::ARROW_UP)
+                                                    .min_size(egui::vec2(27.0, 25.0)),
+                                            )
+                                            .on_hover_text(app.tr("Move up"))
+                                            .clicked()
+                                        {
+                                            crate::ui::layout::move_control_by(
+                                                app,
+                                                &capabilities,
+                                                &control.key,
+                                                -1,
+                                            );
+                                        }
+                                        if ui
+                                            .add_enabled(
+                                                position + 1 < peers.len(),
+                                                egui::Button::new(crate::ui::icons::ARROW_DOWN)
+                                                    .min_size(egui::vec2(27.0, 25.0)),
+                                            )
+                                            .on_hover_text(app.tr("Move down"))
+                                            .clicked()
+                                        {
+                                            crate::ui::layout::move_control_by(
+                                                app,
+                                                &capabilities,
+                                                &control.key,
+                                                1,
+                                            );
+                                        }
+                                    });
+                                });
+                                ui.menu_button(crate::ui::icons::DOTS_THREE, |ui| {
+                                    if ui
+                                        .button(format!(
+                                            "{} {}",
+                                            crate::ui::icons::SLIDERS_HORIZONTAL,
+                                            app.tr("Manage...")
+                                        ))
+                                        .clicked()
+                                    {
+                                        open_detail(app, &capabilities, control);
+                                        app.show_hardware_channels_dialog = false;
+                                        ui.close();
+                                    }
+                                    if ui
+                                        .button(format!(
+                                            "{} {}",
+                                            crate::ui::icons::PUSH_PIN,
+                                            app.tr("Pin to top")
+                                        ))
+                                        .clicked()
+                                    {
+                                        crate::ui::layout::set_control_order(
+                                            app,
+                                            &capabilities,
+                                            &control.key,
+                                            0,
+                                        );
+                                        ui.close();
+                                    }
+                                    ui.separator();
+                                    if ui
+                                        .button(format!(
+                                            "{} {}",
+                                            if control.hidden {
+                                                crate::ui::icons::EYE
+                                            } else {
+                                                crate::ui::icons::EYE_SLASH
+                                            },
+                                            if control.hidden {
+                                                app.tr("Show in Hardware Monitor")
+                                            } else {
+                                                app.tr("Hide from Hardware Monitor")
+                                            }
+                                        ))
+                                        .clicked()
+                                    {
+                                        crate::ui::layout::update_control_presentation_flags(
+                                            app,
+                                            &capabilities,
+                                            control,
+                                            Some(!control.hidden),
+                                            None,
+                                        );
+                                        ui.close();
+                                    }
+                                    if ui
+                                        .button(format!(
+                                            "{} {}",
+                                            if control.locked {
+                                                crate::ui::icons::LOCK
+                                            } else {
+                                                crate::ui::icons::POWER
+                                            },
+                                            if control.locked {
+                                                app.tr("Unlock channel")
+                                            } else {
+                                                app.tr("Lock channel")
+                                            }
+                                        ))
+                                        .clicked()
+                                    {
+                                        crate::ui::layout::update_control_presentation_flags(
+                                            app,
+                                            &capabilities,
+                                            control,
+                                            None,
+                                            Some(!control.locked),
+                                        );
+                                        ui.close();
+                                    }
+                                })
+                                .response
+                                .on_hover_text(app.tr("Channel actions"));
+                            },
+                        )
+                    });
+                    let row_rect = row.response.rect;
+                    crate::ui::layout::finish_hardware_channel_card(
+                        ui, control, row_rect, layer_id,
+                    );
+                    if let Some(drop) =
+                        crate::ui::layout::hardware_channel_drop_target(ui, row_rect, control)
+                    {
+                        crate::ui::layout::persist_channel_drop(app, &capabilities, drop);
+                    }
+                    ui.add(egui::Separator::default().spacing(0.0));
+                }
+            });
+    });
+    if close_requested {
+        app.show_hardware_channels_dialog = false;
+    }
+}
+
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    draw_channel_manager(app, ui);
     let Some(key) = app.hardware_control_dialog_key.clone() else {
         return;
     };
@@ -170,22 +852,56 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         return;
     };
 
-    let mut open = true;
+    let mut close_requested = false;
     let bounds = ui.ctx().content_rect().shrink(20.0);
-    let default_size = egui::vec2(bounds.width().min(560.0), bounds.height().min(620.0));
+    let default_size = egui::vec2(bounds.width().min(620.0), bounds.height().min(680.0));
+    let window_fill = ui.visuals().window_fill();
+    let opaque_window_fill =
+        egui::Color32::from_rgb(window_fill.r(), window_fill.g(), window_fill.b());
     egui::Window::new(format!(
         "{} {}",
         crate::ui::icons::control(&control.kind, &control.icon),
         app.tr("Hardware control")
     ))
     .id(egui::Id::new("hardware_control_dialog"))
-    .open(&mut open)
-    .default_size(default_size)
-    .max_size(egui::vec2(bounds.width().min(700.0), bounds.height()))
+    .fixed_size(default_size)
+    .order(egui::Order::Foreground)
+    .frame(egui::Frame::window(ui.style()).fill(opaque_window_fill))
     .constrain_to(bounds)
-    .resizable(true)
+    .title_bar(false)
+    .vscroll(true)
     .collapsible(false)
     .show(ui.ctx(), |ui| {
+        ui.horizontal(|ui| {
+            if ui
+                .button(format!(
+                    "{} {}",
+                    crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                    app.tr("All channels")
+                ))
+                .on_hover_text(app.tr("Back to channel manager"))
+                .clicked()
+            {
+                app.hardware_control_dialog_key = None;
+                app.show_hardware_channels_dialog = true;
+            }
+            ui.strong(format!(
+                "{} {}",
+                crate::ui::icons::control(&control.kind, &control.icon),
+                app.tr("Manage")
+            ));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .button(crate::ui::icons::X)
+                    .on_hover_text(app.tr("Close"))
+                    .clicked()
+                {
+                    close_requested = true;
+                }
+            });
+        });
+        ui.separator();
+        ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(crate::ui::icons::control(&control.kind, &control.icon))
@@ -502,7 +1218,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         }
     });
 
-    if !open {
+    if close_requested {
         app.hardware_control_dialog_key = None;
     }
 }
@@ -554,6 +1270,51 @@ mod tests {
         assert_eq!(control.kind, "mosfet");
         assert_eq!(control.group, "Lighting");
         assert_eq!(pwm_channel(&capabilities, "pwm.2"), Some(2));
+    }
+
+    #[test]
+    fn channel_manager_includes_advertised_and_raw_board_channels_once() {
+        let capabilities = HardwareCapabilities {
+            controls: vec![HardwareControl {
+                key: "relay.5".to_string(),
+                kind: "relay".to_string(),
+                name: "User relay".to_string(),
+                order: 1,
+                ..Default::default()
+            }],
+            relays: vec![
+                crate::four_d::controller::HardwareOutput {
+                    id: 5,
+                    key: "relay.5".to_string(),
+                    name: "Duplicate source".to_string(),
+                    role: String::new(),
+                    control: "toggle".to_string(),
+                },
+                crate::four_d::controller::HardwareOutput {
+                    id: 6,
+                    key: "relay.6".to_string(),
+                    name: "Raw relay".to_string(),
+                    role: String::new(),
+                    control: "toggle".to_string(),
+                },
+            ],
+            pwm_channels: vec![crate::four_d::controller::HardwareOutput {
+                id: 0,
+                key: "pwm.0".to_string(),
+                name: "House light".to_string(),
+                role: "lighting".to_string(),
+                control: "level".to_string(),
+            }],
+            ..Default::default()
+        };
+        let controls = managed_controls(&capabilities);
+        assert_eq!(controls.len(), 3);
+        assert_eq!(
+            controls.iter().filter(|item| item.key == "relay.5").count(),
+            1
+        );
+        assert!(controls.iter().any(|item| item.key == "relay.6"));
+        assert!(controls.iter().any(|item| item.key == "pwm.0"));
     }
 
     #[test]

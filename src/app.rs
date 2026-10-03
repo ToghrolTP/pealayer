@@ -312,6 +312,7 @@ pub struct PealayerApp {
     pub(crate) show_board_info_dialog: bool,
     pub(crate) board_info_tab: usize,
     pub(crate) board_name_draft: String,
+    pub(crate) show_hardware_channels_dialog: bool,
     pub(crate) hardware_control_dialog_key: Option<String>,
     pub(crate) hardware_control_name_draft: String,
     pub(crate) hardware_control_group_draft: String,
@@ -518,7 +519,9 @@ impl eframe::App for PealayerApp {
         if should_broadcast {
             self.last_web_broadcast = Some(now);
             let hardware = self.advertised_hardware();
-            let hardware_details = hardware.as_ref().map(web_hardware_details);
+            let hardware_details = hardware
+                .as_ref()
+                .map(|capabilities| web_hardware_details(capabilities, self.motion_control_mode));
             let controller_effects = hardware
                 .as_ref()
                 .map(|capabilities| {
@@ -2386,6 +2389,31 @@ impl PealayerApp {
                     },
                 );
             }
+            InteropCommand::UpdateHardwarePresentation { key, fields } => {
+                let Some(capabilities) = self
+                    .advertised_hardware()
+                    .filter(|capabilities| capabilities.board_connected)
+                else {
+                    self.set_osd(self.tr("No board is connected or advertising live controls"));
+                    return;
+                };
+                let Some(control) = capabilities
+                    .controls
+                    .iter()
+                    .find(|control| control.key == key)
+                    .cloned()
+                else {
+                    self.set_osd(format!("Unknown hardware channel: {key}"));
+                    return;
+                };
+                crate::ui::layout::update_control_presentation(
+                    self,
+                    &capabilities,
+                    &control,
+                    "presentation-web",
+                    fields,
+                );
+            }
             InteropCommand::ConfigureAddressableStrip { pixels } => {
                 if let Err(error) = self.configure_addressable_strip(pixels) {
                     self.set_osd(error);
@@ -3675,6 +3703,7 @@ fn controller_effect_lane_name(lane: crate::four_d::models::ControllerEffectLane
 /// client deliberately receives no demo channels or inferred board features.
 fn web_hardware_details(
     capabilities: &crate::four_d::controller::HardwareCapabilities,
+    motion_control_mode: crate::config::MotionControlMode,
 ) -> serde_json::Value {
     let controls = capabilities
         .controls
@@ -3776,6 +3805,10 @@ fn web_hardware_details(
         "board_name": capabilities.board_name,
         "capability_bits": capabilities.capability_bits,
         "host_instance_id": capabilities.host_instance_id,
+        "motion_control_mode": match motion_control_mode {
+            crate::config::MotionControlMode::Hold => "hold",
+            crate::config::MotionControlMode::Toggle => "toggle",
+        },
         "profile": profile,
         "port": {
             "name": capabilities.port.name,
@@ -4014,6 +4047,7 @@ impl Default for PealayerApp {
             show_board_info_dialog: false,
             board_info_tab: 0,
             board_name_draft: String::new(),
+            show_hardware_channels_dialog: false,
             hardware_control_dialog_key: None,
             hardware_control_name_draft: String::new(),
             hardware_control_group_draft: String::new(),
