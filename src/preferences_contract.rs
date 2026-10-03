@@ -481,6 +481,12 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Open Preferences in a separate native window",
         ),
         PreferenceControl::boolean(
+            "auto_reload_config",
+            "advanced",
+            "Config file",
+            "Automatically reload configuration changes",
+        ),
+        PreferenceControl::boolean(
             "status_bar.hardware",
             "advanced",
             "Status bar",

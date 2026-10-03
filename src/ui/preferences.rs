@@ -21,23 +21,31 @@ pub(crate) struct NativePreferencesController {
 pub(crate) struct PreferencesDraft {
     config: AppConfig,
     saved_config: AppConfig,
+    previewed_config: AppConfig,
     tab: usize,
     status: String,
+    status_until: Option<std::time::Instant>,
+    confirm_close: bool,
 }
 
 #[derive(Default)]
 struct PreferencesOutcome {
     close: bool,
     save: bool,
+    close_after_save: bool,
+    discard: bool,
 }
 
 impl PreferencesDraft {
     fn new(config: AppConfig, tab: usize) -> Self {
         Self {
             saved_config: config.clone(),
+            previewed_config: config.clone(),
             config,
             tab: tab.min(preference_sections().len().saturating_sub(1)),
             status: String::new(),
+            status_until: None,
+            confirm_close: false,
         }
     }
 
@@ -49,10 +57,28 @@ impl PreferencesDraft {
         self.saved_config = self.config.clone();
     }
 
+    fn restore_saved(&mut self) {
+        self.config = self.saved_config.clone();
+        self.confirm_close = false;
+    }
+
+    fn take_preview_update(&mut self) -> Option<AppConfig> {
+        if self.config == self.previewed_config {
+            return None;
+        }
+        self.previewed_config = self.config.clone();
+        Some(self.config.clone())
+    }
+
+    fn set_transient_status(&mut self, status: String) {
+        self.status = status;
+        self.status_until = Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
+    }
+
     fn replace_from_disk(&mut self, config: AppConfig, status: String) {
         self.saved_config = config.clone();
         self.config = config;
-        self.status = status;
+        self.set_transient_status(status);
     }
 
     pub(crate) fn apply_external_config(
@@ -182,6 +208,49 @@ struct StandalonePreferencesApp {
 }
 
 impl StandalonePreferencesApp {
+    fn send_owner_command(&mut self, command: crate::platform::interop::InteropCommand) -> bool {
+        let result = serde_json::to_string(&command)
+            .map_err(|error| format!("serialize live preference preview: {error}"))
+            .and_then(|payload| {
+                let identity = crate::config::resolved_app_name(&self.draft.saved_config);
+                crate::platform::interop::send_native_request(
+                    &payload,
+                    &identity,
+                    std::time::Duration::from_millis(750),
+                )
+            });
+        if let Err(error) = result {
+            self.draft.status = error;
+            self.draft.status_until = None;
+            return false;
+        }
+        true
+    }
+
+    fn preview_changes(&mut self) {
+        let Some(config) = self.draft.take_preview_update() else {
+            return;
+        };
+        self.send_owner_command(crate::platform::interop::InteropCommand::PreviewConfig {
+            config: Box::new(config),
+        });
+    }
+
+    fn finish_preview(&mut self, commit: bool) -> bool {
+        let command = if commit {
+            crate::platform::interop::InteropCommand::CommitPreviewConfig {
+                config: Box::new(self.draft.config.clone()),
+            }
+        } else {
+            crate::platform::interop::InteropCommand::CancelPreviewConfig
+        };
+        let sent = self.send_owner_command(command);
+        if sent {
+            self.draft.previewed_config = self.draft.config.clone();
+        }
+        sent
+    }
+
     fn apply_appearance(&mut self, ctx: &egui::Context) {
         let appearance = (
             crate::config::resolved_theme(&self.draft.config),
@@ -204,6 +273,11 @@ impl StandalonePreferencesApp {
     }
 
     fn watch_external_config(&mut self, ctx: &egui::Context) {
+        if !self.draft.config.auto_reload_config {
+            self.config_watcher = None;
+            self.config_reload_due = None;
+            return;
+        }
         let path = AppConfig::get_config_path();
         if self.config_watcher.is_none() {
             let repaint = ctx.clone();
@@ -279,9 +353,19 @@ impl eframe::App for StandalonePreferencesApp {
 
         self.apply_appearance(ui.ctx());
         self.watch_external_config(ui.ctx());
+        let close_requested = ui.ctx().input(|input| input.viewport().close_requested());
+        if close_requested && self.draft.is_dirty() {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.draft.confirm_close = true;
+        }
         if crate::ui::dialog::escape_pressed(ui.ctx()) {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-            return;
+            if self.draft.is_dirty() {
+                self.draft.confirm_close = true;
+            } else {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            }
         }
         let outcome = egui::CentralPanel::default()
             .show_inside(ui, |ui| {
@@ -297,10 +381,22 @@ impl eframe::App for StandalonePreferencesApp {
             })
             .inner;
         if outcome.save {
-            save_draft(&mut self.draft, ui.ctx());
+            let saved = save_draft(&mut self.draft, ui.ctx());
+            let committed = saved && self.finish_preview(true);
+            if committed && outcome.close_after_save {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         }
+        if outcome.discard {
+            self.draft.restore_saved();
+            if self.finish_preview(false) {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            }
+        }
+        self.preview_changes();
         self.apply_appearance(ui.ctx());
-        if outcome.close || !self.draft.config.native_dialog_windows {
+        if outcome.close {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
@@ -381,6 +477,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             return;
         }
         if host == crate::ui::dialog::DialogHost::Native {
+            if let Err(error) = app.cancel_preference_preview(ui.ctx()) {
+                app.config_status = error;
+            }
             app.show_preferences_dialog = false;
             app.native_preferences = None;
             return;
@@ -423,9 +522,24 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     .and_then(|response| response.inner)
     .unwrap_or_default();
 
+    if (!open || outcome.close) && draft.is_dirty() {
+        open = true;
+        draft.confirm_close = true;
+    }
+    if outcome.discard {
+        draft.restore_saved();
+        if let Err(error) = app.cancel_preference_preview(ui.ctx()) {
+            draft.status = error;
+            draft.status_until = None;
+            open = true;
+        } else {
+            draft.previewed_config = draft.config.clone();
+            open = false;
+        }
+    }
     if outcome.save {
         match validate_and_save(&draft.config) {
-            Ok(()) => match app.apply_runtime_config(ui.ctx(), draft.config.clone()) {
+            Ok(()) => match app.commit_preference_preview(ui.ctx(), draft.config.clone()) {
                 Ok(()) => {
                     app.config_fingerprint =
                         AppConfig::fingerprint(&AppConfig::get_config_path()).ok();
@@ -433,16 +547,28 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         "Saved {}",
                         crate::config::display_config_path(&AppConfig::get_config_path())
                     );
-                    draft.status = app.tr("Preferences saved");
+                    draft.set_transient_status(app.tr("Preferences saved"));
                     draft.mark_saved();
+                    draft.previewed_config = draft.config.clone();
+                    if outcome.close_after_save {
+                        open = false;
+                    }
                 }
                 Err(error) => draft.status = error,
             },
             Err(error) => draft.status = error,
         }
     }
+    if let Some(config) = draft.take_preview_update()
+        && let Err(error) = app.preview_runtime_config(ui.ctx(), config)
+    {
+        draft.status = error;
+        draft.status_until = None;
+    }
     app.preferences_tab = draft.tab;
-    open &= !outcome.close;
+    if outcome.close && !draft.is_dirty() {
+        open = false;
+    }
     app.show_preferences_dialog = open;
     if open {
         app.preferences_draft = Some(draft);
@@ -456,14 +582,19 @@ fn validate_and_save(config: &AppConfig) -> Result<(), String> {
     Ok(())
 }
 
-fn save_draft(draft: &mut PreferencesDraft, ctx: &egui::Context) {
+fn save_draft(draft: &mut PreferencesDraft, ctx: &egui::Context) -> bool {
     match validate_and_save(&draft.config) {
         Ok(()) => {
-            draft.status = native_tr(draft.config.language, "Preferences saved");
+            draft.set_transient_status(native_tr(draft.config.language, "Preferences saved"));
             draft.mark_saved();
             ctx.request_repaint_of(egui::ViewportId::ROOT);
+            true
         }
-        Err(error) => draft.status = error,
+        Err(error) => {
+            draft.status = error;
+            draft.status_until = None;
+            false
+        }
     }
 }
 
@@ -476,6 +607,21 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
     let tr = |key: &'static str| native_tr(language, key);
     let rtl = crate::config::resolve_language(language) == AppLanguage::Persian;
     let mut outcome = PreferencesOutcome::default();
+    let now = std::time::Instant::now();
+    if draft.status_until.is_some_and(|until| now >= until) {
+        draft.status.clear();
+        draft.status_until = None;
+    }
+    let footer_text = if draft.is_dirty() {
+        tr("Unsaved changes")
+    } else {
+        draft.status.clone()
+    };
+    let footer_visible = !footer_text.is_empty();
+    if let Some(until) = draft.status_until {
+        ui.ctx()
+            .request_repaint_after(until.saturating_duration_since(now));
+    }
 
     egui::Panel::bottom("preferences_footer")
         .resizable(false)
@@ -486,18 +632,30 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
                 ui,
                 rtl,
                 |ui| {
-                    if !draft.status.is_empty() {
-                        ui.add(
-                            egui::Label::new(egui::RichText::new(&draft.status).small().weak())
-                                .truncate(),
-                        );
+                    let alpha = ui.ctx().animate_bool_with_time(
+                        egui::Id::new("preferences-footer-status-visible"),
+                        footer_visible,
+                        0.2,
+                    );
+                    if alpha > 0.01 {
+                        ui.scope(|ui| {
+                            ui.set_opacity(alpha);
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(&footer_text).small().weak())
+                                    .truncate(),
+                            );
+                        });
                     }
                 },
                 |ui| {
                     if crate::ui::dialog::action_button(ui, crate::ui::icons::X, &tr("Close"))
                         .clicked()
                     {
-                        outcome.close = true;
+                        if draft.is_dirty() {
+                            draft.confirm_close = true;
+                        } else {
+                            outcome.close = true;
+                        }
                     }
                     let save = ui
                         .add_enabled_ui(draft.is_dirty(), |ui| {
@@ -567,6 +725,47 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
             });
         });
     });
+    if draft.confirm_close {
+        egui::Window::new(format!(
+            "{} {}",
+            crate::ui::icons::WARNING,
+            tr("Unsaved preferences")
+        ))
+        .id(egui::Id::new("preferences-confirm-close"))
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .collapsible(false)
+        .resizable(false)
+        .movable(false)
+        .show(ui.ctx(), |ui| {
+            ui.set_min_width(360.0);
+            ui.label(tr("Save your changes before closing Preferences?"));
+            ui.add_space(10.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::ui::dialog::action_button(ui, crate::ui::icons::X, &tr("Cancel"))
+                    .clicked()
+                {
+                    draft.confirm_close = false;
+                }
+                if crate::ui::dialog::action_button(ui, crate::ui::icons::TRASH, &tr("Discard"))
+                    .clicked()
+                {
+                    outcome.discard = true;
+                    draft.confirm_close = false;
+                }
+                if crate::ui::dialog::primary_action_button(
+                    ui,
+                    crate::ui::icons::FLOPPY_DISK,
+                    &tr("Save"),
+                )
+                .clicked()
+                {
+                    outcome.save = true;
+                    outcome.close_after_save = true;
+                    draft.confirm_close = false;
+                }
+            });
+        });
+    }
     outcome
 }
 
@@ -647,6 +846,9 @@ fn draw_contract_section(
                     clear_playback_positions = true;
                     changed = true;
                 }
+            }
+            if section.id == "advanced" && group == "Config file" {
+                draw_config_file_actions(draft, ui, tr);
             }
         });
     }
@@ -975,70 +1177,132 @@ fn draw_advanced_actions(
             });
         },
     );
-    preference_section(
-        ui,
-        crate::ui::icons::FLOPPY_DISK,
-        &tr("Config file"),
-        |ui| {
-            let path = AppConfig::get_config_path();
-            let response = ui
-                .add(
-                    egui::Label::new(
-                        egui::RichText::new(crate::config::display_config_path(&path)).monospace(),
-                    )
-                    .wrap()
-                    .selectable(false)
-                    .sense(egui::Sense::click()),
-                )
-                .on_hover_text(tr("Edit config file in an external editor"));
-            let mut path_action = response.clicked().then_some(ConfigPathAction::Edit);
-            response.context_menu(|ui| {
-                if ui
-                    .button(format!(
-                        "{}  {}",
-                        crate::ui::icons::PENCIL_SIMPLE,
-                        tr("Edit config file")
-                    ))
-                    .clicked()
-                {
-                    path_action = Some(ConfigPathAction::Edit);
-                    ui.close();
-                }
-                if ui
-                    .button(format!(
-                        "{}  {}",
-                        crate::ui::icons::FOLDER_OPEN,
-                        tr("Open containing folder")
-                    ))
-                    .clicked()
-                {
-                    path_action = Some(ConfigPathAction::OpenContainingFolder);
-                    ui.close();
-                }
-            });
-            if let Some(action) = path_action {
-                draft.status = match perform_config_path_action(action, &draft.saved_config) {
-                    Ok(status) => tr(status),
-                    Err(error) => error,
-                };
+}
+
+fn draw_config_file_actions(
+    draft: &mut PreferencesDraft,
+    ui: &mut egui::Ui,
+    tr: &impl Fn(&'static str) -> String,
+) {
+    let path = AppConfig::get_config_path();
+    let response = ui
+        .add(
+            egui::Label::new(
+                egui::RichText::new(crate::config::display_config_path(&path)).monospace(),
+            )
+            .wrap()
+            .selectable(false)
+            .sense(egui::Sense::click()),
+        )
+        .on_hover_text(tr("Edit config file in an external editor"));
+    let mut path_action = response.clicked().then_some(ConfigPathAction::Edit);
+    response.context_menu(|ui| {
+        if ui
+            .button(format!(
+                "{}  {}",
+                crate::ui::icons::PENCIL_SIMPLE,
+                tr("Edit config file")
+            ))
+            .clicked()
+        {
+            path_action = Some(ConfigPathAction::Edit);
+            ui.close();
+        }
+        if ui
+            .button(format!(
+                "{}  {}",
+                crate::ui::icons::FOLDER_OPEN,
+                tr("Open containing folder")
+            ))
+            .clicked()
+        {
+            path_action = Some(ConfigPathAction::OpenContainingFolder);
+            ui.close();
+        }
+        if ui
+            .button(format!(
+                "{}  {}",
+                crate::ui::icons::COPY,
+                tr("Copy full path")
+            ))
+            .clicked()
+        {
+            ui.ctx().copy_text(path.display().to_string());
+            draft.set_transient_status(tr("Configuration path copied"));
+            ui.close();
+        }
+    });
+    if let Some(action) = path_action {
+        match perform_config_path_action(action, &draft.saved_config) {
+            Ok(status) => draft.set_transient_status(tr(status)),
+            Err(error) => {
+                draft.status = error;
+                draft.status_until = None;
             }
-            if ui
-                .button(format!(
-                    "{}  {}",
-                    crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
-                    tr("Reload from disk")
-                ))
-                .clicked()
-            {
-                match AppConfig::load_from_path(&AppConfig::get_config_path()) {
-                    Ok(config) => {
-                        draft.replace_from_disk(config, tr("Preferences reloaded from disk"));
-                    }
-                    Err(error) => draft.status = error,
+        }
+    }
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .button(format!(
+                "{}  {}",
+                crate::ui::icons::FOLDER_OPEN,
+                tr("Import configuration")
+            ))
+            .clicked()
+            && let Some(import_path) = rfd::FileDialog::new()
+                .add_filter("JSON configuration", &["json"])
+                .pick_file()
+        {
+            match AppConfig::load_from_path(&import_path) {
+                Ok(config) => {
+                    draft.config = config;
+                    draft.set_transient_status(tr("Configuration imported; review and save"));
+                }
+                Err(error) => {
+                    draft.status = error;
+                    draft.status_until = None;
                 }
             }
-        },
-    );
+        }
+        if ui
+            .button(format!(
+                "{}  {}",
+                crate::ui::icons::ARROW_SQUARE_OUT,
+                tr("Export configuration")
+            ))
+            .clicked()
+            && let Some(export_path) = rfd::FileDialog::new()
+                .add_filter("JSON configuration", &["json"])
+                .set_file_name("pealayer-settings.json")
+                .save_file()
+        {
+            match draft.config.save_to_path(&export_path) {
+                Ok(()) => draft.set_transient_status(tr("Configuration exported")),
+                Err(error) => {
+                    draft.status = error;
+                    draft.status_until = None;
+                }
+            }
+        }
+        if ui
+            .button(format!(
+                "{}  {}",
+                crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                tr("Reload from disk")
+            ))
+            .clicked()
+        {
+            match AppConfig::load_from_path(&path) {
+                Ok(config) => {
+                    draft.replace_from_disk(config, tr("Preferences reloaded from disk"));
+                }
+                Err(error) => {
+                    draft.status = error;
+                    draft.status_until = None;
+                }
+            }
+        }
+    });
 }
 
 fn preference_row<R>(
@@ -1214,6 +1478,7 @@ fn group_icon(group: &str) -> &'static str {
         "On-screen display" => crate::ui::icons::MONITOR_PLAY,
         "Player controls" => crate::ui::icons::PLAY,
         "Playback history" => crate::ui::icons::CLOCK_COUNTER_CLOCKWISE,
+        "Config file" => crate::ui::icons::FLOPPY_DISK,
         "Open Location / URL" => crate::ui::icons::LINK_SIMPLE,
         "Connection" => crate::ui::icons::PLUG,
         "Motion controls" => crate::ui::icons::SEAT,
@@ -1320,11 +1585,28 @@ mod tests {
     }
 
     #[test]
-    fn config_path_is_clickable_and_has_both_requested_actions() {
+    fn live_preview_is_incremental_and_discard_restores_the_saved_configuration() {
+        let original = AppConfig::default();
+        let mut draft = PreferencesDraft::new(original.clone(), 0);
+        draft.config.pin_controls = !original.pin_controls;
+        let preview = draft.take_preview_update().expect("live preview");
+        assert_eq!(preview.pin_controls, !original.pin_controls);
+        assert!(draft.take_preview_update().is_none());
+        draft.restore_saved();
+        let restored = draft.take_preview_update().expect("discard preview");
+        assert_eq!(restored, original);
+        assert!(!draft.is_dirty());
+    }
+
+    #[test]
+    fn config_path_is_clickable_and_has_all_requested_actions() {
         let source = include_str!("preferences.rs");
         assert!(source.contains("response.clicked()"));
         assert!(source.contains("ConfigPathAction::Edit"));
         assert!(source.contains("ConfigPathAction::OpenContainingFolder"));
+        assert!(source.contains("Copy full path"));
+        assert!(source.contains("Import configuration"));
+        assert!(source.contains("Export configuration"));
         assert!(source.contains("add_enabled_ui(draft.is_dirty()"));
     }
 }

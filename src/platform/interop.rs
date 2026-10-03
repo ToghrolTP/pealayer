@@ -241,6 +241,13 @@ pub enum InteropCommand {
     UpdateConfig {
         values: Value,
     },
+    PreviewConfig {
+        config: Box<crate::config::AppConfig>,
+    },
+    CommitPreviewConfig {
+        config: Box<crate::config::AppConfig>,
+    },
+    CancelPreviewConfig,
     ReloadConfig,
     GetStatus,
 }
@@ -366,6 +373,9 @@ impl InteropCommand {
                 Err("workspace profile direction must be -1 or 1".to_string())
             }
             Self::UpdateConfig { values } => crate::config::AppConfig::validate_patch_shape(values),
+            Self::PreviewConfig { config } | Self::CommitPreviewConfig { config } => {
+                config.validate()
+            }
             _ => Ok(()),
         }
     }

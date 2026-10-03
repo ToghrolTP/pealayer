@@ -364,6 +364,8 @@ pub struct PealayerApp {
     pub(crate) config_fingerprint: Option<u64>,
     pub(crate) config_watcher: Option<crate::config::ConfigFileWatcher>,
     pub(crate) config_reload_due: Option<std::time::Instant>,
+    pub(crate) auto_reload_config: bool,
+    pub(crate) preference_preview_original: Option<crate::config::AppConfig>,
     pub(crate) config_status: String,
     pub(crate) was_hardware_connected: bool,
     pub(crate) was_board_connected: bool,
@@ -2535,6 +2537,24 @@ impl PealayerApp {
                 }
                 return;
             }
+            InteropCommand::PreviewConfig { config } => {
+                if let Err(error) = self.preview_runtime_config(ctx, *config) {
+                    self.config_status = error;
+                }
+                return;
+            }
+            InteropCommand::CommitPreviewConfig { config } => {
+                if let Err(error) = self.commit_preference_preview(ctx, *config) {
+                    self.config_status = error;
+                }
+                return;
+            }
+            InteropCommand::CancelPreviewConfig => {
+                if let Err(error) = self.cancel_preference_preview(ctx) {
+                    self.config_status = error;
+                }
+                return;
+            }
             InteropCommand::ReloadConfig => match self.reload_config_from_disk(ctx) {
                 Ok(()) => {
                     self.set_osd(self.tr("Preferences reloaded from disk"));
@@ -3595,6 +3615,7 @@ impl PealayerApp {
         cfg.windows_dwm_theming = self.windows_dwm_theming;
         cfg.opengl_vsync = self.opengl_vsync;
         cfg.native_dialog_windows = self.native_dialog_windows;
+        cfg.auto_reload_config = self.auto_reload_config;
         cfg.status_bar = self.status_bar;
         cfg.window_geometry = self.window_geometry;
         let mut dock_state = self.dock_state.clone();
@@ -3637,6 +3658,12 @@ impl PealayerApp {
     }
 
     pub fn save_config(&mut self) {
+        if self.preference_preview_original.is_some() {
+            log::debug!(
+                "Deferring automatic configuration save while Preferences is previewing changes"
+            );
+            return;
+        }
         self.capture_current_playback_position();
         let cfg = self.runtime_config_snapshot();
         match cfg.save() {
@@ -3721,6 +3748,7 @@ impl PealayerApp {
         self.windows_dwm_theming = config.windows_dwm_theming;
         self.opengl_vsync = config.opengl_vsync;
         self.native_dialog_windows = config.native_dialog_windows;
+        self.auto_reload_config = config.auto_reload_config;
         self.status_bar = config.status_bar;
         self.workspace_profiles = config.workspace_profiles.clone();
         self.active_workspace_profile = config.active_workspace_profile.clone();
@@ -3770,6 +3798,41 @@ impl PealayerApp {
         Ok(())
     }
 
+    pub(crate) fn preview_runtime_config(
+        &mut self,
+        ctx: &egui::Context,
+        config: crate::config::AppConfig,
+    ) -> Result<(), String> {
+        if self.preference_preview_original.is_none() {
+            self.preference_preview_original = Some(self.runtime_config_snapshot());
+        }
+        self.apply_runtime_config(ctx, config)
+    }
+
+    pub(crate) fn commit_preference_preview(
+        &mut self,
+        ctx: &egui::Context,
+        config: crate::config::AppConfig,
+    ) -> Result<(), String> {
+        self.apply_runtime_config(ctx, config)?;
+        self.preference_preview_original = None;
+        self.config_fingerprint =
+            crate::config::AppConfig::fingerprint(&crate::config::AppConfig::get_config_path())
+                .ok();
+        Ok(())
+    }
+
+    pub(crate) fn cancel_preference_preview(&mut self, ctx: &egui::Context) -> Result<(), String> {
+        let Some(config) = self.preference_preview_original.take() else {
+            return Ok(());
+        };
+        if let Err(error) = self.apply_runtime_config(ctx, config.clone()) {
+            self.preference_preview_original = Some(config);
+            return Err(error);
+        }
+        Ok(())
+    }
+
     pub(crate) fn reload_config_from_disk(&mut self, ctx: &egui::Context) -> Result<(), String> {
         let path = crate::config::AppConfig::get_config_path();
         let config = crate::config::AppConfig::load_from_path(&path)?;
@@ -3786,6 +3849,11 @@ impl PealayerApp {
     }
 
     fn poll_external_config(&mut self, ctx: &egui::Context) {
+        if !self.auto_reload_config {
+            self.config_watcher = None;
+            self.config_reload_due = None;
+            return;
+        }
         let path = crate::config::AppConfig::get_config_path();
         if self.config_watcher.is_none() {
             let repaint = ctx.clone();
@@ -4695,6 +4763,8 @@ impl Default for PealayerApp {
             .ok(),
             config_watcher: None,
             config_reload_due: None,
+            auto_reload_config: true,
+            preference_preview_original: None,
             config_status: String::new(),
             was_hardware_connected: false,
             was_board_connected: false,

@@ -619,6 +619,8 @@ fn main() -> eframe::Result {
                 .ok(),
                 config_watcher: None,
                 config_reload_due: None,
+                auto_reload_config: loaded_config.auto_reload_config,
+                preference_preview_original: None,
                 config_status: String::new(),
                 was_hardware_connected: false,
                 was_board_connected: false,

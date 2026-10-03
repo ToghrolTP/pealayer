@@ -541,6 +541,11 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Save" => "ذخیره",
         "Preferences" => "تنظیمات",
         "Preferences saved" => "تنظیمات ذخیره شد",
+        "Unsaved changes" => "تغییرات ذخیره‌نشده",
+        "Unsaved preferences" => "تنظیمات ذخیره‌نشده",
+        "Save your changes before closing Preferences?" => {
+            "پیش از بستن تنظیمات، تغییرات ذخیره شوند؟"
+        }
         "Preferences reloaded from disk" => "تنظیمات از دیسک بازخوانی شد",
         "No changes to save" => "تغییری برای ذخیره وجود ندارد",
         "Config file" => "پروندهٔ پیکربندی",
@@ -548,6 +553,15 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Edit config file" => "ویرایش پروندهٔ پیکربندی",
         "Edit config file in an external editor" => "ویرایش پروندهٔ پیکربندی در ویرایشگر بیرونی",
         "Open containing folder" => "باز کردن پوشهٔ پرونده",
+        "Copy full path" => "رونوشت مسیر کامل",
+        "Configuration path copied" => "مسیر کامل پیکربندی رونویسی شد",
+        "Import configuration" => "درون‌ریزی پیکربندی",
+        "Export configuration" => "برون‌ریزی پیکربندی",
+        "Configuration imported; review and save" => {
+            "پیکربندی درون‌ریزی شد؛ آن را بررسی و ذخیره کنید"
+        }
+        "Configuration exported" => "پیکربندی برون‌ریزی شد",
+        "Automatically reload configuration changes" => "بازخوانی خودکار تغییرات پیکربندی",
         "Opened configuration in the external editor" => {
             "پروندهٔ پیکربندی در ویرایشگر بیرونی باز شد"
         }

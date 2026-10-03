@@ -264,6 +264,7 @@ pub struct AppConfig {
     pub windows_dwm_theming: bool,
     pub opengl_vsync: bool,
     pub native_dialog_windows: bool,
+    pub auto_reload_config: bool,
     pub status_bar: StatusBarConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_geometry: Option<WindowGeometry>,
@@ -338,6 +339,7 @@ impl Default for AppConfig {
             // embedded implementation as a runtime fallback when process or
             // window creation is unavailable.
             native_dialog_windows: true,
+            auto_reload_config: true,
             status_bar: StatusBarConfig::default(),
             window_geometry: None,
             workspace_dock_layout: None,
@@ -862,6 +864,12 @@ impl AppConfig {
                 // complete document for native tooling and migration.
                 let path = resolve_system_config_path();
                 self.save_to_path(&path)?;
+                if let Err(error) = crate::platform::windows::configure_config_directory(
+                    &path,
+                    &resolved_app_name(self),
+                ) {
+                    log::warn!("Could not apply native configuration-folder metadata: {error}");
+                }
 
                 #[cfg(target_os = "windows")]
                 {
@@ -889,7 +897,14 @@ impl AppConfig {
         self.validate()?;
         if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {
             let path = PathBuf::from(path);
-            return self.save_to_path(&path);
+            self.save_to_path(&path)?;
+            if let Err(error) = crate::platform::windows::configure_config_directory(
+                &path,
+                &resolved_app_name(self),
+            ) {
+                log::warn!("Could not apply native configuration-folder metadata: {error}");
+            }
+            return Ok(());
         }
         let exe_dir = detect_executable_dir();
         let mode = detect_storage_mode(&exe_dir);
@@ -1231,6 +1246,7 @@ mod tests {
         assert!(cfg.open_url_use_proxy);
         assert!(cfg.open_url_proxy_url.is_none());
         assert!(cfg.native_dialog_windows);
+        assert!(cfg.auto_reload_config);
         assert_eq!(cfg.active_workspace_profile.as_deref(), Some("nle"));
         assert_eq!(cfg.workspace_profiles["simple"].name, "Simple");
         assert_eq!(cfg.workspace_profiles["nle"].name, "NLE");

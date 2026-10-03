@@ -1,5 +1,94 @@
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 
+#[cfg(target_os = "windows")]
+fn wide_null_path(path: &std::path::Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+/// Give the roaming configuration folder a recognizable native Explorer
+/// identity. The JSON remains the authoritative cross-platform store; this is
+/// presentation metadata only and is deliberately absent in portable mode.
+#[cfg(target_os = "windows")]
+pub fn configure_config_directory(
+    config_path: &std::path::Path,
+    app_name: &str,
+) -> Result<(), String> {
+    use windows::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_SYSTEM, SetFileAttributesW,
+    };
+    use windows::core::PCWSTR;
+
+    let directory = config_path.parent().ok_or_else(|| {
+        format!(
+            "configuration path has no parent: {}",
+            config_path.display()
+        )
+    })?;
+    std::fs::create_dir_all(directory).map_err(|error| {
+        format!(
+            "create configuration directory {}: {error}",
+            directory.display()
+        )
+    })?;
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("resolve application icon executable: {error}"))?;
+    let safe_name = app_name.trim().replace(['\r', '\n'], " ");
+    let desktop_ini = directory.join("desktop.ini");
+    let contents = format!(
+        "[.ShellClassInfo]\r\nIconResource=\"{}\",0\r\nInfoTip={} configuration and workspace settings\r\nConfirmFileOp=0\r\n",
+        executable.display(),
+        if safe_name.is_empty() {
+            "Pealayer"
+        } else {
+            &safe_name
+        },
+    );
+    let mut encoded = vec![0xff, 0xfe];
+    encoded.extend(contents.encode_utf16().flat_map(u16::to_le_bytes));
+    std::fs::write(&desktop_ini, encoded)
+        .map_err(|error| format!("write {}: {error}", desktop_ini.display()))?;
+
+    let desktop_ini_wide = wide_null_path(&desktop_ini);
+    unsafe {
+        SetFileAttributesW(
+            PCWSTR(desktop_ini_wide.as_ptr()),
+            FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM,
+        )
+    }
+    .map_err(|error| {
+        format!(
+            "mark {} as native folder metadata: {error}",
+            desktop_ini.display()
+        )
+    })?;
+    let directory_wide = wide_null_path(directory);
+    unsafe {
+        SetFileAttributesW(
+            PCWSTR(directory_wide.as_ptr()),
+            FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_SYSTEM,
+        )
+    }
+    .map_err(|error| {
+        format!(
+            "apply native folder identity to {}: {error}",
+            directory.display()
+        )
+    })?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn configure_config_directory(
+    _config_path: &std::path::Path,
+    _app_name: &str,
+) -> Result<(), String> {
+    Ok(())
+}
+
 static WINDOW_HWND: AtomicIsize = AtomicIsize::new(0);
 static WINDOW_DARK_THEME: AtomicBool = AtomicBool::new(true);
 static WINDOW_DWM_THEMING: AtomicBool = AtomicBool::new(true);

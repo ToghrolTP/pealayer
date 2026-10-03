@@ -8123,11 +8123,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 }
                             }
 
-                            let motion_controls = capabilities
-                                .controls
-                                .iter()
+                            let motion_controls = crate::ui::hardware_control::managed_controls(
+                                &capabilities,
+                            )
+                                .into_iter()
                                 .filter(|control| is_motion_control(control))
-                                .cloned()
                                 .collect::<Vec<_>>();
                             if !motion_controls.is_empty() {
                                 let title = format!(

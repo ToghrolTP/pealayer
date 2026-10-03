@@ -155,7 +155,17 @@ fn set_pwm(app: &PealayerApp, channel: u8, percent: f64) {
 }
 
 pub(crate) fn managed_controls(capabilities: &HardwareCapabilities) -> Vec<HardwareControl> {
-    let mut controls = capabilities.controls.clone();
+    let mut controls = Vec::with_capacity(
+        capabilities.controls.len() + capabilities.relays.len() + capabilities.pwm_channels.len(),
+    );
+    for control in &capabilities.controls {
+        if !controls
+            .iter()
+            .any(|known: &HardwareControl| known.key == control.key)
+        {
+            controls.push(control.clone());
+        }
+    }
     for output in &capabilities.relays {
         if !controls.iter().any(|control| control.key == output.key) {
             controls.push(HardwareControl {
@@ -1516,13 +1526,22 @@ mod tests {
     #[test]
     fn channel_manager_includes_advertised_and_raw_board_channels_once() {
         let capabilities = HardwareCapabilities {
-            controls: vec![HardwareControl {
-                key: "relay.5".to_string(),
-                kind: "relay".to_string(),
-                name: "User relay".to_string(),
-                order: 1,
-                ..Default::default()
-            }],
+            controls: vec![
+                HardwareControl {
+                    key: "relay.5".to_string(),
+                    kind: "relay".to_string(),
+                    name: "User relay".to_string(),
+                    order: 1,
+                    ..Default::default()
+                },
+                HardwareControl {
+                    key: "relay.5".to_string(),
+                    kind: "relay".to_string(),
+                    name: "Duplicate advertised control".to_string(),
+                    order: 99,
+                    ..Default::default()
+                },
+            ],
             relays: vec![
                 crate::four_d::controller::HardwareOutput {
                     id: 5,
