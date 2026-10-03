@@ -274,24 +274,19 @@ fn capability_list(
 ) {
     ui.heading(app.tr("Advertised capabilities"));
     ui.add_space(6.0);
-    ui.horizontal_wrapped(|ui| {
-        for (available, label) in [
-            (!capabilities.relays.is_empty(), "Relay outputs"),
-            (!capabilities.pwm_channels.is_empty(), "PWM outputs"),
-            (capabilities.supports_rf_transmit, "RF transmit"),
-            (capabilities.supports_addressable_led, "Addressable strip"),
-            (
-                capabilities.supports_segment_display,
-                "Seven-segment display",
-            ),
-            (capabilities.supports_lcd_display, "LCD display"),
-            (!capabilities.macros.is_empty(), "Timed effects"),
-        ] {
-            if available {
-                pill(ui, &app.tr(label));
+    let advertised = capability_badges(capabilities)
+        .into_iter()
+        .filter(|(available, _, _)| *available)
+        .collect::<Vec<_>>();
+    let columns = capability_column_count(ui.available_width());
+    for badges in advertised.chunks(columns) {
+        ui.columns(columns, |cells| {
+            for (cell, (_, icon, label)) in cells.iter_mut().zip(badges.iter()) {
+                capability_pill(cell, icon, &app.tr(label));
             }
-        }
-    });
+        });
+        ui.add_space(6.0);
+    }
     ui.add_space(10.0);
     egui::Grid::new("board_capability_counts")
         .num_columns(2)
@@ -336,7 +331,7 @@ fn capability_list(
 }
 
 fn front_panel(
-    app: &PealayerApp,
+    app: &mut PealayerApp,
     ui: &mut egui::Ui,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
 ) {
@@ -348,6 +343,67 @@ fn front_panel(
         return;
     };
     ui.heading(app.tr("Live front-panel state"));
+    ui.add_space(6.0);
+    section(ui, &app.tr("Live physical display"), |ui| {
+        if front_panel.raw_segments.len() == 4 {
+            seven_segment_preview(
+                ui,
+                &front_panel.raw_segments,
+                front_panel.brightness,
+                front_panel.segments_active,
+            );
+            ui.add_space(7.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("{} {}", app.tr("Page"), front_panel.menu_page))
+                        .weak(),
+                );
+                ui.label(egui::RichText::new("·").weak());
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} {}/7",
+                        app.tr("Brightness"),
+                        front_panel.brightness.min(7)
+                    ))
+                    .weak(),
+                );
+            });
+        } else {
+            unavailable(ui, &app.tr("No exact seven-segment frame is available."));
+        }
+    });
+
+    section(ui, &app.tr("Physical board keys"), |ui| {
+        ui.columns(2, |columns| {
+            for (index, (key, label)) in FRONT_PANEL_KEYS.into_iter().enumerate() {
+                let pressed = front_panel.pressed_keys & (1 << index) != 0;
+                let text = format!("{}  {key} · {}", key_icon(index), app.tr(label));
+                let button = egui::Button::new(text)
+                    .selected(pressed)
+                    .min_size(egui::vec2(columns[index % 2].available_width(), 34.0));
+                if columns[index % 2]
+                    .add_enabled(app.board_operation.is_none(), button)
+                    .on_hover_text(
+                        app.tr("Send the same front-panel key press through PCController"),
+                    )
+                    .clicked()
+                {
+                    if let Err(error) = app.press_front_panel_key(key) {
+                        app.set_osd(error);
+                    }
+                }
+                if index == 1 {
+                    columns[0].add_space(6.0);
+                    columns[1].add_space(6.0);
+                }
+            }
+        });
+        if !app.board_operation_status.is_empty() {
+            ui.add_space(5.0);
+            ui.label(egui::RichText::new(&app.board_operation_status).weak());
+        }
+    });
+
     egui::Grid::new("front_panel_grid")
         .num_columns(2)
         .spacing([18.0, 8.0])
@@ -491,27 +547,143 @@ fn optional_row(ui: &mut egui::Ui, label: &str, value: &str) {
     }
 }
 
-fn pill(ui: &mut egui::Ui, text: &str) {
-    let width = capability_pill_width(text, ui.available_width());
-    egui::Frame::new()
-        .fill(ui.visuals().selection.bg_fill.gamma_multiply(0.34))
-        .corner_radius(99.0)
-        .inner_margin(egui::Margin::symmetric(8, 3))
-        .show(ui, |ui| {
-            let content_width = (width - 16.0).max(28.0);
-            ui.set_min_width(content_width);
-            ui.set_max_width(content_width);
-            ui.add_sized(
-                [content_width, 18.0],
-                egui::Label::new(egui::RichText::new(text).small().strong()).truncate(),
-            )
-            .on_hover_text(text);
-        });
+const FRONT_PANEL_KEYS: [(&str, &str); 4] = [
+    ("K1", "Previous"),
+    ("K2", "Next"),
+    ("K3", "Decrease"),
+    ("K4", "Select"),
+];
+
+fn capability_badges(
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+) -> [(bool, &'static str, &'static str); 7] {
+    [
+        (
+            !capabilities.relays.is_empty(),
+            crate::ui::icons::PLUG,
+            "Relay outputs",
+        ),
+        (
+            !capabilities.pwm_channels.is_empty(),
+            crate::ui::icons::SLIDERS_HORIZONTAL,
+            "PWM outputs",
+        ),
+        (
+            capabilities.supports_rf_transmit,
+            crate::ui::icons::RADIO,
+            "RF transmit",
+        ),
+        (
+            capabilities.supports_addressable_led,
+            crate::ui::icons::SPARKLE,
+            "Addressable strip",
+        ),
+        (
+            capabilities.supports_segment_display,
+            crate::ui::icons::GAUGE,
+            "Seven-segment display",
+        ),
+        (
+            capabilities.supports_lcd_display,
+            crate::ui::icons::APP_WINDOW,
+            "LCD display",
+        ),
+        (
+            !capabilities.macros.is_empty(),
+            crate::ui::icons::CLOCK,
+            "Timed effects",
+        ),
+    ]
 }
 
-fn capability_pill_width(text: &str, available_width: f32) -> f32 {
-    let natural_width = text.chars().count() as f32 * 7.0 + 24.0;
-    natural_width.clamp(44.0, available_width.clamp(44.0, 220.0))
+fn capability_column_count(available_width: f32) -> usize {
+    if available_width >= 360.0 { 2 } else { 1 }
+}
+
+fn capability_pill(ui: &mut egui::Ui, icon: &str, text: &str) {
+    let width = ui.available_width().max(44.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::hover());
+    let visuals = ui.visuals();
+    let painter = ui.painter().with_clip_rect(rect);
+    painter.rect(
+        rect,
+        15.0,
+        visuals.selection.bg_fill.gamma_multiply(0.30),
+        egui::Stroke::new(1.0_f32, visuals.selection.bg_fill.gamma_multiply(0.55)),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        egui::pos2(rect.left() + 11.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        icon,
+        egui::FontId::proportional(15.0),
+        visuals.selection.bg_fill,
+    );
+    painter.text(
+        egui::pos2(rect.left() + 32.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        text,
+        egui::FontId::proportional(12.0),
+        visuals.text_color(),
+    );
+    response.on_hover_text(text);
+}
+
+fn key_icon(index: usize) -> &'static str {
+    match index {
+        0 => crate::ui::icons::ARROW_UP,
+        1 => crate::ui::icons::ARROW_DOWN,
+        2 => crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+        _ => crate::ui::icons::CHECK,
+    }
+}
+
+fn seven_segment_preview(ui: &mut egui::Ui, raw_segments: &[u8], brightness: u8, active: bool) {
+    const LINES: [(egui::Pos2, egui::Pos2); 7] = [
+        (egui::pos2(8.0, 5.0), egui::pos2(28.0, 5.0)),
+        (egui::pos2(31.0, 8.0), egui::pos2(31.0, 27.0)),
+        (egui::pos2(31.0, 32.0), egui::pos2(31.0, 51.0)),
+        (egui::pos2(8.0, 54.0), egui::pos2(28.0, 54.0)),
+        (egui::pos2(5.0, 32.0), egui::pos2(5.0, 51.0)),
+        (egui::pos2(5.0, 8.0), egui::pos2(5.0, 27.0)),
+        (egui::pos2(8.0, 29.5), egui::pos2(28.0, 29.5)),
+    ];
+    let digit_width = 40.0_f32;
+    let gap = 4.0_f32;
+    let content_width = digit_width * 4.0 + gap * 3.0;
+    let outer_size = egui::vec2((content_width + 20.0).min(ui.available_width()), 76.0);
+    let (rect, _) = ui.allocate_exact_size(outer_size, egui::Sense::hover());
+    let painter = ui.painter().with_clip_rect(rect);
+    painter.rect(
+        rect,
+        10.0,
+        egui::Color32::from_rgb(21, 18, 24),
+        egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(76, 65, 82)),
+        egui::StrokeKind::Inside,
+    );
+    let origin = egui::pos2(rect.left() + 10.0, rect.top() + 7.0);
+    let lit_alpha = if active {
+        170 + brightness.min(7) * 12
+    } else {
+        150
+    };
+    let lit = egui::Color32::from_rgba_unmultiplied(255, 174, 38, lit_alpha);
+    let dim = egui::Color32::from_rgba_unmultiplied(194, 181, 205, 35);
+    for (digit, mask) in raw_segments.iter().take(4).enumerate() {
+        let offset = egui::vec2(digit as f32 * (digit_width + gap), 0.0);
+        for (bit, (start, end)) in LINES.into_iter().enumerate() {
+            let color = if mask & (1 << bit) != 0 { lit } else { dim };
+            painter.line_segment(
+                [
+                    origin + start.to_vec2() + offset,
+                    origin + end.to_vec2() + offset,
+                ],
+                egui::Stroke::new(5.0_f32, color),
+            );
+        }
+        let dot = origin + egui::vec2(36.0, 54.0) + offset;
+        painter.circle_filled(dot, 2.2, if mask & 0x80 != 0 { lit } else { dim });
+    }
 }
 
 fn unavailable(ui: &mut egui::Ui, message: &str) {
@@ -528,12 +700,25 @@ fn yes_no(app: &PealayerApp, value: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::capability_pill_width;
+    use super::{FRONT_PANEL_KEYS, capability_column_count};
 
     #[test]
-    fn capability_pills_are_clamped_to_the_visible_panel() {
-        assert_eq!(capability_pill_width("RF", 180.0), 44.0);
-        assert_eq!(capability_pill_width(&"x".repeat(80), 180.0), 180.0);
-        assert_eq!(capability_pill_width(&"x".repeat(80), 480.0), 220.0);
+    fn capability_badges_use_bounded_responsive_columns() {
+        assert_eq!(capability_column_count(359.0), 1);
+        assert_eq!(capability_column_count(360.0), 2);
+        assert_eq!(capability_column_count(900.0), 2);
+    }
+
+    #[test]
+    fn front_panel_key_names_match_pccontroller_web_ui() {
+        assert_eq!(
+            FRONT_PANEL_KEYS,
+            [
+                ("K1", "Previous"),
+                ("K2", "Next"),
+                ("K3", "Decrease"),
+                ("K4", "Select"),
+            ]
+        );
     }
 }

@@ -135,6 +135,7 @@ pub struct HardwareFrontPanel {
     pub raw_segments: Vec<u8>,
     pub brightness: u8,
     pub blink: bool,
+    pub segments_active: bool,
     pub pressed_keys: u8,
     pub menu_page: u8,
     pub program_mode: u8,
@@ -650,7 +651,22 @@ impl ControllerClient {
     pub fn hardware_capabilities(&mut self) -> Result<HardwareCapabilities, String> {
         let snapshot = self.call("controller.snapshot", json!({}))?;
         let peripherals = self.call("controller.peripherals.get", json!({}))?;
-        Ok(parse_hardware_capabilities(&snapshot, &peripherals))
+        let has_live_segments = snapshot
+            .get("connected")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            && snapshot
+                .pointer("/hello/capabilities")
+                .and_then(Value::as_u64)
+                .is_some_and(|bits| bits & u64::from(CAPABILITY_SEGMENTS) != 0);
+        let exact_front_panel = has_live_segments
+            .then(|| self.call("controller.front_panel", json!({})).ok())
+            .flatten();
+        Ok(parse_hardware_capabilities_with_front_panel(
+            &snapshot,
+            &peripherals,
+            exact_front_panel.as_ref(),
+        ))
     }
 }
 
@@ -792,7 +808,16 @@ fn parse_strip_effects(value: &Value) -> Vec<HardwareStripEffect> {
         .collect()
 }
 
+#[cfg(test)]
 fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCapabilities {
+    parse_hardware_capabilities_with_front_panel(snapshot, catalog, None)
+}
+
+fn parse_hardware_capabilities_with_front_panel(
+    snapshot: &Value,
+    catalog: &Value,
+    exact_front_panel: Option<&Value>,
+) -> HardwareCapabilities {
     let board_connected = snapshot
         .get("connected")
         .and_then(Value::as_bool)
@@ -1299,58 +1324,67 @@ fn parse_hardware_capabilities(snapshot: &Value, catalog: &Value) -> HardwareCap
             .and_then(Value::as_bool)
             .unwrap_or(false),
     });
-    let front_panel = (board_connected
-        && snapshot
-            .get("have_front_panel")
-            .and_then(Value::as_bool)
-            .unwrap_or(false))
-    .then(|| HardwareFrontPanel {
-        raw_segments: snapshot
-            .pointer("/front_panel/raw_segments")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|value| value.as_u64().and_then(|value| u8::try_from(value).ok()))
-            .collect(),
-        brightness: snapshot
-            .pointer("/front_panel/brightness")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as u8,
-        blink: snapshot
-            .pointer("/front_panel/blink")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        pressed_keys: snapshot
-            .pointer("/front_panel/pressed_keys")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as u8,
-        menu_page: snapshot
-            .pointer("/front_panel/menu_page")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as u8,
-        program_mode: snapshot
-            .pointer("/front_panel/program_mode")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as u8,
-        lcd_available: snapshot
-            .pointer("/front_panel/lcd_available")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        lcd_address: snapshot
-            .pointer("/front_panel/lcd_address")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as u8,
-        lcd_line_1: snapshot
-            .pointer("/front_panel/lcd_line_1")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        lcd_line_2: snapshot
-            .pointer("/front_panel/lcd_line_2")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-    });
+    let snapshot_has_exact_front_panel = snapshot
+        .get("have_front_panel")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let front_panel_source = exact_front_panel
+        .filter(|panel| {
+            panel
+                .get("raw_segments")
+                .and_then(Value::as_array)
+                .is_some_and(|segments| segments.len() == 4)
+        })
+        .or_else(|| {
+            snapshot_has_exact_front_panel
+                .then(|| snapshot.get("front_panel"))
+                .flatten()
+        });
+    let front_panel = (board_connected)
+        .then_some(front_panel_source)
+        .flatten()
+        .map(|panel| HardwareFrontPanel {
+            raw_segments: panel
+                .get("raw_segments")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|value| value.as_u64().and_then(|value| u8::try_from(value).ok()))
+                .collect(),
+            brightness: panel.get("brightness").and_then(Value::as_u64).unwrap_or(0) as u8,
+            blink: panel.get("blink").and_then(Value::as_bool).unwrap_or(false),
+            segments_active: panel
+                .get("segments_active")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            pressed_keys: panel
+                .get("pressed_keys")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as u8,
+            menu_page: panel.get("menu_page").and_then(Value::as_u64).unwrap_or(0) as u8,
+            program_mode: panel
+                .get("program_mode")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as u8,
+            lcd_available: panel
+                .get("lcd_available")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            lcd_address: panel
+                .get("lcd_address")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as u8,
+            lcd_line_1: panel
+                .get("lcd_line_1")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            lcd_line_2: panel
+                .get("lcd_line_2")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        });
     let empty_status = Value::Null;
     let status = snapshot.get("status").unwrap_or(&empty_status);
     let telemetry = telemetry_from_status(status, board_connected);
@@ -1919,7 +1953,7 @@ mod tests {
                 "identity_schema": 2,
                 "build_hash": 0xA97EC116_u64,
                 "build_timestamp": "260929223718",
-                "capabilities": 0
+                "capabilities": CAPABILITY_SEGMENTS
             },
             "board_name": {"name":"CAFE-01", "persisted":true},
             "have_board_name": true,
@@ -1938,11 +1972,12 @@ mod tests {
                 "motion_break_ms": 180,
                 "persisted": true
             },
-            "have_front_panel": true,
+            "have_front_panel": false,
             "front_panel": {
                 "raw_segments": [63, 6, 91, 79],
                 "brightness": 5,
                 "blink": true,
+                "segments_active": true,
                 "pressed_keys": 3,
                 "menu_page": 4,
                 "program_mode": 2,
@@ -1952,7 +1987,12 @@ mod tests {
                 "lcd_line_2": "Ready"
             }
         });
-        let parsed = parse_hardware_capabilities(&snapshot, &json!({}));
+        let exact_front_panel = snapshot["front_panel"].clone();
+        let parsed = parse_hardware_capabilities_with_front_panel(
+            &snapshot,
+            &json!({}),
+            Some(&exact_front_panel),
+        );
         assert_eq!(parsed.board_name, "CAFE-01");
         assert_eq!(parsed.board_identity.product_name, "PCController");
         assert_eq!(parsed.board_identity.stored_name, "CAFE-01");
@@ -1965,6 +2005,7 @@ mod tests {
         assert_eq!(settings.stream_period_ms, 25);
         let front_panel = parsed.front_panel.expect("front panel must be advertised");
         assert_eq!(front_panel.raw_segments, [63, 6, 91, 79]);
+        assert!(front_panel.segments_active);
         assert_eq!(front_panel.lcd_line_2, "Ready");
     }
 

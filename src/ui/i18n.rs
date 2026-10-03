@@ -247,6 +247,17 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Macros" => "ماکروها",
         "Lighting effects" => "جلوه‌های نورپردازی",
         "Live front-panel state" => "وضعیت زندهٔ پنل جلویی",
+        "Live physical display" => "نمایشگر فیزیکی زنده",
+        "Physical board keys" => "کلیدهای فیزیکی برد",
+        "Page" => "صفحه",
+        "Previous" => "قبلی",
+        "Next" => "بعدی",
+        "Decrease" => "کاهش",
+        "Select" => "انتخاب",
+        "No exact seven-segment frame is available." => "فریم دقیق نمایشگر هفت‌بخشی در دسترس نیست.",
+        "Send the same front-panel key press through PCController" => {
+            "ارسال همان فشار کلید پنل جلویی از طریق PCController"
+        }
         "The attached board does not advertise front-panel state." => {
             "برد متصل وضعیت پنل جلویی را اعلام نمی‌کند."
         }

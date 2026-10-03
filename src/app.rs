@@ -1568,6 +1568,17 @@ impl PealayerApp {
         )
     }
 
+    pub(crate) fn press_front_panel_key(&mut self, key: &str) -> Result<(), String> {
+        if !matches!(key, "K1" | "K2" | "K3" | "K4") {
+            return Err("front-panel key must be K1, K2, K3, or K4".to_string());
+        }
+        self.request_board_operation(
+            "board-front-panel-key",
+            "controller.command.execute",
+            serde_json::json!({"command": format!("host-menu key {key} press")}),
+        )
+    }
+
     pub(crate) fn reboot_board(&mut self) -> Result<(), String> {
         self.request_board_operation(
             "board-reboot",
@@ -1625,7 +1636,10 @@ impl PealayerApp {
                         "effect-stop" => {
                             self.hardware_effect_authoring.preview_active = false;
                         }
-                        "board-name" | "board-silent" | "board-reboot" => {
+                        "board-name"
+                        | "board-silent"
+                        | "board-reboot"
+                        | "board-front-panel-key" => {
                             self.engine_handle.request_catalog_refresh();
                         }
                         "effect-save" | "effect-delete" => {
