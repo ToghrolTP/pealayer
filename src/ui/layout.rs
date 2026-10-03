@@ -51,6 +51,7 @@ const EFFECT_CARD_HORIZONTAL_MARGIN: i8 = 9;
 const EFFECT_CARD_STROKE_WIDTH: f32 = 1.0;
 const EFFECT_CARD_ACTION_GUTTER: f32 = 100.0;
 const EFFECT_CARD_ACTION_BUTTONS_WIDTH: f32 = 72.0;
+const HARDWARE_CARD_STROKE_WIDTH: f32 = 1.0;
 
 fn effects_panel_content_width(available_width: f32) -> f32 {
     (available_width - EFFECTS_PANEL_RIGHT_GUTTER).max(EFFECT_CARD_MIN_WIDTH)
@@ -114,6 +115,10 @@ fn effect_group_header<R>(
             ui.set_width(content_width);
             add_contents(ui)
         })
+}
+
+fn hardware_frame_content_width(outer_width: f32, horizontal_margin: i8) -> f32 {
+    (outer_width - (f32::from(horizontal_margin) + HARDWARE_CARD_STROKE_WIDTH) * 2.0).max(1.0)
 }
 
 fn pwm_percent(raw: u16) -> f64 {
@@ -1454,11 +1459,17 @@ fn parse_rf_code(value: &str) -> Option<u32> {
 }
 
 fn board_tool_card(ui: &mut egui::Ui, icon: &str, title: &str, body: impl FnOnce(&mut egui::Ui)) {
+    let outer_width = ui.available_width();
+    ui.set_width(outer_width);
     egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::symmetric(12, 10))
+        .stroke(egui::Stroke::new(
+            HARDWARE_CARD_STROKE_WIDTH,
+            ui.visuals().widgets.noninteractive.bg_stroke.color,
+        ))
         .corner_radius(9.0)
         .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
+            ui.set_width(hardware_frame_content_width(outer_width, 12));
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(icon).size(18.0));
                 ui.label(egui::RichText::new(title).strong());
@@ -1665,10 +1676,14 @@ fn draw_compact_control_card(
     let relay_id = relay_id_from_control_key(&control.key);
     let indicator_state = control_indicator_state(capabilities, control);
     let card_outer_width = ui.available_width();
-    let card_content_width = (card_outer_width - 18.0).max(1.0);
+    let card_content_width = hardware_frame_content_width(card_outer_width, 9);
     ui.set_width(card_outer_width);
     let card = egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::symmetric(9, 6))
+        .stroke(egui::Stroke::new(
+            HARDWARE_CARD_STROKE_WIDTH,
+            ui.visuals().widgets.noninteractive.bg_stroke.color,
+        ))
         .corner_radius(7.0)
         .show(ui, |ui| {
             ui.set_width(card_content_width);
@@ -1943,10 +1958,14 @@ fn draw_control_card(
     let relay_id = relay_id_from_control_key(&control.key);
     let indicator_state = control_indicator_state(capabilities, control);
     let card_outer_width = ui.available_width();
-    let card_content_width = (card_outer_width - 24.0).max(1.0);
+    let card_content_width = hardware_frame_content_width(card_outer_width, 12);
     ui.set_width(card_outer_width);
     let card = egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::symmetric(12, 10))
+        .stroke(egui::Stroke::new(
+            HARDWARE_CARD_STROKE_WIDTH,
+            ui.visuals().widgets.noninteractive.bg_stroke.color,
+        ))
         .corner_radius(8.0)
         .show(ui, |ui| {
             ui.set_width(card_content_width);
@@ -1968,15 +1987,17 @@ fn draw_control_card(
                 {
                     let turn_on = indicator_state != ControlIndicatorState::Active;
                     let _ = app.engine_handle.sender.send(
-                        crate::four_d::engine::EngineMessage::ControllerCall {
-                            method: "controller.command.execute".to_string(),
-                            params: serde_json::json!({
-                                "command": format!("relay {id} {}", if turn_on { "on" } else { "off" }),
-                            }),
-                        },
-                    );
+                    crate::four_d::engine::EngineMessage::ControllerCall {
+                        method: "controller.command.execute".to_string(),
+                        params: serde_json::json!({
+                            "command": format!("relay {id} {}", if turn_on { "on" } else { "off" }),
+                        }),
+                    },
+                );
                 }
-                if app.prefix_relay_identifiers && let Some(id) = relay_id {
+                if app.prefix_relay_identifiers
+                    && let Some(id) = relay_id
+                {
                     ui.label(
                         egui::RichText::new(relay_identifier_label(app, id))
                             .monospace()
@@ -1995,7 +2016,8 @@ fn draw_control_card(
                             data.insert_temp(source_id, control.name.clone());
                             data.insert_temp(draft_id, control.name.clone());
                         }
-                        data.get_temp::<String>(draft_id).unwrap_or_else(|| control.name.clone())
+                        data.get_temp::<String>(draft_id)
+                            .unwrap_or_else(|| control.name.clone())
                     });
                     let mut edit_response = None;
                     let mut save_clicked = false;
@@ -2010,16 +2032,17 @@ fn draw_control_card(
                             .on_hover_text(app.tr("Save name"))
                             .clicked();
                         let width = ui.available_width().max(56.0);
-                        edit_response = Some(ui.add_sized(
-                            [width, 24.0],
-                            egui::TextEdit::singleline(&mut draft)
-                                .id(text_edit_id)
-                                .hint_text(&control.default_name),
-                        ));
+                        edit_response = Some(
+                            ui.add_sized(
+                                [width, 24.0],
+                                egui::TextEdit::singleline(&mut draft)
+                                    .id(text_edit_id)
+                                    .hint_text(&control.default_name),
+                            ),
+                        );
                     });
                     let edit = edit_response.expect("rename editor is always rendered");
-                    if ui.data_mut(|data| data.remove_temp::<bool>(focus_pending_id))
-                        == Some(true)
+                    if ui.data_mut(|data| data.remove_temp::<bool>(focus_pending_id)) == Some(true)
                     {
                         edit.request_focus();
                     }
@@ -2041,8 +2064,10 @@ fn draw_control_card(
                 } else {
                     let title_text = crate::ui::i18n::visual_text(app.language, &control.name);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(crate::ui::icons::PENCIL_SIMPLE)
-                            .on_hover_text(app.tr("Rename")).clicked()
+                        if ui
+                            .button(crate::ui::icons::PENCIL_SIMPLE)
+                            .on_hover_text(app.tr("Rename"))
+                            .clicked()
                         {
                             ui.data_mut(|data| {
                                 data.insert_temp(draft_id, control.name.clone());
@@ -2066,11 +2091,9 @@ fn draw_control_card(
                         }
                         let title = ui.add_sized(
                             [ui.available_width().max(52.0), 24.0],
-                            egui::Label::new(
-                                egui::RichText::new(&title_text).strong().size(13.0),
-                            )
-                            .truncate()
-                            .sense(egui::Sense::click()),
+                            egui::Label::new(egui::RichText::new(&title_text).strong().size(13.0))
+                                .truncate()
+                                .sense(egui::Sense::click()),
                         );
                         if title.clicked() {
                             ui.data_mut(|data| {
@@ -2084,8 +2107,8 @@ fn draw_control_card(
                 }
             });
 
-            let mut editing_group = ui
-                .data_mut(|data| data.get_temp::<bool>(group_edit_id).unwrap_or(false));
+            let mut editing_group =
+                ui.data_mut(|data| data.get_temp::<bool>(group_edit_id).unwrap_or(false));
             if editing_group {
                 let mut draft = ui.data_mut(|data| {
                     data.get_temp::<String>(group_draft_id)
@@ -2117,10 +2140,16 @@ fn draw_control_card(
             }
 
             if is_pwm_control(control) {
-                if let Some(channel) = capabilities.pwm_channels.iter()
+                if let Some(channel) = capabilities
+                    .pwm_channels
+                    .iter()
                     .find(|channel| channel.key == control.key)
                 {
-                    ui.add_space(if app.compact_hardware_controls { 3.0 } else { 8.0 });
+                    ui.add_space(if app.compact_hardware_controls {
+                        3.0
+                    } else {
+                        8.0
+                    });
                     draw_pwm_card_editor(
                         app,
                         ui,
@@ -2133,7 +2162,11 @@ fn draw_control_card(
             }
 
             if !control.actions.is_empty() {
-                ui.add_space(if app.compact_hardware_controls { 3.0 } else { 8.0 });
+                ui.add_space(if app.compact_hardware_controls {
+                    3.0
+                } else {
+                    8.0
+                });
                 let is_motion = is_motion_control(control);
                 let stop_action = control
                     .actions
@@ -2146,43 +2179,55 @@ fn draw_control_card(
                     for row in action_row.chunks(columns) {
                         ui.columns(columns, |uis| {
                             for (index, action) in row.iter().enumerate() {
-                            let ui = &mut uis[index];
-                            let visual_name = crate::ui::i18n::visual_text(app.language, &action.name);
-                            let label = responsive_action_label(action, ui.available_width());
-                            let verb = action.verb.to_ascii_lowercase();
-                            let selected = relay_id.is_some()
-                                && ((verb == "on" && indicator_state == ControlIndicatorState::Active)
-                                    || (verb == "off" && indicator_state == ControlIndicatorState::Inactive));
-                            let mut button = egui::Button::new(label)
-                                .truncate()
-                                .selected(selected);
-                            if selected && verb == "on" {
-                                button = button
-                                    .fill(egui::Color32::from_rgb(22, 163, 74))
-                                    .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(34, 197, 94)));
+                                let ui = &mut uis[index];
+                                let visual_name =
+                                    crate::ui::i18n::visual_text(app.language, &action.name);
+                                let label = responsive_action_label(action, ui.available_width());
+                                let verb = action.verb.to_ascii_lowercase();
+                                let selected = relay_id.is_some()
+                                    && ((verb == "on"
+                                        && indicator_state == ControlIndicatorState::Active)
+                                        || (verb == "off"
+                                            && indicator_state == ControlIndicatorState::Inactive));
+                                let mut button =
+                                    egui::Button::new(label).truncate().selected(selected);
+                                if selected && verb == "on" {
+                                    button = button
+                                        .fill(egui::Color32::from_rgb(22, 163, 74))
+                                        .stroke(egui::Stroke::new(
+                                            1.0_f32,
+                                            egui::Color32::from_rgb(34, 197, 94),
+                                        ));
+                                }
+                                let response = ui
+                                    .add_enabled_ui(!app.estop_active && !control.locked, |ui| {
+                                        ui.add_sized([ui.available_width(), 28.0], button)
+                                    })
+                                    .inner
+                                    .on_hover_text(visual_name);
+                                if is_motion
+                                    && app.motion_control_mode
+                                        == crate::config::MotionControlMode::Hold
+                                    && stop_action.is_some()
+                                {
+                                    update_held_motion_action(
+                                        app,
+                                        ui,
+                                        &response,
+                                        control,
+                                        action,
+                                        stop_action.expect("checked above"),
+                                    );
+                                } else if (matches!(verb.as_str(), "on" | "off")
+                                    && hardware_control_activated(app, ui, &response))
+                                    || (!matches!(verb.as_str(), "on" | "off")
+                                        && response.clicked())
+                                {
+                                    crate::ui::hardware_control::invoke_action(
+                                        app, control, action,
+                                    );
+                                }
                             }
-                            let response = ui.add_enabled_ui(!app.estop_active && !control.locked, |ui| {
-                                ui.add_sized([ui.available_width(), 28.0], button)
-                            }).inner.on_hover_text(visual_name);
-                            if is_motion
-                                && app.motion_control_mode == crate::config::MotionControlMode::Hold
-                                && stop_action.is_some()
-                            {
-                                update_held_motion_action(
-                                    app,
-                                    ui,
-                                    &response,
-                                    control,
-                                    action,
-                                    stop_action.expect("checked above"),
-                                );
-                            } else if (matches!(verb.as_str(), "on" | "off")
-                                && hardware_control_activated(app, ui, &response))
-                                || (!matches!(verb.as_str(), "on" | "off") && response.clicked())
-                            {
-                                crate::ui::hardware_control::invoke_action(app, control, action);
-                            }
-                        }
                         });
                     }
                 }
@@ -2201,12 +2246,9 @@ fn draw_control_card(
                             .truncate()
                             .selected(selected);
                         if selected && state {
-                            button = button
-                                .fill(egui::Color32::from_rgb(22, 163, 74))
-                                .stroke(egui::Stroke::new(
-                                    1.0_f32,
-                                    egui::Color32::from_rgb(34, 197, 94),
-                                ));
+                            button = button.fill(egui::Color32::from_rgb(22, 163, 74)).stroke(
+                                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(34, 197, 94)),
+                            );
                         }
                         let response = uis[index]
                             .add_enabled_ui(!app.estop_active && !control.locked, |ui| {
@@ -2252,12 +2294,17 @@ fn draw_compact_relay_group(
     group: &str,
     controls: &[&crate::four_d::controller::HardwareControl],
 ) {
+    let outer_width = ui.available_width();
+    ui.set_width(outer_width);
     egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::symmetric(9, 6))
+        .stroke(egui::Stroke::new(
+            HARDWARE_CARD_STROKE_WIDTH,
+            ui.visuals().widgets.noninteractive.bg_stroke.color,
+        ))
         .corner_radius(7.0)
         .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.set_max_width(ui.available_width());
+            ui.set_width(hardware_frame_content_width(outer_width, 9));
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(crate::ui::icons::PLUG).size(17.0));
                 let title = if group.trim().is_empty() {
@@ -2553,6 +2600,73 @@ mod timeline_row_tests {
         assert_eq!(control_grid_columns(720.0), 2);
         assert_eq!(action_grid_columns(280.0, 2), 2);
         assert_eq!(action_grid_columns(420.0, 3), 3);
+    }
+
+    #[test]
+    fn hardware_cards_keep_one_exact_width_across_cards_and_frames() {
+        let context = egui::Context::default();
+        let expected_width = 318.0;
+
+        for _ in 0..4 {
+            let mut widths = Vec::new();
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(420.0, 480.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.set_width(expected_width);
+                    for (horizontal_margin, vertical_margin, corner_radius) in
+                        [(14, 12, 10.0), (12, 10, 8.0), (9, 6, 7.0)]
+                    {
+                        ui.set_width(expected_width);
+                        let card = egui::Frame::group(ui.style())
+                            .inner_margin(egui::Margin::symmetric(
+                                horizontal_margin,
+                                vertical_margin,
+                            ))
+                            .stroke(egui::Stroke::new(
+                                HARDWARE_CARD_STROKE_WIDTH,
+                                ui.visuals().widgets.noninteractive.bg_stroke.color,
+                            ))
+                            .corner_radius(corner_radius)
+                            .show(ui, |ui| {
+                                ui.set_width(hardware_frame_content_width(
+                                    expected_width,
+                                    horizontal_margin,
+                                ));
+                                ui.horizontal(|ui| {
+                                    ui.label(crate::ui::icons::PLUG);
+                                    ui.label("Hardware control");
+                                });
+                            });
+                        widths.push(card.response.rect.width());
+                    }
+                },
+            );
+            drop(output);
+
+            assert_eq!(widths.len(), 3);
+            for width in widths {
+                assert!(
+                    (width - expected_width).abs() <= 0.1,
+                    "hardware card requested {width}px instead of {expected_width}px"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hardware_card_content_budget_includes_both_margins_and_strokes() {
+        let outer_width = 318.0;
+        for margin in [9, 12, 14] {
+            let content = hardware_frame_content_width(outer_width, margin);
+            let reconstructed = content + 2.0 * (f32::from(margin) + HARDWARE_CARD_STROKE_WIDTH);
+            assert_eq!(reconstructed, outer_width);
+        }
     }
 
     #[test]
@@ -4737,10 +4851,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 &capabilities,
                                 self.app.tr("Connected board"),
                             );
+                            let board_card_width = ui.available_width();
+                            ui.set_width(board_card_width);
                             let board_card = egui::Frame::group(ui.style())
                                 .inner_margin(egui::Margin::symmetric(14, 12))
+                                .stroke(egui::Stroke::new(
+                                    HARDWARE_CARD_STROKE_WIDTH,
+                                    ui.visuals().widgets.noninteractive.bg_stroke.color,
+                                ))
                                 .corner_radius(10.0)
                                 .show(ui, |ui| {
+                                    ui.set_width(hardware_frame_content_width(board_card_width, 14));
                                     let row_height = if board_card_subtitle.is_some() {
                                         42.0
                                     } else {
