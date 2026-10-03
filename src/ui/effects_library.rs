@@ -367,7 +367,7 @@ fn sequence_duration_ms(steps: &[crate::four_d::controller::HardwareMacroStep]) 
         .max(1)
 }
 
-fn draw_sequence_step_editor(ui: &mut egui::Ui, draft: &mut ControllerEffectDraft) {
+fn draw_sequence_step_editor(ui: &mut egui::Ui, draft: &mut ControllerEffectDraft, rtl_ui: bool) {
     draft.duration_ms = sequence_duration_ms(&draft.steps);
     ui.horizontal(|ui| {
         ui.heading("Sequence steps");
@@ -557,7 +557,12 @@ fn draw_sequence_step_editor(ui: &mut egui::Ui, draft: &mut ControllerEffectDraf
                                     });
                                 ui.end_row();
                                 ui.label("Text");
-                                ui.text_edit_singleline(&mut step.text);
+                                let text_align =
+                                    crate::ui::i18n::input_alignment(rtl_ui, &step.text);
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut step.text)
+                                        .horizontal_align(text_align),
+                                );
                                 ui.end_row();
                                 ui.label("Visible for");
                                 ui.add(
@@ -645,7 +650,12 @@ fn draw_sequence_step_editor(ui: &mut egui::Ui, draft: &mut ControllerEffectDraf
                                 );
                                 ui.end_row();
                                 ui.label("Description");
-                                ui.text_edit_singleline(&mut step.text);
+                                let text_align =
+                                    crate::ui::i18n::input_alignment(rtl_ui, &step.text);
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut step.text)
+                                        .horizontal_align(text_align),
+                                );
                                 ui.end_row();
                             }
                             _ => {}
@@ -870,6 +880,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 app.tr("Duration"),
                                 app.tr("Execution"),
                             );
+                            let rtl_ui = app.rtl;
                             let draft = &mut app.effect_library_draft;
                             egui::Grid::new("controller_effect_definition_grid")
                                 .num_columns(2)
@@ -890,14 +901,24 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     );
                                     ui.end_row();
                                     ui.label(&labels.4);
+                                    let name_align = crate::ui::i18n::input_alignment(
+                                        rtl_ui,
+                                        &draft.name,
+                                    );
                                     ui.add(
                                         egui::TextEdit::singleline(&mut draft.name)
+                                            .horizontal_align(name_align)
                                             .desired_width(320.0),
                                     );
                                     ui.end_row();
                                     ui.label(&labels.5);
+                                    let category_align = crate::ui::i18n::input_alignment(
+                                        rtl_ui,
+                                        &draft.category,
+                                    );
                                     ui.add(
                                         egui::TextEdit::singleline(&mut draft.category)
+                                            .horizontal_align(category_align)
                                             .desired_width(320.0),
                                     );
                                     ui.end_row();
@@ -989,7 +1010,11 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 });
                             if app.effect_library_draft.kind == "sequence" {
                                 ui.add_space(12.0);
-                                draw_sequence_step_editor(ui, &mut app.effect_library_draft);
+                                draw_sequence_step_editor(
+                                    ui,
+                                    &mut app.effect_library_draft,
+                                    rtl_ui,
+                                );
                                 ui.add_space(8.0);
                                 if crate::ui::icons::disclosure_header(
                                     ui,
@@ -1031,13 +1056,27 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                                 );
                                                 ui.end_row();
                                                 ui.label("Label");
-                                                ui.text_edit_singleline(
-                                                    &mut app.effect_library_draft.label,
+                                                let label_align = crate::ui::i18n::input_alignment(
+                                                    rtl_ui,
+                                                    &app.effect_library_draft.label,
+                                                );
+                                                ui.add(
+                                                    egui::TextEdit::singleline(
+                                                        &mut app.effect_library_draft.label,
+                                                    )
+                                                    .horizontal_align(label_align),
                                                 );
                                                 ui.end_row();
                                                 ui.label("LCD message");
-                                                ui.text_edit_singleline(
-                                                    &mut app.effect_library_draft.lcd_message,
+                                                let lcd_align = crate::ui::i18n::input_alignment(
+                                                    rtl_ui,
+                                                    &app.effect_library_draft.lcd_message,
+                                                );
+                                                ui.add(
+                                                    egui::TextEdit::singleline(
+                                                        &mut app.effect_library_draft.lcd_message,
+                                                    )
+                                                    .horizontal_align(lcd_align),
                                                 );
                                                 ui.end_row();
                                             });
@@ -1056,11 +1095,16 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 );
                                 ui.add_space(8.0);
                                 ui.label(app.tr("Description"));
+                                let description_align = crate::ui::i18n::input_alignment(
+                                    rtl_ui,
+                                    &app.effect_library_draft.description,
+                                );
                                 ui.add_sized(
                                     [ui.available_width(), 72.0],
                                     egui::TextEdit::multiline(
                                         &mut app.effect_library_draft.description,
                                     )
+                                    .horizontal_align(description_align)
                                     .desired_rows(3),
                                 );
                             }

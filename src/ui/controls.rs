@@ -171,7 +171,7 @@ pub fn begin_elapsed_edit(app: &mut PealayerApp) {
 pub fn draw_elapsed_editor(
     app: &mut PealayerApp,
     ui: &mut egui::Ui,
-    id_source: impl std::hash::Hash,
+    id_source: impl std::hash::Hash + std::fmt::Debug,
     enabled: bool,
 ) -> egui::Response {
     let elapsed = resolve_display_time(app.seek_pos, app.playback_time);

@@ -231,14 +231,20 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .spacing([12.0, 8.0])
             .show(ui, |ui| {
                 ui.label(app.tr("Name"));
+                let name_align =
+                    crate::ui::i18n::input_alignment(app.rtl, &app.hardware_control_name_draft);
                 ui.add(
                     egui::TextEdit::singleline(&mut app.hardware_control_name_draft)
+                        .horizontal_align(name_align)
                         .desired_width(ui.available_width().max(180.0)),
                 );
                 ui.end_row();
                 ui.label(app.tr("Group"));
+                let group_align =
+                    crate::ui::i18n::input_alignment(app.rtl, &app.hardware_control_group_draft);
                 ui.add(
                     egui::TextEdit::singleline(&mut app.hardware_control_group_draft)
+                        .horizontal_align(group_align)
                         .desired_width(ui.available_width().max(180.0)),
                 );
                 ui.end_row();

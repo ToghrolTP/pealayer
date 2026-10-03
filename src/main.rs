@@ -202,7 +202,10 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Glow,
-        vsync: launch_config.opengl_vsync,
+        glow_options: eframe::egui_glow::GlowConfiguration {
+            vsync: launch_config.opengl_vsync,
+            ..Default::default()
+        },
         ..Default::default()
     };
 

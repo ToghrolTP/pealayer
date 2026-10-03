@@ -336,7 +336,7 @@ pub fn compact_row(ui: &mut egui::Ui, rtl: bool, body: impl FnOnce(&mut egui::Ui
 /// otherwise inherit a surrounding horizontal layout and can grow sideways.
 pub fn scroll_column(
     ui: &mut egui::Ui,
-    id: impl std::hash::Hash,
+    id: impl std::hash::Hash + std::fmt::Debug,
     max_height: Option<f32>,
     body: impl FnOnce(&mut egui::Ui),
 ) {
@@ -349,7 +349,7 @@ pub fn scroll_column(
 /// dialog smaller than its contents.
 pub fn fit_scroll(
     ui: &mut egui::Ui,
-    id: impl std::hash::Hash,
+    id: impl std::hash::Hash + std::fmt::Debug,
     max_height: Option<f32>,
     body: impl FnOnce(&mut egui::Ui),
 ) {
@@ -358,7 +358,7 @@ pub fn fit_scroll(
 
 fn scroll_column_impl(
     ui: &mut egui::Ui,
-    id: impl std::hash::Hash,
+    id: impl std::hash::Hash + std::fmt::Debug,
     max_height: Option<f32>,
     shrink_height_to_content: bool,
     body: impl FnOnce(&mut egui::Ui),

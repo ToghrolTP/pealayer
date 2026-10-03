@@ -461,7 +461,7 @@ impl eframe::App for PealayerApp {
             i.raw
                 .dropped_files
                 .iter()
-                .filter_map(|file| file.path.clone())
+                .map(|file| file.path().to_owned())
                 .collect::<Vec<_>>()
         });
         if !dropped_file_paths.is_empty() {
@@ -4211,6 +4211,7 @@ mod tests {
             None
         }
         fn set_string(&mut self, _key: &str, _value: String) {}
+        fn remove_string(&mut self, _key: &str) {}
         fn flush(&mut self) {}
     }
 

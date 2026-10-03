@@ -914,8 +914,8 @@ fn replace_selection(
     id: egui::Id,
 ) {
     let [start, end] = range.sorted_cursors();
-    let start_byte = char_to_byte(text, start.index);
-    let end_byte = char_to_byte(text, end.index);
+    let start_byte = char_to_byte(text, start.index.into());
+    let end_byte = char_to_byte(text, end.index.into());
     let mut undoer = state.undoer();
     undoer.add_undo(&(range, text.clone()));
     text.replace_range(start_byte..end_byte, replacement);
@@ -1749,6 +1749,10 @@ pub fn human_bytes(bytes: u64) -> String {
 mod tests {
     use super::*;
 
+    fn discard_ui_output(mut output: egui::FullOutput) {
+        output.textures_delta.clear();
+    }
+
     #[test]
     fn secondary_click_on_recent_item_content_opens_its_context_menu() {
         let context = egui::Context::default();
@@ -1777,7 +1781,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let _ = context.run_ui(pressed, draw);
+        discard_ui_output(context.run_ui(pressed, draw));
 
         let released = egui::RawInput {
             screen_rect: Some(screen),
@@ -1792,7 +1796,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let _ = context.run_ui(released, draw);
+        discard_ui_output(context.run_ui(released, draw));
 
         assert!(egui::Popup::is_any_open(&context));
     }

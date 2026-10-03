@@ -81,7 +81,7 @@ pub fn action(verb: &str) -> &'static str {
 /// `CollapsingHeader` while preserving keyboard focus and a full-row hit target.
 pub fn disclosure_header(
     ui: &mut eframe::egui::Ui,
-    id_salt: impl std::hash::Hash,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
     label: &str,
     default_open: bool,
 ) -> bool {

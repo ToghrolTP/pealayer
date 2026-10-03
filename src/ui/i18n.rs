@@ -805,17 +805,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
 /// copy to presentation forms and visual order at the UI boundary while
 /// retaining logical Unicode in source, configuration, and protocol data.
 pub fn visual_text(language: AppLanguage, logical: &str) -> String {
-    let contains_arabic_script = logical.chars().any(|character| {
-        matches!(
-            character,
-            '\u{0600}'..='\u{06FF}'
-                | '\u{0750}'..='\u{077F}'
-                | '\u{08A0}'..='\u{08FF}'
-                | '\u{FB50}'..='\u{FDFF}'
-                | '\u{FE70}'..='\u{FEFF}'
-        )
-    });
-    if language != AppLanguage::Persian && !contains_arabic_script {
+    if language != AppLanguage::Persian && !contains_arabic_script(logical) {
         return logical.to_owned();
     }
 
@@ -829,6 +819,34 @@ pub fn visual_text(language: AppLanguage, logical: &str) -> String {
         visual.push_str(&bidi.reorder_line(paragraph, paragraph.range.clone()));
     }
     visual
+}
+
+/// Whether `text` contains Arabic-script Unicode, including Persian-specific
+/// letters and the presentation forms used by the static-label compatibility
+/// renderer.
+pub fn contains_arabic_script(text: &str) -> bool {
+    text.chars().any(|character| {
+        matches!(
+            character,
+            '\u{0600}'..='\u{06FF}'
+                | '\u{0750}'..='\u{077F}'
+                | '\u{08A0}'..='\u{08FF}'
+                | '\u{FB50}'..='\u{FDFF}'
+                | '\u{FE70}'..='\u{FEFF}'
+        )
+    })
+}
+
+/// Keep editable Persian/Arabic content on its natural edge. Since egui 0.35,
+/// HarfRust performs contextual shaping for `TextEdit`; this alignment helper
+/// supplies the missing field-level RTL placement without changing the stored
+/// logical Unicode or corrupting cursor/edit operations.
+pub fn input_alignment(rtl_ui: bool, logical: &str) -> egui::Align {
+    if rtl_ui || contains_arabic_script(logical) {
+        egui::Align::Max
+    } else {
+        egui::Align::Min
+    }
 }
 
 pub fn layout(rtl: bool, main_align: egui::Align) -> egui::Layout {
@@ -901,5 +919,51 @@ mod tests {
                 "font lacks shaped glyph {glyph:?}"
             );
         }
+    }
+
+    #[test]
+    fn persian_input_alignment_follows_content_even_in_ltr_ui() {
+        assert_eq!(input_alignment(false, "Cinema relay"), egui::Align::Min);
+        assert_eq!(input_alignment(false, "رله صندلی"), egui::Align::Max);
+        assert_eq!(input_alignment(true, "Cinema relay"), egui::Align::Max);
+    }
+
+    #[test]
+    fn bundled_vazirmatn_uses_contextual_arabic_shaping() {
+        let context = egui::Context::default();
+        configure_ui_fonts(&context, true);
+        let mut contextual = Vec::new();
+        let mut isolated = None;
+        let mut output = context.run_ui(Default::default(), |ui| {
+            contextual = ui
+                .painter()
+                .layout_no_wrap(
+                    "بب".to_owned(),
+                    egui::FontId::proportional(16.0),
+                    egui::Color32::WHITE,
+                )
+                .rows[0]
+                .glyphs
+                .iter()
+                .map(|glyph| glyph.uv_rect)
+                .collect();
+            isolated = Some(
+                ui.painter()
+                    .layout_no_wrap(
+                        "ب".to_owned(),
+                        egui::FontId::proportional(16.0),
+                        egui::Color32::WHITE,
+                    )
+                    .rows[0]
+                    .glyphs[0]
+                    .uv_rect,
+            );
+        });
+        output.textures_delta.clear();
+        assert!(contextual.len() >= 2);
+        assert!(
+            contextual.iter().any(|glyph| Some(*glyph) != isolated),
+            "Arabic letters must use contextual joined forms rather than isolated glyphs"
+        );
     }
 }

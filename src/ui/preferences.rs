@@ -238,7 +238,10 @@ pub(crate) fn run_native_preferences(owner_hwnd: isize) -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: native_preferences_viewport(title.clone()),
         renderer: eframe::Renderer::Glow,
-        vsync: config.opengl_vsync,
+        glow_options: eframe::egui_glow::GlowConfiguration {
+            vsync: config.opengl_vsync,
+            ..Default::default()
+        },
         ..Default::default()
     };
     eframe::run_native(
@@ -465,7 +468,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
             crate::ui::dialog::scroll_column(ui, "preferences_contract_content", None, |ui| {
                 ui.set_max_width((detail_width - 10.0).max(180.0));
                 ui.spacing_mut().item_spacing.y = 8.0;
-                outcome.save |= draw_contract_section(draft, ui, &tr, &sections);
+                outcome.save |= draw_contract_section(draft, ui, &tr, &sections, rtl);
             });
         });
     });
@@ -477,6 +480,7 @@ fn draw_contract_section(
     ui: &mut egui::Ui,
     tr: &impl Fn(&'static str) -> String,
     sections: &[crate::preferences_contract::PreferenceSection],
+    rtl_ui: bool,
 ) -> bool {
     let section = &sections[draft.tab.min(sections.len() - 1)];
     ui.heading(tr(section_heading(section.id)));
@@ -506,7 +510,8 @@ fn draw_contract_section(
                 .iter()
                 .filter(|control| control.section == section.id && control.group == group)
             {
-                changed |= render_contract_control(ui, control, &mut values, tr, label_width);
+                changed |=
+                    render_contract_control(ui, control, &mut values, tr, label_width, rtl_ui);
             }
             if section.id == "playback" && group == "Open Location / URL" {
                 let remote_count = draft
@@ -559,6 +564,7 @@ fn render_contract_control(
     values: &mut serde_json::Value,
     tr: &impl Fn(&'static str) -> String,
     label_width: f32,
+    rtl_ui: bool,
 ) -> bool {
     let current = value_at_path(values, control.key)
         .cloned()
@@ -724,10 +730,12 @@ fn render_contract_control(
         }
         PreferenceControlKind::Text => {
             let mut text = current.as_str().unwrap_or_default().to_string();
+            let text_align = crate::ui::i18n::input_alignment(rtl_ui, &text);
             preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
                 let control_width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut text)
+                        .horizontal_align(text_align)
                         .desired_width(control_width)
                         .hint_text(control.placeholder.unwrap_or_default()),
                 );

@@ -1864,7 +1864,7 @@ fn should_show_stop_preview(preview_active: bool, pending_operation: Option<&str
 
 fn hardware_section(
     ui: &mut egui::Ui,
-    id_salt: impl std::hash::Hash,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
     icon: &str,
     title: &str,
     default_open: bool,
@@ -2396,10 +2396,12 @@ fn draw_display_text_tool(
         crate::ui::icons::MONITOR_PLAY,
         &app.tr("Display text"),
         |ui| {
+            let text_align = crate::ui::i18n::input_alignment(app.rtl, &text);
             let response = ui.add_sized(
                 [ui.available_width(), 54.0],
                 egui::TextEdit::multiline(&mut text)
                     .desired_rows(2)
+                    .horizontal_align(text_align)
                     .hint_text(app.tr("Message for the board displays")),
             );
             if response.changed() {
@@ -2628,11 +2630,13 @@ fn draw_compact_control_card(
                         data.get_temp::<String>(draft_id)
                             .unwrap_or_else(|| control.name.clone())
                     });
+                    let edit_align = crate::ui::i18n::input_alignment(app.rtl, &draft);
                     let edit_width = (ui.available_width() * 0.42).clamp(64.0, 190.0);
                     let edit = ui.add_sized(
                         [edit_width, 24.0],
                         egui::TextEdit::singleline(&mut draft)
                             .id(text_edit_id)
+                            .horizontal_align(edit_align)
                             .hint_text(&control.default_name),
                     );
                     if ui.data_mut(|data| data.remove_temp::<bool>(focus_pending_id))
@@ -2658,10 +2662,13 @@ fn draw_compact_control_card(
                         data.get_temp::<String>(group_draft_id)
                             .unwrap_or_else(|| control.group.clone())
                     });
+                    let edit_align = crate::ui::i18n::input_alignment(app.rtl, &draft);
                     let edit_width = (ui.available_width() * 0.42).clamp(64.0, 190.0);
                     let edit = ui.add_sized(
                         [edit_width, 24.0],
-                        egui::TextEdit::singleline(&mut draft).hint_text(app.tr("No group")),
+                        egui::TextEdit::singleline(&mut draft)
+                            .horizontal_align(edit_align)
+                            .hint_text(app.tr("No group")),
                     );
                     if edit.changed() {
                         ui.data_mut(|data| data.insert_temp(group_draft_id, draft.clone()));
@@ -2928,6 +2935,7 @@ fn draw_control_card(
                         data.get_temp::<String>(draft_id)
                             .unwrap_or_else(|| control.name.clone())
                     });
+                    let edit_align = crate::ui::i18n::input_alignment(app.rtl, &draft);
                     let mut edit_response = None;
                     let mut save_clicked = false;
                     let mut cancel_clicked = false;
@@ -2946,6 +2954,7 @@ fn draw_control_card(
                                 [width, 24.0],
                                 egui::TextEdit::singleline(&mut draft)
                                     .id(text_edit_id)
+                                    .horizontal_align(edit_align)
                                     .hint_text(&control.default_name),
                             ),
                         );
@@ -3023,11 +3032,14 @@ fn draw_control_card(
                     data.get_temp::<String>(group_draft_id)
                         .unwrap_or_else(|| control.group.clone())
                 });
+                let edit_align = crate::ui::i18n::input_alignment(app.rtl, &draft);
                 ui.horizontal(|ui| {
                     ui.label(app.tr("Group"));
                     let edit = ui.add_sized(
                         [ui.available_width().max(80.0) - 52.0, 24.0],
-                        egui::TextEdit::singleline(&mut draft).hint_text(app.tr("No group")),
+                        egui::TextEdit::singleline(&mut draft)
+                            .horizontal_align(edit_align)
+                            .hint_text(app.tr("No group")),
                     );
                     if edit.changed() {
                         ui.data_mut(|data| data.insert_temp(group_draft_id, draft.clone()));
@@ -3506,6 +3518,10 @@ fn draw_control_card_grid(
 mod timeline_row_tests {
     use super::*;
 
+    fn discard_ui_output(mut output: egui::FullOutput) {
+        output.textures_delta.clear();
+    }
+
     #[test]
     fn magnetic_targets_include_exact_and_automation_keyframes() {
         let mut timeline = crate::four_d::models::Timeline::default();
@@ -3809,11 +3825,11 @@ mod timeline_row_tests {
             ..Default::default()
         };
         let sampled = std::cell::Cell::new(None);
-        let _ = context.run_ui(Default::default(), |ui| {
+        discard_ui_output(context.run_ui(Default::default(), |ui| {
             let value_id = ui.make_persistent_id(("pwm_value", 11_u8));
             ui.data_mut(|data| data.insert_temp(value_id, 2048_u16));
             sampled.set(pwm_control_intensity(ui, &capabilities, &control));
-        });
+        }));
         assert!((sampled.get().unwrap() - 0.5).abs() < 0.001);
         assert_eq!(
             control_indicator_color(&control),
@@ -3866,7 +3882,7 @@ mod timeline_row_tests {
                     }
                 },
             );
-            drop(output);
+            discard_ui_output(output);
 
             assert_eq!(widths.len(), 3);
             for width in widths {
@@ -4230,7 +4246,7 @@ mod timeline_row_tests {
                     }
                 },
             );
-            drop(output);
+            discard_ui_output(output);
 
             let sizes = sizes.into_inner();
             assert_eq!(sizes.len(), 3);
@@ -4276,7 +4292,7 @@ mod timeline_row_tests {
                 painted_widths.set((header.response.rect.width(), card.response.rect.width()));
             },
         );
-        drop(output);
+        discard_ui_output(output);
         let (header_width, card_width) = painted_widths.get();
         assert_eq!(header_width, outer);
         assert_eq!(card_width, outer);
@@ -4345,7 +4361,7 @@ mod timeline_row_tests {
                 });
             },
         );
-        drop(output);
+        discard_ui_output(output);
         let (header, card) = widths.get();
         assert_eq!(header, card);
     }
@@ -4385,7 +4401,7 @@ mod timeline_row_tests {
                     }
                 },
             );
-            drop(output);
+            discard_ui_output(output);
             let painted = painted.into_inner();
             assert_eq!(painted.len(), 3);
             assert!(painted.windows(2).all(|pair| pair[0] == pair[1]));
@@ -4474,7 +4490,7 @@ mod timeline_row_tests {
                     );
                 },
             );
-            drop(output);
+            discard_ui_output(output);
         };
 
         render(Vec::new());
@@ -4536,7 +4552,7 @@ mod timeline_row_tests {
                     );
                 },
             );
-            drop(output);
+            discard_ui_output(output);
         };
 
         render(Vec::new());
@@ -4597,7 +4613,7 @@ mod timeline_row_tests {
                     );
                 },
             );
-            drop(output);
+            discard_ui_output(output);
         };
 
         render(Vec::new());
@@ -4734,7 +4750,7 @@ mod timeline_row_tests {
                     dropped.set(dropped.get() || released.as_deref() == Some(&payload));
                 },
             );
-            drop(output);
+            discard_ui_output(output);
         };
 
         render(Vec::new());
@@ -4838,7 +4854,7 @@ mod timeline_row_tests {
                     });
                 },
             );
-            drop(output);
+            discard_ui_output(output);
         };
 
         render(Vec::new());
@@ -4916,7 +4932,7 @@ mod timeline_row_tests {
                     clicked_inside |= secondary_click_inside(&context, card);
                 },
             );
-            drop(output);
+            discard_ui_output(output);
         }
         assert!(clicked_inside);
     }
@@ -4957,7 +4973,7 @@ mod timeline_row_tests {
                     }
                 },
             );
-            drop(output);
+            discard_ui_output(output);
         };
 
         render(Vec::new());
@@ -5046,7 +5062,7 @@ mod timeline_row_tests {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum PealayerTab {
     ProgramMonitor,
     EffectControls,
@@ -5119,6 +5135,10 @@ pub struct PealayerTabViewer<'a> {
 
 impl<'a> TabViewer for PealayerTabViewer<'a> {
     type Tab = PealayerTab;
+
+    fn id(&mut self, tab: &mut Self::Tab) -> egui::Id {
+        egui::Id::new(*tab)
+    }
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
         format!("{} {}", tab.icon(), tab.title(self.app)).into()
@@ -5656,9 +5676,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             });
                                             ui.add_space(7.0);
                                             ui.label(egui::RichText::new(&name_label).small().weak());
+                                            let name_align = crate::ui::i18n::input_alignment(
+                                                self.app.rtl,
+                                                &template.name,
+                                            );
                                             let name_editor = ui.add_sized(
                                                 [ui.available_width(), 26.0],
-                                                egui::TextEdit::singleline(&mut template.name),
+                                                egui::TextEdit::singleline(&mut template.name)
+                                                    .horizontal_align(name_align),
                                             );
                                             if name_editor.changed() {
                                                 timeline_dirty = true;
@@ -6230,8 +6255,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         ui.horizontal(|ui| {
                             ui.label(self.app.tr("Search"));
                             let search_hint = self.app.tr("Search effects...");
+                            let search_align = crate::ui::i18n::input_alignment(
+                                self.app.rtl,
+                                &self.app.effects_search_query,
+                            );
                             let res = ui.add(
                                 egui::TextEdit::singleline(&mut self.app.effects_search_query)
+                                    .horizontal_align(search_align)
                                     .hint_text(search_hint)
                             );
                             if res.changed() {
@@ -6507,9 +6537,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                         - 48.0
                                                                         - action_spacing * 2.0)
                                                                         .max(54.0);
+                                                                    let name_align = crate::ui::i18n::input_alignment(
+                                                                        self.app.rtl,
+                                                                        &edit.name,
+                                                                    );
                                                                     let name_response = ui.add_sized(
                                                                         [name_width, 24.0],
                                                                         egui::TextEdit::singleline(&mut edit.name)
+                                                                            .horizontal_align(name_align)
                                                                             .char_limit(64),
                                                                     );
                                                                     if name_response.lost_focus()
@@ -6811,6 +6846,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let presets_label = self.app.tr("Presets");
                             let save_group_label = self.app.tr("Save to PCController");
                             let cancel_group_label = self.app.tr("Cancel");
+                            let rtl_ui = self.app.rtl;
                             if let Some(draft) = self.app.effect_group_draft.as_mut() {
                                 egui::Window::new(group_editor_title)
                                 .id(egui::Id::new("effect_group_editor"))
@@ -6823,8 +6859,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         .spacing([14.0, 10.0])
                                         .show(ui, |ui| {
                                             ui.label(&group_name_label);
+                                            let name_align = crate::ui::i18n::input_alignment(
+                                                rtl_ui,
+                                                &draft.name,
+                                            );
                                             ui.add(
                                                 egui::TextEdit::singleline(&mut draft.name)
+                                                    .horizontal_align(name_align)
                                                     .desired_width(250.0),
                                             );
                                             ui.end_row();
@@ -7169,10 +7210,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             .spacing([12.0, 8.0])
                                             .show(ui, |ui| {
                                                 ui.label(&name_label);
+                                                let name_align = crate::ui::i18n::input_alignment(
+                                                    self.app.rtl,
+                                                    &self.app.hardware_effect_authoring.name,
+                                                );
                                                 ui.add_enabled(
                                                     !self.app.hardware_effect_authoring.active
                                                         && self.app.hardware_effect_authoring.pending_operation.is_none(),
                                                     egui::TextEdit::singleline(&mut self.app.hardware_effect_authoring.name)
+                                                        .horizontal_align(name_align)
                                                         .desired_width(ui.available_width().min(280.0))
                                                         .hint_text(&name_hint),
                                                 );
