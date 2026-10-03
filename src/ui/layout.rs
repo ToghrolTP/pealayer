@@ -526,15 +526,25 @@ fn configure_hardware_card_visuals(visuals: &mut egui::Visuals) {
         return;
     }
 
+    // A restrained cool-gray ramp keeps every hardware action visibly
+    // clickable on the almost-white card surface without making the sidebar
+    // look heavy. Cover every widget state: leaving `active` or `open` on the
+    // global palette caused the surface to disappear or jump to an unrelated
+    // accent treatment as focus and menus changed.
+    visuals.button_frame = true;
     let widgets = &mut visuals.widgets;
-    widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(230, 233, 237);
-    widgets.inactive.bg_fill = egui::Color32::from_rgb(230, 233, 237);
-    widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(185, 192, 201));
-    widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(220, 226, 232);
-    widgets.hovered.bg_fill = egui::Color32::from_rgb(220, 226, 232);
-    widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(145, 155, 167));
-    widgets.noninteractive.weak_bg_fill = egui::Color32::from_rgb(240, 242, 244);
-    widgets.noninteractive.bg_fill = egui::Color32::from_rgb(240, 242, 244);
+    widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(227, 231, 236);
+    widgets.inactive.bg_fill = egui::Color32::from_rgb(227, 231, 236);
+    widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(184, 192, 202));
+    widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(217, 223, 230);
+    widgets.hovered.bg_fill = egui::Color32::from_rgb(217, 223, 230);
+    widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(144, 156, 169));
+    widgets.active.weak_bg_fill = egui::Color32::from_rgb(206, 214, 223);
+    widgets.active.bg_fill = egui::Color32::from_rgb(206, 214, 223);
+    widgets.active.bg_stroke = egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(120, 134, 150));
+    widgets.open = widgets.active;
+    widgets.noninteractive.weak_bg_fill = egui::Color32::from_rgb(238, 240, 243);
+    widgets.noninteractive.bg_fill = egui::Color32::from_rgb(238, 240, 243);
     widgets.noninteractive.bg_stroke =
         egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(207, 212, 218));
 }
@@ -4440,12 +4450,28 @@ mod timeline_row_tests {
         let mut visuals = egui::Visuals::light();
         configure_hardware_card_visuals(&mut visuals);
         let widgets = visuals.widgets;
+        assert!(visuals.button_frame);
         assert_eq!(
             widgets.inactive.weak_bg_fill,
-            egui::Color32::from_rgb(230, 233, 237)
+            egui::Color32::from_rgb(227, 231, 236)
         );
+        assert_eq!(
+            widgets.hovered.weak_bg_fill,
+            egui::Color32::from_rgb(217, 223, 230)
+        );
+        assert_eq!(
+            widgets.active.weak_bg_fill,
+            egui::Color32::from_rgb(206, 214, 223)
+        );
+        assert_eq!(widgets.open, widgets.active);
         assert_eq!(widgets.inactive.bg_stroke.width, 1.0);
         assert_ne!(widgets.inactive.bg_stroke.color, egui::Color32::TRANSPARENT);
+        assert!(
+            widgets.noninteractive.weak_bg_fill.r() > widgets.inactive.weak_bg_fill.r()
+                && widgets.inactive.weak_bg_fill.r() > widgets.hovered.weak_bg_fill.r()
+                && widgets.hovered.weak_bg_fill.r() > widgets.active.weak_bg_fill.r(),
+            "light hardware buttons must progress from muted disabled to visibly pressed"
+        );
         assert_ne!(
             widgets.noninteractive.weak_bg_fill, widgets.inactive.weak_bg_fill,
             "disabled and enabled buttons must remain visually distinguishable"
