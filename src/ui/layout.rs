@@ -6134,9 +6134,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
         let stop_label = self.app.tr("Stop");
         let delete_all_label = self.app.tr("Delete All Selected");
         let timeline_delete_cue_label = self.app.tr("Delete Cue");
-        let estop_banner_label = self
-            .app
-            .tr("EMERGENCY STOP ACTIVE - ALL HARDWARE OUTPUTS DISABLED");
+        let estop_banner_label = self.app.tr("EMERGENCY STOP ACTIVE - ALL OUTPUTS DISABLED");
         let relay_mute_help = self
             .app
             .tr("Mute Track (M)\nMutes relay physical output during playback.");

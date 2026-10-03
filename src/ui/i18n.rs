@@ -806,8 +806,8 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Unavailable project output" => "خروجی پروژه در دسترس نیست",
         "Delete Cue" => "حذف نشانه",
         "Delete All Selected" => "حذف همهٔ انتخاب‌شده‌ها",
-        "EMERGENCY STOP ACTIVE - ALL HARDWARE OUTPUTS DISABLED" => {
-            "توقف اضطراری فعال است — همهٔ خروجی‌های سخت‌افزاری غیرفعال‌اند"
+        "EMERGENCY STOP ACTIVE - ALL OUTPUTS DISABLED" => {
+            "توقف اضطراری فعال است — همهٔ خروجی‌ها غیرفعال‌اند"
         }
         "Linear" => "خطی",
         "Smooth (Hermite)" => "نرم (هرمیت)",

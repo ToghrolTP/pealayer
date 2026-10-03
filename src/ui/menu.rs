@@ -117,6 +117,11 @@ pub(crate) fn draw_estop_release_dialog(app: &mut PealayerApp, ui: &mut egui::Ui
             let mut release = false;
             let mut cancel = false;
             crate::ui::dialog::action_row(ui, rtl, |ui| {
+                if crate::ui::dialog::action_button(ui, crate::ui::icons::X, &cancel_label)
+                    .clicked()
+                {
+                    cancel = true;
+                }
                 if crate::ui::dialog::primary_action_button(
                     ui,
                     crate::ui::icons::POWER,
@@ -125,11 +130,6 @@ pub(crate) fn draw_estop_release_dialog(app: &mut PealayerApp, ui: &mut egui::Ui
                 .clicked()
                 {
                     release = true;
-                }
-                if crate::ui::dialog::action_button(ui, crate::ui::icons::X, &cancel_label)
-                    .clicked()
-                {
-                    cancel = true;
                 }
             });
             (release, cancel)
