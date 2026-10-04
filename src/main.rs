@@ -250,6 +250,22 @@ fn main() -> eframe::Result {
                 .expect("Glow backend must provide get_proc_address");
 
             let subtitle_font_directory = subtitle_font_directory();
+            if let Some(font_path) = subtitle_font_directory
+                .as_ref()
+                .map(|directory| directory.join("Vazirmatn-Regular.ttf"))
+            {
+                match crate::platform::windows::register_private_font(&font_path) {
+                    Ok(faces) if faces > 0 => log::info!(
+                        "registered {faces} bundled {} font face(s) for subtitle overlays",
+                        crate::subtitle::SUBTITLE_FONT_FAMILY
+                    ),
+                    Ok(_) => {}
+                    Err(error) => log::warn!(
+                        "could not register bundled {} subtitle font: {error}",
+                        crate::subtitle::SUBTITLE_FONT_FAMILY
+                    ),
+                }
+            }
             let mpv = Mpv::with_initializer(|init| {
                 init.set_property("vo", "libmpv")?;
                 init.set_property("keep-open", "always")?;
@@ -269,7 +285,11 @@ fn main() -> eframe::Result {
                 {
                     init.set_property("sub-fonts-dir", font_dir_str)?;
                 }
-                init.set_property("sub-font", "Vazirmatn")?;
+                init.set_property("sub-font", crate::subtitle::SUBTITLE_FONT_FAMILY)?;
+                // Processed Persian captions are rendered through
+                // `osd-overlay ass-events`, whose default face comes from the
+                // OSD renderer rather than the subtitle renderer.
+                init.set_property("osd-font", crate::subtitle::SUBTITLE_FONT_FAMILY)?;
                 // ASS/SSA tracks normally keep their embedded FontName and
                 // ignore `sub-font`. Force mpv's normal subtitle styling so
                 // the bundled Vazirmatn face is also stable in the native

@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub const SUBTITLE_FONT_FAMILY: &str = "Vazirmatn";
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SubtitleDirection {
@@ -82,7 +84,7 @@ pub fn overlay_ass_event(text: &str, direction: SubtitleDirection, font_size: f6
     };
     let font_size = font_size.clamp(10.0, 100.0);
     format!(
-        "{{\\an{alignment}\\pos({x},680)\\q2\\fnVazirmatn\\fs{font_size:.1}\\1c&HFFFFFF&\\3c&H000000&\\bord2\\shad0}}{directed}"
+        "{{\\an{alignment}\\pos({x},680)\\q2\\fn{SUBTITLE_FONT_FAMILY}\\fs{font_size:.1}\\1c&HFFFFFF&\\3c&H000000&\\bord2\\shad0}}{directed}"
     )
 }
 
@@ -128,6 +130,7 @@ mod tests {
     fn overlay_uses_requested_direction_and_preserves_multiline_text() {
         let rtl = overlay_ass_event("خط یک\nخط دو", SubtitleDirection::Rtl, 55.0);
         assert!(rtl.contains("\\an3\\pos(1248,680)"));
+        assert!(rtl.contains(&format!("\\fn{SUBTITLE_FONT_FAMILY}")));
         assert!(rtl.contains('\u{202B}'));
         assert!(rtl.contains("\\N"));
         assert!(rtl.ends_with('\u{202C}'));

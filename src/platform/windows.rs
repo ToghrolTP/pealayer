@@ -9,6 +9,46 @@ fn wide_null_path(path: &std::path::Path) -> Vec<u16> {
         .collect()
 }
 
+/// Register a bundled font for the lifetime of this process.
+///
+/// mpv's regular subtitle renderer can load faces from `sub-fonts-dir`, but
+/// custom `osd-overlay` ASS events use the OSD renderer's font provider. On
+/// Windows that provider only saw installed/process fonts and silently fell
+/// back to Arial even though the bundled Vazirmatn file existed. `FR_PRIVATE`
+/// exposes the face to this process without installing it for the user or
+/// leaking it to other applications. Windows removes the registration when
+/// the process exits.
+#[cfg(target_os = "windows")]
+pub fn register_private_font(path: &std::path::Path) -> Result<u32, String> {
+    use windows::Win32::Graphics::Gdi::{AddFontResourceExW, FR_PRIVATE};
+    use windows::core::PCWSTR;
+
+    if !path.is_file() {
+        return Err(format!("font file does not exist: {}", path.display()));
+    }
+    let wide_path = wide_null_path(path);
+    let faces = unsafe {
+        AddFontResourceExW(
+            PCWSTR(wide_path.as_ptr()),
+            FR_PRIVATE,
+            Some(std::ptr::null()),
+        )
+    };
+    if faces == 0 {
+        Err(format!(
+            "Windows did not register the private font {}",
+            path.display()
+        ))
+    } else {
+        Ok(faces as u32)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn register_private_font(_path: &std::path::Path) -> Result<u32, String> {
+    Ok(0)
+}
+
 /// Give the roaming configuration folder a recognizable native Explorer
 /// identity. The JSON remains the authoritative cross-platform store; this is
 /// presentation metadata only and is deliberately absent in portable mode.
