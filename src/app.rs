@@ -4413,6 +4413,25 @@ fn web_hardware_details(
                     })
                 });
             let pwm_percent = pwm_channel.and_then(|channel| {
+                let status_component = capabilities.status_led.as_ref().and_then(|status| {
+                    let role = capabilities
+                        .pwm_channels
+                        .iter()
+                        .find(|output| output.id == channel)
+                        .map(|output| output.role.to_ascii_lowercase())?;
+                    if role.contains("status") && role.contains("red") {
+                        Some(status.red)
+                    } else if role.contains("status") && role.contains("green") {
+                        Some(status.green)
+                    } else if role.contains("status") && role.contains("blue") {
+                        Some(status.blue)
+                    } else {
+                        None
+                    }
+                });
+                if let Some(value) = status_component {
+                    return Some(f64::from(value) * 100.0 / 255.0);
+                }
                 capabilities
                     .telemetry
                     .pwm_values
@@ -5369,5 +5388,24 @@ mod tests {
             web_hardware_details(&capabilities, crate::config::MotionControlMode::default());
         let percent = details["controls"][0]["percent"].as_f64().unwrap();
         assert!((percent - (2048.0 * 100.0 / 4095.0)).abs() < f64::EPSILON);
+
+        capabilities.controls[0].key = "pwm.15".to_string();
+        capabilities.pwm_channels[0] = crate::four_d::controller::HardwareOutput {
+            id: 15,
+            key: "pwm.15".to_string(),
+            name: "Status blue".to_string(),
+            role: "status-blue".to_string(),
+            control: "role-specific".to_string(),
+        };
+        capabilities.telemetry.pwm_values.resize(16, None);
+        capabilities.telemetry.pwm_values[15] = Some(0);
+        capabilities.status_led = Some(crate::four_d::controller::HardwareStatusLed {
+            blue: 160,
+            ..Default::default()
+        });
+        let details =
+            web_hardware_details(&capabilities, crate::config::MotionControlMode::default());
+        let percent = details["controls"][0]["percent"].as_f64().unwrap();
+        assert!((percent - (160.0 * 100.0 / 255.0)).abs() < f64::EPSILON);
     }
 }
