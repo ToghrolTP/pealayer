@@ -230,9 +230,15 @@ pub fn chapters(info: &MediaFileInfo) -> Vec<MediaChapter> {
         .iter()
         .filter_map(|entry| {
             let time_seconds = entry.properties.get("time")?.parse::<f64>().ok()?;
-            if !time_seconds.is_finite() || time_seconds < 0.0 {
+            if !time_seconds.is_finite() {
                 return None;
             }
+            // Container timestamps can place the first presentation frame a few
+            // milliseconds after the chapter origin (for example, Matroska/AAC
+            // preroll). libmpv then exposes the opening chapter with a small
+            // negative time even though it is the chapter at the playable 0s
+            // boundary. Preserve that real chapter and make it reachable.
+            let time_seconds = time_seconds.max(0.0);
             let title = entry
                 .properties
                 .get("title")
@@ -295,7 +301,10 @@ mod tests {
                 },
                 MediaCollectionEntry {
                     index: 0,
-                    properties: BTreeMap::from([("time".to_string(), "0".to_string())]),
+                    properties: BTreeMap::from([
+                        ("title".to_string(), "Opening".to_string()),
+                        ("time".to_string(), "-0.021".to_string()),
+                    ]),
                 },
                 MediaCollectionEntry {
                     index: 2,
@@ -307,7 +316,7 @@ mod tests {
 
         let chapters = chapters(&info);
         assert_eq!(chapters.len(), 2);
-        assert_eq!(chapters[0].title, "Chapter 1");
+        assert_eq!(chapters[0].title, "Opening");
         assert_eq!(chapters[0].time_seconds, 0.0);
         assert_eq!(chapters[1].title, "Act II");
         assert_eq!(chapters[1].time_seconds, 12.5);
