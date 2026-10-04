@@ -394,6 +394,8 @@ pub struct AppConfig {
     pub auto_connect_hardware: bool,
     pub pause_on_hardware_disconnect: bool,
     pub click_player_to_toggle: bool,
+    pub playback_speed: f64,
+    pub temporary_fast_forward_speed: f64,
     pub subtitle_direction: crate::subtitle::SubtitleDirection,
     pub subtitle_text_replacements: Vec<crate::subtitle::SubtitleReplacement>,
     pub show_subseconds: bool,
@@ -470,6 +472,8 @@ impl Default for AppConfig {
             auto_connect_hardware: true,
             pause_on_hardware_disconnect: true,
             click_player_to_toggle: true,
+            playback_speed: 1.0,
+            temporary_fast_forward_speed: 2.0,
             subtitle_direction: crate::subtitle::SubtitleDirection::Auto,
             subtitle_text_replacements: crate::subtitle::default_text_replacements(),
             show_subseconds: true,
@@ -1185,6 +1189,14 @@ impl AppConfig {
         if !self.volume.is_finite() || !(0.0..=130.0).contains(&self.volume) {
             return Err("volume must be between 0 and 130".to_string());
         }
+        if !self.playback_speed.is_finite() || !(0.25..=4.0).contains(&self.playback_speed) {
+            return Err("playback_speed must be between 0.25 and 4".to_string());
+        }
+        if !self.temporary_fast_forward_speed.is_finite()
+            || !(1.0..=16.0).contains(&self.temporary_fast_forward_speed)
+        {
+            return Err("temporary_fast_forward_speed must be between 1 and 16".to_string());
+        }
         if !self.wheel_seek_seconds.is_finite() || !(0.1..=60.0).contains(&self.wheel_seek_seconds)
         {
             return Err("wheel_seek_seconds must be between 0.1 and 60".to_string());
@@ -1493,11 +1505,29 @@ mod tests {
         assert!(cfg.open_url_fetch_remote_thumbnail);
         assert!(cfg.open_url_use_proxy);
         assert!(cfg.open_url_proxy_url.is_none());
+        assert_eq!(cfg.playback_speed, 1.0);
+        assert_eq!(cfg.temporary_fast_forward_speed, 2.0);
         assert!(cfg.native_dialog_windows);
         assert!(cfg.auto_reload_config);
         assert_eq!(cfg.active_workspace_profile.as_deref(), Some("nle"));
         assert_eq!(cfg.workspace_profiles["simple"].name, "Simple");
         assert_eq!(cfg.workspace_profiles["nle"].name, "NLE");
+    }
+
+    #[test]
+    fn playback_speeds_reject_non_finite_and_out_of_range_values() {
+        let mut config = AppConfig::default();
+        config.playback_speed = 0.0;
+        assert!(config.validate().unwrap_err().contains("playback_speed"));
+
+        config.playback_speed = 1.0;
+        config.temporary_fast_forward_speed = f64::NAN;
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .contains("temporary_fast_forward_speed")
+        );
     }
 
     #[test]

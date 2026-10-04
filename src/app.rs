@@ -235,6 +235,8 @@ pub struct PealayerApp {
     pub(crate) volume: f64,
     pub(crate) is_muted: bool,
     pub(crate) playback_rate: f64,
+    pub(crate) configured_playback_speed: f64,
+    pub(crate) temporary_fast_forward_speed: f64,
     pub(crate) video_surface_gesture: Option<crate::ui::video::VideoSurfaceGesture>,
 
     pub seek_pos: Option<f64>,
@@ -2629,8 +2631,7 @@ impl PealayerApp {
                 self.save_config();
             }
             InteropCommand::SetRate { rate } => {
-                let _ = self.mpv.set_property("speed", rate);
-                self.playback_rate = rate;
+                self.set_playback_speed(rate, true);
             }
             InteropCommand::Open { target } => self.load_media_target(&target),
             InteropCommand::SetFullscreen { enabled } => self.set_fullscreen(ctx, enabled),
@@ -4219,6 +4220,8 @@ impl PealayerApp {
         cfg.auto_connect_hardware = self.auto_connect_hardware;
         cfg.pause_on_hardware_disconnect = self.pause_on_hardware_disconnect;
         cfg.click_player_to_toggle = self.click_player_to_toggle;
+        cfg.playback_speed = self.configured_playback_speed;
+        cfg.temporary_fast_forward_speed = self.temporary_fast_forward_speed;
         cfg.subtitle_direction = self.subtitle_direction;
         cfg.subtitle_text_replacements = self.subtitle_text_replacements.clone();
         cfg.show_subseconds = self.show_subseconds;
@@ -4357,6 +4360,14 @@ impl PealayerApp {
         self.auto_connect_hardware = config.auto_connect_hardware;
         self.pause_on_hardware_disconnect = config.pause_on_hardware_disconnect;
         self.click_player_to_toggle = config.click_player_to_toggle;
+        self.configured_playback_speed = config.playback_speed;
+        self.temporary_fast_forward_speed = config.temporary_fast_forward_speed;
+        if self.video_surface_gesture.is_none() {
+            let _ = self
+                .mpv
+                .set_property("speed", self.configured_playback_speed);
+            self.playback_rate = self.configured_playback_speed;
+        }
         self.subtitle_direction = config.subtitle_direction;
         self.subtitle_text_replacements = config.subtitle_text_replacements.clone();
         self.show_subseconds = config.show_subseconds;
@@ -4719,6 +4730,22 @@ impl PealayerApp {
 
     pub fn set_osd(&mut self, msg: String) {
         self.osd_message = Some((msg, std::time::Instant::now()));
+    }
+
+    pub(crate) fn set_playback_speed(&mut self, speed: f64, persist: bool) {
+        if !speed.is_finite() {
+            return;
+        }
+        let speed = speed.clamp(0.25, 4.0);
+        self.configured_playback_speed = speed;
+        if self.video_surface_gesture.is_none() {
+            let _ = self.mpv.set_property("speed", speed);
+            self.playback_rate = speed;
+        }
+        self.set_osd(format!("{}: {speed:.2}×", self.tr("Playback speed")));
+        if persist {
+            self.save_config();
+        }
     }
 
     pub(crate) fn commit_recorded_samples(&mut self) -> bool {
@@ -5401,6 +5428,8 @@ impl Default for PealayerApp {
             volume: 100.0,
             is_muted: false,
             playback_rate: 1.0,
+            configured_playback_speed: 1.0,
+            temporary_fast_forward_speed: 2.0,
             video_surface_gesture: None,
             seek_pos: None,
             seek_controller: crate::mpv::seek::SeekController::new(

@@ -419,6 +419,14 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Interface" => "رابط",
         "Position" => "موقعیت",
         "Player controls" => "کنترل‌های پخش‌کننده",
+        "Playback speed" => "سرعت پخش",
+        "Hold-to-fast-forward speed" => "سرعت جلورفتن با نگه‌داشتن",
+        "Normal speed used for playback and restored after a temporary fast-forward" => {
+            "سرعت عادی پخش که پس از جلورفتن موقت بازیابی می‌شود"
+        }
+        "Speed used while holding the configured temporary fast-forward gesture" => {
+            "سرعت هنگام نگه‌داشتن حرکت جلورفتن موقت"
+        }
         "Connection" => "اتصال",
         "Reconnect" => "اتصال دوباره",
         "Refresh live status" => "تازه‌سازی وضعیت زنده",

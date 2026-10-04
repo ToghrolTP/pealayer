@@ -280,6 +280,34 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Player controls",
             "Single-click the picture to play or pause",
         ),
+        {
+            let mut control = PreferenceControl::number(
+                "playback_speed",
+                "playback",
+                "Player controls",
+                "Playback speed",
+                0.25,
+                4.0,
+                0.05,
+            );
+            control.description =
+                Some("Normal speed used for playback and restored after a temporary fast-forward");
+            control
+        },
+        {
+            let mut control = PreferenceControl::number(
+                "temporary_fast_forward_speed",
+                "playback",
+                "Player controls",
+                "Hold-to-fast-forward speed",
+                1.0,
+                16.0,
+                0.25,
+            );
+            control.description =
+                Some("Speed used while holding the configured temporary fast-forward gesture");
+            control
+        },
         PreferenceControl::boolean(
             "show_subseconds",
             "playback",
@@ -734,6 +762,24 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing {key} preference"));
             assert!(matches!(control.kind, PreferenceControlKind::Boolean));
             assert_eq!(control.section, "hardware");
+        }
+    }
+
+    #[test]
+    fn playback_speeds_are_shared_numeric_preferences() {
+        let controls = preference_controls(&crate::config::AppConfig::default());
+        for (key, min, max) in [
+            ("playback_speed", 0.25, 4.0),
+            ("temporary_fast_forward_speed", 1.0, 16.0),
+        ] {
+            let control = controls
+                .iter()
+                .find(|control| control.key == key)
+                .unwrap_or_else(|| panic!("missing {key} preference"));
+            assert!(matches!(control.kind, PreferenceControlKind::Number));
+            assert_eq!(control.section, "playback");
+            assert_eq!(control.minimum, Some(min));
+            assert_eq!(control.maximum, Some(max));
         }
     }
 }

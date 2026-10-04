@@ -381,6 +381,7 @@ fn main() -> eframe::Result {
                 && loaded_config.last_media_paused;
             let _ = mpv_static.set_property("volume", initial_volume);
             let _ = mpv_static.set_property("mute", loaded_config.is_muted);
+            let _ = mpv_static.set_property("speed", loaded_config.playback_speed);
             crate::platform::windows::sync_windows_jump_list(&loaded_config.recent_media);
 
             let (interop_tx, interop_rx) = std::sync::mpsc::channel();
@@ -474,7 +475,9 @@ fn main() -> eframe::Result {
                 is_eof: false,
                 volume: initial_volume,
                 is_muted: loaded_config.is_muted,
-                playback_rate: 1.0,
+                playback_rate: loaded_config.playback_speed,
+                configured_playback_speed: loaded_config.playback_speed,
+                temporary_fast_forward_speed: loaded_config.temporary_fast_forward_speed,
                 video_surface_gesture: None,
                 show_sub_settings: loaded_config.workspace_session.dialogs.subtitles,
                 sub_visibility: true,

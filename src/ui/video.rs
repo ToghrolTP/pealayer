@@ -18,10 +18,11 @@ fn seek_target_from_drag(start_time: f64, drag_delta_x: f32, duration: f64) -> f
     (start_time + drag_delta_x as f64 / 12.0).clamp(0.0, duration.max(0.0))
 }
 
-fn temporary_fast_forward_rate(start_rate: f64, drag_delta_x: f32) -> f64 {
+fn temporary_fast_forward_rate(start_rate: f64, configured_rate: f64, drag_delta_x: f32) -> f64 {
     // A press without movement must still fast-forward. Horizontal movement
-    // can then increase the temporary rate without changing the base setting.
-    (start_rate.max(1.0) * 2.0 + drag_delta_x.abs() as f64 / 160.0).clamp(1.0, 4.0)
+    // can then increase the configured temporary rate without changing the
+    // persisted normal playback speed. Never slow an already-faster session.
+    (configured_rate.max(start_rate) + drag_delta_x.abs() as f64 / 160.0).clamp(1.0, 16.0)
 }
 
 fn should_consume_fast_forward_click(
@@ -56,7 +57,8 @@ fn begin_video_surface_gesture(app: &mut PealayerApp, action: crate::config::Pla
                 .is_playing
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        let speed = temporary_fast_forward_rate(gesture.start_rate, 0.0);
+        let speed =
+            temporary_fast_forward_rate(gesture.start_rate, app.temporary_fast_forward_speed, 0.0);
         let _ = app.mpv.set_property("speed", speed);
         app.playback_rate = speed;
         app.set_osd(format!("{}: {speed:.1}×", app.tr("Playback speed")));
@@ -148,8 +150,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 }
             }
             crate::config::PlayerDragAction::TemporaryFastForward => {
-                let speed =
-                    temporary_fast_forward_rate(gesture.start_rate, response.drag_delta().x);
+                let speed = temporary_fast_forward_rate(
+                    gesture.start_rate,
+                    app.temporary_fast_forward_speed,
+                    response.drag_delta().x,
+                );
                 let _ = app.mpv.set_property("speed", speed);
                 app.playback_rate = speed;
                 app.set_osd(format!("{}: {speed:.1}×", app.tr("Playback speed")));
@@ -285,6 +290,28 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             ui.close();
             app.toggle_playback();
         }
+
+        crate::ui::icons::submenu(
+            ui,
+            format!("{} {}", crate::ui::icons::GAUGE, app.tr("Playback speed")),
+            |ui| {
+                for speed in [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0] {
+                    let selected = (app.configured_playback_speed - speed).abs() < 0.001;
+                    let label = if selected {
+                        format!("{} {speed}×", crate::ui::icons::CHECK)
+                    } else {
+                        format!("   {speed}×")
+                    };
+                    if ui
+                        .add_enabled(has_video, egui::Button::new(label))
+                        .clicked()
+                    {
+                        ui.close();
+                        app.set_playback_speed(speed, true);
+                    }
+                }
+            },
+        );
 
         let is_fullscreen = app.fullscreen_intent(ui.ctx());
         let fs_title = if is_fullscreen {
@@ -650,9 +677,10 @@ mod tests {
 
     #[test]
     fn temporary_fast_forward_starts_without_pointer_motion() {
-        assert_eq!(temporary_fast_forward_rate(1.0, 0.0), 2.0);
-        assert_eq!(temporary_fast_forward_rate(1.5, 0.0), 3.0);
-        assert_eq!(temporary_fast_forward_rate(1.0, 320.0), 4.0);
+        assert_eq!(temporary_fast_forward_rate(1.0, 3.0, 0.0), 3.0);
+        assert_eq!(temporary_fast_forward_rate(1.5, 2.0, 0.0), 2.0);
+        assert_eq!(temporary_fast_forward_rate(3.0, 2.0, 0.0), 3.0);
+        assert_eq!(temporary_fast_forward_rate(1.0, 2.0, 2_240.0), 16.0);
     }
 
     #[test]
