@@ -475,6 +475,7 @@ fn main() -> eframe::Result {
                 volume: initial_volume,
                 is_muted: loaded_config.is_muted,
                 playback_rate: 1.0,
+                video_surface_gesture: None,
                 show_sub_settings: loaded_config.workspace_session.dialogs.subtitles,
                 sub_visibility: true,
                 sub_font_size: 55.0,

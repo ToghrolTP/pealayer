@@ -3,6 +3,92 @@ use crate::mpv::render::GetProcAddress;
 use eframe::egui;
 use std::sync::Arc;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct VideoSurfaceGesture {
+    pub(crate) action: crate::config::PlayerDragAction,
+    pub(crate) start_time: f64,
+    pub(crate) start_rate: f64,
+    pub(crate) was_paused: bool,
+    pub(crate) target_time: f64,
+    pub(crate) started_at: std::time::Instant,
+    pub(crate) dragged: bool,
+}
+
+fn seek_target_from_drag(start_time: f64, drag_delta_x: f32, duration: f64) -> f64 {
+    (start_time + drag_delta_x as f64 / 12.0).clamp(0.0, duration.max(0.0))
+}
+
+fn temporary_fast_forward_rate(start_rate: f64, drag_delta_x: f32) -> f64 {
+    // A press without movement must still fast-forward. Horizontal movement
+    // can then increase the temporary rate without changing the base setting.
+    (start_rate.max(1.0) * 2.0 + drag_delta_x.abs() as f64 / 160.0).clamp(1.0, 4.0)
+}
+
+fn should_consume_fast_forward_click(
+    action: crate::config::PlayerDragAction,
+    dragged: bool,
+    held_for: std::time::Duration,
+) -> bool {
+    action == crate::config::PlayerDragAction::TemporaryFastForward
+        && (dragged || held_for >= std::time::Duration::from_millis(180))
+}
+
+fn begin_video_surface_gesture(app: &mut PealayerApp, action: crate::config::PlayerDragAction) {
+    if app.video_surface_gesture.is_some() {
+        return;
+    }
+    let gesture = VideoSurfaceGesture {
+        action,
+        start_time: app.playback_time,
+        start_rate: app.playback_rate,
+        was_paused: app.is_paused,
+        target_time: app.playback_time,
+        started_at: std::time::Instant::now(),
+        dragged: false,
+    };
+    app.video_surface_gesture = Some(gesture);
+
+    if action == crate::config::PlayerDragAction::TemporaryFastForward {
+        if gesture.was_paused {
+            let _ = app.mpv.set_property("pause", false);
+            app.is_paused = false;
+            app.engine_handle
+                .is_playing
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let speed = temporary_fast_forward_rate(gesture.start_rate, 0.0);
+        let _ = app.mpv.set_property("speed", speed);
+        app.playback_rate = speed;
+        app.set_osd(format!("{}: {speed:.1}×", app.tr("Playback speed")));
+    }
+}
+
+fn finish_video_surface_gesture(app: &mut PealayerApp) -> bool {
+    let Some(gesture) = app.video_surface_gesture.take() else {
+        return false;
+    };
+    match gesture.action {
+        crate::config::PlayerDragAction::Seek => app.finish_scrub(gesture.target_time),
+        crate::config::PlayerDragAction::TemporaryFastForward => {
+            let _ = app.mpv.set_property("speed", gesture.start_rate);
+            app.playback_rate = gesture.start_rate;
+            if gesture.was_paused {
+                let _ = app.mpv.set_property("pause", true);
+                app.is_paused = true;
+                app.engine_handle
+                    .is_playing
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        crate::config::PlayerDragAction::MoveWindow | crate::config::PlayerDragAction::None => {}
+    }
+    should_consume_fast_forward_click(
+        gesture.action,
+        gesture.dragged,
+        gesture.started_at.elapsed(),
+    )
+}
+
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let video_files_label = app.tr("Video Files");
     let video_size = ui.available_size();
@@ -12,10 +98,80 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
     let (rect, response) = ui.allocate_exact_size(video_size, egui::Sense::click_and_drag());
 
+    let selected_action = if app.is_paused {
+        app.paused_drag_action
+    } else {
+        app.playing_drag_action
+    };
+    let primary_pressed =
+        ui.input(|input| input.pointer.button_pressed(egui::PointerButton::Primary));
+    let primary_down = ui.input(|input| input.pointer.primary_down());
+
+    // Temporary fast-forward is a hold gesture, so it starts on mouse-down
+    // without requiring the pointer to move far enough to become an egui drag.
+    if response.hovered()
+        && primary_pressed
+        && app.current_video_path.is_some()
+        && selected_action == crate::config::PlayerDragAction::TemporaryFastForward
+    {
+        begin_video_surface_gesture(app, selected_action);
+    }
+
+    if response.drag_started() && app.current_video_path.is_some() {
+        begin_video_surface_gesture(app, selected_action);
+        if selected_action == crate::config::PlayerDragAction::Seek {
+            app.scrub_to(app.playback_time);
+        }
+    }
+
+    if response.dragged()
+        && app.current_video_path.is_some()
+        && let Some(mut gesture) = app.video_surface_gesture
+    {
+        gesture.dragged = true;
+        app.video_surface_gesture = Some(gesture);
+        match gesture.action {
+            crate::config::PlayerDragAction::MoveWindow => {
+                app.is_window_operating = true;
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            crate::config::PlayerDragAction::Seek => {
+                let target = seek_target_from_drag(
+                    gesture.start_time,
+                    response.drag_delta().x,
+                    app.duration,
+                );
+                if (target - gesture.target_time).abs() >= 0.001 {
+                    gesture.target_time = target;
+                    app.video_surface_gesture = Some(gesture);
+                    app.scrub_to(target);
+                }
+            }
+            crate::config::PlayerDragAction::TemporaryFastForward => {
+                let speed =
+                    temporary_fast_forward_rate(gesture.start_rate, response.drag_delta().x);
+                let _ = app.mpv.set_property("speed", speed);
+                app.playback_rate = speed;
+                app.set_osd(format!("{}: {speed:.1}×", app.tr("Playback speed")));
+            }
+            crate::config::PlayerDragAction::None => {}
+        }
+    }
+
+    let gesture_released =
+        response.drag_stopped() || (app.video_surface_gesture.is_some() && !primary_down);
+    let suppress_click = if gesture_released {
+        finish_video_surface_gesture(app)
+    } else {
+        app.video_surface_gesture.is_some_and(|gesture| {
+            gesture.action == crate::config::PlayerDragAction::TemporaryFastForward
+        })
+    };
+
     if response.double_clicked_by(egui::PointerButton::Primary) && app.current_video_path.is_some()
     {
         app.toggle_fullscreen(ui.ctx());
-    } else if response.clicked_by(egui::PointerButton::Primary) {
+    } else if !suppress_click && response.clicked_by(egui::PointerButton::Primary) {
         if app.current_video_path.is_some() && app.click_player_to_toggle {
             app.toggle_playback();
         } else if app.current_video_path.is_none() {
@@ -29,34 +185,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 app.load_video_file(path);
             }
         }
-    }
-
-    if response.dragged() && app.current_video_path.is_some() {
-        let action = if app.is_paused {
-            app.paused_drag_action
-        } else {
-            app.playing_drag_action
-        };
-        match action {
-            crate::config::PlayerDragAction::MoveWindow => {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-            }
-            crate::config::PlayerDragAction::Seek => {
-                let delta = ui.input(|input| input.pointer.delta().x) as f64 / 12.0;
-                if delta.abs() >= 0.01 {
-                    app.seek_relative(delta);
-                }
-            }
-            crate::config::PlayerDragAction::TemporaryFastForward => {
-                let speed = (1.0 + response.drag_delta().x.abs() as f64 / 160.0).clamp(1.0, 4.0);
-                let _ = app.mpv.set_property("speed", speed);
-                app.set_osd(format!("{}: {speed:.1}×", app.tr("Playback speed")));
-            }
-            crate::config::PlayerDragAction::None => {}
-        }
-    }
-    if response.drag_stopped() {
-        let _ = app.mpv.set_property("speed", 1.0_f64);
     }
 
     if response.hovered() {
@@ -511,5 +639,38 @@ mod tests {
 
         // 2.0x scaling (200% Retina / 4K DPI)
         assert_eq!(calculate_physical_bounds(rect, 2.0), (1600, 1200));
+    }
+
+    #[test]
+    fn playing_seek_drag_uses_one_cumulative_origin() {
+        assert_eq!(seek_target_from_drag(100.0, 120.0, 500.0), 110.0);
+        assert_eq!(seek_target_from_drag(100.0, -1_800.0, 500.0), 0.0);
+        assert_eq!(seek_target_from_drag(490.0, 240.0, 500.0), 500.0);
+    }
+
+    #[test]
+    fn temporary_fast_forward_starts_without_pointer_motion() {
+        assert_eq!(temporary_fast_forward_rate(1.0, 0.0), 2.0);
+        assert_eq!(temporary_fast_forward_rate(1.5, 0.0), 3.0);
+        assert_eq!(temporary_fast_forward_rate(1.0, 320.0), 4.0);
+    }
+
+    #[test]
+    fn fast_forward_hold_does_not_turn_release_into_play_pause_click() {
+        assert!(!should_consume_fast_forward_click(
+            crate::config::PlayerDragAction::TemporaryFastForward,
+            false,
+            std::time::Duration::from_millis(50),
+        ));
+        assert!(should_consume_fast_forward_click(
+            crate::config::PlayerDragAction::TemporaryFastForward,
+            false,
+            std::time::Duration::from_millis(250),
+        ));
+        assert!(should_consume_fast_forward_click(
+            crate::config::PlayerDragAction::TemporaryFastForward,
+            true,
+            std::time::Duration::ZERO,
+        ));
     }
 }

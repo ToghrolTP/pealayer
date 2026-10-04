@@ -235,6 +235,7 @@ pub struct PealayerApp {
     pub(crate) volume: f64,
     pub(crate) is_muted: bool,
     pub(crate) playback_rate: f64,
+    pub(crate) video_surface_gesture: Option<crate::ui::video::VideoSurfaceGesture>,
 
     pub seek_pos: Option<f64>,
     pub(crate) seek_controller: crate::mpv::seek::SeekController,
@@ -425,6 +426,14 @@ pub struct PealayerApp {
     pub(crate) last_thumbnail_button_state: Option<(bool, bool)>,
 }
 
+fn should_throttle_video_render(
+    pointer_down: bool,
+    previous_window_operation: bool,
+    timeline_drag_active: bool,
+) -> bool {
+    pointer_down && (previous_window_operation || timeline_drag_active)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SubtitleTrack {
     pub id: i64,
@@ -511,9 +520,15 @@ impl eframe::App for PealayerApp {
 
         // Track active window/panel drag operations safely without lock nesting
         let is_pointer_down = ui.input(|i| i.pointer.any_down());
-        let is_using_pointer = ui.ctx().egui_is_using_pointer();
-        self.is_window_operating =
-            is_pointer_down && (self.active_drag.is_some() || is_using_pointer);
+        // Only throttle the MPV render pass for a real window/timeline drag.
+        // `egui_is_using_pointer()` is also true while seeking or holding the
+        // video surface, where suppressing paint freezes the very preview the
+        // gesture is meant to control.
+        self.is_window_operating = should_throttle_video_render(
+            is_pointer_down,
+            self.is_window_operating,
+            self.active_drag.is_some(),
+        );
 
         // Process drag and dropped files
         let dropped_file_paths = ui.input(|i| {
@@ -5386,6 +5401,7 @@ impl Default for PealayerApp {
             volume: 100.0,
             is_muted: false,
             playback_rate: 1.0,
+            video_surface_gesture: None,
             seek_pos: None,
             seek_controller: crate::mpv::seek::SeekController::new(
                 crate::mpv::seek::MpvSeekBackend::new(mpv),
@@ -5796,10 +5812,10 @@ mod tests {
 
     #[test]
     fn test_window_operating_flag_state() {
-        let pointer_down = true;
-        let active_drag = true;
-        let is_operating = pointer_down && active_drag;
-        assert!(is_operating);
+        assert!(should_throttle_video_render(true, false, true));
+        assert!(should_throttle_video_render(true, true, false));
+        assert!(!should_throttle_video_render(true, false, false));
+        assert!(!should_throttle_video_render(false, true, true));
     }
 
     struct DummyStorage;
