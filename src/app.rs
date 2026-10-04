@@ -176,6 +176,25 @@ fn seek_target_reached(actual_time: f64, target_time: f64, media_fps: f64) -> bo
     (actual_time - target_time).abs() <= frame_tolerance.max(0.05)
 }
 
+/// Resolve the logical timeline position after mpv has decoded a seek.
+///
+/// A requested timestamp can fall between video frames. In that case mpv's
+/// `time-pos` reports the PTS of the real frame it can display (usually the
+/// following frame), but an editor must retain the user's sub-frame timeline
+/// position while paused so hardware cues and keyframes can still be authored
+/// at millisecond precision. Playing media follows the decoded clock instead.
+fn settled_seek_position(
+    actual_time: f64,
+    target_time: f64,
+    was_playing_before_scrub: bool,
+) -> f64 {
+    if was_playing_before_scrub {
+        actual_time
+    } else {
+        target_time
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeyframeDragState {
     pub track_id: uuid::Uuid,
@@ -3120,18 +3139,24 @@ impl PealayerApp {
             return;
         }
 
-        self.playback_time = actual_time;
-        self.seek_pos = None;
+        let retain_exact_target = !self.was_playing_before_scrub;
+        let settled_time = settled_seek_position(
+            actual_time,
+            pending.target_time,
+            self.was_playing_before_scrub,
+        );
+        self.playback_time = settled_time;
+        self.seek_pos = retain_exact_target.then_some(pending.target_time);
         self.pending_scrub_commit = None;
         self.engine_handle.playback_time_ms.store(
-            (actual_time * 1_000.0).max(0.0) as u64,
+            (settled_time * 1_000.0).max(0.0) as u64,
             std::sync::atomic::Ordering::Relaxed,
         );
         let _ = self
             .engine_handle
             .sender
             .send(crate::four_d::engine::EngineMessage::Seek(
-                (actual_time * 1_000.0).max(0.0) as u64,
+                (settled_time * 1_000.0).max(0.0) as u64,
             ));
 
         if self.was_playing_before_scrub {
@@ -3165,7 +3190,10 @@ impl PealayerApp {
                     ..
                 })) => match (reply_userdata, change) {
                     (1, PropertyData::Double(v)) => {
-                        if !self.is_scrubbing && self.pending_scrub_commit.is_none() {
+                        if !self.is_scrubbing
+                            && self.pending_scrub_commit.is_none()
+                            && self.seek_pos.is_none()
+                        {
                             self.playback_time = v;
                             self.engine_handle
                                 .playback_time_ms
@@ -3386,6 +3414,10 @@ impl PealayerApp {
         if self.is_playback_finished() {
             self.replay();
         } else {
+            // A paused exact seek may intentionally retain a sub-frame logical
+            // playhead. Once playback starts, mpv's decoded clock is again the
+            // authoritative position.
+            self.seek_pos = None;
             let _ = self.mpv.set_property("pause", false);
             self.is_paused = false;
             self.engine_handle
@@ -3825,13 +3857,14 @@ impl PealayerApp {
         if self.current_video_path.is_none() || !self.is_seekable {
             return;
         }
-        let sec_str = seconds.to_string();
-        let _ = self.mpv.command("seek", &[&sec_str, "relative+exact"]);
         if seconds < 0.0 {
             self.is_eof = false;
         }
         let target = (self.playback_time + seconds).clamp(0.0, self.duration.max(0.0));
-        self.seek_pos = Some(target);
+        // Use the same exact-commit lifecycle as absolute/timeline seeks so a
+        // paused relative seek also retains a sub-frame authoring position.
+        self.scrub_to(target);
+        self.finish_scrub(target);
         let sign = if seconds > 0.0 { "+" } else { "" };
         self.set_osd(format!("Seek: {}{:.0}s", sign, seconds));
     }
@@ -3860,6 +3893,9 @@ impl PealayerApp {
         if self.current_video_path.is_none() || direction == 0 {
             return;
         }
+        // Frame stepping explicitly returns control to mpv's decoded-frame
+        // clock, replacing any paused sub-frame timeline position.
+        self.seek_pos = None;
         let command = if direction > 0 {
             "frame-step"
         } else {
@@ -5931,6 +5967,16 @@ mod tests {
         assert!(seek_target_reached(48.0, 48.0, 24.0));
         assert!(seek_target_reached(48.04, 48.0, 24.0));
         assert!(seek_target_reached(48.08, 48.0, 24.0));
+    }
+
+    #[test]
+    fn paused_exact_seek_retains_sub_frame_timeline_position() {
+        assert_eq!(settled_seek_position(3.462, 3.429, false), 3.429);
+    }
+
+    #[test]
+    fn playing_exact_seek_follows_decoded_media_clock() {
+        assert_eq!(settled_seek_position(3.462, 3.429, true), 3.462);
     }
 
     #[test]
