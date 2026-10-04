@@ -381,6 +381,16 @@ pub struct HardwareMacroStep {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_value: Option<u16>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub easing: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_rate_hz: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_count: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_interval_ms: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frequency_hz: Option<u16>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
@@ -402,6 +412,14 @@ pub struct HardwareMacroStep {
     pub blue: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brightness: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_red: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_green: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_blue: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_brightness: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opcode: Option<u8>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -2452,6 +2470,11 @@ mod tests {
                     "text": "GO",
                     "destination": "segments",
                     "duration_ms": 200,
+                    "to_value": 2048,
+                    "easing": "ease-in-out",
+                    "sample_rate_hz": 30,
+                    "repeat_count": 3,
+                    "repeat_interval_ms": 500,
                     "action_ids": ["seat.a.up"]
                 }],
                 "properties": {
@@ -2493,6 +2516,11 @@ mod tests {
         assert_eq!(parsed.macros[0].steps[0].text, "GO");
         assert_eq!(parsed.macros[0].steps[0].destination, "segments");
         assert_eq!(parsed.macros[0].steps[0].duration_ms, Some(200));
+        assert_eq!(parsed.macros[0].steps[0].to_value, Some(2048));
+        assert_eq!(parsed.macros[0].steps[0].easing, "ease-in-out");
+        assert_eq!(parsed.macros[0].steps[0].sample_rate_hz, Some(30));
+        assert_eq!(parsed.macros[0].steps[0].repeat_count, Some(3));
+        assert_eq!(parsed.macros[0].steps[0].repeat_interval_ms, Some(500));
         assert_eq!(parsed.macros[0].steps[0].action_ids, ["seat.a.up"]);
         assert_eq!(parsed.macros[0].color, "amber");
         assert_eq!(parsed.macros[0].label, "Seat rise");

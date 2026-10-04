@@ -49,16 +49,20 @@ does not seed or persist an independent effect catalog.
 2. Drag a live card onto the **Controller effects** timeline track. The card
    stays under the pointer at the exact grab offset and drops at the selected
    time.
-3. Right-click a card for **Manage** or **Run now**. The editor can
-   create, rename, regroup, inspect, run, duplicate, or delete definitions in
-   PCController.
-4. In **Hardware Monitor**, expand **Record effect**, choose
-   **PCController host** to capture all coordinator peripheral actions or
-   **Board RAM** for bounded live relay capture, operate the advertised
-   controls, then choose **Save and place**.
-5. Timeline playback calls `effect play sequence:ID` or
-   `effect play strip:ID`; lighting cues receive a matching `effect stop` at
-   their authored end. The stored definition remains solely in PCController.
+3. Right-click a card for **Manage** or **Run now**. **Manage** opens the
+   resizable effect editor: its capability-derived lanes show every cue on a
+   timing ruler. Drag a cue to move it; drag either edge to resize it; use
+   snapping, quantization, keyboard nudging, duplicate/delete, or **Remove
+   delay** to refine the sequence. The selected cue exposes the right control
+   for its channel type, including seat/relay duration, PWM or RGB fade target,
+   easing, curve quality, and repetition.
+4. Live capture is available in that same editor. Start recording, operate any
+   advertised controls, inspect status, then choose **Finish and edit**. The
+   saved PCController take opens on the editor timeline and is also placed at
+   the playhead where recording started.
+5. Timeline playback calls `effect play effect:<stable-id>`; lighting cues
+   receive a matching `effect stop` at their authored end. The stored
+   definition remains solely in PCController.
 
 The PCController Web UI, TUI, CLI/IPC, and other Pealayer instances see edits
 from the same catalog on their next authoritative snapshot.
@@ -213,7 +217,14 @@ PCController's peripheral catalog is authoritative for stable control/action key
 
 #### Hardware effect authoring
 
-With an attached, configured board, open **Hardware Monitor → Record hardware effect**. Enter a take name and choose **Start board recording** at the desired video playhead. PCController records the board-applied actions coming from Pealayer, its TUI/Web/API, RF, or the physical front panel. **Refresh status** reports the captured step count; **Save and place** persists the take in PCController, refreshes the authoritative macro catalog, and inserts its durable macro cue at the original video anchor. **Discard** keeps neither the take nor a timeline cue.
+With an attached, configured board, open **Effects Library → Manage** and use
+**Record live controls**. Enter a take name and start at the desired video
+playhead. PCController records acknowledged board-applied actions coming from
+Pealayer, its TUI/Web/API, RF, or the physical front panel. **Status** reports
+the take; **Finish and edit** persists it in PCController, refreshes the
+authoritative catalog, inserts its durable cue at the original video anchor,
+and opens the captured sequence for timeline refinement. **Discard take**
+keeps neither the recording nor a timeline cue.
 
 Addressable-strip effects are never synthesized by Pealayer. Only stable effect IDs advertised by the connected PCController are shown. Use **Preview**/**Stop preview** in Hardware Monitor for the live board, or drag an advertised strip effect from **Effects Library** onto **Controller effects**. The cue duration controls when Pealayer sends the matching start and stop commands during video playback; pause and seek stop an active preview so lighting cannot drift from the playhead.
 

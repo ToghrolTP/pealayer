@@ -1771,7 +1771,11 @@ impl PealayerApp {
     }
 
     pub(crate) fn save_controller_effect(&mut self) -> Result<(), String> {
-        let draft = self.effect_library_draft.clone();
+        let mut draft = self.effect_library_draft.clone();
+        if draft.kind == "sequence" {
+            draft.steps.sort_by_key(|step| step.at_us);
+            draft.duration_ms = crate::ui::effects_library::sequence_duration_ms(&draft.steps);
+        }
         let checked_text = |value: &str, field: &str, required: bool| -> Result<String, String> {
             let value = value.trim();
             if (required && value.is_empty())
@@ -2146,6 +2150,8 @@ impl PealayerApp {
         self.selected_instance_ids.clear();
         self.selected_instance_ids.insert(instance.id);
         self.timeline.instances.push(instance);
+        crate::ui::effects_library::select_sequence(self, &hardware_macro);
+        self.show_effect_library_editor = true;
         self.hardware_effect_authoring.pending_saved_macro_id = None;
         self.hardware_effect_authoring.status = format!(
             "Saved '{}' and placed it at {:.3}s",
