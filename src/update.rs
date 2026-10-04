@@ -948,6 +948,9 @@ fn prepare_self_update(
     let directory = current_path
         .parent()
         .ok_or_else(|| "current executable has no parent directory".to_string())?;
+    let staged_path = staged_path
+        .canonicalize()
+        .map_err(|error| format!("resolve staged executable: {error}"))?;
     let suffix = &expected_sha256[..12];
     let helper_extension = if cfg!(windows) {
         "helper.exe"
@@ -968,7 +971,7 @@ fn prepare_self_update(
         operation_id: operation_id.to_string(),
         parent_pid: std::process::id(),
         current_path: current_path.clone(),
-        staged_path: staged_path.to_path_buf(),
+        staged_path,
         backup_path,
         helper_path: helper_path.clone(),
         journal_path: journal_path.clone(),
@@ -1131,10 +1134,24 @@ pub fn cleanup_orphaned_downloads() {
     let Ok(entries) = fs::read_dir(directory) else {
         return;
     };
+    let active_prefix = std::env::var(HELPER_PATH_ENV)
+        .ok()
+        .and_then(|path| PathBuf::from(path).file_name().map(|name| name.to_owned()))
+        .and_then(|name| {
+            let name = name.to_string_lossy();
+            name.strip_suffix("helper.exe")
+                .or_else(|| name.strip_suffix("helper"))
+                .map(str::to_string)
+        });
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name.starts_with(".update-") && name.ends_with(".download") {
+        let orphaned_download = name.starts_with(".update-") && name.ends_with(".download");
+        let orphaned_transaction = name.starts_with(".pealayer-update-")
+            && active_prefix
+                .as_deref()
+                .is_none_or(|prefix| !name.starts_with(prefix));
+        if orphaned_download || orphaned_transaction {
             let _ = fs::remove_file(entry.path());
         }
     }
