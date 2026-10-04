@@ -302,6 +302,12 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             0.1,
         ),
         PreferenceControl::boolean(
+            "restore_last_media_on_startup",
+            "playback",
+            "Playback history",
+            "Reopen the last media when Pealayer starts",
+        ),
+        PreferenceControl::boolean(
             "remember_playback_position",
             "playback",
             "Playback history",

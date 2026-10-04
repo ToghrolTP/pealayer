@@ -375,6 +375,8 @@ pub struct AppConfig {
     pub open_url_use_proxy: bool,
     pub open_url_proxy_url: Option<String>,
     pub recent_media: Vec<PathBuf>,
+    pub last_media_target: Option<PathBuf>,
+    pub restore_last_media_on_startup: bool,
     pub remember_playback_position: bool,
     pub playback_position_history_limit: u32,
     pub playback_positions: Vec<PlaybackPositionEntry>,
@@ -446,6 +448,8 @@ impl Default for AppConfig {
             open_url_use_proxy: true,
             open_url_proxy_url: None,
             recent_media: Vec::new(),
+            last_media_target: None,
+            restore_last_media_on_startup: true,
             remember_playback_position: true,
             playback_position_history_limit: DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT,
             playback_positions: Vec::new(),
@@ -1223,6 +1227,13 @@ impl AppConfig {
         }
         if self.recent_media.len() > 100 {
             return Err("recent_media contains too many entries".to_string());
+        }
+        if self
+            .last_media_target
+            .as_ref()
+            .is_some_and(|target| target.to_string_lossy().len() > 8_192)
+        {
+            return Err("last_media_target is too long".to_string());
         }
         if !(1..=MAX_PLAYBACK_POSITION_HISTORY_LIMIT)
             .contains(&self.playback_position_history_limit)

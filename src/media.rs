@@ -100,6 +100,45 @@ pub fn media_target_label(target: &str) -> String {
     }
 }
 
+/// Selects the media target to load for a fresh process.
+///
+/// An explicit CLI target is authoritative. Automatic restoration is
+/// deliberately conservative for local media (the file must still exist) but
+/// keeps remote targets eligible because reachability is determined by mpv
+/// asynchronously. `last_media_target` is the durable source; recent media and
+/// playback history provide migration recovery for configurations written by
+/// builds that predate that field.
+pub fn startup_media_target(
+    explicit: Option<&str>,
+    restore_enabled: bool,
+    last_media_target: Option<&std::path::Path>,
+    recent_media: &[std::path::PathBuf],
+    playback_positions: &[crate::config::PlaybackPositionEntry],
+) -> Option<String> {
+    if let Some(explicit) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
+        return Some(explicit.to_string());
+    }
+    if !restore_enabled {
+        return None;
+    }
+
+    last_media_target
+        .into_iter()
+        .chain(recent_media.iter().map(std::path::PathBuf::as_path))
+        .map(|target| target.to_string_lossy().into_owned())
+        .chain(
+            playback_positions
+                .iter()
+                .map(|entry| entry.target.trim().to_string()),
+        )
+        .find(|target| restorable_media_target(target))
+}
+
+fn restorable_media_target(target: &str) -> bool {
+    let target = target.trim();
+    !target.is_empty() && (is_remote_media_target(target) || std::path::Path::new(target).is_file())
+}
+
 /// Stable identity for bounded playback-position history. URL fragments do
 /// not change the underlying media. Existing local files are canonicalized so
 /// aliases share a resume point; non-existing paths remain usable as entered.
@@ -200,6 +239,57 @@ mod tests {
         assert_eq!(
             playback_history_key("https://example.invalid/movie.mp4#chapter"),
             "https://example.invalid/movie.mp4"
+        );
+    }
+
+    #[test]
+    fn startup_restore_prefers_cli_then_durable_last_target_and_skips_missing_files() {
+        let existing = std::env::temp_dir().join(format!(
+            "pealayer-startup-media-{}.mp4",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&existing, b"test").unwrap();
+        let missing = existing.with_extension("missing.mp4");
+        let history = vec![crate::config::PlaybackPositionEntry {
+            target: existing.to_string_lossy().into_owned(),
+            position_seconds: 12.0,
+            updated_at_unix_ms: 1,
+        }];
+
+        assert_eq!(
+            startup_media_target(
+                Some("https://example.invalid/explicit.mp4"),
+                true,
+                Some(&existing),
+                &[],
+                &history,
+            )
+            .as_deref(),
+            Some("https://example.invalid/explicit.mp4")
+        );
+        assert_eq!(
+            startup_media_target(None, true, Some(&missing), &[], &history),
+            Some(existing.to_string_lossy().into_owned())
+        );
+        assert_eq!(
+            startup_media_target(None, false, Some(&existing), &[], &history),
+            None
+        );
+        std::fs::remove_file(existing).unwrap();
+    }
+
+    #[test]
+    fn remote_media_remains_restorable_without_blocking_on_a_network_probe() {
+        assert_eq!(
+            startup_media_target(
+                None,
+                true,
+                Some(std::path::Path::new("https://example.invalid/movie.mp4")),
+                &[],
+                &[],
+            )
+            .as_deref(),
+            Some("https://example.invalid/movie.mp4")
         );
     }
 }

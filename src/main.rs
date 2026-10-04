@@ -355,6 +355,13 @@ fn main() -> eframe::Result {
             });
 
             let initial_volume = cli_options.volume.unwrap_or(loaded_config.volume);
+            let startup_media_target = crate::media::startup_media_target(
+                cli_options.target.as_deref(),
+                loaded_config.restore_last_media_on_startup,
+                loaded_config.last_media_target.as_deref(),
+                &loaded_config.recent_media,
+                &loaded_config.playback_positions,
+            );
             let _ = mpv_static.set_property("volume", initial_volume);
             let _ = mpv_static.set_property("mute", loaded_config.is_muted);
             crate::platform::windows::sync_windows_jump_list(&loaded_config.recent_media);
@@ -525,6 +532,8 @@ fn main() -> eframe::Result {
                 elapsed_edit_focus_requested: false,
                 osd_message: None,
                 recent_media: loaded_config.recent_media.clone(),
+                last_media_target: loaded_config.last_media_target.clone(),
+                restore_last_media_on_startup: loaded_config.restore_last_media_on_startup,
                 remember_playback_position: loaded_config.remember_playback_position,
                 playback_position_history_limit: loaded_config.playback_position_history_limit,
                 playback_positions: loaded_config.playback_positions.clone(),
@@ -670,7 +679,7 @@ fn main() -> eframe::Result {
                 }
             }
 
-            if let Some(target) = cli_options.target {
+            if let Some(target) = startup_media_target {
                 app.load_media_target(&target);
             }
             for command in cli_options.commands {

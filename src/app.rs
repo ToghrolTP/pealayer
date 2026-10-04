@@ -287,6 +287,8 @@ pub struct PealayerApp {
     pub(crate) elapsed_edit_focus_requested: bool,
     pub(crate) osd_message: Option<(String, std::time::Instant)>,
     pub(crate) recent_media: Vec<std::path::PathBuf>,
+    pub(crate) last_media_target: Option<std::path::PathBuf>,
+    pub(crate) restore_last_media_on_startup: bool,
     pub(crate) remember_playback_position: bool,
     pub(crate) playback_position_history_limit: u32,
     pub(crate) playback_positions: Vec<crate::config::PlaybackPositionEntry>,
@@ -3720,6 +3722,7 @@ impl PealayerApp {
             let _ = self.mpv.set_property("keep-open", "always");
             let _ = self.mpv.command("loadfile", &[path_str, "replace"]);
             self.current_video_path = Some(path.clone());
+            self.last_media_target = Some(path.clone());
             self.is_eof = false;
             self.is_paused = false;
             self.playback_time = 0.0;
@@ -3843,6 +3846,7 @@ impl PealayerApp {
             };
             let path = std::path::PathBuf::from(trimmed);
             self.current_video_path = Some(path.clone());
+            self.last_media_target = Some(path.clone());
             self.is_eof = false;
             self.is_paused = false;
             self.playback_time = 0.0;
@@ -3899,11 +3903,10 @@ impl PealayerApp {
     }
 
     pub fn close_video(&mut self) {
-        if self.capture_current_playback_position() {
-            self.save_config();
-        }
+        self.capture_current_playback_position();
         let _ = self.mpv.command("stop", &[]);
         self.current_video_path = None;
+        self.last_media_target = None;
         self.playback_time = 0.0;
         self.duration = 0.0;
         self.is_seekable = false;
@@ -3918,6 +3921,7 @@ impl PealayerApp {
             mc.update_playback(false, 0.0, 0.0);
         }
         self.set_osd("Video Closed".to_string());
+        self.save_config();
     }
 
     pub(crate) fn runtime_config_snapshot(&self) -> crate::config::AppConfig {
@@ -3937,6 +3941,8 @@ impl PealayerApp {
         cfg.open_url_proxy_url = (!self.open_url_proxy_url.trim().is_empty())
             .then(|| self.open_url_proxy_url.trim().to_string());
         cfg.recent_media = self.recent_media.clone();
+        cfg.last_media_target = self.last_media_target.clone();
+        cfg.restore_last_media_on_startup = self.restore_last_media_on_startup;
         cfg.remember_playback_position = self.remember_playback_position;
         cfg.playback_position_history_limit = self.playback_position_history_limit;
         cfg.playback_positions = self.playback_positions.clone();
@@ -4069,6 +4075,8 @@ impl PealayerApp {
         self.open_url_use_proxy = config.open_url_use_proxy;
         self.open_url_proxy_url = config.open_url_proxy_url.clone().unwrap_or_default();
         self.recent_media = config.recent_media.clone();
+        self.last_media_target = config.last_media_target.clone();
+        self.restore_last_media_on_startup = config.restore_last_media_on_startup;
         self.remember_playback_position = config.remember_playback_position;
         self.playback_position_history_limit = config.playback_position_history_limit;
         self.playback_positions = config.playback_positions.clone();
@@ -5142,6 +5150,8 @@ impl Default for PealayerApp {
             elapsed_edit_focus_requested: false,
             osd_message: None,
             recent_media: Vec::new(),
+            last_media_target: None,
+            restore_last_media_on_startup: true,
             remember_playback_position: true,
             playback_position_history_limit: crate::config::DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT,
             playback_positions: Vec::new(),
