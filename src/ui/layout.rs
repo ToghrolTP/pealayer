@@ -404,6 +404,79 @@ fn pan_timeline_offset(
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TimelineWheelAction {
+    Zoom(f32),
+    HorizontalScroll(f32),
+}
+
+fn timeline_wheel_action(
+    delta: egui::Vec2,
+    shift: bool,
+    command_or_ctrl: bool,
+    plain_zoom: bool,
+    ctrl_zoom: bool,
+    shift_horizontal_scroll: bool,
+) -> Option<TimelineWheelAction> {
+    let dominant_delta = if delta.y.abs() >= delta.x.abs() {
+        delta.y
+    } else {
+        delta.x
+    };
+    if dominant_delta == 0.0 {
+        return None;
+    }
+    if shift && shift_horizontal_scroll {
+        Some(TimelineWheelAction::HorizontalScroll(dominant_delta))
+    } else if (command_or_ctrl && ctrl_zoom) || (!command_or_ctrl && plain_zoom) {
+        Some(TimelineWheelAction::Zoom(dominant_delta))
+    } else {
+        None
+    }
+}
+
+fn timeline_zoom_from_wheel(current_zoom: f32, wheel_delta: f32) -> f32 {
+    // Multiplicative zoom feels uniform at both ends of the range. A 120-unit
+    // Windows wheel notch changes the scale by roughly 27%, while precision
+    // touchpads still produce small, smooth increments.
+    (current_zoom * (wheel_delta * 0.002).exp()).clamp(20.0, 500.0)
+}
+
+fn timeline_offset_for_pointer_zoom(
+    current_offset: f32,
+    pointer_x_in_viewport: f32,
+    current_zoom: f32,
+    next_zoom: f32,
+    duration_seconds: f64,
+    viewport_width: f32,
+) -> f32 {
+    if current_zoom <= 0.0 || !current_zoom.is_finite() || !next_zoom.is_finite() {
+        return current_offset;
+    }
+    let pointer_x_in_viewport = pointer_x_in_viewport.clamp(0.0, viewport_width.max(0.0));
+    let seconds_under_pointer = (current_offset + pointer_x_in_viewport) / current_zoom;
+    let next_content_width = (duration_seconds.max(0.0) as f32 * next_zoom).max(0.0);
+    let max_offset = (next_content_width - viewport_width).max(0.0);
+    (seconds_under_pointer * next_zoom - pointer_x_in_viewport).clamp(0.0, max_offset)
+}
+
+fn constrain_middle_pan_delta(
+    pointer_delta: egui::Vec2,
+    shift: bool,
+    command_or_ctrl: bool,
+    axis_lock_modifiers: bool,
+) -> egui::Vec2 {
+    if !axis_lock_modifiers || (shift && command_or_ctrl) {
+        pointer_delta
+    } else if shift {
+        egui::vec2(pointer_delta.x, 0.0)
+    } else if command_or_ctrl {
+        egui::vec2(0.0, pointer_delta.y)
+    } else {
+        pointer_delta
+    }
+}
+
 fn timeline_offset_to_reveal_x(
     current_offset: f32,
     target_x: f32,
@@ -4873,6 +4946,48 @@ mod timeline_row_tests {
             ),
             egui::vec2(600.0, 300.0)
         );
+    }
+
+    #[test]
+    fn timeline_zoom_keeps_the_media_time_under_the_pointer() {
+        let next_offset = timeline_offset_for_pointer_zoom(200.0, 300.0, 100.0, 200.0, 20.0, 800.0);
+
+        assert_eq!(next_offset, 700.0);
+        let old_time = (200.0 + 300.0) / 100.0;
+        let new_time = (next_offset + 300.0) / 200.0;
+        assert_eq!(old_time, new_time);
+    }
+
+    #[test]
+    fn timeline_wheel_modifiers_route_zoom_and_horizontal_scroll() {
+        let delta = egui::vec2(0.0, 120.0);
+        assert_eq!(
+            timeline_wheel_action(delta, false, false, true, true, true),
+            Some(TimelineWheelAction::Zoom(120.0))
+        );
+        assert_eq!(
+            timeline_wheel_action(delta, false, true, true, true, true),
+            Some(TimelineWheelAction::Zoom(120.0))
+        );
+        assert_eq!(
+            timeline_wheel_action(delta, true, false, true, true, true),
+            Some(TimelineWheelAction::HorizontalScroll(120.0))
+        );
+    }
+
+    #[test]
+    fn middle_pan_axis_modifiers_preserve_free_and_constrained_modes() {
+        let delta = egui::vec2(15.0, -9.0);
+        assert_eq!(constrain_middle_pan_delta(delta, false, false, true), delta);
+        assert_eq!(
+            constrain_middle_pan_delta(delta, true, false, true),
+            egui::vec2(15.0, 0.0)
+        );
+        assert_eq!(
+            constrain_middle_pan_delta(delta, false, true, true),
+            egui::vec2(0.0, -9.0)
+        );
+        assert_eq!(constrain_middle_pan_delta(delta, true, false, false), delta);
     }
 
     #[test]
@@ -9555,6 +9670,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         // a taller row, that centered the canvas lower by roughly one ruler band.
                         // `horizontal_top` makes the header ruler and canvas ruler share one
                         // origin regardless of visible track count or panel height.
+                        let timeline_vertical_sync_id =
+                            egui::Id::new("timeline-shared-vertical-offset");
+                        let synced_vertical_offset = ui.ctx().data_mut(|data| {
+                            data.get_persisted::<f32>(timeline_vertical_sync_id)
+                                .unwrap_or(0.0)
+                        });
+                        let mut timeline_header_scroll_id = None;
+                        let mut timeline_header_offset_y = synced_vertical_offset;
                         ui.horizontal_top(|ui| {
                             // 1. Left column: Fixed Track Headers
                             ui.vertical(|ui| {
@@ -9706,6 +9829,29 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     header_ui.ctx().request_repaint();
                                 }
 
+                                let header_wheel_multiplier = if self
+                                    .app
+                                    .timeline_header_wheel_vertical_scroll
+                                {
+                                    1.0
+                                } else {
+                                    0.0
+                                };
+                                let header_scroll = egui::ScrollArea::vertical()
+                                    .id_salt("timeline_header_scroll")
+                                    .max_height(ui.available_height())
+                                    .auto_shrink([false, false])
+                                    .scroll_bar_visibility(
+                                        egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                                    )
+                                    .wheel_scroll_multiplier(egui::vec2(
+                                        0.0,
+                                        header_wheel_multiplier,
+                                    ))
+                                    .vertical_scroll_offset(synced_vertical_offset)
+                                    .show(ui, |ui| {
+                                ui.set_width(TIMELINE_TRACK_HEADER_WIDTH);
+                                ui.spacing_mut().item_spacing.y = 0.0;
                                 let rename_key_id = egui::Id::new("timeline_track_rename_key");
                                 let rename_draft_id = egui::Id::new("timeline_track_rename_draft");
                                 let rename_focus_id = egui::Id::new("timeline_track_rename_focus");
@@ -10724,10 +10870,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 } else {
                                     clear_released_timeline_track_drag(ui);
                                 }
+                                });
+                                timeline_header_scroll_id = Some(header_scroll.id);
+                                timeline_header_offset_y = header_scroll.state.offset.y;
                             });
 
                             // 2. Right column: Scrollable Timeline Grid
                             let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
+                            let scroll_modifiers = ui.input(|i| i.modifiers);
+                            let mut pending_timeline_wheel = None;
                             let zoom = self.app.timeline_zoom;
                             let px_per_ms = zoom / 1000.0;
                             let total_seconds = if self.app.duration > 0.0 { self.app.duration } else { 60.0 };
@@ -10749,6 +10900,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             // occluded its parent, so releases were never accepted.
                             let timeline_scroll = egui::ScrollArea::both()
                                 .id_salt("timeline_scroll")
+                                .vertical_scroll_offset(timeline_header_offset_y)
                                 .show(ui, |ui| {
                                         let size = egui::vec2(total_width, total_height);
                                         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
@@ -10769,13 +10921,24 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let pointer_pos = ui.ctx().pointer_latest_pos();
 
                                         if let Some(pos) = pointer_pos {
-                                            if rect.contains(pos) && scroll_delta.y != 0.0 {
-                                                self.app.timeline_zoom = (self.app.timeline_zoom + scroll_delta.y * 0.2).clamp(20.0, 500.0);
-                                                // The wheel gesture belongs to timeline zoom while
-                                                // the pointer is over the canvas; prevent the parent
-                                                // two-axis ScrollArea from also moving vertically.
+                                            if rect.contains(pos)
+                                                && let Some(action) = timeline_wheel_action(
+                                                    scroll_delta,
+                                                    scroll_modifiers.shift,
+                                                    scroll_modifiers.ctrl
+                                                        || scroll_modifiers.command,
+                                                    self.app.timeline_plain_wheel_zoom,
+                                                    self.app.timeline_ctrl_wheel_zoom,
+                                                    self.app
+                                                        .timeline_shift_wheel_horizontal_scroll,
+                                                )
+                                            {
+                                                pending_timeline_wheel = Some((action, pos.x));
+                                                // This gesture is handled after the ScrollArea has
+                                                // reported its exact viewport and offset. Prevent
+                                                // egui from applying the same wheel event again.
                                                 ui.ctx().input_mut(|input| {
-                                                    input.smooth_scroll_delta.y = 0.0;
+                                                    input.smooth_scroll_delta = egui::Vec2::ZERO;
                                                 });
                                             }
                                         }
@@ -12043,7 +12206,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         if let Some((track_id, k_idx, pos, orig_t, orig_v)) = started_drag_info {
                                             if !self.app.selected_keyframes.contains(&(track_id, k_idx)) {
-                                                if !ui.input(|i| i.modifiers.shift || i.modifiers.ctrl) {
+                                                if !ui.input(|i| {
+                                                    i.modifiers.ctrl || i.modifiers.command
+                                                }) {
                                                     self.app.selected_keyframes.clear();
                                                 }
                                                 self.app.selected_keyframes.insert((track_id, k_idx));
@@ -12544,6 +12709,40 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let timeline_viewport = timeline_scroll.inner_rect;
                             let ((rect, response), clicked_any_clip, clicked_any_keyframe) = timeline_scroll.inner;
 
+                            let mut timeline_scroll_changed = false;
+                            if let Some((wheel_action, pointer_screen_x)) =
+                                pending_timeline_wheel
+                            {
+                                match wheel_action {
+                                    TimelineWheelAction::Zoom(delta) => {
+                                        let next_zoom =
+                                            timeline_zoom_from_wheel(zoom, delta);
+                                        let pointer_x_in_viewport =
+                                            pointer_screen_x - timeline_viewport.left();
+                                        timeline_scroll_state.offset.x =
+                                            timeline_offset_for_pointer_zoom(
+                                                timeline_scroll_state.offset.x,
+                                                pointer_x_in_viewport,
+                                                zoom,
+                                                next_zoom,
+                                                total_seconds,
+                                                timeline_viewport.width(),
+                                            );
+                                        self.app.timeline_zoom = next_zoom;
+                                        timeline_scroll_changed = true;
+                                    }
+                                    TimelineWheelAction::HorizontalScroll(delta) => {
+                                        let max_offset = (timeline_content_size.x
+                                            - timeline_viewport.width())
+                                            .max(0.0);
+                                        timeline_scroll_state.offset.x =
+                                            (timeline_scroll_state.offset.x - delta)
+                                                .clamp(0.0, max_offset);
+                                        timeline_scroll_changed = true;
+                                    }
+                                }
+                            }
+
                             // Middle-button dragging pans the existing two-axis
                             // ScrollArea viewport. Track the gesture independently
                             // of child responses so panning also works when it starts
@@ -12568,7 +12767,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let mut middle_pan_active = ui
                                 .data(|data| data.get_temp::<bool>(middle_pan_id))
                                 .unwrap_or(false);
-                            if middle_pressed
+                            if self.app.timeline_middle_button_pan
+                                && middle_pressed
                                 && pointer_position
                                     .is_some_and(|position| timeline_viewport.contains(position))
                             {
@@ -12580,9 +12780,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let mut middle_pan_changed = false;
                             if middle_pan_active && middle_down {
                                 let previous_offset = timeline_scroll_state.offset;
+                                let constrained_delta = constrain_middle_pan_delta(
+                                    pointer_delta,
+                                    scroll_modifiers.shift,
+                                    scroll_modifiers.ctrl || scroll_modifiers.command,
+                                    self.app.timeline_middle_axis_lock_modifiers,
+                                );
                                 timeline_scroll_state.offset = pan_timeline_offset(
                                     previous_offset,
-                                    pointer_delta,
+                                    constrained_delta,
                                     timeline_content_size,
                                     timeline_viewport.size(),
                                 );
@@ -12596,8 +12802,26 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             ui.data_mut(|data| {
                                 data.insert_temp(middle_pan_id, middle_pan_active);
                             });
-                            if middle_pan_changed {
+                            timeline_scroll_changed |= middle_pan_changed;
+                            if timeline_scroll_changed {
                                 timeline_scroll_state.store(ui.ctx(), timeline_scroll_id);
+                            }
+
+                            let synced_offset_y = timeline_scroll_state.offset.y;
+                            ui.ctx().data_mut(|data| {
+                                data.insert_persisted(
+                                    timeline_vertical_sync_id,
+                                    synced_offset_y,
+                                );
+                            });
+                            if let Some(header_scroll_id) = timeline_header_scroll_id
+                                && let Some(mut header_state) =
+                                    egui::scroll_area::State::load(ui.ctx(), header_scroll_id)
+                                && header_state.offset.y != synced_offset_y
+                            {
+                                header_state.offset.y = synced_offset_y;
+                                header_state.store(ui.ctx(), header_scroll_id);
+                                ui.ctx().request_repaint();
                             }
 
                             if ui.input(|input| input.pointer.any_pressed()) {
@@ -12659,9 +12883,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     let lasso_rect = egui::Rect::from_two_pos(origin, mouse_pos);
                                     self.app.lasso_rect = Some(lasso_rect);
 
-                                    let shift_held = ui.ctx().input(|i| i.modifiers.shift);
-                                    let mut new_instance_selection = if shift_held { self.app.selected_instance_ids.clone() } else { std::collections::HashSet::new() };
-                                    let mut new_keyframe_selection = if shift_held { self.app.selected_keyframes.clone() } else { std::collections::HashSet::new() };
+                                    let multi_select = ui.ctx().input(|i| {
+                                        i.modifiers.ctrl || i.modifiers.command
+                                    });
+                                    let mut new_instance_selection = if multi_select { self.app.selected_instance_ids.clone() } else { std::collections::HashSet::new() };
+                                    let mut new_keyframe_selection = if multi_select { self.app.selected_keyframes.clone() } else { std::collections::HashSet::new() };
 
                                     // Instances
                                     for instance in &self.app.timeline.instances {

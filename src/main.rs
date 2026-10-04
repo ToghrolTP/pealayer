@@ -733,6 +733,15 @@ fn main() -> eframe::Result {
                 held_motion_action: None,
                 compact_hardware_controls: loaded_config.compact_hardware_controls,
                 compact_timeline_tracks: loaded_config.compact_timeline_tracks,
+                timeline_header_wheel_vertical_scroll: loaded_config
+                    .timeline_header_wheel_vertical_scroll,
+                timeline_plain_wheel_zoom: loaded_config.timeline_plain_wheel_zoom,
+                timeline_ctrl_wheel_zoom: loaded_config.timeline_ctrl_wheel_zoom,
+                timeline_shift_wheel_horizontal_scroll: loaded_config
+                    .timeline_shift_wheel_horizontal_scroll,
+                timeline_middle_button_pan: loaded_config.timeline_middle_button_pan,
+                timeline_middle_axis_lock_modifiers: loaded_config
+                    .timeline_middle_axis_lock_modifiers,
                 non_user_control_visibility: loaded_config.non_user_control_visibility,
                 prefix_relay_identifiers: loaded_config.prefix_relay_identifiers,
                 live_pwm_updates: loaded_config.live_pwm_updates,

@@ -415,6 +415,12 @@ pub struct PealayerApp {
     pub(crate) held_motion_action: Option<(String, String)>,
     pub(crate) compact_hardware_controls: bool,
     pub(crate) compact_timeline_tracks: bool,
+    pub(crate) timeline_header_wheel_vertical_scroll: bool,
+    pub(crate) timeline_plain_wheel_zoom: bool,
+    pub(crate) timeline_ctrl_wheel_zoom: bool,
+    pub(crate) timeline_shift_wheel_horizontal_scroll: bool,
+    pub(crate) timeline_middle_button_pan: bool,
+    pub(crate) timeline_middle_axis_lock_modifiers: bool,
     pub(crate) non_user_control_visibility: crate::config::NonUserControlVisibility,
     pub(crate) prefix_relay_identifiers: bool,
     pub(crate) live_pwm_updates: bool,
@@ -4588,6 +4594,12 @@ impl PealayerApp {
         cfg.motion_control_mode = self.motion_control_mode;
         cfg.compact_hardware_controls = self.compact_hardware_controls;
         cfg.compact_timeline_tracks = self.compact_timeline_tracks;
+        cfg.timeline_header_wheel_vertical_scroll = self.timeline_header_wheel_vertical_scroll;
+        cfg.timeline_plain_wheel_zoom = self.timeline_plain_wheel_zoom;
+        cfg.timeline_ctrl_wheel_zoom = self.timeline_ctrl_wheel_zoom;
+        cfg.timeline_shift_wheel_horizontal_scroll = self.timeline_shift_wheel_horizontal_scroll;
+        cfg.timeline_middle_button_pan = self.timeline_middle_button_pan;
+        cfg.timeline_middle_axis_lock_modifiers = self.timeline_middle_axis_lock_modifiers;
         cfg.non_user_control_visibility = self.non_user_control_visibility;
         cfg.prefix_relay_identifiers = self.prefix_relay_identifiers;
         cfg.live_pwm_updates = self.live_pwm_updates;
@@ -4735,6 +4747,12 @@ impl PealayerApp {
         self.motion_control_mode = config.motion_control_mode;
         self.compact_hardware_controls = config.compact_hardware_controls;
         self.compact_timeline_tracks = config.compact_timeline_tracks;
+        self.timeline_header_wheel_vertical_scroll = config.timeline_header_wheel_vertical_scroll;
+        self.timeline_plain_wheel_zoom = config.timeline_plain_wheel_zoom;
+        self.timeline_ctrl_wheel_zoom = config.timeline_ctrl_wheel_zoom;
+        self.timeline_shift_wheel_horizontal_scroll = config.timeline_shift_wheel_horizontal_scroll;
+        self.timeline_middle_button_pan = config.timeline_middle_button_pan;
+        self.timeline_middle_axis_lock_modifiers = config.timeline_middle_axis_lock_modifiers;
         self.non_user_control_visibility = config.non_user_control_visibility;
         self.prefix_relay_identifiers = config.prefix_relay_identifiers;
         self.live_pwm_updates = config.live_pwm_updates;
@@ -5935,6 +5953,12 @@ impl Default for PealayerApp {
             held_motion_action: None,
             compact_hardware_controls: false,
             compact_timeline_tracks: true,
+            timeline_header_wheel_vertical_scroll: true,
+            timeline_plain_wheel_zoom: true,
+            timeline_ctrl_wheel_zoom: true,
+            timeline_shift_wheel_horizontal_scroll: true,
+            timeline_middle_button_pan: true,
+            timeline_middle_axis_lock_modifiers: true,
             non_user_control_visibility: crate::config::NonUserControlVisibility::Dimmed,
             prefix_relay_identifiers: true,
             live_pwm_updates: true,

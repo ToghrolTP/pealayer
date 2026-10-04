@@ -458,6 +458,42 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Timeline",
             "Use compact timeline track rows",
         ),
+        PreferenceControl::boolean(
+            "timeline_header_wheel_vertical_scroll",
+            "input",
+            "Timeline navigation",
+            "Scroll track headers vertically with the mouse wheel",
+        ),
+        PreferenceControl::boolean(
+            "timeline_plain_wheel_zoom",
+            "input",
+            "Timeline navigation",
+            "Zoom the timeline when scrolling over its canvas",
+        ),
+        PreferenceControl::boolean(
+            "timeline_ctrl_wheel_zoom",
+            "input",
+            "Timeline navigation",
+            "Use Ctrl or Command plus wheel to zoom",
+        ),
+        PreferenceControl::boolean(
+            "timeline_shift_wheel_horizontal_scroll",
+            "input",
+            "Timeline navigation",
+            "Use Shift plus wheel to scroll horizontally",
+        ),
+        PreferenceControl::boolean(
+            "timeline_middle_button_pan",
+            "input",
+            "Timeline navigation",
+            "Pan the timeline with the middle mouse button",
+        ),
+        PreferenceControl::boolean(
+            "timeline_middle_axis_lock_modifiers",
+            "input",
+            "Timeline navigation",
+            "Constrain middle-button pan with Shift or Ctrl",
+        ),
         PreferenceControl::select(
             "non_user_control_visibility",
             "hardware",
@@ -783,6 +819,35 @@ mod tests {
         assert!(matches!(control.kind, PreferenceControlKind::Boolean));
         assert_eq!(control.section, "hardware");
         assert_eq!(control.group, "Timeline");
+    }
+
+    #[test]
+    fn timeline_navigation_gestures_are_shared_persistent_preferences() {
+        let config = crate::config::AppConfig::default();
+        assert!(config.timeline_header_wheel_vertical_scroll);
+        assert!(config.timeline_plain_wheel_zoom);
+        assert!(config.timeline_ctrl_wheel_zoom);
+        assert!(config.timeline_shift_wheel_horizontal_scroll);
+        assert!(config.timeline_middle_button_pan);
+        assert!(config.timeline_middle_axis_lock_modifiers);
+
+        let controls = preference_controls(&config);
+        for key in [
+            "timeline_header_wheel_vertical_scroll",
+            "timeline_plain_wheel_zoom",
+            "timeline_ctrl_wheel_zoom",
+            "timeline_shift_wheel_horizontal_scroll",
+            "timeline_middle_button_pan",
+            "timeline_middle_axis_lock_modifiers",
+        ] {
+            let control = controls
+                .iter()
+                .find(|control| control.key == key)
+                .unwrap_or_else(|| panic!("missing {key} preference"));
+            assert!(matches!(control.kind, PreferenceControlKind::Boolean));
+            assert_eq!(control.section, "input");
+            assert_eq!(control.group, "Timeline navigation");
+        }
     }
 
     #[test]
