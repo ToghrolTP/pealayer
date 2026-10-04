@@ -4691,6 +4691,60 @@ mod timeline_row_tests {
         );
     }
 
+    #[test]
+    fn timeline_fixed_rows_have_no_hidden_gap_against_canvas_lanes() {
+        let context = egui::Context::default();
+        let fixed_rects = std::cell::RefCell::new(Vec::<egui::Rect>::new());
+        let canvas_rect = std::cell::Cell::new(egui::Rect::NOTHING);
+        let output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(700.0, 220.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(TIMELINE_TRACK_HEADER_WIDTH);
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        for height in [
+                            TIMELINE_RULER_HEIGHT,
+                            TIMELINE_TRACK_ROW_HEIGHT,
+                            TIMELINE_TRACK_ROW_HEIGHT,
+                        ] {
+                            fixed_rects.borrow_mut().push(
+                                ui.allocate_exact_size(
+                                    egui::vec2(TIMELINE_TRACK_HEADER_WIDTH, height),
+                                    egui::Sense::hover(),
+                                )
+                                .0,
+                            );
+                        }
+                    });
+                    canvas_rect.set(
+                        ui.allocate_exact_size(
+                            egui::vec2(360.0, timeline_content_height(2, 0)),
+                            egui::Sense::hover(),
+                        )
+                        .0,
+                    );
+                });
+            },
+        );
+        discard_ui_output(output);
+
+        let fixed = fixed_rects.borrow();
+        let canvas = canvas_rect.get();
+        assert_eq!(fixed[0].top(), canvas.top());
+        assert_eq!(fixed[0].bottom(), fixed[1].top());
+        assert_eq!(fixed[1].bottom(), fixed[2].top());
+        assert_eq!(fixed[1].top(), timeline_track_row_top(canvas.top(), 0));
+        assert_eq!(fixed[2].top(), timeline_track_row_top(canvas.top(), 1));
+        assert_eq!(fixed[2].bottom(), canvas.bottom());
+    }
+
     fn discard_ui_output(mut output: egui::FullOutput) {
         output.textures_delta.clear();
     }
@@ -9164,6 +9218,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             // 1. Left column: Fixed Track Headers
                             ui.vertical(|ui| {
                                 ui.set_width(TIMELINE_TRACK_HEADER_WIDTH);
+                                // The canvas paints contiguous bands. Remove egui's default
+                                // inter-widget gap so the fixed header rows have the exact same
+                                // top/bottom coordinates instead of drifting farther on every row.
+                                ui.spacing_mut().item_spacing.y = 0.0;
 
                                 // Header occupies the exact same band as the right-side ruler.
                                 let (header_rect, _) = ui.allocate_exact_size(
@@ -9340,6 +9398,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             .max_rect(rect)
                                             .layout(egui::Layout::left_to_right(egui::Align::Center)),
                                     );
+                                    child_ui.set_clip_rect(child_ui.clip_rect().intersect(rect));
                                     if track_row.dimmed {
                                         child_ui.set_opacity(0.58);
                                     }
@@ -9353,36 +9412,56 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         },
                                     );
                                     let mut rename_commit = None;
-                                    child_ui.horizontal(|ui| {
+                                    {
+                                        let ui = &mut child_ui;
                                         ui.add_space(6.0);
                                         let icon_color = if track_row.active && track_row.enabled {
                                             ui.visuals().selection.bg_fill
                                         } else {
                                             ui.visuals().weak_text_color()
                                         };
-                                        ui.allocate_ui_with_layout(
+                                        let (icon_rect, _) = ui.allocate_exact_size(
                                             egui::vec2(18.0, TIMELINE_TRACK_ROW_HEIGHT),
-                                            egui::Layout::left_to_right(egui::Align::Center),
-                                            |ui| {
-                                                ui.label(
-                                                    egui::RichText::new(&track_row.icon)
-                                                        .color(icon_color),
-                                                );
-                                            },
+                                            egui::Sense::hover(),
+                                        );
+                                        ui.painter().with_clip_rect(icon_rect).text(
+                                            icon_rect.center(),
+                                            egui::Align2::CENTER_CENTER,
+                                            &track_row.icon,
+                                            egui::FontId::proportional(14.0),
+                                            icon_color,
                                         );
                                         let label_width = if !track_row.relay_ids.is_empty() {
                                             116.0
                                         } else {
                                             158.0
                                         };
-                                        ui.allocate_ui(egui::vec2(label_width, 28.0), |ui| {
+                                        let (identity_rect, identity_response) =
+                                            ui.allocate_exact_size(
+                                                egui::vec2(
+                                                    label_width,
+                                                    TIMELINE_TRACK_ROW_HEIGHT,
+                                                ),
+                                                egui::Sense::hover(),
+                                            );
+                                        let mut identity_ui = ui.new_child(
+                                            egui::UiBuilder::new()
+                                                .max_rect(identity_rect)
+                                                .layout(egui::Layout::top_down(egui::Align::Min)),
+                                        );
+                                        identity_ui.set_clip_rect(
+                                            identity_ui.clip_rect().intersect(identity_rect),
+                                        );
+                                        identity_ui.spacing_mut().item_spacing.y = 0.0;
+                                        {
+                                            let ui = &mut identity_ui;
                                             if editing_name {
                                                 let mut draft = ui.ctx().data(|data| {
                                                     data.get_temp::<String>(rename_draft_id)
                                                         .unwrap_or_else(|| track_row.name.clone())
                                                 });
                                                 let edit = ui.add_sized(
-                                                    [label_width, 24.0],
+                                                    [label_width, TIMELINE_TRACK_ROW_HEIGHT],
                                                     egui::TextEdit::singleline(&mut draft),
                                                 );
                                                 let focus = ui.ctx().data_mut(|data| {
@@ -9419,31 +9498,32 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     .size(11.0)
                                                     .strong();
                                                 if let Some(detail) = track_row.detail.as_deref() {
-                                                    ui.spacing_mut().item_spacing.y = 0.0;
                                                     ui.add_space(2.0);
-                                                    ui.vertical(|ui| {
-                                                        ui.add(egui::Label::new(title).truncate())
-                                                            .on_hover_text(&track_row.name);
-                                                        ui.add(
-                                                            egui::Label::new(
-                                                                egui::RichText::new(detail)
-                                                                    .size(9.0)
-                                                                    .weak(),
-                                                            )
-                                                            .truncate(),
+                                                    ui.add_sized(
+                                                        [label_width, 15.0],
+                                                        egui::Label::new(title).truncate(),
+                                                    );
+                                                    ui.add_sized(
+                                                        [label_width, 13.0],
+                                                        egui::Label::new(
+                                                            egui::RichText::new(detail)
+                                                                .size(9.0)
+                                                                .weak(),
                                                         )
-                                                        .on_hover_text(detail);
-                                                    });
+                                                        .truncate(),
+                                                    );
                                                 } else {
-                                                    ui.with_layout(
-                                                        egui::Layout::left_to_right(egui::Align::Center),
-                                                        |ui| {
-                                                            ui.add(egui::Label::new(title).truncate())
-                                                                .on_hover_text(&track_row.name);
-                                                        },
+                                                    ui.add_space(7.0);
+                                                    ui.add_sized(
+                                                        [label_width, 18.0],
+                                                        egui::Label::new(title).truncate(),
                                                     );
                                                 }
                                             }
+                                        }
+                                        identity_response.on_hover_text(match track_row.detail.as_deref() {
+                                            Some(detail) => format!("{}\n{}", track_row.name, detail),
+                                            None => track_row.name.clone(),
                                         });
                                         ui.allocate_ui_with_layout(
                                             ui.available_size(),
@@ -9547,7 +9627,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
                                             },
                                         );
-                                    });
+                                    }
                                     if let (Some(control_key), Some(requested_name)) =
                                         (track_row.control_key.as_deref(), rename_commit)
                                     {
