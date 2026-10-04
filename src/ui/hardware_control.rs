@@ -1,6 +1,7 @@
 use crate::app::PealayerApp;
 use crate::four_d::controller::{HardwareAction, HardwareCapabilities, HardwareControl};
 use eframe::egui;
+use std::collections::BTreeSet;
 
 fn selected_control(capabilities: &HardwareCapabilities, key: &str) -> Option<HardwareControl> {
     capabilities
@@ -209,6 +210,121 @@ fn channel_kind_rank(kind: &str) -> u8 {
         "pwm" | "mosfet" => 2,
         _ => 3,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChannelSelectionCommand {
+    CheckAll,
+    UncheckAll,
+    Invert,
+}
+
+fn apply_channel_selection(
+    selected: &mut BTreeSet<String>,
+    available: impl IntoIterator<Item = String>,
+    command: ChannelSelectionCommand,
+) {
+    let available = available.into_iter().collect::<BTreeSet<_>>();
+    selected.retain(|key| available.contains(key));
+    match command {
+        ChannelSelectionCommand::CheckAll => selected.extend(available),
+        ChannelSelectionCommand::UncheckAll => selected.clear(),
+        ChannelSelectionCommand::Invert => {
+            *selected = available.difference(selected).cloned().collect();
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChannelBulkAction {
+    ShowInMonitor,
+    HideFromMonitor,
+    Lock,
+    Unlock,
+    LinkTimeline,
+    UnlinkTimeline,
+    ShowTimelineTracks,
+    HideTimelineTracks,
+}
+
+fn selected_channel_controls(
+    controls: &[HardwareControl],
+    selected: &BTreeSet<String>,
+) -> Vec<HardwareControl> {
+    controls
+        .iter()
+        .filter(|control| selected.contains(&control.key))
+        .cloned()
+        .collect()
+}
+
+fn apply_channel_bulk_action(
+    app: &mut PealayerApp,
+    controls: &[HardwareControl],
+    selected: &BTreeSet<String>,
+    action: ChannelBulkAction,
+) {
+    let selected_controls = selected_channel_controls(controls, selected);
+    if selected_controls.is_empty() {
+        return;
+    }
+    match action {
+        ChannelBulkAction::ShowInMonitor => {
+            crate::ui::layout::update_control_presentation_flags_bulk(
+                app,
+                &selected_controls,
+                Some(false),
+                None,
+            );
+        }
+        ChannelBulkAction::HideFromMonitor => {
+            crate::ui::layout::update_control_presentation_flags_bulk(
+                app,
+                &selected_controls,
+                Some(true),
+                None,
+            );
+        }
+        ChannelBulkAction::Lock => {
+            crate::ui::layout::update_control_presentation_flags_bulk(
+                app,
+                &selected_controls,
+                None,
+                Some(true),
+            );
+        }
+        ChannelBulkAction::Unlock => {
+            crate::ui::layout::update_control_presentation_flags_bulk(
+                app,
+                &selected_controls,
+                None,
+                Some(false),
+            );
+        }
+        ChannelBulkAction::LinkTimeline | ChannelBulkAction::UnlinkTimeline => {
+            let linked = action == ChannelBulkAction::LinkTimeline;
+            app.set_timeline_tracks_linked(
+                selected_controls.iter().map(|control| {
+                    crate::four_d::models::hardware_timeline_track_key(&control.key)
+                }),
+                linked,
+            );
+        }
+        ChannelBulkAction::ShowTimelineTracks | ChannelBulkAction::HideTimelineTracks => {
+            let visible = action == ChannelBulkAction::ShowTimelineTracks;
+            app.set_timeline_tracks_visible(
+                selected_controls.iter().map(|control| {
+                    crate::four_d::models::hardware_timeline_track_key(&control.key)
+                }),
+                visible,
+            );
+        }
+    }
+    app.set_osd(format!(
+        "{} {}",
+        selected_controls.len(),
+        app.tr("selected channels updated")
+    ));
 }
 
 fn channel_kind_label(app: &PealayerApp, kind: &str) -> String {
@@ -625,6 +741,16 @@ fn draw_channel_manager_page(
     capabilities: &HardwareCapabilities,
 ) {
     let controls = managed_controls(&capabilities);
+    let selection_id = ui.make_persistent_id("manager-channel-selection");
+    let available_keys = controls
+        .iter()
+        .map(|control| control.key.clone())
+        .collect::<BTreeSet<_>>();
+    let mut selected = ui.data_mut(|data| {
+        data.get_temp::<BTreeSet<String>>(selection_id)
+            .unwrap_or_default()
+    });
+    selected.retain(|key| available_keys.contains(key));
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.label(
@@ -650,6 +776,161 @@ fn draw_channel_manager_page(
     ui.add_space(8.0);
     ui.separator();
     ui.add_space(4.0);
+
+    let mut pending_selection = None;
+    let mut pending_bulk_action = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            egui::RichText::new(format!(
+                "{} {}",
+                crate::ui::icons::CHECK_SQUARE,
+                if selected.is_empty() {
+                    app.tr("No channels selected")
+                } else {
+                    format!("{} {}", selected.len(), app.tr("selected"))
+                }
+            ))
+            .strong(),
+        );
+        ui.separator();
+        if ui
+            .button(format!(
+                "{} {}",
+                crate::ui::icons::SELECTION_ALL,
+                app.tr("Check all")
+            ))
+            .clicked()
+        {
+            pending_selection = Some(ChannelSelectionCommand::CheckAll);
+        }
+        if ui
+            .add_enabled(
+                !selected.is_empty(),
+                egui::Button::new(format!("{} {}", crate::ui::icons::X, app.tr("Uncheck all"))),
+            )
+            .clicked()
+        {
+            pending_selection = Some(ChannelSelectionCommand::UncheckAll);
+        }
+        if ui
+            .button(format!(
+                "{} {}",
+                crate::ui::icons::ARROW_CLOCKWISE,
+                app.tr("Invert selection")
+            ))
+            .clicked()
+        {
+            pending_selection = Some(ChannelSelectionCommand::Invert);
+        }
+        ui.add_enabled_ui(!selected.is_empty(), |ui| {
+            egui::containers::menu::MenuButton::from_button(egui::Button::new(format!(
+                "{} {}",
+                crate::ui::icons::LIST_CHECKS,
+                app.tr("Bulk actions")
+            )))
+            .ui(ui, |ui| {
+                if ui
+                    .button(format!(
+                        "{} {}",
+                        crate::ui::icons::EYE,
+                        app.tr("Show in Hardware Monitor")
+                    ))
+                    .clicked()
+                {
+                    pending_bulk_action = Some(ChannelBulkAction::ShowInMonitor);
+                    ui.close();
+                }
+                if ui
+                    .button(format!(
+                        "{} {}",
+                        crate::ui::icons::EYE_SLASH,
+                        app.tr("Hide from Hardware Monitor")
+                    ))
+                    .clicked()
+                {
+                    pending_bulk_action = Some(ChannelBulkAction::HideFromMonitor);
+                    ui.close();
+                }
+                ui.separator();
+                if ui
+                    .button(format!(
+                        "{} {}",
+                        crate::ui::icons::LOCK,
+                        app.tr("Lock channels")
+                    ))
+                    .clicked()
+                {
+                    pending_bulk_action = Some(ChannelBulkAction::Lock);
+                    ui.close();
+                }
+                if ui
+                    .button(format!(
+                        "{} {}",
+                        crate::ui::icons::POWER,
+                        app.tr("Unlock channels")
+                    ))
+                    .clicked()
+                {
+                    pending_bulk_action = Some(ChannelBulkAction::Unlock);
+                    ui.close();
+                }
+                ui.separator();
+                if ui
+                    .button(format!(
+                        "{} {}",
+                        crate::ui::icons::LINK,
+                        app.tr("Link to timeline")
+                    ))
+                    .clicked()
+                {
+                    pending_bulk_action = Some(ChannelBulkAction::LinkTimeline);
+                    ui.close();
+                }
+                if ui
+                    .button(format!(
+                        "{} {}",
+                        crate::ui::icons::LINK_SIMPLE,
+                        app.tr("Unlink from timeline")
+                    ))
+                    .clicked()
+                {
+                    pending_bulk_action = Some(ChannelBulkAction::UnlinkTimeline);
+                    ui.close();
+                }
+                if ui
+                    .button(format!(
+                        "{} {}",
+                        crate::ui::icons::EYE,
+                        app.tr("Show timeline tracks")
+                    ))
+                    .clicked()
+                {
+                    pending_bulk_action = Some(ChannelBulkAction::ShowTimelineTracks);
+                    ui.close();
+                }
+                if ui
+                    .button(format!(
+                        "{} {}",
+                        crate::ui::icons::EYE_SLASH,
+                        app.tr("Hide timeline tracks")
+                    ))
+                    .clicked()
+                {
+                    pending_bulk_action = Some(ChannelBulkAction::HideTimelineTracks);
+                    ui.close();
+                }
+            });
+        });
+    });
+    if let Some(command) = pending_selection {
+        apply_channel_selection(&mut selected, available_keys.iter().cloned(), command);
+    }
+    if let Some(action) = pending_bulk_action {
+        apply_channel_bulk_action(app, &controls, &selected, action);
+    }
+    ui.add_space(4.0);
+    ui.separator();
+    ui.add_space(2.0);
 
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -707,6 +988,16 @@ fn draw_channel_manager_page(
                     .ctx()
                     .pointer_hover_pos()
                     .is_some_and(|pointer| predicted_rect.contains(pointer));
+                let row_selected = selected.contains(&control.key);
+                if row_selected {
+                    ui.painter().rect(
+                        predicted_rect.shrink(1.0),
+                        6.0,
+                        ui.visuals().selection.bg_fill.gamma_multiply(0.22),
+                        egui::Stroke::new(1.0, ui.visuals().selection.bg_fill.gamma_multiply(0.82)),
+                        egui::StrokeKind::Inside,
+                    );
+                }
                 let order_focused = ui.memory(|memory| memory.has_focus(order_edit_id));
                 let order_alpha = ui.ctx().animate_bool(
                     egui::Id::new(("manager-order-visible", &control.key)),
@@ -737,6 +1028,18 @@ fn draw_channel_manager_page(
                         egui::vec2(row_width, row_height),
                         egui::Layout::left_to_right(egui::Align::Center),
                         |ui| {
+                            let mut checked = selected.contains(&control.key);
+                            if ui
+                                .checkbox(&mut checked, "")
+                                .on_hover_text(app.tr("Select for bulk actions"))
+                                .changed()
+                            {
+                                if checked {
+                                    selected.insert(control.key.clone());
+                                } else {
+                                    selected.remove(&control.key);
+                                }
+                            }
                             let indicator_color = if channel_is_active(&capabilities, control) {
                                 if matches!(control.kind.as_str(), "seat" | "motion") {
                                     crate::ui::layout::motion_direction_color(
@@ -777,7 +1080,7 @@ fn draw_channel_manager_page(
                                         .unwrap_or_else(|| control.name.clone())
                                 });
                                 let edit = ui.add_sized(
-                                    [(ui.available_width() - 324.0).max(130.0), 27.0],
+                                    [(ui.available_width() - 348.0).max(130.0), 27.0],
                                     egui::TextEdit::singleline(&mut draft).id(text_edit_id),
                                 );
                                 if ui.data_mut(|data| {
@@ -809,7 +1112,7 @@ fn draw_channel_manager_page(
                                 let response = crate::ui::layout::left_aligned_click_label(
                                     ui,
                                     &name,
-                                    (ui.available_width() - 324.0).max(130.0),
+                                    (ui.available_width() - 348.0).max(130.0),
                                     27.0,
                                     13.0,
                                 );
@@ -1091,6 +1394,7 @@ fn draw_channel_manager_page(
                 ui.add(egui::Separator::default().spacing(0.0));
             }
         });
+    ui.data_mut(|data| data.insert_temp(selection_id, selected));
     // A release over the source row, outside the window, or over an
     // incompatible channel is not a drop. Clear the transient drag in all of
     // those cases so a cancelled drag cannot leave a transformed layer above
@@ -1956,6 +2260,63 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn channel_bulk_selection_handles_all_none_invert_and_stale_keys() {
+        let available = || {
+            ["seat.a", "relay.5", "pwm.0"]
+                .into_iter()
+                .map(str::to_string)
+        };
+        let mut selected = BTreeSet::from(["stale.channel".to_string()]);
+
+        apply_channel_selection(
+            &mut selected,
+            available(),
+            ChannelSelectionCommand::CheckAll,
+        );
+        assert_eq!(selected.len(), 3);
+        assert!(!selected.contains("stale.channel"));
+
+        selected.remove("relay.5");
+        apply_channel_selection(&mut selected, available(), ChannelSelectionCommand::Invert);
+        assert_eq!(selected, BTreeSet::from(["relay.5".to_string()]));
+
+        apply_channel_selection(
+            &mut selected,
+            available(),
+            ChannelSelectionCommand::UncheckAll,
+        );
+        assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn channel_bulk_actions_target_only_checked_stable_keys() {
+        let controls = vec![
+            HardwareControl {
+                key: "relay.5".to_string(),
+                ..Default::default()
+            },
+            HardwareControl {
+                key: "pwm.0".to_string(),
+                ..Default::default()
+            },
+            HardwareControl {
+                key: "seat.a".to_string(),
+                ..Default::default()
+            },
+        ];
+        let selected = BTreeSet::from(["seat.a".to_string(), "pwm.0".to_string()]);
+
+        let targeted = selected_channel_controls(&controls, &selected);
+        assert_eq!(
+            targeted
+                .iter()
+                .map(|control| control.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["pwm.0", "seat.a"]
+        );
+    }
 
     #[test]
     fn motion_live_controls_never_reuse_generic_boolean_verbs() {

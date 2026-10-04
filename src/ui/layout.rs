@@ -2019,6 +2019,39 @@ pub(crate) fn update_control_presentation_flags(
     );
 }
 
+/// Apply the same presentation policy to several stable channel keys. Bulk
+/// edits intentionally omit an optimistic profile revision: the controller
+/// processes these tracked calls serially, and reusing the one revision from
+/// the initial catalog would make every request after the first look stale.
+pub(crate) fn update_control_presentation_flags_bulk(
+    app: &mut PealayerApp,
+    controls: &[crate::four_d::controller::HardwareControl],
+    hidden: Option<bool>,
+    locked: Option<bool>,
+) {
+    for control in controls {
+        let mut params = serde_json::Map::new();
+        params.insert(
+            "key".to_string(),
+            serde_json::Value::String(control.key.clone()),
+        );
+        if let Some(hidden) = hidden {
+            params.insert("hidden".to_string(), serde_json::Value::Bool(hidden));
+        }
+        if let Some(locked) = locked {
+            params.insert("locked".to_string(), serde_json::Value::Bool(locked));
+        }
+        if let Err(error) = app.engine_handle.request_controller_call(
+            format!("presentation-bulk-policy:{}", control.key),
+            "controller.peripheral.presentation.update",
+            serde_json::Value::Object(params),
+        ) {
+            app.set_osd(error);
+            break;
+        }
+    }
+}
+
 pub(crate) fn update_control_presentation(
     app: &mut PealayerApp,
     capabilities: &crate::four_d::controller::HardwareCapabilities,

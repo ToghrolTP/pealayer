@@ -4283,6 +4283,49 @@ impl PealayerApp {
         self.persist_timeline_track_preferences();
     }
 
+    pub(crate) fn set_timeline_tracks_linked(
+        &mut self,
+        keys: impl IntoIterator<Item = String>,
+        linked: bool,
+    ) {
+        let keys = keys.into_iter().collect::<Vec<_>>();
+        if !keys
+            .iter()
+            .any(|key| self.timeline.track_state(key).linked != linked)
+        {
+            return;
+        }
+        self.undo_stack.push(self.snapshot_timeline());
+        for key in keys {
+            self.timeline.set_track_linked(key, linked);
+        }
+        self.persist_timeline_track_preferences();
+        self.sync_timeline_engine();
+    }
+
+    pub(crate) fn set_timeline_tracks_visible(
+        &mut self,
+        keys: impl IntoIterator<Item = String>,
+        visible: bool,
+    ) {
+        let keys = keys.into_iter().collect::<Vec<_>>();
+        if !keys.iter().any(|key| {
+            self.timeline
+                .track_states
+                .get(key)
+                .map_or(true, |state| state.visible != visible)
+        }) {
+            return;
+        }
+        self.undo_stack.push(self.snapshot_timeline());
+        for key in keys {
+            let mut state = self.timeline.track_state(&key);
+            state.visible = visible;
+            self.timeline.track_states.insert(key, state);
+        }
+        self.persist_timeline_track_preferences();
+    }
+
     /// Rebuilds every hardware lane from the authoritative project timeline.
     /// Keeping relay edges and controller-owned macro cues together prevents
     /// load, undo, delete, and drag operations from updating only one lane.
