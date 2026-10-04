@@ -12,6 +12,7 @@ import {
   VideoCameraOutlined,
 } from '@ant-design/icons';
 import { tr, UiLocale } from '../i18n';
+import { mediaBasename } from '../mediaLabel';
 
 export interface PlayerState {
   status?: string;
@@ -176,7 +177,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
   }, [state.playing]);
 
   const videoName = state.current_video
-    ? state.current_video.split(/[\\/]/).pop() || tr(locale, 'Untitled')
+    ? mediaBasename(state.current_video, tr(locale, 'Untitled'))
     : state.current_video === null ? tr(locale, 'No Media Playing') : tr(locale, 'Initializing…');
   const seekPercent = state.duration && state.duration > 0
     ? ((state.playback_time || 0) / state.duration) * 100

@@ -296,7 +296,42 @@ body {
 .program-viewer__chrome { position: absolute; inset: auto 10px 9px; display: flex; justify-content: space-between; pointer-events: none; color: rgba(255, 255, 255, .66); font-size: 10px; text-shadow: 0 1px 3px #000; }
 .studio-transport { min-width: 0; padding: 10px 12px 12px; display: grid; grid-template-columns: 32px 38px 32px auto minmax(100px, 1fr) auto 18px minmax(62px, 100px); align-items: center; gap: 7px; border-top: 1px solid var(--line); }
 .studio-transport .ant-btn { border-color: var(--line); background: var(--surface-2); color: var(--muted); }
-.studio-transport__play.ant-btn { height: 38px; color: #06110a; background: var(--green); border-color: var(--green); box-shadow: 0 7px 20px color-mix(in srgb, var(--green) 22%, transparent); }
+.studio-transport__play.ant-btn,
+.remote-player__play.ant-btn {
+  color: var(--accent-text) !important;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 90%, white 10%), var(--accent)) !important;
+  border-color: color-mix(in srgb, var(--accent) 78%, var(--line)) !important;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 24%, transparent),
+    0 1px 2px rgba(0, 0, 0, .18),
+    0 7px 18px color-mix(in srgb, var(--accent) 24%, transparent) !important;
+  transition: background .16s ease, border-color .16s ease, box-shadow .16s ease, transform .12s ease;
+}
+.studio-transport__play.ant-btn:hover,
+.remote-player__play.ant-btn:hover {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 82%, white 18%), color-mix(in srgb, var(--accent) 94%, white 6%)) !important;
+  border-color: color-mix(in srgb, var(--accent) 70%, white 30%) !important;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 30%, transparent),
+    0 2px 3px rgba(0, 0, 0, .16),
+    0 9px 22px color-mix(in srgb, var(--accent) 28%, transparent) !important;
+}
+.studio-transport__play.ant-btn:active,
+.remote-player__play.ant-btn:active {
+  transform: translateY(1px);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, .18),
+    0 2px 7px color-mix(in srgb, var(--accent) 20%, transparent) !important;
+}
+.studio-transport__play.ant-btn:focus-visible,
+.remote-player__play.ant-btn:focus-visible {
+  outline: none;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 24%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent),
+    0 7px 18px color-mix(in srgb, var(--accent) 24%, transparent) !important;
+}
+.studio-transport__play.ant-btn { height: 38px; }
 .studio-timecode { color: var(--text); font: 600 11px ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; }
 .studio-timecode--muted { color: var(--muted); }
 .studio-scrubber, .studio-volume { margin: 0 5px !important; }
@@ -460,7 +495,7 @@ body {
 .remote-player__chapters { padding: 0 18px 12px; display: grid; grid-template-columns: 34px minmax(0, 1fr) 34px; align-items: center; gap: 8px; }
 .remote-player__chapters .ant-select { min-width: 0; width: 100%; }
 .remote-player__chapters .ant-btn { color: var(--muted); background: var(--surface-2); border-color: var(--line); }
-.remote-player__play.ant-btn { width: 54px; height: 54px; color: #06110a; background: var(--green); border-color: var(--green); box-shadow: 0 8px 24px color-mix(in srgb, var(--green) 24%, transparent); }
+.remote-player__play.ant-btn { width: 54px; height: 54px; }
 
 .surface-card.ant-card {
   color: var(--text);

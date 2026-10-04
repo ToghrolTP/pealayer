@@ -24,6 +24,7 @@ import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
 import { effectGlyph as configuredEffectGlyph, effectIconOptions } from '../effectIcons';
 import { EffectRecorder } from './EffectRecorder';
+import { mediaBasename } from '../mediaLabel';
 
 interface StudioTabProps {
   state: PlayerState;
@@ -103,7 +104,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   }, [cues, durationSeconds]);
   const selected = selectedEffect ? controllerEffects.find((effect) => effect.reference === selectedEffect) : undefined;
   const mediaName = state.current_video
-    ? state.current_video.split(/[\\/]/).pop()
+    ? mediaBasename(state.current_video, tr(locale, 'Untitled'))
     : tr(locale, 'No Media Playing');
   const seekPercent = durationSeconds > 0 ? (currentSeconds / durationSeconds) * 100 : 0;
   const activeSeek = seekDraft ?? seekPercent;
