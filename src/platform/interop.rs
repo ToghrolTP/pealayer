@@ -163,6 +163,9 @@ pub enum InteropCommand {
     Maximize,
     Restore,
     OpenPreferences,
+    OpenBoardInformation {
+        tab: usize,
+    },
     ShowMessage {
         message: String,
     },
@@ -323,6 +326,9 @@ impl InteropCommand {
             {
                 Err("front-panel key must be K1, K2, K3, or K4".to_string())
             }
+            Self::OpenBoardInformation { tab } if *tab > 3 => {
+                Err("board information tab must be between 0 and 3".to_string())
+            }
             Self::Open { target } if target.trim().is_empty() || target.len() > 32_768 => {
                 Err("media target must contain 1 to 32768 bytes".to_string())
             }
@@ -389,7 +395,7 @@ pub fn command_catalog() -> Value {
             "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
             "seek", "seek_to", "seek_abs", "set_volume", "set_mute", "toggle_mute",
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
-            "maximize", "restore", "open_preferences", "show_message", "set_workspace",
+            "maximize", "restore", "open_preferences", "open_board_information", "show_message", "set_workspace",
             "create_workspace_profile", "update_workspace_profile", "delete_workspace_profile",
             "move_workspace_profile", "update_config",
             "reload_config", "add_effect_cue", "remove_effect_cue", "set_recording",
@@ -397,7 +403,7 @@ pub fn command_catalog() -> Value {
             "controller_effect.stop", "controller_effect.save", "controller_effect.delete",
             "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm",
             "configure_addressable_strip", "fill_addressable_strip", "clear_addressable_strip",
-            "press_front_panel_key"
+            "press_front_panel_key", "board_information"
         ],
         "json_rpc_prefix": "pealayer",
         "discovery": "/api/player/commands"
@@ -855,6 +861,30 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "restore" | "pealayer.window.restore" => Some(InteropCommand::Restore),
         "preferences" | "open_preferences" | "pealayer.window.preferences" => {
             Some(InteropCommand::OpenPreferences)
+        }
+        "board_information" | "board.info.open" | "pealayer.board.info.open" => {
+            let tab = request
+                .params
+                .get("tab")
+                .map(|value| {
+                    value
+                        .as_u64()
+                        .and_then(|value| usize::try_from(value).ok())
+                        .or_else(|| {
+                            value.as_str().and_then(|value| {
+                                match value.trim().to_ascii_lowercase().as_str() {
+                                    "overview" => Some(0),
+                                    "capabilities" => Some(1),
+                                    "front-panel" | "front_panel" | "front panel" => Some(2),
+                                    "settings" | "board-settings" | "board_settings" => Some(3),
+                                    _ => None,
+                                }
+                            })
+                        })
+                })
+                .flatten()
+                .unwrap_or(0);
+            Some(InteropCommand::OpenBoardInformation { tab })
         }
         "message" | "show_message" | "pealayer.message.show" => Some(InteropCommand::ShowMessage {
             message: string(&["message", "text", "value"])?,
@@ -2246,6 +2276,15 @@ mod tests {
         assert_eq!(
             command_from_json_rpc(&preferences).unwrap(),
             Some(InteropCommand::OpenPreferences)
+        );
+
+        let front_panel: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":9,"method":"pealayer.board.info.open","params":{"tab":"front-panel"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&front_panel).unwrap(),
+            Some(InteropCommand::OpenBoardInformation { tab: 2 })
         );
     }
 

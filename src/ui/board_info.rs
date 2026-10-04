@@ -23,6 +23,15 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         app.board_settings_draft = capabilities.settings.clone();
         app.board_settings_dirty = false;
     }
+    if app.board_info_tab == 2
+        && capabilities.front_panel.is_none()
+        && !app.front_panel_refresh_attempted
+        && app.board_operation.is_none()
+    {
+        if let Err(error) = app.refresh_front_panel() {
+            app.board_operation_status = error;
+        }
+    }
 
     let mut open = true;
     let geometry = crate::ui::dialog::bounded_geometry(
@@ -121,6 +130,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         app.board_settings_draft = None;
         app.board_settings_dirty = false;
         app.board_reboot_armed = false;
+        app.front_panel_refresh_attempted = false;
+        app.front_panel_pending_key = None;
     }
 }
 
@@ -346,15 +357,70 @@ fn front_panel(
     ui: &mut egui::Ui,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
 ) {
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.heading(format!(
+                "{} {}",
+                crate::ui::icons::APP_WINDOW,
+                app.tr("Front panel")
+            ));
+            ui.label(
+                egui::RichText::new(app.tr("Live physical display and board controls"))
+                    .small()
+                    .weak(),
+            );
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let refresh = ui.add_enabled(
+                app.board_operation.is_none(),
+                egui::Button::new(format!(
+                    "{} {}",
+                    crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                    app.tr("Refresh")
+                )),
+            );
+            if refresh
+                .on_hover_text(app.tr("Read the exact state from the physical board"))
+                .clicked()
+                && let Err(error) = app.refresh_front_panel()
+            {
+                app.set_osd(error);
+            }
+        });
+    });
+    ui.add_space(8.0);
+
     let Some(front_panel) = &capabilities.front_panel else {
-        unavailable(
-            ui,
-            &app.tr("The attached board does not advertise front-panel state."),
-        );
+        egui::Frame::new()
+            .fill(ui.visuals().faint_bg_color)
+            .stroke(egui::Stroke::new(
+                1.0,
+                ui.visuals().widgets.noninteractive.bg_stroke.color,
+            ))
+            .corner_radius(12.0)
+            .inner_margin(egui::Margin::same(18))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if app.board_operation.as_deref() == Some("board-front-panel-refresh") {
+                        ui.spinner();
+                    } else {
+                        ui.label(egui::RichText::new(crate::ui::icons::INFO).size(22.0));
+                    }
+                    ui.vertical(|ui| {
+                        ui.strong(app.tr("Reading the physical front panel"));
+                        ui.label(
+                            egui::RichText::new(app.tr(
+                                "Pealayer is requesting the exact display frame from PCController.",
+                            ))
+                            .small()
+                            .weak(),
+                        );
+                    });
+                });
+            });
         return;
     };
-    ui.heading(app.tr("Live front-panel state"));
-    ui.add_space(6.0);
+
     section(ui, &app.tr("Live physical display"), |ui| {
         if front_panel.raw_segments.len() == 4 {
             seven_segment_preview(
@@ -363,20 +429,34 @@ fn front_panel(
                 front_panel.brightness,
                 front_panel.segments_active,
             );
-            ui.add_space(7.0);
+            ui.add_space(9.0);
             ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    egui::RichText::new(format!("{} {}", app.tr("Page"), front_panel.menu_page))
-                        .weak(),
+                state_badge(
+                    ui,
+                    crate::ui::icons::GAUGE,
+                    &format!("{} {}", app.tr("Page"), front_panel.menu_page),
                 );
-                ui.label(egui::RichText::new("·").weak());
-                ui.label(
-                    egui::RichText::new(format!(
+                state_badge(
+                    ui,
+                    crate::ui::icons::LIGHTBULB,
+                    &format!(
                         "{} {}/7",
                         app.tr("Brightness"),
                         front_panel.brightness.min(7)
-                    ))
-                    .weak(),
+                    ),
+                );
+                state_badge(
+                    ui,
+                    if front_panel.segments_active {
+                        crate::ui::icons::CHECK
+                    } else {
+                        crate::ui::icons::STOP_CIRCLE
+                    },
+                    &app.tr(if front_panel.segments_active {
+                        "Display active"
+                    } else {
+                        "Display idle"
+                    }),
                 );
             });
         } else {
@@ -386,18 +466,24 @@ fn front_panel(
 
     section(ui, &app.tr("Physical board keys"), |ui| {
         ui.columns(2, |columns| {
-            for (index, (key, label)) in FRONT_PANEL_KEYS.into_iter().enumerate() {
-                let pressed = front_panel.pressed_keys & (1 << index) != 0;
-                let text = format!("{}  {key} · {}", key_icon(index), app.tr(label));
-                let button = egui::Button::new(text)
-                    .selected(pressed)
-                    .min_size(egui::vec2(columns[index % 2].available_width(), 34.0));
-                if columns[index % 2]
-                    .add_enabled(app.board_operation.is_none(), button)
-                    .on_hover_text(
-                        app.tr("Send the same front-panel key press through PCController"),
-                    )
-                    .clicked()
+            for (index, (key, default_label)) in FRONT_PANEL_KEYS.into_iter().enumerate() {
+                let label = if front_panel.host_captured && key == "K4" {
+                    "Select"
+                } else {
+                    default_label
+                };
+                let pressed = front_panel.pressed_keys & (1 << index) != 0
+                    || app.front_panel_pending_key.as_deref() == Some(key);
+                if front_panel_key_button(
+                    &mut columns[index % 2],
+                    key,
+                    &app.tr(label),
+                    key_icon(index),
+                    pressed,
+                    app.board_operation.is_none(),
+                )
+                .on_hover_text(app.tr("Send the same front-panel key press through PCController"))
+                .clicked()
                 {
                     if let Err(error) = app.press_front_panel_key(key) {
                         app.set_osd(error);
@@ -415,47 +501,50 @@ fn front_panel(
         }
     });
 
-    egui::Grid::new("front_panel_grid")
-        .num_columns(2)
-        .spacing([18.0, 8.0])
-        .show(ui, |ui| {
-            row(
-                ui,
-                &app.tr("Raw segments"),
-                &format!("{:02X?}", front_panel.raw_segments),
-            );
-            row(
-                ui,
-                &app.tr("Brightness"),
-                &front_panel.brightness.to_string(),
-            );
-            row(ui, &app.tr("Blink"), &yes_no(app, front_panel.blink));
-            row(
-                ui,
-                &app.tr("Pressed keys"),
-                &format!("0x{:02X}", front_panel.pressed_keys),
-            );
-            row(ui, &app.tr("Menu page"), &front_panel.menu_page.to_string());
-            row(
-                ui,
-                &app.tr("Program mode"),
-                &front_panel.program_mode.to_string(),
-            );
-            row(
-                ui,
-                &app.tr("LCD available"),
-                &yes_no(app, front_panel.lcd_available),
-            );
-            if front_panel.lcd_available {
+    egui::CollapsingHeader::new(format!(
+        "{} {}",
+        crate::ui::icons::CIRCUITRY,
+        app.tr("Technical readback")
+    ))
+    .default_open(false)
+    .show(ui, |ui| {
+        egui::Grid::new("front_panel_grid")
+            .num_columns(2)
+            .spacing([18.0, 8.0])
+            .show(ui, |ui| {
+                row(ui, &app.tr("Schema"), &front_panel.schema.to_string());
                 row(
                     ui,
-                    &app.tr("LCD address"),
-                    &format!("0x{:02X}", front_panel.lcd_address),
+                    &app.tr("Raw segments"),
+                    &format!("{:02X?}", front_panel.raw_segments),
                 );
-                row(ui, &app.tr("LCD line 1"), &front_panel.lcd_line_1);
-                row(ui, &app.tr("LCD line 2"), &front_panel.lcd_line_2);
-            }
-        });
+                row(ui, &app.tr("Blink"), &yes_no(app, front_panel.blink));
+                row(
+                    ui,
+                    &app.tr("Pressed keys"),
+                    &format!("0x{:02X}", front_panel.pressed_keys),
+                );
+                row(
+                    ui,
+                    &app.tr("Program mode"),
+                    &front_panel.program_mode.to_string(),
+                );
+                row(
+                    ui,
+                    &app.tr("LCD available"),
+                    &yes_no(app, front_panel.lcd_available),
+                );
+                if front_panel.lcd_available {
+                    row(
+                        ui,
+                        &app.tr("LCD address"),
+                        &format!("0x{:02X}", front_panel.lcd_address),
+                    );
+                    row(ui, &app.tr("LCD line 1"), &front_panel.lcd_line_1);
+                    row(ui, &app.tr("LCD line 2"), &front_panel.lcd_line_2);
+                }
+            });
+    });
 }
 
 fn settings(
@@ -912,7 +1001,7 @@ const FRONT_PANEL_KEYS: [(&str, &str); 4] = [
     ("K1", "Previous"),
     ("K2", "Next"),
     ("K3", "Decrease"),
-    ("K4", "Select"),
+    ("K4", "Increase"),
 ];
 
 fn capability_badges(
@@ -999,6 +1088,95 @@ fn key_icon(index: usize) -> &'static str {
     }
 }
 
+fn state_badge(ui: &mut egui::Ui, icon: &str, text: &str) {
+    egui::Frame::new()
+        .fill(ui.visuals().widgets.inactive.bg_fill)
+        .stroke(ui.visuals().widgets.inactive.bg_stroke)
+        .corner_radius(9.0)
+        .inner_margin(egui::Margin::symmetric(9, 4))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(format!("{icon}  {text}")).small());
+        });
+}
+
+fn front_panel_key_button(
+    ui: &mut egui::Ui,
+    key: &str,
+    label: &str,
+    icon: &str,
+    selected: bool,
+    enabled: bool,
+) -> egui::Response {
+    let desired_size = egui::vec2(ui.available_width().max(1.0), 48.0);
+    let sense = if enabled {
+        egui::Sense::click()
+    } else {
+        egui::Sense::hover()
+    };
+    let (rect, mut response) = ui.allocate_exact_size(desired_size, sense);
+    response = response.on_disabled_hover_text("A board operation is already running");
+    let visuals = if selected {
+        &ui.visuals().widgets.active
+    } else if response.hovered() && enabled {
+        &ui.visuals().widgets.hovered
+    } else {
+        &ui.visuals().widgets.inactive
+    };
+    let fill = if selected {
+        ui.visuals().selection.bg_fill
+    } else {
+        visuals.bg_fill
+    };
+    let text_color = if selected {
+        ui.visuals().selection.stroke.color
+    } else if enabled {
+        ui.visuals().text_color()
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+    painter.rect(
+        rect,
+        9.0,
+        fill,
+        egui::Stroke::new(1.0, visuals.bg_stroke.color),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        egui::pos2(rect.left() + 14.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        icon,
+        egui::FontId::proportional(18.0),
+        text_color,
+    );
+    painter.text(
+        egui::pos2(rect.left() + 42.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(14.0),
+        text_color,
+    );
+    let key_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 25.0, rect.center().y),
+        egui::vec2(34.0, 24.0),
+    );
+    painter.rect(
+        key_rect,
+        6.0,
+        fill.gamma_multiply(if selected { 0.82 } else { 1.08 }),
+        egui::Stroke::new(1.0, text_color.gamma_multiply(0.45)),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        key_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        key,
+        egui::FontId::monospace(12.0),
+        text_color,
+    );
+    response
+}
+
 fn seven_segment_preview(ui: &mut egui::Ui, raw_segments: &[u8], brightness: u8, active: bool) {
     const LINES: [(egui::Pos2, egui::Pos2); 7] = [
         (egui::pos2(8.0, 5.0), egui::pos2(28.0, 5.0)),
@@ -1009,10 +1187,12 @@ fn seven_segment_preview(ui: &mut egui::Ui, raw_segments: &[u8], brightness: u8,
         (egui::pos2(5.0, 8.0), egui::pos2(5.0, 27.0)),
         (egui::pos2(8.0, 29.5), egui::pos2(28.0, 29.5)),
     ];
-    let digit_width = 40.0_f32;
-    let gap = 4.0_f32;
+    let available_width = ui.available_width().max(1.0);
+    let scale = ((available_width - 28.0) / 196.0).clamp(0.72, 1.45);
+    let digit_width = 40.0_f32 * scale;
+    let gap = 6.0_f32 * scale;
     let content_width = digit_width * 4.0 + gap * 3.0;
-    let outer_size = egui::vec2((content_width + 20.0).min(ui.available_width()), 76.0);
+    let outer_size = egui::vec2(available_width, 72.0 * scale);
     let (rect, _) = ui.allocate_exact_size(outer_size, egui::Sense::hover());
     let painter = ui.painter().with_clip_rect(rect);
     painter.rect(
@@ -1022,7 +1202,10 @@ fn seven_segment_preview(ui: &mut egui::Ui, raw_segments: &[u8], brightness: u8,
         egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(76, 65, 82)),
         egui::StrokeKind::Inside,
     );
-    let origin = egui::pos2(rect.left() + 10.0, rect.top() + 7.0);
+    let origin = egui::pos2(
+        rect.center().x - content_width / 2.0,
+        rect.top() + (outer_size.y - 61.0 * scale) / 2.0,
+    );
     let lit_alpha = if active {
         170 + brightness.min(7) * 12
     } else {
@@ -1036,14 +1219,14 @@ fn seven_segment_preview(ui: &mut egui::Ui, raw_segments: &[u8], brightness: u8,
             let color = if mask & (1 << bit) != 0 { lit } else { dim };
             painter.line_segment(
                 [
-                    origin + start.to_vec2() + offset,
-                    origin + end.to_vec2() + offset,
+                    origin + start.to_vec2() * scale + offset,
+                    origin + end.to_vec2() * scale + offset,
                 ],
-                egui::Stroke::new(5.0_f32, color),
+                egui::Stroke::new(5.0_f32 * scale, color),
             );
         }
-        let dot = origin + egui::vec2(36.0, 54.0) + offset;
-        painter.circle_filled(dot, 2.2, if mask & 0x80 != 0 { lit } else { dim });
+        let dot = origin + egui::vec2(36.0, 54.0) * scale + offset;
+        painter.circle_filled(dot, 2.2 * scale, if mask & 0x80 != 0 { lit } else { dim });
     }
 }
 
@@ -1071,14 +1254,14 @@ mod tests {
     }
 
     #[test]
-    fn front_panel_key_names_match_pccontroller_web_ui() {
+    fn front_panel_key_names_match_the_physical_menu_actions() {
         assert_eq!(
             FRONT_PANEL_KEYS,
             [
                 ("K1", "Previous"),
                 ("K2", "Next"),
                 ("K3", "Decrease"),
-                ("K4", "Select"),
+                ("K4", "Increase"),
             ]
         );
     }

@@ -1743,6 +1743,9 @@ fn open_board_information(
 ) {
     app.board_name_draft = capabilities.board_identity.stored_name.clone();
     app.board_info_tab = tab;
+    if tab == 2 {
+        app.front_panel_refresh_attempted = false;
+    }
     app.show_board_info_dialog = true;
 }
 

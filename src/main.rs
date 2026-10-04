@@ -587,6 +587,8 @@ fn main() -> eframe::Result {
                 board_settings_draft: None,
                 board_settings_dirty: false,
                 board_reboot_armed: false,
+                front_panel_refresh_attempted: false,
+                front_panel_pending_key: None,
                 pause_on_hardware_disconnect: loaded_config.pause_on_hardware_disconnect,
                 auto_connect_hardware: loaded_config.auto_connect_hardware,
                 click_player_to_toggle: loaded_config.click_player_to_toggle,

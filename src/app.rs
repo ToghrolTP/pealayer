@@ -335,6 +335,8 @@ pub struct PealayerApp {
     pub(crate) board_settings_draft: Option<crate::four_d::controller::HardwareBoardSettings>,
     pub(crate) board_settings_dirty: bool,
     pub(crate) board_reboot_armed: bool,
+    pub(crate) front_panel_refresh_attempted: bool,
+    pub(crate) front_panel_pending_key: Option<String>,
     pub(crate) pause_on_hardware_disconnect: bool,
     pub(crate) auto_connect_hardware: bool,
     pub(crate) click_player_to_toggle: bool,
@@ -1987,13 +1989,37 @@ impl PealayerApp {
     }
 
     pub(crate) fn press_front_panel_key(&mut self, key: &str) -> Result<(), String> {
-        if !matches!(key, "K1" | "K2" | "K3" | "K4") {
-            return Err("front-panel key must be K1, K2, K3, or K4".to_string());
-        }
-        self.request_board_operation(
+        let host_captured = self
+            .engine_handle
+            .hardware_capabilities
+            .lock()
+            .ok()
+            .and_then(|capabilities| {
+                capabilities
+                    .as_ref()
+                    .and_then(|value| value.front_panel.as_ref())
+                    .map(|panel| panel.host_captured)
+            })
+            .unwrap_or(false);
+        let command = front_panel_command(key, host_captured)?;
+        self.front_panel_pending_key = Some(key.to_string());
+        let result = self.request_board_operation(
             "board-front-panel-key",
             "controller.command.execute",
-            serde_json::json!({"command": format!("host-menu key {key} press")}),
+            serde_json::json!({"command": command}),
+        );
+        if result.is_err() {
+            self.front_panel_pending_key = None;
+        }
+        result
+    }
+
+    pub(crate) fn refresh_front_panel(&mut self) -> Result<(), String> {
+        self.front_panel_refresh_attempted = true;
+        self.request_board_operation(
+            "board-front-panel-refresh",
+            "controller.front_panel",
+            serde_json::json!({}),
         )
     }
 
@@ -2019,11 +2045,31 @@ impl PealayerApp {
             if is_board_operation {
                 self.board_operation = None;
                 self.board_reboot_armed = false;
+                if result.operation == "board-front-panel-key" {
+                    self.front_panel_pending_key = None;
+                }
             } else if !is_presentation_operation {
                 self.hardware_effect_authoring.pending_operation = None;
             }
             match result.result {
                 Ok(value) => {
+                    let front_panel_apply_error = if result.operation == "board-front-panel-refresh"
+                    {
+                        self.engine_handle
+                            .hardware_capabilities
+                            .lock()
+                            .map_err(|_| "hardware catalog lock is unavailable".to_string())
+                            .and_then(|mut current| {
+                                current
+                                    .as_mut()
+                                    .ok_or_else(|| "hardware catalog is unavailable".to_string())?
+                                    .apply_front_panel_state(&value)
+                                    .map(|_| ())
+                            })
+                            .err()
+                    } else {
+                        None
+                    };
                     let presentation_apply_error = if is_presentation_operation {
                         self.engine_handle
                             .hardware_capabilities
@@ -2047,6 +2093,8 @@ impl PealayerApp {
                             "Channel order saved"
                         } else if is_presentation_operation {
                             "Channel presentation saved"
+                        } else if result.operation == "board-front-panel-refresh" {
+                            "Physical front panel refreshed"
                         } else {
                             "PCController accepted the operation"
                         })
@@ -2078,12 +2126,22 @@ impl PealayerApp {
                         | "board-settings"
                         | "board-status-led-override"
                         | "board-status-led-release"
-                        | "board-reboot"
-                        | "board-front-panel-key" => {
+                        | "board-reboot" => {
                             if result.operation == "board-settings" {
                                 self.board_settings_dirty = false;
                             }
                             self.engine_handle.request_catalog_refresh();
+                        }
+                        "board-front-panel-key" => {
+                            // The command acknowledgement proves delivery, but
+                            // the follow-up exact read proves what the physical
+                            // board is now showing after it processed the key.
+                            if let Err(error) = self.refresh_front_panel() {
+                                self.board_operation_status = error;
+                            }
+                        }
+                        "board-front-panel-refresh" => {
+                            self.board_operation_status = self.tr("Physical front panel refreshed");
                         }
                         "effect-save" | "effect-delete" | "strip-config" | "strip-fill"
                         | "strip-frame" | "strip-pixel" | "strip-status" => {
@@ -2100,11 +2158,16 @@ impl PealayerApp {
                         self.engine_handle.request_catalog_refresh();
                     }
                     if is_board_operation {
-                        self.board_operation_status = output.clone();
+                        if result.operation != "board-front-panel-refresh" {
+                            self.board_operation_status = output.clone();
+                        }
                     } else if !is_presentation_operation {
                         self.hardware_effect_authoring.status = output.clone();
                     }
-                    if let Some(error) = presentation_apply_error {
+                    if let Some(error) = front_panel_apply_error {
+                        self.board_operation_status = error.clone();
+                        self.set_osd(error);
+                    } else if let Some(error) = presentation_apply_error {
                         self.set_osd(format!("Channel saved; refreshing details: {error}"));
                     } else {
                         self.set_osd(output);
@@ -2280,6 +2343,15 @@ impl PealayerApp {
             }
             InteropCommand::OpenPreferences => {
                 self.show_preferences_dialog = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            InteropCommand::OpenBoardInformation { tab } => {
+                self.board_info_tab = tab.min(3);
+                self.show_board_info_dialog = true;
+                if self.board_info_tab == 2 {
+                    self.front_panel_refresh_attempted = false;
+                }
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
@@ -4508,6 +4580,7 @@ fn web_hardware_details(
             "pressed_keys": panel.pressed_keys,
             "menu_page": panel.menu_page,
             "program_mode": panel.program_mode,
+            "host_captured": panel.host_captured,
             "lcd_available": panel.lcd_available,
             "lcd_address": panel.lcd_address,
             "lcd_line_1": panel.lcd_line_1,
@@ -4581,6 +4654,23 @@ fn web_hardware_details(
             "temperature_sensors": capabilities.supports_temperature_sensors,
         },
     })
+}
+
+fn front_panel_command(key: &str, host_captured: bool) -> Result<String, String> {
+    if !matches!(key, "K1" | "K2" | "K3" | "K4") {
+        return Err("front-panel key must be K1, K2, K3, or K4".to_string());
+    }
+    if host_captured {
+        return Ok(format!("host-menu key {key} press"));
+    }
+    Ok(match key {
+        "K1" => "menu previous",
+        "K2" => "menu next",
+        "K3" => "menu decrease",
+        "K4" => "menu increase",
+        _ => unreachable!("validated above"),
+    }
+    .to_string())
 }
 
 fn controller_strip_effect_preset(
@@ -4799,6 +4889,8 @@ impl Default for PealayerApp {
             board_settings_draft: None,
             board_settings_dirty: false,
             board_reboot_armed: false,
+            front_panel_refresh_attempted: false,
+            front_panel_pending_key: None,
             pause_on_hardware_disconnect: true,
             auto_connect_hardware: true,
             click_player_to_toggle: true,
@@ -4887,6 +4979,19 @@ fn hardware_connection_was_lost(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn front_panel_keys_route_to_the_board_or_active_host_menu() {
+        assert_eq!(front_panel_command("K1", false).unwrap(), "menu previous");
+        assert_eq!(front_panel_command("K2", false).unwrap(), "menu next");
+        assert_eq!(front_panel_command("K3", false).unwrap(), "menu decrease");
+        assert_eq!(front_panel_command("K4", false).unwrap(), "menu increase");
+        assert_eq!(
+            front_panel_command("K4", true).unwrap(),
+            "host-menu key K4 press"
+        );
+        assert!(front_panel_command("K5", false).is_err());
+    }
 
     #[test]
     fn board_settings_command_serializes_every_live_setting_in_contract_order() {

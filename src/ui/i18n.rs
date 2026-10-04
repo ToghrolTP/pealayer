@@ -359,12 +359,24 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Macros" => "ماکروها",
         "Lighting effects" => "جلوه‌های نورپردازی",
         "Live front-panel state" => "وضعیت زندهٔ پنل جلویی",
+        "Live physical display and board controls" => "نمایشگر فیزیکی زنده و کنترل‌های برد",
         "Live physical display" => "نمایشگر فیزیکی زنده",
         "Physical board keys" => "کلیدهای فیزیکی برد",
+        "Read the exact state from the physical board" => "خواندن وضعیت دقیق از برد فیزیکی",
+        "Reading the physical front panel" => "در حال خواندن پنل جلویی فیزیکی",
+        "Pealayer is requesting the exact display frame from PCController." => {
+            "Pealayer در حال دریافت فریم دقیق نمایشگر از PCController است."
+        }
+        "Physical front panel refreshed" => "پنل جلویی فیزیکی به‌روز شد",
+        "Technical readback" => "خوانش فنی",
+        "Display active" => "نمایشگر فعال",
+        "Display idle" => "نمایشگر غیرفعال",
+        "Schema" => "طرحواره",
         "Page" => "صفحه",
         "Previous" => "قبلی",
         "Next" => "بعدی",
         "Decrease" => "کاهش",
+        "Increase" => "افزایش",
         "Select" => "انتخاب",
         "No exact seven-segment frame is available." => "فریم دقیق نمایشگر هفت‌بخشی در دسترس نیست.",
         "Send the same front-panel key press through PCController" => {

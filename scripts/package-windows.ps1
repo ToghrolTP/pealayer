@@ -38,9 +38,14 @@ $userProfileDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]
 $rustBin = @(
     (Join-Path $env:ProgramFiles 'Rust\bin')
     (Join-Path $userProfileDirectory '.cargo\bin')
+) + @(
+    Get-ChildItem -LiteralPath (Join-Path $userProfileDirectory '.rustup\toolchains') -Directory -ErrorAction SilentlyContinue |
+        Sort-Object -Property Name |
+        ForEach-Object { Join-Path $_.FullName 'bin' }
 ) | Where-Object {
-    (Test-Path -LiteralPath (Join-Path $_ 'cargo.exe') -PathType Leaf) -and
-    (Test-Path -LiteralPath (Join-Path $_ 'rustc.exe') -PathType Leaf)
+    $cargo = Get-Item -LiteralPath (Join-Path $_ 'cargo.exe') -ErrorAction SilentlyContinue
+    $rustc = Get-Item -LiteralPath (Join-Path $_ 'rustc.exe') -ErrorAction SilentlyContinue
+    $cargo -and $cargo.Length -gt 0 -and $rustc -and $rustc.Length -gt 0
 } | Select-Object -First 1
 if ($rustBin) {
     $env:Path = $rustBin + ';' + $env:Path

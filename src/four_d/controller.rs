@@ -317,6 +317,9 @@ pub struct HardwareBoardSettings {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HardwareFrontPanel {
+    /// Schema reported by the authoritative `controller.front_panel` read.
+    /// Zero means that only a changed-only display frame has been observed.
+    pub schema: u8,
     pub raw_segments: Vec<u8>,
     pub brightness: u8,
     pub blink: bool,
@@ -324,6 +327,10 @@ pub struct HardwareFrontPanel {
     pub pressed_keys: u8,
     pub menu_page: u8,
     pub program_mode: u8,
+    /// True while PCController owns the display for a hosted menu. In that
+    /// state K1..K4 route to the host-menu engine rather than the board's
+    /// ordinary one-shot menu actions.
+    pub host_captured: bool,
     pub lcd_available: bool,
     pub lcd_address: u8,
     pub lcd_line_1: String,
@@ -522,6 +529,35 @@ impl HardwareCapabilities {
     /// compositor has applied priority, brightness, and procedural effects.
     pub(crate) fn apply_state_notification(&mut self, event: &Value) -> bool {
         match event.get("kind").and_then(Value::as_str) {
+            Some("front_panel.segment") => {
+                let Some(metadata) = event.get("metadata").filter(|value| value.is_object()) else {
+                    return false;
+                };
+                let Some(raw_segments) = parse_raw_segments(metadata.get("raw_segments")) else {
+                    return false;
+                };
+                let brightness = metadata
+                    .get("brightness")
+                    .and_then(value_as_u64)
+                    .and_then(|value| u8::try_from(value).ok())
+                    .unwrap_or_else(|| {
+                        self.front_panel
+                            .as_ref()
+                            .map(|panel| panel.brightness)
+                            .unwrap_or_default()
+                    })
+                    .min(7);
+                let panel = self
+                    .front_panel
+                    .get_or_insert_with(HardwareFrontPanel::default);
+                let changed = panel.raw_segments != raw_segments
+                    || panel.brightness != brightness
+                    || !panel.segments_active;
+                panel.raw_segments = raw_segments;
+                panel.brightness = brightness;
+                panel.segments_active = true;
+                changed
+            }
             Some("pwm.changed") => {
                 let Some(metadata) = event.get("metadata").filter(|value| value.is_object()) else {
                     return false;
@@ -633,16 +669,37 @@ impl HardwareCapabilities {
             self.status_led = current.status_led.clone();
             self.status_led_revision = current.status_led_revision;
         }
+        // `controller.snapshot` deliberately does not perform a synchronous
+        // serial front-panel read. Preserve the latest exact read/event frame
+        // while the same coordinator and board remain connected so the slow
+        // catalog recovery baseline cannot make the native preview disappear.
+        if self.board_connected && same_host && current.front_panel.is_some() {
+            self.front_panel.clone_from(&current.front_panel);
+        }
+    }
+
+    /// Installs the authoritative response returned by
+    /// `controller.front_panel`. This is intentionally independent from the
+    /// slower capability catalog refresh so opening the dialog never poisons
+    /// the persistent controller connection when the board is busy.
+    pub(crate) fn apply_front_panel_state(&mut self, value: &Value) -> Result<bool, String> {
+        let panel = hardware_front_panel(value)
+            .ok_or_else(|| "PCController returned an invalid front-panel frame".to_string())?;
+        let changed = self.front_panel.as_ref() != Some(&panel);
+        self.front_panel = Some(panel);
+        Ok(changed)
     }
 
     pub(crate) fn mark_board_disconnected(&mut self) -> bool {
         let changed = self.board_connected
             || !self.active_relays.is_empty()
             || self.status_led.is_some()
+            || self.front_panel.is_some()
             || self.telemetry != HardwareTelemetry::default();
         self.board_connected = false;
         self.active_relays.clear();
         self.status_led = None;
+        self.front_panel = None;
         self.telemetry = HardwareTelemetry::default();
         changed
     }
@@ -652,6 +709,84 @@ fn value_as_u64(value: &Value) -> Option<u64> {
     value
         .as_u64()
         .or_else(|| value.as_str()?.trim().parse::<u64>().ok())
+}
+
+fn parse_raw_segments(value: Option<&Value>) -> Option<Vec<u8>> {
+    let value = value?;
+    if let Some(values) = value.as_array() {
+        let bytes = values
+            .iter()
+            .map(|value| value.as_u64().and_then(|value| u8::try_from(value).ok()))
+            .collect::<Option<Vec<_>>>()?;
+        return (bytes.len() == 4).then_some(bytes);
+    }
+    let encoded = value.as_str()?.trim();
+    if encoded.len() != 8 || !encoded.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    (0..4)
+        .map(|index| u8::from_str_radix(&encoded[index * 2..index * 2 + 2], 16).ok())
+        .collect::<Option<Vec<_>>>()
+}
+
+fn hardware_front_panel(panel: &Value) -> Option<HardwareFrontPanel> {
+    Some(HardwareFrontPanel {
+        schema: panel
+            .get("schema")
+            .and_then(value_as_u64)
+            .and_then(|value| u8::try_from(value).ok())
+            .unwrap_or_default(),
+        raw_segments: parse_raw_segments(panel.get("raw_segments"))?,
+        brightness: panel
+            .get("brightness")
+            .and_then(value_as_u64)
+            .and_then(|value| u8::try_from(value).ok())
+            .unwrap_or_default()
+            .min(7),
+        blink: panel.get("blink").and_then(Value::as_bool).unwrap_or(false),
+        segments_active: panel
+            .get("segments_active")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        pressed_keys: panel
+            .get("pressed_keys")
+            .and_then(value_as_u64)
+            .and_then(|value| u8::try_from(value).ok())
+            .unwrap_or_default(),
+        menu_page: panel
+            .get("menu_page")
+            .and_then(value_as_u64)
+            .and_then(|value| u8::try_from(value).ok())
+            .unwrap_or_default(),
+        program_mode: panel
+            .get("program_mode")
+            .and_then(value_as_u64)
+            .and_then(|value| u8::try_from(value).ok())
+            .unwrap_or_default(),
+        host_captured: panel
+            .get("host_captured")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        lcd_available: panel
+            .get("lcd_available")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        lcd_address: panel
+            .get("lcd_address")
+            .and_then(value_as_u64)
+            .and_then(|value| u8::try_from(value).ok())
+            .unwrap_or_default(),
+        lcd_line_1: panel
+            .get("lcd_line_1")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        lcd_line_2: panel
+            .get("lcd_line_2")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    })
 }
 
 fn active_relays_from_mask(relays: &[HardwareOutput], mask: u64) -> std::collections::BTreeSet<u8> {
@@ -1782,48 +1917,7 @@ fn parse_hardware_capabilities_with_front_panel(
     let front_panel = (board_connected)
         .then_some(front_panel_source)
         .flatten()
-        .map(|panel| HardwareFrontPanel {
-            raw_segments: panel
-                .get("raw_segments")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|value| value.as_u64().and_then(|value| u8::try_from(value).ok()))
-                .collect(),
-            brightness: panel.get("brightness").and_then(Value::as_u64).unwrap_or(0) as u8,
-            blink: panel.get("blink").and_then(Value::as_bool).unwrap_or(false),
-            segments_active: panel
-                .get("segments_active")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            pressed_keys: panel
-                .get("pressed_keys")
-                .and_then(Value::as_u64)
-                .unwrap_or(0) as u8,
-            menu_page: panel.get("menu_page").and_then(Value::as_u64).unwrap_or(0) as u8,
-            program_mode: panel
-                .get("program_mode")
-                .and_then(Value::as_u64)
-                .unwrap_or(0) as u8,
-            lcd_available: panel
-                .get("lcd_available")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            lcd_address: panel
-                .get("lcd_address")
-                .and_then(Value::as_u64)
-                .unwrap_or(0) as u8,
-            lcd_line_1: panel
-                .get("lcd_line_1")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            lcd_line_2: panel
-                .get("lcd_line_2")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-        });
+        .and_then(hardware_front_panel);
     let empty_status = Value::Null;
     let status = snapshot.get("status").unwrap_or(&empty_status);
     let telemetry = telemetry_from_status(status, board_connected);
@@ -2669,6 +2763,7 @@ mod tests {
             },
             "have_front_panel": false,
             "front_panel": {
+                "schema": 2,
                 "raw_segments": [63, 6, 91, 79],
                 "brightness": 5,
                 "blink": true,
@@ -2716,9 +2811,41 @@ mod tests {
         assert!(parsed.supports_motion_break_setting);
         assert!(parsed.supports_status_led_settings);
         let front_panel = parsed.front_panel.expect("front panel must be advertised");
+        assert_eq!(front_panel.schema, 2);
         assert_eq!(front_panel.raw_segments, [63, 6, 91, 79]);
         assert!(front_panel.segments_active);
         assert_eq!(front_panel.lcd_line_2, "Ready");
+    }
+
+    #[test]
+    fn exact_front_panel_read_and_changed_only_frame_stay_live() {
+        let mut capabilities = live_capabilities();
+        let exact = json!({
+            "schema": 2,
+            "raw_segments": [0x06, 0x5B, 0x4F, 0x66],
+            "brightness": 5,
+            "segments_active": true,
+            "menu_page": 3,
+            "program_mode": 1,
+            "pressed_keys": 0,
+            "lcd_available": false
+        });
+        assert!(capabilities.apply_front_panel_state(&exact).unwrap());
+        assert_eq!(capabilities.front_panel.as_ref().unwrap().schema, 2);
+        assert_eq!(capabilities.front_panel.as_ref().unwrap().menu_page, 3);
+
+        assert!(capabilities.apply_state_notification(&json!({
+            "kind": "front_panel.segment",
+            "metadata": {"raw_segments":"39386D5E", "brightness":"7"}
+        })));
+        let panel = capabilities.front_panel.as_ref().unwrap();
+        assert_eq!(panel.raw_segments, [0x39, 0x38, 0x6D, 0x5E]);
+        assert_eq!(panel.brightness, 7);
+        assert_eq!(panel.menu_page, 3);
+        assert!(!capabilities.apply_state_notification(&json!({
+            "kind": "front_panel.segment",
+            "metadata": {"raw_segments":"39386D5E", "brightness":"7"}
+        })));
     }
 
     fn live_capabilities() -> HardwareCapabilities {
