@@ -1149,6 +1149,13 @@ fn can_add_timeline_keyframe(
         && playback_time >= 0.0
 }
 
+fn timeline_keyframe_marker_center(ruler_rect: egui::Rect, marker_x: f32) -> egui::Pos2 {
+    // Reserve the lower 12 px of the ruler for the red playhead handle. An
+    // exact keyframe inserted at the playhead then remains independently
+    // visible and clickable instead of sitting underneath the handle.
+    egui::pos2(marker_x, ruler_rect.min.y + 6.0)
+}
+
 fn media_timeline_track_label(
     app: &PealayerApp,
     kind: &'static str,
@@ -5078,6 +5085,53 @@ mod timeline_row_tests {
         assert!(can_add_timeline_keyframe(&[row], 0, 0.0));
         assert!(!can_add_timeline_keyframe(&[], 0, 0.0));
         assert!(!can_add_timeline_keyframe(&[], 1, f64::NAN));
+    }
+
+    #[test]
+    fn exact_keyframe_insertion_selects_and_deduplicates_the_durable_model() {
+        let mut app = PealayerApp::default();
+        let (first, inserted) = app.insert_timeline_keyframe(1_250);
+        assert!(inserted);
+        assert_eq!(app.timeline.keyframes.len(), 1);
+        assert_eq!(app.timeline.keyframes[0].time_ms, 1_250);
+        assert_eq!(app.selected_timeline_keyframe, Some(first));
+
+        let (duplicate, inserted) = app.insert_timeline_keyframe(1_250);
+        assert!(!inserted);
+        assert_eq!(duplicate, first);
+        assert_eq!(app.timeline.keyframes.len(), 1);
+    }
+
+    #[test]
+    fn exact_keyframe_insertion_is_written_to_the_media_sidecar() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "pealayer-keyframe-persistence-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&temp_dir).expect("temporary test directory should be created");
+        let media_path = temp_dir.join("sample.mkv");
+        let sidecar_path = temp_dir.join("sample.4d.json");
+
+        let mut app = PealayerApp::default();
+        app.current_video_path = Some(media_path);
+        let (_, inserted) = app.insert_timeline_keyframe(2_750);
+        assert!(inserted);
+        let restored = crate::four_d::models::Timeline::load_from_file(&sidecar_path)
+            .expect("insertion should persist a readable timeline sidecar");
+        assert_eq!(restored.keyframes.len(), 1);
+        assert_eq!(restored.keyframes[0].time_ms, 2_750);
+
+        std::fs::remove_file(&sidecar_path).expect("test sidecar should be removable");
+        std::fs::remove_dir(&temp_dir).expect("empty test directory should be removable");
+    }
+
+    #[test]
+    fn exact_keyframe_marker_does_not_overlap_the_playhead_handle() {
+        let ruler = egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(310.0, 46.0));
+        let marker = timeline_keyframe_marker_center(ruler, 80.0);
+        let marker_bottom = marker.y + 5.0;
+        let playhead_handle_top = ruler.max.y - 12.0;
+        assert!(marker_bottom < playhead_handle_top);
     }
 
     #[test]
@@ -9095,11 +9149,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     let time_ms = (self.app.playback_time * 1_000.0)
                                         .round()
                                         .max(0.0) as u64;
-                                    if !self.app.timeline.keyframes.iter().any(|keyframe| keyframe.time_ms == time_ms) {
-                                        self.app.undo_stack.push(self.app.snapshot_timeline());
-                                    }
-                                    self.app.selected_timeline_keyframe =
-                                        Some(self.app.timeline.add_keyframe(time_ms));
+                                    self.app.insert_timeline_keyframe(time_ms);
+                                    ui.ctx().request_repaint();
                                 }
                                 egui::containers::menu::MenuButton::from_button(
                                     egui::Button::new(crate::ui::icons::LIST_CHECKS),
@@ -9984,7 +10035,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     }
                                 }
                                 if analog_tracks_changed {
-                                    let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateAnalogTracks(self.app.linked_analog_tracks()));
+                                    self.app.commit_timeline_edit();
                                 }
                             });
 
@@ -10056,11 +10107,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 )
                                                 .clicked()
                                             {
-                                                if !self.app.timeline.keyframes.iter().any(|keyframe| keyframe.time_ms == playhead_ms) {
-                                                    self.app.undo_stack.push(self.app.snapshot_timeline());
-                                                }
-                                                self.app.selected_timeline_keyframe =
-                                                    Some(self.app.timeline.add_keyframe(playhead_ms));
+                                                self.app.insert_timeline_keyframe(playhead_ms);
+                                                ui.ctx().request_repaint();
                                                 ui.close();
                                             }
                                             if let Some(position) = pointer_pos {
@@ -10079,11 +10127,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     )
                                                     .clicked()
                                                 {
-                                                    if !self.app.timeline.keyframes.iter().any(|keyframe| keyframe.time_ms == pointer_ms) {
-                                                        self.app.undo_stack.push(self.app.snapshot_timeline());
-                                                    }
-                                                    self.app.selected_timeline_keyframe =
-                                                        Some(self.app.timeline.add_keyframe(pointer_ms));
+                                                    self.app.insert_timeline_keyframe(pointer_ms);
+                                                    ui.ctx().request_repaint();
                                                     ui.close();
                                                 }
                                             }
@@ -10095,22 +10140,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             if marker_x < rect.min.x || marker_x > rect.max.x {
                                                 continue;
                                             }
-                                            let selected = self.app.selected_timeline_keyframe == Some(marker.id);
-                                            let color = if selected {
-                                                ui.visuals().selection.stroke.color
-                                            } else {
-                                                ui.visuals().hyperlink_color
-                                            };
-                                            painter.line_segment(
-                                                [
-                                                    egui::pos2(marker_x, ruler_rect.center().y),
-                                                    egui::pos2(marker_x, rect.max.y),
-                                                ],
-                                                egui::Stroke::new(if selected { 1.6_f32 } else { 1.0_f32 }, color.gamma_multiply(0.7)),
+                                            // Interaction is registered here, but the marker is
+                                            // painted after the ruler background and timeline
+                                            // lanes. Painting it here used to make the opaque ruler
+                                            // pass erase every inserted keyframe on the same frame.
+                                            let marker_center = timeline_keyframe_marker_center(
+                                                ruler_rect,
+                                                marker_x,
                                             );
                                             let marker_rect = egui::Rect::from_center_size(
-                                                egui::pos2(marker_x, ruler_rect.center().y),
-                                                egui::vec2(20.0, 22.0),
+                                                marker_center,
+                                                egui::vec2(20.0, 14.0),
                                             );
                                             let marker_response = ui
                                                 .interact(marker_rect, egui::Id::new(("timeline-keyframe", marker.id)), egui::Sense::click())
@@ -10119,13 +10159,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     self.app.tr("Exact timeline keyframe"),
                                                     crate::duration::format_time_value_ms(marker.time_ms)
                                                 ));
-                                            painter.text(
-                                                marker_rect.center(),
-                                                egui::Align2::CENTER_CENTER,
-                                                crate::ui::icons::DIAMOND,
-                                                egui::FontId::proportional(13.0),
-                                                color,
-                                            );
                                             if marker_response.clicked() {
                                                 clicked_any_keyframe = true;
                                                 self.app.selected_timeline_keyframe = Some(marker.id);
@@ -10150,7 +10183,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         && exact_time != marker.time_ms
                                                     {
                                                         self.app.undo_stack.push(self.app.snapshot_timeline());
-                                                        let _ = self.app.timeline.move_keyframe(marker.id, exact_time);
+                                                        if self
+                                                            .app
+                                                            .timeline
+                                                            .move_keyframe(marker.id, exact_time)
+                                                        {
+                                                            self.app.commit_timeline_edit();
+                                                        }
                                                     }
                                                 });
                                                 if ui
@@ -10173,7 +10212,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     .clicked()
                                                 {
                                                     self.app.undo_stack.push(self.app.snapshot_timeline());
-                                                    self.app.timeline.remove_keyframe(marker.id);
+                                                    if self.app.timeline.remove_keyframe(marker.id) {
+                                                        self.app.commit_timeline_edit();
+                                                    }
                                                     self.app.selected_timeline_keyframe = None;
                                                     ui.close();
                                                 }
@@ -10908,6 +10949,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         // Render Analog Curve Tracks
                                         let mut curve_updated = false;
+                                        let mut curve_persist_requested = false;
                                         let pointer_pos = ui.ctx().pointer_latest_pos();
 
                                         let mut started_drag_info = None;
@@ -11132,6 +11174,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 ));
                                             }
                                             curve_updated = true;
+                                            curve_persist_requested = true;
                                         }
 
                                         if let Some((tid, kid, new_interp)) = kf_interp_change {
@@ -11143,6 +11186,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 }
                                             }
                                             curve_updated = true;
+                                            curve_persist_requested = true;
                                         }
 
                                         if let Some((tid, kid)) = kf_to_remove {
@@ -11155,6 +11199,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
                                             self.app.selected_keyframes.clear();
                                             curve_updated = true;
+                                            curve_persist_requested = true;
                                         }
 
                                         if let Some((track_id, k_idx, pos, orig_t, orig_v)) = started_drag_info {
@@ -11246,6 +11291,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                                 self.app.active_keyframe_drag = None;
                                                 curve_updated = true;
+                                                curve_persist_requested = true;
                                             } else if let Some(pos) = pointer_pos {
                                                 let delta_x = pos.x - drag.start_pointer_pos.x;
                                                 let delta_time_ms = (delta_x / px_per_ms) as i64;
@@ -11304,7 +11350,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
                                         }
 
-                                        if curve_updated {
+                                        if curve_persist_requested {
+                                            self.app.commit_timeline_edit();
+                                        } else if curve_updated {
                                             let _ = self.app.engine_handle.sender.send(
                                                 crate::four_d::engine::EngineMessage::UpdateAnalogTracks(
                                                     self.app.linked_analog_tracks(),
@@ -11364,6 +11412,53 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     );
                                                 }
                                             }
+                                        }
+
+                                        // Exact timeline keyframes must be painted after the
+                                        // opaque ruler and lane backgrounds. The previous order
+                                        // erased the diamond immediately after insertion, making
+                                        // a successful model mutation look completely broken.
+                                        for marker in &self.app.timeline.keyframes {
+                                            let marker_x =
+                                                rect.min.x + marker.time_ms as f32 * px_per_ms;
+                                            if marker_x < rect.min.x || marker_x > rect.max.x {
+                                                continue;
+                                            }
+                                            let selected = self.app.selected_timeline_keyframe
+                                                == Some(marker.id);
+                                            let color = if selected {
+                                                ui.visuals().selection.stroke.color
+                                            } else {
+                                                ui.visuals().hyperlink_color
+                                            };
+                                            painter.line_segment(
+                                                [
+                                                    egui::pos2(marker_x, ruler_rect.min.y + 11.0),
+                                                    egui::pos2(marker_x, rect.max.y),
+                                                ],
+                                                egui::Stroke::new(
+                                                    if selected { 1.6 } else { 1.0 },
+                                                    color.gamma_multiply(0.7),
+                                                ),
+                                            );
+                                            let center = timeline_keyframe_marker_center(
+                                                ruler_rect,
+                                                marker_x,
+                                            );
+                                            let diamond = vec![
+                                                egui::pos2(center.x, center.y - 5.0),
+                                                egui::pos2(center.x + 5.0, center.y),
+                                                egui::pos2(center.x, center.y + 5.0),
+                                                egui::pos2(center.x - 5.0, center.y),
+                                            ];
+                                            painter.add(egui::Shape::convex_polygon(
+                                                diamond,
+                                                color,
+                                                egui::Stroke::new(
+                                                    1.0,
+                                                    ui.visuals().panel_fill,
+                                                ),
+                                            ));
                                         }
 
                                         // Draw Playhead
@@ -11800,13 +11895,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         .round()
                                         .clamp(0.0, total_seconds * 1_000.0)
                                         as u64;
-                                    if !self.app.timeline.keyframes.iter().any(|keyframe| keyframe.time_ms == time_ms) {
-                                        self.app.undo_stack.push(self.app.snapshot_timeline());
-                                    }
-                                    self.app.selected_timeline_keyframe =
-                                        Some(self.app.timeline.add_keyframe(time_ms));
-                                    self.app.selected_instance_ids.clear();
-                                    self.app.selected_keyframes.clear();
+                                    self.app.insert_timeline_keyframe(time_ms);
+                                    ui.ctx().request_repaint();
                                 } else if nudge_left_pressed || nudge_right_pressed {
                                     if !self.app.selected_instance_ids.is_empty() {
                                         let direction = if nudge_left_pressed { -1 } else { 1 };
@@ -12007,10 +12097,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         self.app.selected_instance_ids.clear();
                                         self.app.selected_keyframes.clear();
-
-                                        let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
-                                        let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
-                                        let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateAnalogTracks(self.app.linked_analog_tracks()));
+                                        self.app.commit_timeline_edit();
                                     }
                                 } else if key_1_pressed || key_2_pressed || key_3_pressed {
                                     if !self.app.selected_keyframes.is_empty() {
@@ -12029,7 +12116,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 }
                                             }
                                         }
-                                        let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateAnalogTracks(self.app.linked_analog_tracks()));
+                                        self.app.commit_timeline_edit();
                                     }
                                 }
                                 timeline_scroll_state.store(ui.ctx(), timeline_scroll_id);

@@ -4563,6 +4563,51 @@ impl PealayerApp {
         }
     }
 
+    /// Insert an exact, timeline-wide magnetic guide and make the edit durable.
+    ///
+    /// All UI entry points use this method so toolbar, ruler-menu, and keyboard
+    /// insertion share undo, selection, persistence, and user feedback.
+    pub(crate) fn insert_timeline_keyframe(&mut self, time_ms: u64) -> (uuid::Uuid, bool) {
+        if let Some(existing) = self
+            .timeline
+            .keyframes
+            .iter()
+            .find(|keyframe| keyframe.time_ms == time_ms)
+            .map(|keyframe| keyframe.id)
+        {
+            self.selected_timeline_keyframe = Some(existing);
+            self.selected_instance_ids.clear();
+            self.selected_keyframes.clear();
+            self.set_osd(format!(
+                "{} {}",
+                self.tr("Keyframe already exists at"),
+                crate::duration::format_time_value_ms(time_ms)
+            ));
+            return (existing, false);
+        }
+
+        self.undo_stack.push(self.snapshot_timeline());
+        let id = self.timeline.add_keyframe(time_ms);
+        self.selected_timeline_keyframe = Some(id);
+        self.selected_instance_ids.clear();
+        self.selected_keyframes.clear();
+        self.set_osd(format!(
+            "{} {}",
+            self.tr("Keyframe inserted at"),
+            crate::duration::format_time_value_ms(time_ms)
+        ));
+        // Persist last so an I/O failure remains the visible status message
+        // instead of being overwritten by a success notification.
+        self.persist_timeline_track_preferences();
+        (id, true)
+    }
+
+    /// Persist and publish a timeline edit that has already mutated the model.
+    pub(crate) fn commit_timeline_edit(&mut self) {
+        self.persist_timeline_track_preferences();
+        self.sync_timeline_engine();
+    }
+
     pub(crate) fn set_timeline_track_linked(&mut self, key: &str, linked: bool) {
         if self.timeline.track_state(key).linked == linked {
             return;
