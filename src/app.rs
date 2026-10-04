@@ -2704,15 +2704,10 @@ impl PealayerApp {
                 self.save_config();
             }
             InteropCommand::SetMute { muted } => {
-                let _ = self.mpv.set_property("mute", muted);
-                self.is_muted = muted;
-                self.save_config();
+                self.set_audio_muted(muted);
             }
             InteropCommand::ToggleMute => {
-                let muted = !self.is_muted;
-                let _ = self.mpv.set_property("mute", muted);
-                self.is_muted = muted;
-                self.save_config();
+                self.toggle_audio_muted();
             }
             InteropCommand::SetRate { rate } => {
                 self.set_playback_speed(rate, true);
