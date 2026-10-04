@@ -7295,15 +7295,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                     let elapsed = self.app.seek_pos.unwrap_or(self.app.playback_time);
                                     let include_hours = self.app.duration >= 3600.0;
-                                    let elapsed_response = crate::ui::controls::draw_elapsed_editor(
+                                    crate::ui::controls::draw_elapsed_editor(
                                         self.app,
                                         ui,
                                         "nle-elapsed-editor",
                                         can_seek,
                                     );
-                                    elapsed_response.context_menu(|ui| {
-                                        crate::ui::controls::transport_context_menu(self.app, ui)
-                                    });
 
                                     let mut current_pos = if has_video {
                                         self.app.seek_pos.unwrap_or(self.app.playback_time)

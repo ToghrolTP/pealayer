@@ -196,18 +196,41 @@ pub fn draw_elapsed_editor(
     let elapsed = resolve_display_time(app.seek_pos, app.playback_time);
     let rendered = format_player_time(elapsed, app.duration >= 3600.0, app.show_subseconds);
     let desired_width = if app.duration >= 3600.0 { 104.0 } else { 82.0 };
+    let edit_id = ui.make_persistent_id(id_source);
+    let editing = app.editing_elapsed_time && enabled;
+    let mut display_buffer = rendered;
+    let buffer = if editing {
+        &mut app.elapsed_time_input
+    } else {
+        &mut display_buffer
+    };
 
-    if app.editing_elapsed_time && enabled {
-        let response = ui
-            .add_sized(
-                [desired_width, 22.0],
-                egui::TextEdit::singleline(&mut app.elapsed_time_input)
-                    .id(ui.make_persistent_id(id_source))
-                    .font(egui::TextStyle::Monospace)
-                    .horizontal_align(egui::Align::Center)
-                    .hint_text("00:00.000"),
-            )
-            .on_hover_text(app.tr(
+    // Render both states with the same widget metrics. The former Label ->
+    // TextEdit swap used different font padding and allocation rules, which
+    // made the time jump when editing began even though the outer row stayed
+    // in place.
+    let editor = egui::TextEdit::singleline(buffer)
+        .id(edit_id)
+        .font(egui::TextStyle::Monospace)
+        .horizontal_align(egui::Align::Center)
+        .vertical_align(egui::Align::Center)
+        .margin(egui::Margin::symmetric(4, 2))
+        .interactive(editing)
+        .frame(if editing {
+            egui::Frame::new()
+                .fill(ui.visuals().extreme_bg_color)
+                .stroke(ui.visuals().widgets.active.bg_stroke)
+                .corner_radius(ui.visuals().widgets.active.corner_radius)
+        } else {
+            egui::Frame::NONE
+        });
+    let widget_response =
+        ui.add_enabled_ui(enabled, |ui| ui.add_sized([desired_width, 22.0], editor));
+    let mut response = widget_response.inner;
+
+    if editing {
+        response =
+            response.on_hover_text(app.tr(
                 "Enter seconds, MM:SS.mmm, or HH:MM:SS.mmm. Press Enter to seek; Escape cancels.",
             ));
         if app.elapsed_edit_focus_requested {
@@ -233,19 +256,67 @@ pub fn draw_elapsed_editor(
             }
             app.editing_elapsed_time = false;
         }
-        response
     } else {
-        let response = ui
-            .add_enabled(
-                enabled,
-                egui::Label::new(timecode_text(rendered)).sense(egui::Sense::click()),
-            )
-            .on_hover_text(app.tr("Click to enter an exact playback time."));
+        // A non-interactive TextEdit deliberately has no click sense. Layer a
+        // stable activation target over its exact rectangle so display and
+        // editing keep identical text geometry.
+        if enabled {
+            let activation = ui.interact(
+                response.rect,
+                edit_id.with("activate"),
+                egui::Sense::click(),
+            );
+            response = response.union(activation);
+        }
+        response = response.on_hover_text(app.tr("Click to enter an exact playback time."));
         if response.clicked() {
             begin_elapsed_edit(app);
         }
-        response
     }
+
+    response.context_menu(|ui| {
+        let copied_time = if app.editing_elapsed_time {
+            app.elapsed_time_input.clone()
+        } else {
+            format_player_time(
+                resolve_display_time(app.seek_pos, app.playback_time),
+                app.duration >= 3600.0,
+                app.show_subseconds,
+            )
+        };
+        if ui
+            .button(format!("{} {}", crate::ui::icons::COPY, app.tr("Copy")))
+            .clicked()
+        {
+            ui.ctx().copy_text(copied_time);
+            ui.close();
+        }
+        if ui
+            .add_enabled(
+                enabled,
+                egui::Button::new(format!(
+                    "{} {}",
+                    crate::ui::icons::CLIPBOARD,
+                    app.tr("Paste")
+                )),
+            )
+            .clicked()
+        {
+            if !app.editing_elapsed_time {
+                begin_elapsed_edit(app);
+                // Pasting from display mode replaces the displayed timestamp
+                // instead of appending clipboard text to it.
+                app.elapsed_time_input.clear();
+            }
+            ui.ctx().memory_mut(|memory| memory.request_focus(edit_id));
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            ui.close();
+        }
+        ui.separator();
+        transport_context_menu(app, ui);
+    });
+    response
 }
 
 /// Shared seek/action menu for the NLE and Simple transports.
@@ -553,9 +624,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             }
                         });
 
-                        let elapsed_resp =
-                            draw_elapsed_editor(app, ui, "simple-elapsed-editor", has_video && can_seek);
-                        elapsed_resp.context_menu(|ui| transport_context_menu(app, ui));
+                        draw_elapsed_editor(
+                            app,
+                            ui,
+                            "simple-elapsed-editor",
+                            has_video && can_seek,
+                        );
 
                         let mut current_pos = if has_video {
                             app.seek_pos.unwrap_or(app.playback_time)
