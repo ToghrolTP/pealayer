@@ -404,6 +404,28 @@ fn pan_timeline_offset(
     )
 }
 
+fn timeline_offset_to_reveal_x(
+    current_offset: f32,
+    target_x: f32,
+    content_width: f32,
+    viewport_width: f32,
+) -> f32 {
+    let max_offset = (content_width - viewport_width).max(0.0);
+    let margin = 24.0_f32.min(viewport_width * 0.2);
+    let visible_left = current_offset + margin;
+    let visible_right = current_offset + viewport_width - margin;
+
+    let revealed = if target_x < visible_left {
+        target_x - margin
+    } else if target_x > visible_right {
+        target_x - viewport_width + margin
+    } else {
+        current_offset
+    };
+
+    revealed.clamp(0.0, max_offset)
+}
+
 fn timeline_frame_step_ms(media_fps: f64, frame_count: u32) -> u64 {
     if media_fps.is_finite() && media_fps > 0.0 {
         ((1_000.0 * f64::from(frame_count.max(1))) / media_fps)
@@ -4850,6 +4872,22 @@ mod timeline_row_tests {
                 egui::vec2(400.0, 300.0),
             ),
             egui::vec2(600.0, 300.0)
+        );
+    }
+
+    #[test]
+    fn bring_playhead_into_view_moves_only_when_outside_the_viewport() {
+        assert_eq!(
+            timeline_offset_to_reveal_x(200.0, 350.0, 1_000.0, 400.0),
+            200.0
+        );
+        assert_eq!(
+            timeline_offset_to_reveal_x(200.0, 800.0, 1_000.0, 400.0),
+            424.0
+        );
+        assert_eq!(
+            timeline_offset_to_reveal_x(400.0, 50.0, 1_000.0, 400.0),
+            26.0
         );
     }
 
@@ -12648,6 +12686,28 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                             response.context_menu(|ui| {
                                 ui.label(egui::RichText::new(self.app.tr("Timeline")).strong());
+                                ui.separator();
+                                if ui
+                                    .button(format!(
+                                        "{} {}",
+                                        crate::ui::icons::TARGET,
+                                        self.app.tr("Bring playhead into view")
+                                    ))
+                                    .clicked()
+                                {
+                                    let playhead_x =
+                                        (self.app.playback_time.max(0.0) as f32 * zoom)
+                                            .min(timeline_content_size.x);
+                                    timeline_scroll_state.offset.x =
+                                        timeline_offset_to_reveal_x(
+                                            timeline_scroll_state.offset.x,
+                                            playhead_x,
+                                            timeline_content_size.x,
+                                            timeline_viewport.width(),
+                                        );
+                                    timeline_scroll_state.store(ui.ctx(), timeline_scroll_id);
+                                    ui.close();
+                                }
                                 ui.separator();
                                 if ui.button(format!("{} {}", crate::ui::icons::SELECTION_ALL, self.app.tr("Select all cues"))).clicked() {
                                     self.app.selected_instance_ids = self.app.timeline.instances.iter().map(|instance| instance.id).collect();
