@@ -89,6 +89,22 @@ pub fn bounded_geometry(
     }
 }
 
+/// Build a window frame whose body is always fully opaque.
+///
+/// The application's Mica/DWM theme may deliberately give `window_fill` an
+/// alpha channel. That looks appropriate for the main viewport, but applying
+/// it to a floating editor lets controls from the workspace show through the
+/// dialog and makes both surfaces unreadable. Dialogs use the same theme RGB
+/// while explicitly discarding that alpha component.
+pub fn opaque_window_frame(ui: &egui::Ui) -> egui::Frame {
+    egui::Frame::window(ui.style()).fill(opaque_color(ui.visuals().window_fill()))
+}
+
+fn opaque_color(fill: egui::Color32) -> egui::Color32 {
+    let [red, green, blue, _alpha] = fill.to_srgba_unmultiplied();
+    egui::Color32::from_rgb(red, green, blue)
+}
+
 /// A consistent, keyboard-focusable dialog action with a Phosphor icon.
 pub fn action_button(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Response {
     action_button_with_kind(ui, icon, label, false)
@@ -391,6 +407,15 @@ mod tests {
         assert_eq!(preferred_host(true, true), DialogHost::Native);
         assert_eq!(preferred_host(true, false), DialogHost::Embedded);
         assert_eq!(preferred_host(false, true), DialogHost::Embedded);
+    }
+
+    #[test]
+    fn floating_dialog_frame_discards_theme_transparency() {
+        let translucent = egui::Color32::from_rgba_unmultiplied(17, 34, 51, 40);
+        let [red, green, blue, _alpha] = translucent.to_srgba_unmultiplied();
+        let actual = opaque_color(translucent);
+        assert_eq!(actual, egui::Color32::from_rgb(red, green, blue));
+        assert_eq!(actual.a(), 255);
     }
 }
 

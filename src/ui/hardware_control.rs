@@ -1697,9 +1697,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         egui::vec2(680.0, 500.0),
         egui::vec2(1_100.0, 820.0),
     );
-    let window_fill = ui.visuals().window_fill();
-    let opaque_window_fill =
-        egui::Color32::from_rgb(window_fill.r(), window_fill.g(), window_fill.b());
     egui::Window::new(format!(
         "{} {}",
         crate::ui::icons::SLIDERS_HORIZONTAL,
@@ -1711,7 +1708,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     .max_size(geometry.max_size)
     .resizable(true)
     .order(egui::Order::Foreground)
-    .frame(egui::Frame::window(ui.style()).fill(opaque_window_fill))
+    .frame(crate::ui::dialog::opaque_window_frame(ui))
     .constrain_to(geometry.bounds)
     .title_bar(false)
     .collapsible(false)

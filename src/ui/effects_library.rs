@@ -959,6 +959,8 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
     .max_size(max_size)
     .constrain_to(bounds)
     .resizable(true)
+    .order(egui::Order::Foreground)
+    .frame(crate::ui::dialog::opaque_window_frame(ui))
     .collapsible(false)
     .show(ui.ctx(), |ui| {
         let height = ui.available_height();
