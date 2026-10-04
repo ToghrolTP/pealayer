@@ -116,6 +116,13 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 }
 
 fn current_status_message(app: &PealayerApp) -> Option<String> {
+    let update = crate::update::manager().status();
+    if update.active() {
+        return Some(match update.progress_percent() {
+            Some(percent) => format!("{} · {percent:.0}%", update.message),
+            None => update.message,
+        });
+    }
     let (message, timestamp) = app.osd_message.as_ref()?;
     let lifetime = std::time::Duration::from_secs_f32(app.osd_timeout_seconds.max(1.0));
     (timestamp.elapsed() <= lifetime).then(|| message.clone())

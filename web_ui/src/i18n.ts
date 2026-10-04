@@ -125,6 +125,8 @@ const fa: Record<string, string> = {
   'Application': 'برنامه',
   'Version': 'نسخه',
   'Hardware Acceleration': 'شتاب‌دهی سخت‌افزاری',
+  'Application update': 'به‌روزرسانی برنامه',
+  'Download, verify and restart': 'بارگیری، اعتبارسنجی و راه‌اندازی دوباره',
   'Application logo': 'نشان برنامه',
   'Live': 'زنده',
   'Polling': 'در حال پایش',

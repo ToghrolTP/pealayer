@@ -16,6 +16,9 @@ pub struct CliOptions {
 pub enum CliAction {
     RunGui(CliOptions),
     SendRemote(String),
+    PushUpdate(String),
+    UpdateFrom { url: String, sha256: Option<String> },
+    UpdateStatus(String),
     RegisterAssociations,
     UnregisterAssociations,
     PrintHelp(String),
@@ -72,6 +75,12 @@ PLAYER OPTIONS:
   --quit                    Close the running application
   --command <COMMAND>       Queue a unified text or JSON command; repeatable
   --remote <COMMAND>        Send one unified command and exit
+
+UPDATE OPTIONS:
+  --deploy-to <HOST:PORT>   Stream this verified executable to a Pealayer peer
+  --update-from <URL>       Ask the running instance to fetch, verify and apply an update
+  --sha256 <HASH>           Required/expected hash for the preceding --update-from URL
+  --update-status [HOST]    Query local or remote update progress
 
 APPLICATION OPTIONS:
   --register-associations    Register Pealayer as the default media handler
@@ -194,6 +203,34 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
                     "Option '--remote' requires a command argument (e.g. 'play', 'pause')",
                 )?;
                 return Ok(CliAction::SendRemote(cmd));
+            }
+            "--deploy-to" => {
+                let target = args_iter
+                    .next()
+                    .ok_or("Option '--deploy-to' requires a Pealayer host or URL")?;
+                return Ok(CliAction::PushUpdate(target));
+            }
+            "--update-from" => {
+                let url = args_iter
+                    .next()
+                    .ok_or("Option '--update-from' requires an HTTP(S) URL")?;
+                let mut sha256 = None;
+                if let Some(option) = args_iter.next() {
+                    if option != "--sha256" {
+                        return Err(format!("Unexpected update option: {option}"));
+                    }
+                    sha256 = Some(
+                        args_iter
+                            .next()
+                            .ok_or("Option '--sha256' requires a 64-character digest")?,
+                    );
+                }
+                return Ok(CliAction::UpdateFrom { url, sha256 });
+            }
+            "--update-status" => {
+                return Ok(CliAction::UpdateStatus(args_iter.next().unwrap_or_else(
+                    || format!("127.0.0.1:{}", crate::config::control_port()),
+                )));
             }
             "--" => {
                 let positional = args_iter

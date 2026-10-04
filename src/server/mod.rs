@@ -10,7 +10,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use include_dir::{Dir, include_dir};
+
 const MAX_HTTP_REQUEST_BYTES: usize = 1024 * 1024;
+static EMBEDDED_WEB_UI: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web_ui/dist");
 
 fn resolve_web_bind_address(value: Option<&str>) -> std::net::IpAddr {
     value
@@ -23,6 +26,15 @@ fn web_bind_address() -> std::net::IpAddr {
 }
 
 fn web_dist_root() -> std::path::PathBuf {
+    if let Some(override_root) = std::env::var_os("PEALAYER_WEB_ROOT")
+        .map(std::path::PathBuf::from)
+        .filter(|root| root.join("index.html").is_file())
+    {
+        return override_root;
+    }
+    if !cfg!(debug_assertions) {
+        return std::path::PathBuf::new();
+    }
     let working_tree = std::path::PathBuf::from("web_ui/dist");
     if working_tree.join("index.html").is_file() {
         return working_tree;
@@ -504,6 +516,88 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
             .unwrap_or_else(|_| "{}".to_string()),
         ),
         ("POST", "/api/config") => config_update_response(&request.body, state),
+        ("GET", "/api/update/manifest") => match crate::update::current_manifest() {
+            Ok(manifest) => HttpResponse::json(
+                200,
+                "OK",
+                serde_json::to_string(&manifest).unwrap_or_else(|_| "{}".to_string()),
+            ),
+            Err(error) => update_error_response(500, "Internal Server Error", error),
+        },
+        ("GET", "/api/update/artifact") => match crate::update::current_artifact() {
+            Ok(bytes) => HttpResponse::bytes(200, "OK", "application/octet-stream", bytes),
+            Err(error) => update_error_response(500, "Internal Server Error", error),
+        },
+        ("GET", "/api/update/status") => HttpResponse::json(
+            200,
+            "OK",
+            serde_json::to_string(&crate::update::manager().status())
+                .unwrap_or_else(|_| "{}".to_string()),
+        ),
+        ("POST", "/api/update/begin") => {
+            match serde_json::from_slice::<crate::update::BeginUploadRequest>(&request.body)
+                .map_err(|error| format!("invalid begin-update request: {error}"))
+                .and_then(|request| crate::update::manager().begin_upload(request))
+            {
+                Ok(status) => update_status_response(202, "Accepted", status),
+                Err(error) => update_error_response(400, "Bad Request", error),
+            }
+        }
+        ("POST", "/api/update/chunk") => {
+            let result = query_value(&request.target, "id")
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| "update chunk requires an operation id".to_string())
+                .and_then(|operation_id| {
+                    query_value(&request.target, "offset")
+                        .ok_or_else(|| "update chunk requires an offset".to_string())
+                        .and_then(|value| {
+                            value
+                                .parse::<u64>()
+                                .map_err(|_| "update chunk offset must be an integer".to_string())
+                        })
+                        .and_then(|offset| {
+                            crate::update::manager().append_chunk(
+                                &operation_id,
+                                offset,
+                                &request.body,
+                            )
+                        })
+                });
+            match result {
+                Ok(status) => update_status_response(200, "OK", status),
+                Err(error) => update_error_response(400, "Bad Request", error),
+            }
+        }
+        ("POST", "/api/update/finish") => {
+            match serde_json::from_slice::<crate::update::FinishUploadRequest>(&request.body)
+                .map_err(|error| format!("invalid finish-update request: {error}"))
+                .and_then(|request| {
+                    crate::update::manager()
+                        .finish_upload(&request.operation_id, state.command_tx.clone())
+                }) {
+                Ok(status) => update_status_response(202, "Accepted", status),
+                Err(error) => update_error_response(400, "Bad Request", error),
+            }
+        }
+        ("POST", "/api/update/abort") => {
+            match serde_json::from_slice::<crate::update::FinishUploadRequest>(&request.body)
+                .map_err(|error| format!("invalid abort-update request: {error}"))
+                .and_then(|request| crate::update::manager().abort_upload(&request.operation_id))
+            {
+                Ok(status) => update_status_response(200, "OK", status),
+                Err(error) => update_error_response(400, "Bad Request", error),
+            }
+        }
+        ("POST", "/api/update/from-url") => {
+            match serde_json::from_slice::<crate::update::FetchUpdateRequest>(&request.body)
+                .map_err(|error| format!("invalid URL-update request: {error}"))
+                .and_then(|request| {
+                    crate::update::manager().fetch_and_apply(request, state.command_tx.clone())
+                }) {
+                Ok(status) => update_status_response(202, "Accepted", status),
+                Err(error) => update_error_response(400, "Bad Request", error),
+            }
+        }
         ("GET", "/api/player/status") => {
             match state
                 .latest_status
@@ -537,6 +631,26 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
         ("GET", _) => static_response(path, state),
         _ => HttpResponse::text(404, "Not Found", "Not Found"),
     }
+}
+
+fn update_status_response(
+    status: u16,
+    reason: &'static str,
+    update: crate::update::UpdateStatus,
+) -> HttpResponse {
+    HttpResponse::json(
+        status,
+        reason,
+        serde_json::to_string(&update).unwrap_or_else(|_| "{}".to_string()),
+    )
+}
+
+fn update_error_response(status: u16, reason: &'static str, error: impl ToString) -> HttpResponse {
+    HttpResponse::json(
+        status,
+        reason,
+        serde_json::json!({"error": error.to_string()}).to_string(),
+    )
 }
 
 fn runtime_app_icon_response() -> HttpResponse {
@@ -906,16 +1020,43 @@ fn trash_response(body: &[u8]) -> HttpResponse {
 }
 
 fn static_response(path: &str, state: &ControlState) -> HttpResponse {
-    let target = web_asset_path(&state.web_dist_root, path)
-        .unwrap_or_else(|| state.web_dist_root.join("__invalid_request_path__"));
-    if target.is_file()
-        && let Ok(data) = std::fs::read(&target)
-    {
-        return HttpResponse::bytes(200, "OK", mime_for_path(&target), data);
+    if !state.web_dist_root.as_os_str().is_empty() {
+        let target = web_asset_path(&state.web_dist_root, path)
+            .unwrap_or_else(|| state.web_dist_root.join("__invalid_request_path__"));
+        if target.is_file()
+            && let Ok(data) = std::fs::read(&target)
+        {
+            return HttpResponse::bytes(200, "OK", mime_for_path(&target), data);
+        }
     }
-    let fallback = std::fs::read(state.web_dist_root.join("index.html"))
-        .unwrap_or_else(|_| web_assets::INDEX_HTML.as_bytes().to_vec());
-    HttpResponse::bytes(200, "OK", "text/html; charset=utf-8", fallback)
+    let relative = path.trim_start_matches('/');
+    let embedded_path = if relative.is_empty() {
+        "index.html"
+    } else {
+        relative
+    };
+    if let Some(file) = EMBEDDED_WEB_UI.get_file(embedded_path) {
+        return HttpResponse::bytes(
+            200,
+            "OK",
+            mime_for_path(std::path::Path::new(embedded_path)),
+            file.contents().to_vec(),
+        );
+    }
+    if let Some(index) = EMBEDDED_WEB_UI.get_file("index.html") {
+        return HttpResponse::bytes(
+            200,
+            "OK",
+            "text/html; charset=utf-8",
+            index.contents().to_vec(),
+        );
+    }
+    HttpResponse::bytes(
+        200,
+        "OK",
+        "text/html; charset=utf-8",
+        web_assets::INDEX_HTML.as_bytes().to_vec(),
+    )
 }
 
 fn query_value(target: &str, name: &str) -> Option<String> {

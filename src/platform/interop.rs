@@ -580,6 +580,8 @@ pub struct PlayerStatusResponse {
     pub cues: Vec<WebEffectCue>,
     #[serde(default)]
     pub hardware_details: Option<Value>,
+    #[serde(default)]
+    pub update: crate::update::UpdateStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -743,6 +745,7 @@ impl Default for PlayerStatusResponse {
             controller_effects: Vec::new(),
             cues: Vec::new(),
             hardware_details: None,
+            update: crate::update::UpdateStatus::default(),
         }
     }
 }

@@ -110,6 +110,17 @@ export interface PlayerState {
     duration_ms: number;
     duration_display: string;
   }>;
+  update?: {
+    operation_id?: string | null;
+    state: string;
+    source?: string | null;
+    bytes_done: number;
+    bytes_total?: number | null;
+    sha256?: string | null;
+    version?: string | null;
+    message: string;
+    error?: string | null;
+  };
 }
 
 interface RemoteControlTabProps {

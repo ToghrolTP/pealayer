@@ -12,3 +12,4 @@ pub mod preferences_contract;
 pub mod server;
 pub mod subtitle;
 pub mod ui;
+pub mod update;

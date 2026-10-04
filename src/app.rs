@@ -431,6 +431,7 @@ pub struct PealayerApp {
     pub shell_initialized: bool,
     pub(crate) last_taskbar_state: Option<crate::platform::windows::TaskbarState>,
     pub(crate) last_thumbnail_button_state: Option<(bool, bool)>,
+    pub(crate) last_update_notice_state: Option<String>,
 }
 
 fn should_throttle_video_render(
@@ -892,6 +893,7 @@ impl eframe::App for PealayerApp {
                             })
                     })
                     .collect(),
+                update: crate::update::manager().status(),
             };
             crate::platform::interop::set_live_status(status_resp.clone());
             if let Ok(json) = serde_json::to_string(&status_resp) {
@@ -1028,6 +1030,22 @@ impl eframe::App for PealayerApp {
         self.is_connected = connected_now;
         self.was_hardware_connected = connected_now;
         self.was_board_connected = board_connected_now;
+        let update = crate::update::manager().status();
+        if update.state != "idle"
+            && self.last_update_notice_state.as_deref() != Some(update.state.as_str())
+        {
+            self.set_osd(update.message.clone());
+            if matches!(update.state.as_str(), "restarting" | "failed")
+                && let Some(hwnd) = self.window_handle
+            {
+                let _ = crate::platform::windows::show_system_notification(
+                    hwnd,
+                    &self.app_name,
+                    &update.message,
+                );
+            }
+            self.last_update_notice_state = Some(update.state.clone());
+        }
         // Controller/WebSocket callbacks already request repaint on real state
         // changes. Do not keep the opaque OpenGL window on a synthetic timer:
         // that needlessly recomposes the entire UI and can present as flicker.
@@ -5851,6 +5869,7 @@ impl Default for PealayerApp {
             shell_initialized: false,
             last_taskbar_state: None,
             last_thumbnail_button_state: None,
+            last_update_notice_state: None,
         }
     }
 }

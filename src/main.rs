@@ -14,6 +14,7 @@ pub mod preferences_contract;
 pub mod server;
 pub mod subtitle;
 pub mod ui;
+pub mod update;
 
 use app::PealayerApp;
 use eframe::egui;
@@ -45,6 +46,13 @@ fn subtitle_font_directory() -> Option<std::path::PathBuf> {
 
 fn main() -> eframe::Result {
     let startup_args: Vec<String> = std::env::args().collect();
+    if let Some(journal_path) = crate::update::helper_invocation(&startup_args) {
+        if let Err(error) = crate::update::run_update_helper(journal_path) {
+            eprintln!("Pealayer update helper failed: {error}");
+            std::process::exit(4);
+        }
+        return Ok(());
+    }
     if startup_args
         .iter()
         .any(|argument| argument == "--smoke-test")
@@ -86,6 +94,52 @@ fn main() -> eframe::Result {
                 std::process::exit(1);
             }
         },
+        Ok(crate::cli::CliAction::PushUpdate(target)) => {
+            match crate::update::push_current_to_peer(&target) {
+                Ok(status) => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&status).unwrap_or_default()
+                    );
+                    return Ok(());
+                }
+                Err(error) => {
+                    eprintln!("Peer update failed: {error}");
+                    std::process::exit(4);
+                }
+            }
+        }
+        Ok(crate::cli::CliAction::UpdateFrom { url, sha256 }) => {
+            let target = format!("http://127.0.0.1:{}", crate::config::control_port());
+            match crate::update::request_update_from_url(&target, &url, sha256.as_deref()) {
+                Ok(status) => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&status).unwrap_or_default()
+                    );
+                    return Ok(());
+                }
+                Err(error) => {
+                    eprintln!("URL update request failed: {error}");
+                    std::process::exit(4);
+                }
+            }
+        }
+        Ok(crate::cli::CliAction::UpdateStatus(target)) => {
+            match crate::update::peer_update_status(&target) {
+                Ok(status) => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&status).unwrap_or_default()
+                    );
+                    return Ok(());
+                }
+                Err(error) => {
+                    eprintln!("Update status request failed: {error}");
+                    std::process::exit(4);
+                }
+            }
+        }
         Ok(crate::cli::CliAction::RegisterAssociations) => {
             match crate::platform::associations::register_file_associations(None) {
                 Ok(count) => {
@@ -718,6 +772,7 @@ fn main() -> eframe::Result {
                 shell_initialized: false,
                 last_taskbar_state: None,
                 last_thumbnail_button_state: None,
+                last_update_notice_state: None,
             };
 
             if app.auto_connect_hardware {
@@ -746,6 +801,8 @@ fn main() -> eframe::Result {
             for command in cli_options.commands {
                 app.apply_interop_command(&cc.egui_ctx, command, "Command line");
             }
+
+            crate::update::schedule_startup_health_acknowledgement();
 
             Ok(Box::new(app))
         }),
