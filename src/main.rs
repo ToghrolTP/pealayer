@@ -270,6 +270,11 @@ fn main() -> eframe::Result {
                     init.set_property("sub-fonts-dir", font_dir_str)?;
                 }
                 init.set_property("sub-font", "Vazirmatn")?;
+                // ASS/SSA tracks normally keep their embedded FontName and
+                // ignore `sub-font`. Force mpv's normal subtitle styling so
+                // the bundled Vazirmatn face is also stable in the native
+                // fallback path (processed text uses the same face explicitly).
+                init.set_property("sub-ass-override", "force")?;
 
                 Ok(())
             })

@@ -47,6 +47,20 @@ pub fn apply_text_replacements(text: &str, replacements: &[SubtitleReplacement])
         })
 }
 
+/// Decide once from the selected rendering policy, never from the contents of
+/// an individual subtitle event. Basing this decision on the current line made
+/// the renderer alternate between Pealayer's Vazirmatn overlay and mpv's native
+/// ASS style whenever only some lines contained replaceable Persian glyphs.
+pub fn requires_processed_overlay(
+    direction: SubtitleDirection,
+    replacements: &[SubtitleReplacement],
+) -> bool {
+    direction != SubtitleDirection::Auto
+        || replacements
+            .iter()
+            .any(|replacement| !replacement.from.is_empty())
+}
+
 fn escape_ass_text(text: &str) -> String {
     text.replace('\\', "\\\\")
         .replace('{', "\\{")
@@ -88,6 +102,26 @@ mod tests {
     fn empty_sources_are_ignored_instead_of_expanding_every_boundary() {
         let replacements = [SubtitleReplacement::new("", "x")];
         assert_eq!(apply_text_replacements("caption", &replacements), "caption");
+    }
+
+    #[test]
+    fn processed_overlay_policy_is_stable_across_subtitle_lines() {
+        let replacements = default_text_replacements();
+        assert!(requires_processed_overlay(
+            SubtitleDirection::Auto,
+            &replacements
+        ));
+        assert!(requires_processed_overlay(SubtitleDirection::Rtl, &[]));
+        assert!(!requires_processed_overlay(SubtitleDirection::Auto, &[]));
+
+        // The previous content-dependent test disagreed for these two lines,
+        // causing a visible font swap. Renderer selection now ignores text.
+        assert_eq!(apply_text_replacements("Hello", &replacements), "Hello");
+        assert_ne!(apply_text_replacements("كي", &replacements), "كي");
+        assert!(requires_processed_overlay(
+            SubtitleDirection::Auto,
+            &replacements
+        ));
     }
 
     #[test]

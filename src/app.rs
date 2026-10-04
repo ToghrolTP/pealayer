@@ -3885,11 +3885,10 @@ impl PealayerApp {
         if !self.sub_visibility || self.current_sid == "no" || self.selected_subtitle_is_bitmap() {
             return false;
         }
-        self.subtitle_direction != crate::subtitle::SubtitleDirection::Auto
-            || crate::subtitle::apply_text_replacements(
-                &self.subtitle_text,
-                &self.subtitle_text_replacements,
-            ) != self.subtitle_text
+        crate::subtitle::requires_processed_overlay(
+            self.subtitle_direction,
+            &self.subtitle_text_replacements,
+        )
     }
 
     fn clear_subtitle_overlay(&self) {
