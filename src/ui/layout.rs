@@ -80,6 +80,20 @@ const BOARD_IDENTITY_TWO_LINE_HEIGHT: f32 = 42.0;
 const BOARD_IDENTITY_LINE_GAP: f32 = 0.0;
 const EFFECT_CONTROLS_RIGHT_GUTTER: f32 = 8.0;
 const EFFECT_CONTROLS_CARD_MARGIN: i8 = 10;
+const TIMELINE_TRACK_HEADER_WIDTH: f32 = 250.0;
+const TIMELINE_RULER_HEIGHT: f32 = 26.0;
+const TIMELINE_TRACK_ROW_HEIGHT: f32 = 32.0;
+const TIMELINE_ANALOG_ROW_HEIGHT: f32 = 40.0;
+
+fn timeline_track_row_top(timeline_top: f32, row_index: usize) -> f32 {
+    timeline_top + TIMELINE_RULER_HEIGHT + row_index as f32 * TIMELINE_TRACK_ROW_HEIGHT
+}
+
+fn timeline_content_height(track_rows: usize, analog_rows: usize) -> f32 {
+    TIMELINE_RULER_HEIGHT
+        + track_rows as f32 * TIMELINE_TRACK_ROW_HEIGHT
+        + analog_rows as f32 * TIMELINE_ANALOG_ROW_HEIGHT
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct InlineEffectIdentityEdit {
@@ -4657,6 +4671,26 @@ mod timeline_row_tests {
         );
     }
 
+    #[test]
+    fn timeline_header_rows_and_canvas_lanes_share_one_vertical_geometry() {
+        let timeline_top = 73.0;
+
+        assert_eq!(
+            timeline_track_row_top(timeline_top, 0),
+            timeline_top + TIMELINE_RULER_HEIGHT
+        );
+        assert_eq!(
+            timeline_track_row_top(timeline_top, 3),
+            timeline_top + TIMELINE_RULER_HEIGHT + 3.0 * TIMELINE_TRACK_ROW_HEIGHT
+        );
+        assert_eq!(
+            timeline_content_height(3, 2),
+            TIMELINE_RULER_HEIGHT
+                + 3.0 * TIMELINE_TRACK_ROW_HEIGHT
+                + 2.0 * TIMELINE_ANALOG_ROW_HEIGHT
+        );
+    }
+
     fn discard_ui_output(mut output: egui::FullOutput) {
         output.textures_delta.clear();
     }
@@ -9121,13 +9155,24 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             };
                             ui.label(message);
                         }
-                        ui.horizontal(|ui| {
+                        // Both panes must start at the same Y coordinate. `horizontal` uses
+                        // center cross-axis alignment; after the fixed header column establishes
+                        // a taller row, that centered the canvas lower by roughly one ruler band.
+                        // `horizontal_top` makes the header ruler and canvas ruler share one
+                        // origin regardless of visible track count or panel height.
+                        ui.horizontal_top(|ui| {
                             // 1. Left column: Fixed Track Headers
                             ui.vertical(|ui| {
-                                ui.set_width(250.0);
+                                ui.set_width(TIMELINE_TRACK_HEADER_WIDTH);
 
-                                // 26px spacer to align with the right-side ruler
-                                let (header_rect, _) = ui.allocate_exact_size(egui::vec2(250.0, 26.0), egui::Sense::hover());
+                                // Header occupies the exact same band as the right-side ruler.
+                                let (header_rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(
+                                        TIMELINE_TRACK_HEADER_WIDTH,
+                                        TIMELINE_RULER_HEIGHT,
+                                    ),
+                                    egui::Sense::hover(),
+                                );
                                 ui.painter().rect_filled(header_rect, 0.0, ui.visuals().panel_fill);
                                 ui.painter().line_segment(
                                     [egui::pos2(header_rect.min.x, header_rect.max.y), egui::pos2(header_rect.max.x, header_rect.max.y)],
@@ -9255,7 +9300,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let rename_focus_id = egui::Id::new("timeline_track_rename_focus");
                                 for track_row in &timeline_rows {
                                     let (rect, _) = ui.allocate_exact_size(
-                                        egui::vec2(250.0, 32.0),
+                                        egui::vec2(
+                                            TIMELINE_TRACK_HEADER_WIDTH,
+                                            TIMELINE_TRACK_ROW_HEIGHT,
+                                        ),
                                         egui::Sense::hover(),
                                     );
                                     // A popup remains open across frames. Auto-generated row IDs
@@ -9313,7 +9361,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             ui.visuals().weak_text_color()
                                         };
                                         ui.allocate_ui_with_layout(
-                                            egui::vec2(18.0, 32.0),
+                                            egui::vec2(18.0, TIMELINE_TRACK_ROW_HEIGHT),
                                             egui::Layout::left_to_right(egui::Align::Center),
                                             |ui| {
                                                 ui.label(
@@ -9675,7 +9723,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         .iter()
                                         .find(|row| row.key == track_key);
                                     let (rect, _) = ui.allocate_exact_size(
-                                        egui::vec2(250.0, 40.0),
+                                        egui::vec2(
+                                            TIMELINE_TRACK_HEADER_WIDTH,
+                                            TIMELINE_ANALOG_ROW_HEIGHT,
+                                        ),
                                         egui::Sense::hover(),
                                     );
                                     let response = ui.interact(
@@ -9731,7 +9782,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     child_ui.horizontal(|ui| {
                                         ui.add_space(6.0);
                                         ui.allocate_ui_with_layout(
-                                            egui::vec2(18.0, 40.0),
+                                            egui::vec2(18.0, TIMELINE_ANALOG_ROW_HEIGHT),
                                             egui::Layout::left_to_right(egui::Align::Center),
                                             |ui| {
                                                 ui.label(
@@ -10034,8 +10085,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let total_seconds = if self.app.duration > 0.0 { self.app.duration } else { 60.0 };
                             let total_width = (total_seconds * zoom as f64) as f32;
                             let num_analog = visible_analog_track_ids.len();
-                            let track_area_height = timeline_rows.len() as f32 * 32.0;
-                            let total_height = 26.0 + track_area_height + (num_analog as f32 * 40.0);
+                            let track_area_height =
+                                timeline_rows.len() as f32 * TIMELINE_TRACK_ROW_HEIGHT;
+                            let total_height =
+                                timeline_content_height(timeline_rows.len(), num_analog);
 
                             // The interactive timeline canvas itself is the drop
                             // target. Wrapping it in `dnd_drop_zone` made the outer
@@ -10053,7 +10106,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         // Draw timeline tracks background
                                         painter.rect_filled(rect, 0.0, ui.visuals().panel_fill);
 
-                                        let tracks_top = rect.min.y + 26.0;
+                                        let tracks_top = rect.min.y + TIMELINE_RULER_HEIGHT;
 
                                         // Allocate top 26px band of the timeline grid canvas as dedicated time ruler
                                         let ruler_rect = egui::Rect::from_min_max(
@@ -10244,14 +10297,18 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         // Draw horizontal track separators and backgrounds
                                         for i in 0..=timeline_rows.len() {
-                                            let grid_y = tracks_top + (i as f32 * 32.0);
+                                            let grid_y =
+                                                tracks_top + i as f32 * TIMELINE_TRACK_ROW_HEIGHT;
 
                                             // Lock row background darkening
                                             if let Some(relay_id) = relay_for_timeline_row(&timeline_rows, i as i32) {
                                                 if self.app.track_locked.contains(&relay_id) {
                                                     let track_rect = egui::Rect::from_min_max(
                                                         egui::pos2(rect.min.x, grid_y),
-                                                        egui::pos2(rect.max.x, grid_y + 32.0),
+                                                        egui::pos2(
+                                                            rect.max.x,
+                                                            grid_y + TIMELINE_TRACK_ROW_HEIGHT,
+                                                        ),
                                                     );
                                                     painter.rect_filled(track_rect, 0.0, ui.visuals().faint_bg_color);
                                                 }
@@ -10272,7 +10329,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             .filter(|track| visible_analog_track_ids.contains(&track.id))
                                             .enumerate()
                                         {
-                                            let grid_y = tracks_top + track_area_height + ((t_idx + 1) as f32 * 40.0);
+                                            let grid_y = tracks_top
+                                                + track_area_height
+                                                + (t_idx + 1) as f32 * TIMELINE_ANALOG_ROW_HEIGHT;
                                             painter.line_segment(
                                                 [egui::pos2(rect.min.x, grid_y), egui::pos2(rect.max.x, grid_y)],
                                                 ui.visuals().widgets.noninteractive.bg_stroke,
@@ -10284,7 +10343,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             if drag.mode == crate::app::DragMode::Move {
                                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                                     let relative_y = mouse_pos.y - tracks_top;
-                                                    let track_index = (relative_y / 32.0).floor() as i32;
+                                                    let track_index = (relative_y
+                                                        / TIMELINE_TRACK_ROW_HEIGHT)
+                                                        .floor()
+                                                        as i32;
                                                     if let Some(target_r) = relay_for_timeline_row(&timeline_rows, track_index) {
                                                         let target_compatible = self.app.timeline.instances.iter()
                                                             .find(|i| i.id == drag.instance_id)
@@ -10293,17 +10355,27 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                             .unwrap_or(true);
 
                                                         if !self.app.track_locked.contains(&target_r) && target_compatible {
-                                                            let row_y = tracks_top + (track_index as f32 * 32.0);
+                                                            let row_y = tracks_top
+                                                                + track_index as f32
+                                                                    * TIMELINE_TRACK_ROW_HEIGHT;
                                                             let dest_rect = egui::Rect::from_min_max(
                                                                 egui::pos2(rect.min.x, row_y),
-                                                                egui::pos2(rect.max.x, row_y + 32.0),
+                                                                egui::pos2(
+                                                                    rect.max.x,
+                                                                    row_y + TIMELINE_TRACK_ROW_HEIGHT,
+                                                                ),
                                                             );
                                                             painter.rect_filled(dest_rect, 0.0, egui::Color32::from_rgba_unmultiplied(46, 204, 113, 25)); // Faint green highlight
                                                         } else if !target_compatible && !self.app.track_locked.contains(&target_r) {
-                                                            let row_y = tracks_top + (track_index as f32 * 32.0);
+                                                            let row_y = tracks_top
+                                                                + track_index as f32
+                                                                    * TIMELINE_TRACK_ROW_HEIGHT;
                                                             let dest_rect = egui::Rect::from_min_max(
                                                                 egui::pos2(rect.min.x, row_y),
-                                                                egui::pos2(rect.max.x, row_y + 32.0),
+                                                                egui::pos2(
+                                                                    rect.max.x,
+                                                                    row_y + TIMELINE_TRACK_ROW_HEIGHT,
+                                                                ),
                                                             );
                                                             painter.rect_filled(dest_rect, 0.0, egui::Color32::from_rgba_unmultiplied(231, 76, 60, 30)); // Faint red warning highlight for incompatible track
                                                         }
@@ -10325,7 +10397,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let color = color.gamma_multiply(
                                                     if track_row.active && track_row.enabled { 1.0 } else { 0.52 },
                                                 );
-                                                let row_y = tracks_top + row_index as f32 * 32.0;
+                                                let row_y = timeline_track_row_top(
+                                                    rect.min.y,
+                                                    row_index,
+                                                );
                                                 let clip_rect = egui::Rect::from_min_max(
                                                     egui::pos2(rect.min.x, row_y + 4.0),
                                                     egui::pos2(rect.min.x + total_width, row_y + 28.0),
@@ -10381,7 +10456,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 };
                                                 let is_mismatched = relay_id
                                                     .is_some_and(|relay_id| !effect.target.is_compatible_with_relay(relay_id));
-                                                let track_y = tracks_top + track_index as f32 * 32.0;
+                                                let track_y = timeline_track_row_top(
+                                                    rect.min.y,
+                                                    track_index,
+                                                );
 
                                                 let start_x = rect.min.x + (instance.start_time_ms as f32 * px_per_ms);
                                                 let end_x = start_x + (effect.duration_ms.max(1) as f32 * px_per_ms);
@@ -10721,7 +10799,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         let mut target_relay = None;
                                                         if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                                             let relative_y = mouse_pos.y - tracks_top;
-                                                            let track_index = (relative_y / 32.0).floor() as i32;
+                                                            let track_index = (relative_y
+                                                                / TIMELINE_TRACK_ROW_HEIGHT)
+                                                                .floor()
+                                                                as i32;
                                                             if let Some(target_r) = relay_for_timeline_row(&timeline_rows, track_index) {
                                                                 if !self.app.track_locked.contains(&target_r) {
                                                                     let is_compatible = self.app.timeline.instances.iter()
@@ -10954,10 +11035,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             .filter(|track| visible_analog_track_ids.contains(&track.id))
                                             .enumerate()
                                         {
-                                            let row_y = tracks_top + track_area_height + (t_idx as f32 * 40.0);
+                                            let row_y = tracks_top
+                                                + track_area_height
+                                                + t_idx as f32 * TIMELINE_ANALOG_ROW_HEIGHT;
                                             let row_rect = egui::Rect::from_min_max(
                                                 egui::pos2(rect.min.x, row_y),
-                                                egui::pos2(rect.max.x, row_y + 40.0),
+                                                egui::pos2(
+                                                    rect.max.x,
+                                                    row_y + TIMELINE_ANALOG_ROW_HEIGHT,
+                                                ),
                                             );
 
                                             // Row background shading
@@ -11484,7 +11570,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             if let Some(mouse_pos) = ui.ctx().pointer_hover_pos() {
                                                 if rect.contains(mouse_pos) {
                                                     let relative_y = mouse_pos.y - tracks_top;
-                                                    let hovered_track_index = (relative_y / 32.0).floor() as i32;
+                                                    let hovered_track_index = (relative_y
+                                                        / TIMELINE_TRACK_ROW_HEIGHT)
+                                                        .floor()
+                                                        as i32;
 
                                                     for (i, track_row) in timeline_rows.iter().enumerate() {
                                                         if payload.controller_macro.is_some()
@@ -11497,10 +11586,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                     ),
                                                                 )
                                                             {
-                                                                let row_y = tracks_top + (i as f32 * 32.0);
+                                                                let row_y = timeline_track_row_top(
+                                                                    rect.min.y,
+                                                                    i,
+                                                                );
                                                                 let track_rect = egui::Rect::from_min_max(
                                                                     egui::pos2(rect.min.x, row_y),
-                                                                    egui::pos2(rect.max.x, row_y + 32.0),
+                                                                    egui::pos2(
+                                                                        rect.max.x,
+                                                                        row_y
+                                                                            + TIMELINE_TRACK_ROW_HEIGHT,
+                                                                    ),
                                                                 );
                                                                 if hovered_track_index == i as i32 {
                                                                     ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
@@ -11513,14 +11609,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         let TimelineTrackKind::Relay(relay_id) = track_row.kind else {
                                                             continue;
                                                         };
+                                                        let row_index = i;
                                                         let i = i as i32;
                                                         let is_compatible = payload.target.is_compatible_with_relay(relay_id);
                                                         let is_locked = self.app.track_locked.contains(&relay_id);
                                                         let is_primary = payload.target.primary_relay_id() == Some(relay_id);
-                                                        let row_y = tracks_top + (i as f32 * 32.0);
+                                                        let row_y = timeline_track_row_top(
+                                                            rect.min.y,
+                                                            row_index,
+                                                        );
                                                         let track_rect = egui::Rect::from_min_max(
                                                             egui::pos2(rect.min.x, row_y),
-                                                            egui::pos2(rect.max.x, row_y + 32.0),
+                                                            egui::pos2(
+                                                                rect.max.x,
+                                                                row_y
+                                                                    + TIMELINE_TRACK_ROW_HEIGHT,
+                                                            ),
                                                         );
 
                                                         if hovered_track_index == i {
