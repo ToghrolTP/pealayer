@@ -148,18 +148,30 @@ fn timeline_track_drag_id() -> egui::Id {
     egui::Id::new("timeline-track-order-drag")
 }
 
+fn timeline_track_handle_hovered(
+    pointer: Option<egui::Pos2>,
+    row_rect: egui::Rect,
+    active: bool,
+) -> bool {
+    active || pointer.is_some_and(|position| row_rect.contains(position))
+}
+
 fn timeline_track_drag_handle(
     ui: &mut egui::Ui,
     control: &crate::four_d::controller::HardwareControl,
-    row_hovered: bool,
+    row_rect: egui::Rect,
     help: &str,
 ) -> egui::Response {
     let active = ui
         .data_mut(|data| data.get_temp::<TimelineTrackDrag>(timeline_track_drag_id()))
         .is_some_and(|drag| drag.key == control.key);
+    // Child widgets (including this handle) take hover ownership away from the
+    // row's background `Response`. Use geometric containment instead so the
+    // handle cannot make itself fade out when the pointer reaches it.
+    let hovered = timeline_track_handle_hovered(ui.ctx().pointer_hover_pos(), row_rect, active);
     let alpha = ui.ctx().animate_bool_with_time(
         egui::Id::new(("timeline-track-order-handle", control.key.as_str())),
-        row_hovered || active,
+        hovered,
         0.12,
     );
     let response = ui
@@ -4912,6 +4924,25 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn timeline_drag_indicator_keeps_hover_at_the_handle_edge() {
+        let row = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(376.0, 34.0));
+
+        // The handle is the right-most child widget. Its owning response must
+        // not make the row-level fade target false when the pointer reaches it.
+        assert!(timeline_track_handle_hovered(
+            Some(egui::pos2(380.0, 37.0)),
+            row,
+            false,
+        ));
+        assert!(!timeline_track_handle_hovered(
+            Some(egui::pos2(392.0, 37.0)),
+            row,
+            false,
+        ));
+        assert!(timeline_track_handle_hovered(None, row, true));
+    }
+
+    #[test]
     fn hardware_drag_indicator_uses_the_whole_card_hover_area() {
         let card = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(320.0, 72.0));
         // The current horizontal row starts after the leading icon/indicator.
@@ -9593,7 +9624,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         timeline_track_row_id(&track_row.key),
                                         egui::Sense::click(),
                                     );
-                                    let row_hovered = response.hovered();
                                     let reorder_control = track_row.control_key.as_ref().and_then(
                                         |control_key| {
                                             timeline_order_controls
@@ -9804,7 +9834,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             timeline_track_drag_handle(
                                                 ui,
                                                 control,
-                                                row_hovered,
+                                                rect,
                                                 &reorder_help,
                                             );
                                         }
@@ -10155,7 +10185,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         timeline_analog_track_row_id(&track_key),
                                         egui::Sense::click(),
                                     );
-                                    let row_hovered = response.hovered();
                                     let reorder_control = analog_menu_controls
                                         .iter()
                                         .find(|control| control.key == control_key)
@@ -10301,7 +10330,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             timeline_track_drag_handle(
                                                 ui,
                                                 control,
-                                                row_hovered,
+                                                rect,
                                                 &reorder_help,
                                             );
                                         }
