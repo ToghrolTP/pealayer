@@ -1303,10 +1303,59 @@ fn inspect_executable(path: &Path) -> Result<(), String> {
         }
         validate_pe_machine(&header[pe_offset..pe_offset + 6])?;
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
     {
         if count < 20 || &header[..4] != b"\x7fELF" {
             return Err("update is not an ELF executable".to_string());
+        }
+        let machine = match header[5] {
+            1 => u16::from_le_bytes([header[18], header[19]]),
+            2 => u16::from_be_bytes([header[18], header[19]]),
+            _ => return Err("update has an invalid ELF byte order".to_string()),
+        };
+        let expected = match std::env::consts::ARCH {
+            "x86_64" => 62,
+            "x86" => 3,
+            "aarch64" => 183,
+            _ => machine,
+        };
+        if machine != expected {
+            return Err(format!(
+                "update ELF machine {machine} does not match this host"
+            ));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if count < 8 {
+            return Err("update is not a Mach-O executable".to_string());
+        }
+        let magic = &header[..4];
+        let universal = matches!(
+            magic,
+            b"\xca\xfe\xba\xbe" | b"\xbe\xba\xfe\xca" | b"\xca\xfe\xba\xbf" | b"\xbf\xba\xfe\xca"
+        );
+        if !universal {
+            let little_endian = matches!(magic, b"\xce\xfa\xed\xfe" | b"\xcf\xfa\xed\xfe");
+            let big_endian = matches!(magic, b"\xfe\xed\xfa\xce" | b"\xfe\xed\xfa\xcf");
+            if !little_endian && !big_endian {
+                return Err("update is not a Mach-O executable".to_string());
+            }
+            let cpu_type = if little_endian {
+                u32::from_le_bytes(header[4..8].try_into().unwrap())
+            } else {
+                u32::from_be_bytes(header[4..8].try_into().unwrap())
+            };
+            let expected = match std::env::consts::ARCH {
+                "x86_64" => 0x0100_0007,
+                "aarch64" => 0x0100_000c,
+                _ => cpu_type,
+            };
+            if cpu_type != expected {
+                return Err(format!(
+                    "update Mach-O CPU type 0x{cpu_type:08x} does not match this host"
+                ));
+            }
         }
     }
     Ok(())
