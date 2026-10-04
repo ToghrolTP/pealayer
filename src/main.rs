@@ -348,6 +348,9 @@ fn main() -> eframe::Result {
             mpv_client
                 .observe_property("speed", libmpv2::Format::Double, 17)
                 .unwrap();
+            mpv_client
+                .observe_property("vid", libmpv2::Format::String, 18)
+                .unwrap();
 
             let egui_ctx2 = cc.egui_ctx.clone();
             mpv_client.set_wakeup_callback(move || {
@@ -474,6 +477,8 @@ fn main() -> eframe::Result {
                 sub_delay: 0.0,
                 current_sid: "no".to_string(),
                 sub_tracks: Vec::new(),
+                current_vid: "no".to_string(),
+                video_tracks: Vec::new(),
                 show_audio_settings: loaded_config.workspace_session.dialogs.audio,
                 audio_delay: 0.0,
                 current_aid: "no".to_string(),

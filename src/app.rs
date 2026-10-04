@@ -233,6 +233,10 @@ pub struct PealayerApp {
     pub(crate) current_sid: String,
     pub(crate) sub_tracks: Vec<SubtitleTrack>,
 
+    // Video state
+    pub(crate) current_vid: String,
+    pub(crate) video_tracks: Vec<VideoTrack>,
+
     // Audio state
     pub(crate) show_audio_settings: bool,
     pub(crate) audio_delay: f64,
@@ -399,6 +403,13 @@ pub struct PealayerApp {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SubtitleTrack {
+    pub id: i64,
+    pub title: Option<String>,
+    pub lang: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VideoTrack {
     pub id: i64,
     pub title: Option<String>,
     pub lang: Option<String>,
@@ -3000,6 +3011,8 @@ impl PealayerApp {
                         self.cache_buffering_percent = Some((v as f64).clamp(0.0, 100.0));
                     }
                     (17, PropertyData::Double(v)) => self.playback_rate = v,
+                    (18, PropertyData::Str(v)) => self.current_vid = v.to_string(),
+                    (18, PropertyData::OsdStr(v)) => self.current_vid = v.to_string(),
                     _ => {}
                 },
                 Some(Ok(Event::EndFile(reason))) => {
@@ -3032,6 +3045,7 @@ impl PealayerApp {
                     self.seek_pos = None;
                     self.refresh_sub_tracks();
                     self.refresh_audio_tracks();
+                    self.refresh_video_tracks();
                 }
                 Some(Ok(Event::FileLoaded)) => {
                     self.media_metadata_loaded = true;
@@ -3072,6 +3086,7 @@ impl PealayerApp {
                     }
                     self.refresh_sub_tracks();
                     self.refresh_audio_tracks();
+                    self.refresh_video_tracks();
                 }
                 Some(Ok(_)) => {}
                 _ => break,
@@ -3711,6 +3726,28 @@ impl PealayerApp {
 
                             self.audio_tracks.push(AudioTrack { id, title, lang });
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn refresh_video_tracks(&mut self) {
+        self.video_tracks.clear();
+        if let Ok(count) = self.mpv.get_property::<i64>("track-list/count") {
+            for i in 0..count {
+                let track_type_prop = format!("track-list/{}/type", i);
+                if let Ok(track_type) = self.mpv.get_property::<String>(&track_type_prop)
+                    && track_type == "video"
+                {
+                    let id_prop = format!("track-list/{}/id", i);
+                    let lang_prop = format!("track-list/{}/lang", i);
+                    let title_prop = format!("track-list/{}/title", i);
+
+                    if let Ok(id) = self.mpv.get_property::<i64>(&id_prop) {
+                        let lang = self.mpv.get_property::<String>(&lang_prop).ok();
+                        let title = self.mpv.get_property::<String>(&title_prop).ok();
+                        self.video_tracks.push(VideoTrack { id, title, lang });
                     }
                 }
             }
@@ -5049,6 +5086,7 @@ impl Default for PealayerApp {
         let _ = mpv_client.observe_property("seekable", libmpv2::Format::Flag, 14);
         let _ = mpv_client.observe_property("demuxer-cache-duration", libmpv2::Format::Double, 15);
         let _ = mpv_client.observe_property("cache-buffering-state", libmpv2::Format::Int64, 16);
+        let _ = mpv_client.observe_property("vid", libmpv2::Format::String, 18);
         let (interop_tx, interop_rx) = std::sync::mpsc::channel();
         let (_controller_cmd_tx, controller_cmd_rx) =
             std::sync::mpsc::channel::<crate::platform::interop::ControllerDelivery>();
@@ -5103,6 +5141,8 @@ impl Default for PealayerApp {
             sub_delay: 0.0,
             current_sid: "no".to_string(),
             sub_tracks: Vec::new(),
+            current_vid: "no".to_string(),
+            video_tracks: Vec::new(),
             show_audio_settings: false,
             audio_delay: 0.0,
             current_aid: "no".to_string(),

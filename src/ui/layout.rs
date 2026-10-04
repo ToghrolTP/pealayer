@@ -1156,20 +1156,46 @@ fn media_timeline_track_label(
     title: Option<&str>,
     language: Option<&str>,
 ) -> (String, Option<String>) {
-    let title = title.map(str::trim).filter(|value| !value.is_empty());
+    let title = title
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        // Some containers expose a generic title copied from the wrong
+        // stream type (for example an audio stream titled "Video"). Such a
+        // value is not a useful track identity and must not make two
+        // different media rows appear to be the same channel.
+        .filter(|value| {
+            !["video", "audio", "subtitle", "subtitles"]
+                .iter()
+                .any(|generic| value.eq_ignore_ascii_case(generic))
+                || value.eq_ignore_ascii_case(kind)
+        });
     let language = language.map(str::trim).filter(|value| !value.is_empty());
     let name = title
         .map(|value| app.display_text(value))
-        .unwrap_or_else(|| format!("{} {}", app.tr(kind), ordinal + 1));
+        .unwrap_or_else(|| {
+            if ordinal == 0 {
+                app.tr(kind)
+            } else {
+                format!("{} {}", app.tr(kind), ordinal + 1)
+            }
+        });
     let detail = if title.is_some() {
-        Some(match language {
+        match language {
             Some(value) => format!("{} · {}", app.tr(kind), app.display_text(value)),
             None => app.tr(kind),
-        })
+        }
     } else {
-        language.map(|value| app.display_text(value))
+        match language {
+            Some(value) => format!(
+                "{} {} · {}",
+                app.tr("Track"),
+                ordinal + 1,
+                app.display_text(value)
+            ),
+            None => format!("{} {}", app.tr("Track"), ordinal + 1),
+        }
     };
-    (name, detail)
+    (name, Some(detail))
 }
 
 fn timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
@@ -1198,22 +1224,56 @@ fn hardware_row_has_analog_track(app: &PealayerApp, row: &TimelineTrackRow) -> b
 fn all_timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
     let mut rows = Vec::new();
     if app.current_video_path.is_some() {
-        let key = "media:video".to_string();
-        let state = app.timeline.track_state(&key);
-        rows.push(TimelineTrackRow {
-            key,
-            name: app.tr("Video"),
-            detail: None,
-            active: true,
-            enabled: true,
-            linked: state.linked,
-            visible: state.visible,
-            icon: crate::ui::icons::FILE_VIDEO.to_string(),
-            control_key: None,
-            relay_ids: Vec::new(),
-            dimmed: false,
-            kind: TimelineTrackKind::Video,
-        });
+        if app.video_tracks.is_empty() {
+            let key = "media:video".to_string();
+            let state = app.timeline.track_state(&key);
+            let (name, detail) = media_timeline_track_label(app, "Video", 0, None, None);
+            rows.push(TimelineTrackRow {
+                key,
+                name,
+                detail,
+                active: true,
+                enabled: true,
+                linked: state.linked,
+                visible: state.visible,
+                icon: crate::ui::icons::FILE_VIDEO.to_string(),
+                control_key: None,
+                relay_ids: Vec::new(),
+                dimmed: false,
+                kind: TimelineTrackKind::Video,
+            });
+        } else {
+            for (ordinal, track) in app.video_tracks.iter().enumerate() {
+                let key = if ordinal == 0 {
+                    "media:video".to_string()
+                } else {
+                    format!("media:video:{}", track.id)
+                };
+                let state = app.timeline.track_state(&key);
+                let active = app.current_vid == track.id.to_string();
+                let (name, detail) = media_timeline_track_label(
+                    app,
+                    "Video",
+                    ordinal,
+                    track.title.as_deref(),
+                    track.lang.as_deref(),
+                );
+                rows.push(TimelineTrackRow {
+                    key,
+                    name,
+                    detail,
+                    active,
+                    enabled: active,
+                    linked: state.linked,
+                    visible: state.visible,
+                    icon: crate::ui::icons::FILE_VIDEO.to_string(),
+                    control_key: None,
+                    relay_ids: Vec::new(),
+                    dimmed: false,
+                    kind: TimelineTrackKind::Video,
+                });
+            }
+        }
         for (ordinal, track) in app.audio_tracks.iter().enumerate() {
             let key = format!("media:audio:{}", track.id);
             let state = app.timeline.track_state(&key);
@@ -4857,9 +4917,15 @@ mod timeline_row_tests {
     fn timeline_lists_every_real_audio_and_subtitle_track_in_media_order() {
         let mut app = PealayerApp::default();
         app.current_video_path = Some(std::path::PathBuf::from("feature.mkv"));
+        app.current_vid = "1".to_string();
         app.current_aid = "7".to_string();
         app.current_sid = "12".to_string();
         app.sub_visibility = true;
+        app.video_tracks = vec![crate::app::VideoTrack {
+            id: 1,
+            title: Some("Main picture".to_string()),
+            lang: Some("und".to_string()),
+        }];
         app.audio_tracks = vec![
             crate::app::AudioTrack {
                 id: 7,
@@ -4896,8 +4962,23 @@ mod timeline_row_tests {
         assert!(!rows[2].active);
         assert!(!rows[3].active);
         assert!(rows[4].active && rows[4].enabled);
+        assert_eq!(rows[0].name, "Main picture");
+        assert_eq!(rows[0].detail.as_deref(), Some("Video · und"));
         assert_eq!(rows[1].detail.as_deref(), Some("Audio · en"));
         assert_eq!(rows[4].detail.as_deref(), Some("Subtitles · fa"));
+    }
+
+    #[test]
+    fn media_track_labels_are_two_line_and_reject_a_wrong_generic_type() {
+        let app = PealayerApp::default();
+        let (audio_name, audio_detail) =
+            media_timeline_track_label(&app, "Audio", 0, Some("Video"), Some("en"));
+        assert_eq!(audio_name, "Audio");
+        assert_eq!(audio_detail.as_deref(), Some("Track 1 · en"));
+
+        let (video_name, video_detail) = media_timeline_track_label(&app, "Video", 0, None, None);
+        assert_eq!(video_name, "Video");
+        assert_eq!(video_detail.as_deref(), Some("Track 1"));
     }
 
     #[test]
@@ -9164,10 +9245,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         child_ui.set_opacity(0.58);
                                     }
                                     let mut media_control_clicked = false;
-                                    let editing_name = child_ui.ctx().data(|data| {
-                                        data.get_temp::<String>(rename_key_id).as_deref()
-                                            == track_row.control_key.as_deref()
-                                    });
+                                    let editing_name = track_row.control_key.as_ref().is_some_and(
+                                        |control_key| {
+                                            child_ui.ctx().data(|data| {
+                                                data.get_temp::<String>(rename_key_id).as_deref()
+                                                    == Some(control_key.as_str())
+                                            })
+                                        },
+                                    );
                                     let mut rename_commit = None;
                                     child_ui.horizontal(|ui| {
                                         ui.add_space(6.0);
@@ -9238,7 +9323,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     ui.spacing_mut().item_spacing.y = 0.0;
                                                     ui.add_space(2.0);
                                                     ui.vertical(|ui| {
-                                                        ui.add(egui::Label::new(title).truncate());
+                                                        ui.add(egui::Label::new(title).truncate())
+                                                            .on_hover_text(&track_row.name);
                                                         ui.add(
                                                             egui::Label::new(
                                                                 egui::RichText::new(detail)
@@ -9246,13 +9332,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                     .weak(),
                                                             )
                                                             .truncate(),
-                                                        );
+                                                        )
+                                                        .on_hover_text(detail);
                                                     });
                                                 } else {
                                                     ui.with_layout(
                                                         egui::Layout::left_to_right(egui::Align::Center),
                                                         |ui| {
-                                                            ui.add(egui::Label::new(title).truncate());
+                                                            ui.add(egui::Label::new(title).truncate())
+                                                                .on_hover_text(&track_row.name);
                                                         },
                                                     );
                                                 }
@@ -11282,16 +11370,19 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let current_playhead_time = self.app.seek_pos.unwrap_or(self.app.playback_time);
                                         let playhead_x = rect.min.x + (current_playhead_time as f32 * zoom);
                                         if playhead_x <= rect.max.x {
-                                            // Vertical line
+                                            // Keep the playhead handle wholly inside the ruler.
+                                            // The timeline line begins at the track boundary so it
+                                            // cannot make the first media lane look like the ruler.
                                             painter.line_segment(
-                                                [egui::pos2(playhead_x, rect.min.y), egui::pos2(playhead_x, rect.max.y)],
+                                                [egui::pos2(playhead_x, tracks_top), egui::pos2(playhead_x, rect.max.y)],
                                                 egui::Stroke::new(1.5_f32, egui::Color32::RED),
                                             );
-                                            // Playhead handle (triangle at top in ruler bar, 14px width)
+                                            // Downward handle terminating exactly at the bottom of
+                                            // the ruler, immediately above the first track.
                                             let points = vec![
-                                                egui::pos2(playhead_x - 7.0, rect.min.y),
-                                                egui::pos2(playhead_x + 7.0, rect.min.y),
-                                                egui::pos2(playhead_x, rect.min.y + 12.0),
+                                                egui::pos2(playhead_x - 7.0, tracks_top - 12.0),
+                                                egui::pos2(playhead_x + 7.0, tracks_top - 12.0),
+                                                egui::pos2(playhead_x, tracks_top),
                                             ];
                                             painter.add(egui::Shape::convex_polygon(points, egui::Color32::RED, egui::Stroke::NONE));
                                         }
