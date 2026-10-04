@@ -91,7 +91,8 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             label
                         };
 
-                        let none_label = app.tr("None");
+                        let none_label = app.tr("Subtitles hidden");
+                        let tracks = app.sub_tracks.clone();
                         let combo_width =
                             (ui.available_width() - 4.0).clamp(140.0, SUBTITLE_TRACK_WIDTH);
                         egui::ComboBox::from_id_salt("sub_track_combo")
@@ -100,16 +101,12 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             .height(SUBTITLE_TRACK_POPUP_HEIGHT)
                             .show_ui(ui, |ui| {
                                 if ui
-                                    .selectable_value(
-                                        &mut app.current_sid,
-                                        "no".to_string(),
-                                        none_label,
-                                    )
+                                    .selectable_label(app.current_sid == "no", none_label)
                                     .clicked()
                                 {
-                                    let _ = app.mpv.set_property("sid", "no");
+                                    app.disable_media_track(crate::app::MediaTrackType::Subtitle);
                                 }
-                                for track in &app.sub_tracks {
+                                for track in tracks {
                                     let track_id_str = track.id.to_string();
                                     let parts: Vec<&str> = vec![
                                         track.lang.as_deref().unwrap_or(""),
@@ -124,14 +121,13 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         format!("Track {} ({})", track.id, parts.join(" - "))
                                     };
                                     if ui
-                                        .selectable_value(
-                                            &mut app.current_sid,
-                                            track_id_str.clone(),
-                                            label,
-                                        )
+                                        .selectable_label(app.current_sid == track_id_str, label)
                                         .clicked()
                                     {
-                                        let _ = app.mpv.set_property("sid", track_id_str);
+                                        app.select_media_track(crate::app::MediaTrackKey {
+                                            kind: crate::app::MediaTrackType::Subtitle,
+                                            id: track.id,
+                                        });
                                     }
                                 }
                             });

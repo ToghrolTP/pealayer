@@ -328,31 +328,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     );
                     ui.add_enabled_ui(state.submenu_enabled, |ui| {
                         crate::ui::icons::submenu(ui, app.tr("Audio Track"), |ui| {
-                            ui.add_enabled_ui(state.none_enabled, |ui| {
-                                if ui
-                                    .selectable_label(app.current_aid == "no", app.tr("None"))
-                                    .clicked()
-                                {
-                                    let _ = app.mpv.set_property("aid", "no");
-                                    ui.close();
-                                }
-                            });
-                            for track in &app.audio_tracks {
-                                let track_id_str = track.id.to_string();
-                                let label = format_track_label(
-                                    track.id,
-                                    track.lang.as_deref(),
-                                    track.title.as_deref(),
-                                );
-
-                                if ui
-                                    .selectable_label(app.current_aid == track_id_str, label)
-                                    .clicked()
-                                {
-                                    let _ = app.mpv.set_property("aid", track_id_str);
-                                    ui.close();
-                                }
-                            }
+                            crate::ui::media_tracks::draw_track_menu(
+                                app,
+                                ui,
+                                crate::app::MediaTrackType::Audio,
+                            );
                         });
                     });
 
@@ -372,31 +352,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     );
                     ui.add_enabled_ui(state.submenu_enabled, |ui| {
                         crate::ui::icons::submenu(ui, app.tr("Subtitle Track"), |ui| {
-                            ui.add_enabled_ui(state.none_enabled, |ui| {
-                                if ui
-                                    .selectable_label(app.current_sid == "no", app.tr("None"))
-                                    .clicked()
-                                {
-                                    let _ = app.mpv.set_property("sid", "no");
-                                    ui.close();
-                                }
-                            });
-                            for track in &app.sub_tracks {
-                                let track_id_str = track.id.to_string();
-                                let label = format_track_label(
-                                    track.id,
-                                    track.lang.as_deref(),
-                                    track.title.as_deref(),
-                                );
-
-                                if ui
-                                    .selectable_label(app.current_sid == track_id_str, label)
-                                    .clicked()
-                                {
-                                    let _ = app.mpv.set_property("sid", track_id_str);
-                                    ui.close();
-                                }
-                            }
+                            crate::ui::media_tracks::draw_track_menu(
+                                app,
+                                ui,
+                                crate::app::MediaTrackType::Subtitle,
+                            );
                         });
                     });
 

@@ -73,19 +73,20 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     label
                 };
 
-                let none_label = app.tr("None");
+                let none_label = app.tr("No audio track");
+                let tracks = app.audio_tracks.clone();
                 egui::ComboBox::from_id_salt("audio_track_combo")
                     .selected_text(current_label)
                     .width((ui.available_width() - 4.0).clamp(140.0, 240.0))
                     .height(200.0)
                     .show_ui(ui, |ui| {
                         if ui
-                            .selectable_value(&mut app.current_aid, "no".to_string(), none_label)
+                            .selectable_label(app.current_aid == "no", none_label)
                             .clicked()
                         {
-                            let _ = app.mpv.set_property("aid", "no");
+                            app.disable_media_track(crate::app::MediaTrackType::Audio);
                         }
-                        for track in &app.audio_tracks {
+                        for track in tracks {
                             let track_id_str = track.id.to_string();
                             let parts: Vec<&str> = vec![
                                 track.lang.as_deref().unwrap_or(""),
@@ -102,10 +103,13 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             };
 
                             if ui
-                                .selectable_value(&mut app.current_aid, track_id_str.clone(), label)
+                                .selectable_label(app.current_aid == track_id_str, label)
                                 .clicked()
                             {
-                                let _ = app.mpv.set_property("aid", track_id_str);
+                                app.select_media_track(crate::app::MediaTrackKey {
+                                    kind: crate::app::MediaTrackType::Audio,
+                                    id: track.id,
+                                });
                             }
                         }
                     });

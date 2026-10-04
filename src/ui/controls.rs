@@ -700,14 +700,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     app.save_config();
                 }
                 if toggle_mute {
-                    let _ = app.mpv.command("cycle", &["mute"]);
-                    app.is_muted = !app.is_muted;
-                    app.set_osd(if app.is_muted {
-                        app.tr("Mute")
-                    } else {
-                        app.tr("Unmute")
-                    });
-                    app.save_config();
+                    app.toggle_audio_muted();
                 }
                 if toggle_total_mode {
                     app.show_remaining_time = !app.show_remaining_time;

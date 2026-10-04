@@ -7187,6 +7187,40 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         self.app.playback_time = 0.0;
                                         self.app.seek_pos = None;
                                     }
+                                    let mute_icon = if self.app.is_muted {
+                                        crate::ui::icons::SPEAKER_SLASH
+                                    } else {
+                                        crate::ui::icons::SPEAKER_HIGH
+                                    };
+                                    if ui
+                                        .add_sized([30.0, 22.0], egui::Button::new(mute_icon))
+                                        .on_hover_text(if self.app.is_muted {
+                                            self.app.tr("Unmute")
+                                        } else {
+                                            self.app.tr("Mute")
+                                        })
+                                        .clicked()
+                                    {
+                                        self.app.toggle_audio_muted();
+                                    }
+                                    crate::ui::media_tracks::menu_button(
+                                        self.app,
+                                        ui,
+                                        crate::app::MediaTrackType::Video,
+                                        "nle-video-track-menu",
+                                    );
+                                    crate::ui::media_tracks::menu_button(
+                                        self.app,
+                                        ui,
+                                        crate::app::MediaTrackType::Audio,
+                                        "nle-audio-track-menu",
+                                    );
+                                    crate::ui::media_tracks::menu_button(
+                                        self.app,
+                                        ui,
+                                        crate::app::MediaTrackType::Subtitle,
+                                        "nle-subtitle-track-menu",
+                                    );
                                     crate::ui::controls::draw_contextual_transport_nudge(
                                         self.app,
                                         ui,
@@ -9573,7 +9607,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         &track_row.key,
                                         rect,
                                     );
-                                    let row_fill = if brought_into_view {
+                                    let selected_track = self
+                                        .app
+                                        .selected_timeline_track
+                                        .as_deref()
+                                        == Some(track_row.key.as_str());
+                                    let row_fill = if brought_into_view || selected_track {
                                         ui.visuals().selection.bg_fill.gamma_multiply(0.24)
                                     } else if track_row.active {
                                         ui.visuals().selection.bg_fill.gamma_multiply(
@@ -9736,47 +9775,81 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 &reorder_help,
                                             );
                                         }
-                                        if let TimelineTrackKind::Subtitle(_) = track_row.kind {
-                                            let visible = track_row.active && track_row.enabled;
-                                            let visibility = ui
-                                                .selectable_label(
-                                                    visible,
-                                                    if visible {
-                                                        crate::ui::icons::EYE
+                                        match &track_row.kind {
+                                            TimelineTrackKind::Video(_) => {
+                                                let selector = crate::ui::media_tracks::menu_button(
+                                                    self.app,
+                                                    ui,
+                                                    crate::app::MediaTrackType::Video,
+                                                    ("timeline-video-selector", &track_row.key),
+                                                );
+                                                media_control_clicked |= selector.clicked();
+                                            }
+                                            TimelineTrackKind::Audio(_) => {
+                                                let selector = crate::ui::media_tracks::menu_button(
+                                                    self.app,
+                                                    ui,
+                                                    crate::app::MediaTrackType::Audio,
+                                                    ("timeline-audio-selector", &track_row.key),
+                                                );
+                                                media_control_clicked |= selector.clicked();
+                                                let mute = ui
+                                                    .selectable_label(
+                                                        self.app.is_muted,
+                                                        if self.app.is_muted {
+                                                            crate::ui::icons::SPEAKER_SLASH
+                                                        } else {
+                                                            crate::ui::icons::SPEAKER_HIGH
+                                                        },
+                                                    )
+                                                    .on_hover_text(if self.app.is_muted {
+                                                        self.app.tr("Unmute")
                                                     } else {
-                                                        crate::ui::icons::EYE_SLASH
-                                                    },
-                                                )
-                                                .on_hover_text(if visible {
-                                                    self.app.tr("Hide subtitles")
-                                                } else {
-                                                    self.app.tr("Show subtitles")
-                                                });
-                                            if visibility.clicked() {
-                                                media_control_clicked = true;
-                                                if track_row.active {
-                                                    self.app.set_subtitle_visibility(!visible);
-                                                } else if let TimelineTrackKind::Subtitle(track_id) =
-                                                    track_row.kind
-                                                {
-                                                    let track_id = track_id.to_string();
-                                                    self.app.current_sid = track_id.clone();
-                                                    let _ = self
-                                                        .app
-                                                        .mpv
-                                                        .set_property("sid", track_id);
-                                                    self.app.set_subtitle_visibility(true);
+                                                        self.app.tr("Mute")
+                                                    });
+                                                if mute.clicked() {
+                                                    media_control_clicked = true;
+                                                    self.app.toggle_audio_muted();
                                                 }
                                             }
-                                        } else if track_row.active
-                                            && matches!(track_row.kind, TimelineTrackKind::Audio(_))
-                                        {
-                                            ui.colored_label(
-                                                egui::Color32::from_rgb(34, 197, 94),
-                                                crate::ui::icons::DOT_OUTLINE,
-                                            )
-                                            .on_hover_text(self.app.tr("Active track"));
-                                        } else if !track_row.relay_ids.is_empty() {
+                                            TimelineTrackKind::Subtitle(track_id) => {
+                                                let selector = crate::ui::media_tracks::menu_button(
+                                                    self.app,
+                                                    ui,
+                                                    crate::app::MediaTrackType::Subtitle,
+                                                    ("timeline-subtitle-selector", &track_row.key),
+                                                );
+                                                media_control_clicked |= selector.clicked();
+                                                let visible = track_row.active && track_row.enabled;
+                                                let visibility = ui
+                                                    .selectable_label(
+                                                        visible,
+                                                        if visible {
+                                                            crate::ui::icons::EYE
+                                                        } else {
+                                                            crate::ui::icons::EYE_SLASH
+                                                        },
+                                                    )
+                                                    .on_hover_text(if visible {
+                                                        self.app.tr("Hide subtitles")
+                                                    } else {
+                                                        self.app.tr("Show subtitles")
+                                                    });
+                                                if visibility.clicked() {
+                                                    media_control_clicked = true;
+                                                    if track_row.active {
+                                                        self.app.set_subtitle_visibility(!visible);
+                                                    } else {
+                                                        self.app.select_media_track(
+                                                            crate::app::MediaTrackKey {
+                                                                kind: crate::app::MediaTrackType::Subtitle,
+                                                                id: *track_id,
+                                                            },
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                            _ if !track_row.relay_ids.is_empty() => {
                                             let locked = track_row.relay_ids.iter().all(|relay| {
                                                 self.app.track_locked.contains(relay)
                                             });
@@ -9831,6 +9904,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
                                                 let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
                                             }
+                                            }
+                                            _ => {}
                                         }
                                             },
                                         );
@@ -9868,23 +9943,26 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
                                     }
                                     if response.clicked() && !media_control_clicked {
-                                        match track_row.kind {
+                                        self.app.selected_timeline_track =
+                                            Some(track_row.key.clone());
+                                        match &track_row.kind {
                                             TimelineTrackKind::Video(Some(track_id)) => {
                                                 self.app.select_media_track(crate::app::MediaTrackKey {
                                                     kind: crate::app::MediaTrackType::Video,
-                                                    id: track_id,
+                                                    id: *track_id,
                                                 });
                                             }
                                             TimelineTrackKind::Audio(track_id) => {
-                                                let track_id = track_id.to_string();
-                                                self.app.current_aid = track_id.clone();
-                                                let _ = self.app.mpv.set_property("aid", track_id);
+                                                self.app.select_media_track(crate::app::MediaTrackKey {
+                                                    kind: crate::app::MediaTrackType::Audio,
+                                                    id: *track_id,
+                                                });
                                             }
                                             TimelineTrackKind::Subtitle(track_id) => {
-                                                let track_id = track_id.to_string();
-                                                self.app.current_sid = track_id.clone();
-                                                let _ = self.app.mpv.set_property("sid", track_id);
-                                                self.app.set_subtitle_visibility(true);
+                                                self.app.select_media_track(crate::app::MediaTrackKey {
+                                                    kind: crate::app::MediaTrackType::Subtitle,
+                                                    id: *track_id,
+                                                });
                                             }
                                             _ => {}
                                         }
@@ -10054,7 +10132,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         &track_key,
                                         rect,
                                     );
-                                    let row_fill = if brought_into_view {
+                                    let selected_track = self
+                                        .app
+                                        .selected_timeline_track
+                                        .as_deref()
+                                        == Some(track_key.as_str());
+                                    let row_fill = if brought_into_view || selected_track {
                                         ui.visuals().selection.bg_fill.gamma_multiply(0.24)
                                     } else {
                                         ui.visuals().extreme_bg_color
@@ -10247,6 +10330,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             timeline_track_drop_target(ui, rect, control)
                                     {
                                         pending_timeline_order_drop = Some(drop);
+                                    }
+                                    if response.clicked() {
+                                        self.app.selected_timeline_track = Some(track_key.clone());
                                     }
                                     if response.double_clicked() {
                                         response.ctx.data_mut(|data| {
@@ -10916,10 +11002,16 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                                 if clip_response.double_clicked() {
                                                     clicked_any_clip = true;
+                                                    self.app.selected_timeline_track = timeline_rows
+                                                        .get(track_index)
+                                                        .map(|row| row.key.clone());
                                                     manage_cue_id = Some(instance.id);
                                                 } else if clip_response.clicked() {
                                                     let is_ctrl = ui.ctx().input(|i| i.modifiers.command || i.modifiers.ctrl);
                                                     clicked_any_clip = true;
+                                                    self.app.selected_timeline_track = timeline_rows
+                                                        .get(track_index)
+                                                        .map(|row| row.key.clone());
                                                     if is_ctrl {
                                                         if self.app.selected_instance_ids.contains(&instance.id) {
                                                             self.app.selected_instance_ids.remove(&instance.id);
@@ -10936,6 +11028,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                                 if clip_response.drag_started() && !is_track_locked {
                                                     clicked_any_clip = true;
+                                                    self.app.selected_timeline_track = timeline_rows
+                                                        .get(track_index)
+                                                        .map(|row| row.key.clone());
                                                     let is_ctrl = ui.ctx().input(|i| i.modifiers.command || i.modifiers.ctrl);
                                                     if !self.app.selected_instance_ids.contains(&instance.id) {
                                                         if !is_ctrl {
@@ -11406,8 +11501,23 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 ),
                                             );
 
-                                            // Row background shading
-                                            painter.rect_filled(row_rect, 0.0, ui.visuals().extreme_bg_color);
+                                            // Keep lane selection visible across both the heading and
+                                            // editable curve area, matching fixed/media tracks.
+                                            let track_key =
+                                                crate::four_d::models::hardware_timeline_track_key(
+                                                    &format!("pwm.{}", track.channel),
+                                                );
+                                            let row_fill = if self
+                                                .app
+                                                .selected_timeline_track
+                                                .as_deref()
+                                                == Some(track_key.as_str())
+                                            {
+                                                ui.visuals().selection.bg_fill.gamma_multiply(0.12)
+                                            } else {
+                                                ui.visuals().extreme_bg_color
+                                            };
+                                            painter.rect_filled(row_rect, 0.0, row_fill);
 
                                             // Centerline guide (50% intensity)
                                             painter.line_segment(
@@ -11580,6 +11690,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     && self.app.active_keyframe_drag.is_none()
                                                 {
                                                     if let Some(pos) = pointer_pos {
+                                                        self.app.selected_timeline_track = Some(
+                                                            crate::four_d::models::hardware_timeline_track_key(
+                                                                &format!("pwm.{}", track.channel),
+                                                            ),
+                                                        );
                                                         started_drag_info = Some((track.id, k_idx, pos, kf.time_ms, kf.value));
                                                         clicked_any_keyframe = true;
                                                     }
@@ -11589,6 +11704,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             if response.double_clicked() && !clicked_any_keyframe {
                                                 if let Some(pos) = response.interact_pointer_pos() {
                                                     if row_rect.contains(pos) {
+                                                        self.app.selected_timeline_track = Some(
+                                                            crate::four_d::models::hardware_timeline_track_key(
+                                                                &format!("pwm.{}", track.channel),
+                                                            ),
+                                                        );
                                                         let new_t = (((pos.x - rect.min.x) / zoom) * 1000.0).max(0.0) as u64;
                                                         let new_v = ((curve_bottom - pos.y) / curve_span).clamp(0.0, 1.0);
                                                         pending_add_keyframe = Some((track.id, new_t, new_v));
@@ -12225,6 +12345,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             if response.clicked() && !clicked_any_clip && !clicked_any_keyframe && self.app.active_drag.is_none() && self.app.active_keyframe_drag.is_none() {
                                 if let Some(mouse_pos) = response.interact_pointer_pos() {
                                     if mouse_pos.y >= tracks_top && mouse_pos.y < tracks_top + track_area_height {
+                                        let row_index = ((mouse_pos.y - tracks_top)
+                                            / timeline_track_height)
+                                            .floor()
+                                            as usize;
+                                        self.app.selected_timeline_track = timeline_rows
+                                            .get(row_index)
+                                            .map(|row| row.key.clone());
                                         self.app.selected_instance_ids.clear();
                                         self.app.selected_timeline_keyframe = None;
                                         let relative_x = mouse_pos.x - rect.min.x;
@@ -12234,6 +12361,29 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         self.app.commit_recorded_samples();
 
                                         let _ = self.app.mpv.command("seek", &[&target_time.to_string(), "absolute"]);
+                                    } else if mouse_pos.y >= tracks_top + track_area_height {
+                                        let analog_index = ((mouse_pos.y
+                                            - tracks_top
+                                            - track_area_height)
+                                            / timeline_analog_height)
+                                            .floor()
+                                            as usize;
+                                        if let Some(track) = self
+                                            .app
+                                            .timeline
+                                            .analog_tracks
+                                            .iter()
+                                            .filter(|track| {
+                                                visible_analog_track_ids.contains(&track.id)
+                                            })
+                                            .nth(analog_index)
+                                        {
+                                            self.app.selected_timeline_track = Some(
+                                                crate::four_d::models::hardware_timeline_track_key(
+                                                    &format!("pwm.{}", track.channel),
+                                                ),
+                                            );
+                                        }
                                     }
                                 }
                             }

@@ -838,6 +838,15 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Pin Controls" => "ثابت کردن کنترل‌ها",
         "Unpin Controls" => "آزاد کردن کنترل‌ها",
         "Mute" => "قطع صدا",
+        "Mute audio" => "قطع صدا",
+        "Mute playback without changing the selected audio track." => {
+            "صدا را بدون تغییر ترک صوتی انتخاب‌شده قطع می‌کند."
+        }
+        "Track" => "ترک",
+        "Video disabled" => "تصویر غیرفعال",
+        "No audio track" => "بدون ترک صوتی",
+        "Subtitles hidden" => "زیرنویس پنهان",
+        "No tracks available" => "ترکی موجود نیست",
         "Unmute" => "وصل صدا",
         "Video Files" => "پرونده‌های ویدئویی",
         "Unknown" => "ناشناخته",

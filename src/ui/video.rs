@@ -338,13 +338,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .clicked()
         {
             ui.close();
-            let _ = app.mpv.command("cycle", &["mute"]);
-            app.is_muted = !app.is_muted;
-            app.set_osd(if app.is_muted {
-                app.tr("Mute")
-            } else {
-                app.tr("Unmute")
-            });
+            app.toggle_audio_muted();
         }
 
         ui.separator();

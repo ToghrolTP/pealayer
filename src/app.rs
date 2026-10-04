@@ -271,6 +271,7 @@ pub struct PealayerApp {
     pub(crate) audio_tracks: Vec<AudioTrack>,
     pub(crate) media_tracks: Vec<MediaTrackInfo>,
     pub(crate) media_track_properties: Option<MediaTrackKey>,
+    pub(crate) selected_timeline_track: Option<String>,
 
     // 4D Cinema state
     pub(crate) show_four_d_editor: bool,
@@ -1083,13 +1084,7 @@ impl eframe::App for PealayerApp {
             self.toggle_fullscreen(&ctx);
         }
         if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::M)) {
-            let _ = self.mpv.command("cycle", &["mute"]);
-            self.is_muted = !self.is_muted;
-            self.set_osd(if self.is_muted {
-                "Mute".to_string()
-            } else {
-                "Unmute".to_string()
-            });
+            self.toggle_audio_muted();
         }
         if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
             self.seek_relative(-self.quick_seek_seconds);
@@ -1789,8 +1784,7 @@ impl PealayerApp {
                 | crate::platform::windows::TRAY_CMD_PLAYPAUSE => self.toggle_playback(),
                 crate::platform::windows::THUMB_BUTTON_NEXT => self.seek_relative(10.0),
                 crate::platform::windows::TRAY_CMD_MUTE => {
-                    let _ = self.mpv.command("cycle", &["mute"]);
-                    self.is_muted = !self.is_muted;
+                    self.toggle_audio_muted();
                 }
                 crate::platform::windows::TRAY_CMD_OPEN => {
                     if let Some(path) = rfd::FileDialog::new()
@@ -4168,6 +4162,55 @@ impl PealayerApp {
         }
     }
 
+    pub(crate) fn current_media_track_id(&self, kind: MediaTrackType) -> &str {
+        match kind {
+            MediaTrackType::Video => &self.current_vid,
+            MediaTrackType::Audio => &self.current_aid,
+            MediaTrackType::Subtitle => &self.current_sid,
+        }
+    }
+
+    pub(crate) fn disable_media_track(&mut self, kind: MediaTrackType) {
+        let property = match kind {
+            MediaTrackType::Video => {
+                self.current_vid = "no".to_string();
+                "vid"
+            }
+            MediaTrackType::Audio => {
+                self.current_aid = "no".to_string();
+                "aid"
+            }
+            MediaTrackType::Subtitle => {
+                self.current_sid = "no".to_string();
+                self.sub_visibility = false;
+                "sid"
+            }
+        };
+        if self.mpv.set_property(property, "no").is_ok() {
+            for track in &mut self.media_tracks {
+                if track.kind == kind {
+                    track.selected = Some(false);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn set_audio_muted(&mut self, muted: bool) {
+        if self.mpv.set_property("mute", muted).is_ok() {
+            self.is_muted = muted;
+            self.set_osd(if muted {
+                self.tr("Mute")
+            } else {
+                self.tr("Unmute")
+            });
+            self.save_config();
+        }
+    }
+
+    pub(crate) fn toggle_audio_muted(&mut self) {
+        self.set_audio_muted(!self.is_muted);
+    }
+
     pub fn load_video_file(&mut self, path: std::path::PathBuf) {
         let path_str = path.to_str().unwrap_or("");
         if !path_str.is_empty() {
@@ -5649,6 +5692,7 @@ impl Default for PealayerApp {
             audio_tracks: Vec::new(),
             media_tracks: Vec::new(),
             media_track_properties: None,
+            selected_timeline_track: None,
             show_four_d_editor: true,
             dock_state: crate::ui::layout::create_initial_layout(),
             timeline: crate::four_d::models::Timeline::new(),
@@ -5843,6 +5887,18 @@ fn hardware_connection_was_lost(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_media_track_identity_covers_video_audio_and_subtitles() {
+        let mut app = PealayerApp::default();
+        app.current_vid = "2".to_string();
+        app.current_aid = "5".to_string();
+        app.current_sid = "9".to_string();
+
+        assert_eq!(app.current_media_track_id(MediaTrackType::Video), "2");
+        assert_eq!(app.current_media_track_id(MediaTrackType::Audio), "5");
+        assert_eq!(app.current_media_track_id(MediaTrackType::Subtitle), "9");
+    }
 
     #[test]
     fn exact_seek_settlement_rejects_stale_positions() {
