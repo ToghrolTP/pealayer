@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Slider, Tooltip } from 'antd';
+import { Button, Select, Slider, Tooltip } from 'antd';
 import {
   FastBackwardOutlined,
   FastForwardOutlined,
@@ -7,6 +7,8 @@ import {
   PauseOutlined,
   PlayCircleFilled,
   SoundOutlined,
+  StepBackwardOutlined,
+  StepForwardOutlined,
   VideoCameraOutlined,
 } from '@ant-design/icons';
 import { tr, UiLocale } from '../i18n';
@@ -18,6 +20,8 @@ export interface PlayerState {
   playback_time?: number;
   duration?: number;
   current_video?: string | null;
+  chapters?: Array<{ index: number; title: string; time_seconds: number }>;
+  current_chapter_index?: number | null;
   seekable?: boolean;
   live?: boolean;
   muted?: boolean;
@@ -221,6 +225,26 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
           <Button shape="circle" icon={<FastForwardOutlined />} onClick={() => sendCmd('seek', { seconds: quickSeekSeconds })} />
         </Tooltip>
       </div>
+
+      {(state.chapters?.length ?? 0) > 0 && (
+        <div className="remote-player__chapters">
+          <Tooltip title={tr(locale, 'Previous chapter')}>
+            <Button icon={<StepBackwardOutlined />} onClick={() => sendCmd('chapter_previous')} />
+          </Tooltip>
+          <Select
+            aria-label={tr(locale, 'Chapter')}
+            value={state.current_chapter_index ?? state.chapters?.[0]?.index}
+            options={state.chapters?.map((chapter) => ({
+              value: chapter.index,
+              label: `${formatTime(chapter.time_seconds)} · ${chapter.title}`,
+            }))}
+            onChange={(index) => sendCmd('set_chapter', { index })}
+          />
+          <Tooltip title={tr(locale, 'Next chapter')}>
+            <Button icon={<StepForwardOutlined />} onClick={() => sendCmd('chapter_next')} />
+          </Tooltip>
+        </div>
+      )}
 
       <div className="remote-player__volume">
         <Button

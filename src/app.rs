@@ -783,6 +783,8 @@ impl eframe::App for PealayerApp {
             let hardware_connected = hardware
                 .as_ref()
                 .is_some_and(|capabilities| capabilities.board_connected);
+            let chapters = self.media_chapters();
+            let current_chapter_index = self.active_media_chapter().map(|chapter| chapter.index);
             let status_resp = crate::platform::interop::PlayerStatusResponse {
                 status: if !controller_connected {
                     "connecting"
@@ -802,6 +804,15 @@ impl eframe::App for PealayerApp {
                     .current_video_path
                     .as_ref()
                     .map(|p| crate::media::redact_media_target(&p.to_string_lossy())),
+                chapters: chapters
+                    .into_iter()
+                    .map(|chapter| crate::platform::interop::WebMediaChapter {
+                        index: chapter.index,
+                        title: chapter.title,
+                        time_seconds: chapter.time_seconds,
+                    })
+                    .collect(),
+                current_chapter_index,
                 seekable: self.is_seekable,
                 live: self.is_live_media(),
                 buffered_until: self.buffered_until(),
@@ -2719,6 +2730,9 @@ impl PealayerApp {
             InteropCommand::Previous => {
                 let _ = self.mpv.command("playlist-prev", &["force"]);
             }
+            InteropCommand::PreviousChapter => self.previous_media_chapter(),
+            InteropCommand::NextChapter => self.next_media_chapter(),
+            InteropCommand::SetChapter { index } => self.jump_to_media_chapter(index),
             InteropCommand::Seek { seconds } => self.seek_relative(seconds),
             InteropCommand::SeekTo { seconds } => {
                 if self.is_seekable {
@@ -3886,6 +3900,59 @@ impl PealayerApp {
             self.tr("Seek"),
             crate::ui::controls::format_player_time(target, self.duration >= 3600.0, true)
         ));
+    }
+
+    pub(crate) fn media_chapters(&self) -> Vec<crate::media_info::MediaChapter> {
+        crate::media_info::chapters(&self.media_file_info)
+    }
+
+    pub(crate) fn active_media_chapter(&self) -> Option<crate::media_info::MediaChapter> {
+        let position = self.seek_pos.unwrap_or(self.playback_time);
+        self.media_chapters()
+            .into_iter()
+            .rev()
+            .find(|chapter| chapter.time_seconds <= position + 0.001)
+    }
+
+    pub(crate) fn jump_to_media_chapter(&mut self, index: i64) {
+        let Some(chapter) = self
+            .media_chapters()
+            .into_iter()
+            .find(|chapter| chapter.index == index)
+        else {
+            return;
+        };
+        self.seek_absolute(chapter.time_seconds);
+        self.set_osd(format!("{}: {}", self.tr("Chapter"), chapter.title));
+    }
+
+    pub(crate) fn next_media_chapter(&mut self) {
+        let position = self.seek_pos.unwrap_or(self.playback_time);
+        if let Some(chapter) = self
+            .media_chapters()
+            .into_iter()
+            .find(|chapter| chapter.time_seconds > position + 0.05)
+        {
+            self.jump_to_media_chapter(chapter.index);
+        }
+    }
+
+    pub(crate) fn previous_media_chapter(&mut self) {
+        let position = self.seek_pos.unwrap_or(self.playback_time);
+        let chapters = self.media_chapters();
+        let Some(active_position) = chapters
+            .iter()
+            .rposition(|chapter| chapter.time_seconds <= position + 0.001)
+        else {
+            return;
+        };
+        let active = &chapters[active_position];
+        let target_position = if position - active.time_seconds > 3.0 {
+            active_position
+        } else {
+            active_position.saturating_sub(1)
+        };
+        self.jump_to_media_chapter(chapters[target_position].index);
     }
 
     /// Advances or reverses playback by the configured number of frames.

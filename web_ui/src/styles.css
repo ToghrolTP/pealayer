@@ -286,6 +286,10 @@ body {
 .timeline-row__duration { color: var(--green); text-align: center; font: 650 10px ui-monospace, monospace; }
 .timeline-playhead-web { position: absolute; z-index: 4; top: 0; bottom: 0; margin-inline-start: 180px; width: 2px; background: var(--red); box-shadow: 0 0 14px color-mix(in srgb, var(--red) 60%, transparent); pointer-events: none; }
 .timeline-playhead-web::before { content: ''; position: absolute; top: 0; left: -4px; width: 10px; height: 8px; clip-path: polygon(0 0, 100% 0, 50% 100%); background: var(--red); }
+.timeline-chapter-web { position: absolute; z-index: 3; top: 0; bottom: 0; margin-inline-start: 180px; width: 1px; padding: 0; border: 0; border-radius: 0; background: color-mix(in srgb, #d8a238 58%, transparent); cursor: pointer; }
+.timeline-chapter-web::before { content: ''; position: absolute; top: 2px; left: 0; width: 9px; height: 8px; clip-path: polygon(0 0, 100% 50%, 0 100%); background: #d8a238; }
+.timeline-chapter-web:hover, .timeline-chapter-web.is-active { width: 2px; background: #ffc14b; box-shadow: 0 0 10px color-mix(in srgb, #ffc14b 45%, transparent); }
+.timeline-chapter-web:hover::before, .timeline-chapter-web.is-active::before { background: #ffc14b; }
 .timeline-empty { padding: 32px; color: var(--subtle); text-align: center; font-size: 12px; }
 
 .surface-page { width: min(1180px, 100%); margin: 0 auto; display: grid; align-content: start; gap: 14px; padding-bottom: 24px; }
@@ -414,6 +418,9 @@ body {
 .remote-player__timeline .ant-slider { margin: 0; }
 .remote-player__controls { padding: 10px 18px 14px; display: flex; align-items: center; justify-content: center; gap: 18px; }
 .remote-player__controls .ant-btn { color: var(--muted); background: var(--surface-2); border-color: var(--line); }
+.remote-player__chapters { padding: 0 18px 12px; display: grid; grid-template-columns: 34px minmax(0, 1fr) 34px; align-items: center; gap: 8px; }
+.remote-player__chapters .ant-select { min-width: 0; width: 100%; }
+.remote-player__chapters .ant-btn { color: var(--muted); background: var(--surface-2); border-color: var(--line); }
 .remote-player__play.ant-btn { width: 54px; height: 54px; color: #06110a; background: var(--green); border-color: var(--green); box-shadow: 0 8px 24px color-mix(in srgb, var(--green) 24%, transparent); }
 
 .surface-card.ant-card {
@@ -467,6 +474,7 @@ body {
   .timeline-ruler { padding-inline: 144px 64px; }
   .timeline-row { grid-template-columns: 144px minmax(380px, 1fr) 64px; }
   .timeline-playhead-web { margin-inline-start: 144px; }
+  .timeline-chapter-web { margin-inline-start: 144px; }
   .preferences-layout { grid-template-columns: 1fr; }
   .preferences-rail { position: static; grid-template-columns: repeat(5, minmax(0, 1fr)); overflow-x: auto; }
   .preferences-rail button { display: flex; justify-content: center; }

@@ -3,6 +3,7 @@ import {
   AppstoreOutlined,
   ArrowDownOutlined,
   ArrowUpOutlined,
+  BookOutlined,
   CaretRightFilled,
   ClockCircleOutlined,
   DeleteOutlined,
@@ -81,6 +82,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   const effects = state.effects ?? [];
   const controllerEffects = state.controller_effects ?? [];
   const cues = state.cues ?? [];
+  const chapters = state.chapters ?? [];
   const currentSeconds = state.playback_time ?? 0;
   const durationSeconds = state.duration ?? 0;
   const timelineDurationMs = useMemo(() => {
@@ -441,6 +443,22 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             <Tooltip title={tr(locale, 'Manage workspaces')}>
               <Button icon={<SettingOutlined />} onClick={() => setWorkspaceManagerOpen(true)} />
             </Tooltip>
+            {chapters.length > 0 && (
+              <Dropdown
+                menu={{
+                  selectedKeys: state.current_chapter_index === null || state.current_chapter_index === undefined
+                    ? []
+                    : [String(state.current_chapter_index)],
+                  items: chapters.map((chapter) => ({
+                    key: String(chapter.index),
+                    label: `${formatTime(chapter.time_seconds, false)} · ${chapter.title}`,
+                  })),
+                  onClick: ({ key }) => sendCmd('set_chapter', { index: Number(key) }),
+                }}
+              >
+                <Button icon={<BookOutlined />}>{tr(locale, 'Chapters')}</Button>
+              </Dropdown>
+            )}
             <span className="timeline-meta">{cues.length} {tr(locale, 'cues')}</span>
           </div>
         </header>
@@ -458,6 +476,17 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             className="timeline-playhead-web"
             style={{ left: `${Math.min(100, (currentSeconds * 1000 / timelineDurationMs) * 100)}%` }}
           />
+          {chapters.map((chapter) => (
+            <button
+              key={chapter.index}
+              type="button"
+              className={`timeline-chapter-web ${state.current_chapter_index === chapter.index ? 'is-active' : ''}`}
+              style={{ left: `${Math.min(100, (chapter.time_seconds * 1000 / timelineDurationMs) * 100)}%` }}
+              title={`${chapter.title} · ${formatTime(chapter.time_seconds)}`}
+              aria-label={`${tr(locale, 'Chapter')}: ${chapter.title}`}
+              onClick={() => sendCmd('set_chapter', { index: chapter.index })}
+            />
+          ))}
           {timelineLanes.length === 0 ? (
             <div className="timeline-empty">{tr(locale, 'No effects')}</div>
           ) : timelineLanes.map((lane) => {

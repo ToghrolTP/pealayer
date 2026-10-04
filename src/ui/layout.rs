@@ -10911,6 +10911,59 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             });
                                         }
 
+                                        let media_chapters = self.app.media_chapters();
+                                        let active_chapter_index =
+                                            self.app.active_media_chapter().map(|chapter| chapter.index);
+                                        for chapter in &media_chapters {
+                                            let marker_x =
+                                                rect.min.x + chapter.time_seconds as f32 * zoom;
+                                            if marker_x < rect.min.x || marker_x > rect.max.x {
+                                                continue;
+                                            }
+                                            let marker_rect = egui::Rect::from_center_size(
+                                                egui::pos2(marker_x, ruler_rect.min.y + 7.0),
+                                                egui::vec2(18.0, 14.0),
+                                            );
+                                            let chapter_response = ui
+                                                .interact(
+                                                    marker_rect,
+                                                    egui::Id::new(("media-chapter", chapter.index)),
+                                                    egui::Sense::click(),
+                                                )
+                                                .on_hover_text(format!(
+                                                    "{} · {}",
+                                                    chapter.title,
+                                                    crate::duration::format_time_value_ms(
+                                                        (chapter.time_seconds * 1_000.0).round()
+                                                            as u64
+                                                    )
+                                                ));
+                                            if chapter_response.clicked() {
+                                                clicked_any_keyframe = true;
+                                                self.app.jump_to_media_chapter(chapter.index);
+                                            }
+                                            chapter_response.context_menu(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new(&chapter.title).strong(),
+                                                );
+                                                ui.label(crate::duration::format_time_value_ms(
+                                                    (chapter.time_seconds * 1_000.0).round() as u64,
+                                                ));
+                                                if ui
+                                                    .button(format!(
+                                                        "{} {}",
+                                                        crate::ui::icons::TARGET,
+                                                        self.app.tr("Jump to chapter")
+                                                    ))
+                                                    .clicked()
+                                                {
+                                                    self.app
+                                                        .jump_to_media_chapter(chapter.index);
+                                                    ui.close();
+                                                }
+                                            });
+                                        }
+
                                         if let Some(pos) = pointer_pos {
                                             if (ruler_rect.contains(pos)
                                                 || ruler_response.dragged_by(egui::PointerButton::Primary))
@@ -12201,6 +12254,44 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     );
                                                 }
                                             }
+                                        }
+
+                                        // Media chapters are file-owned navigation landmarks,
+                                        // distinct from editable project keyframes. Render them
+                                        // as subtle amber flags spanning the timeline so chapter
+                                        // boundaries remain useful without looking editable.
+                                        for chapter in &media_chapters {
+                                            let marker_x =
+                                                rect.min.x + chapter.time_seconds as f32 * zoom;
+                                            if marker_x < rect.min.x || marker_x > rect.max.x {
+                                                continue;
+                                            }
+                                            let active =
+                                                active_chapter_index == Some(chapter.index);
+                                            let color = if active {
+                                                egui::Color32::from_rgb(255, 193, 75)
+                                            } else {
+                                                egui::Color32::from_rgb(201, 151, 59)
+                                            };
+                                            painter.line_segment(
+                                                [
+                                                    egui::pos2(marker_x, ruler_rect.min.y + 4.0),
+                                                    egui::pos2(marker_x, rect.max.y),
+                                                ],
+                                                egui::Stroke::new(
+                                                    if active { 1.5 } else { 1.0 },
+                                                    color.gamma_multiply(if active { 0.8 } else { 0.45 }),
+                                                ),
+                                            );
+                                            painter.add(egui::Shape::convex_polygon(
+                                                vec![
+                                                    egui::pos2(marker_x, ruler_rect.min.y + 3.0),
+                                                    egui::pos2(marker_x + 9.0, ruler_rect.min.y + 6.5),
+                                                    egui::pos2(marker_x, ruler_rect.min.y + 10.0),
+                                                ],
+                                                color,
+                                                egui::Stroke::NONE,
+                                            ));
                                         }
 
                                         // Exact timeline keyframes must be painted after the

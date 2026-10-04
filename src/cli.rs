@@ -57,6 +57,9 @@ PLAYER OPTIONS:
   --estop                   Latch E-STOP and release all motion/output sources
   --reset-estop             Reset E-STOP without resuming motion
   --next | --previous       Navigate the playlist
+  --chapter-next            Jump to the next media chapter
+  --chapter-previous        Restart or jump to the previous media chapter
+  --chapter <INDEX>         Jump to a zero-based media chapter index
   --seek <SECONDS>          Seek relative to the current position
   --seek-to <SECONDS>       Seek to an absolute playback time
   --seek-percent <0-100>    Seek to a percentage of the media
@@ -156,6 +159,18 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
             "--reset-estop" => commands.push(InteropCommand::SetEmergencyStop { active: false }),
             "--next" => commands.push(InteropCommand::Next),
             "--previous" => commands.push(InteropCommand::Previous),
+            "--chapter-next" => commands.push(InteropCommand::NextChapter),
+            "--chapter-previous" => commands.push(InteropCommand::PreviousChapter),
+            "--chapter" => {
+                let index = args_iter
+                    .next()
+                    .ok_or("Option '--chapter' requires a zero-based index")?
+                    .parse::<i64>()
+                    .map_err(|_| "Option '--chapter' requires a zero-based index")?;
+                let command = InteropCommand::SetChapter { index };
+                command.validate()?;
+                commands.push(command);
+            }
             "--mute" => commands.push(InteropCommand::SetMute { muted: true }),
             "--unmute" => commands.push(InteropCommand::SetMute { muted: false }),
             "--toggle-mute" => commands.push(InteropCommand::ToggleMute),

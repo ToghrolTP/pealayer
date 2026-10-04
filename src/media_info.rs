@@ -13,6 +13,13 @@ pub struct MediaCollectionEntry {
     pub properties: BTreeMap<String, String>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct MediaChapter {
+    pub index: i64,
+    pub title: String,
+    pub time_seconds: f64,
+}
+
 /// A static, factual snapshot read directly from libmpv after a file loads or
 /// when the user explicitly refreshes the Media Inspector. Exact libmpv keys
 /// are retained so the diagnostic surface never invents or obscures data.
@@ -217,6 +224,37 @@ pub fn capture(mpv: &Mpv) -> MediaFileInfo {
     }
 }
 
+pub fn chapters(info: &MediaFileInfo) -> Vec<MediaChapter> {
+    let mut chapters = info
+        .chapters
+        .iter()
+        .filter_map(|entry| {
+            let time_seconds = entry.properties.get("time")?.parse::<f64>().ok()?;
+            if !time_seconds.is_finite() || time_seconds < 0.0 {
+                return None;
+            }
+            let title = entry
+                .properties
+                .get("title")
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("Chapter {}", entry.index + 1));
+            Some(MediaChapter {
+                index: entry.index,
+                title,
+                time_seconds,
+            })
+        })
+        .collect::<Vec<_>>();
+    chapters.sort_by(|left, right| {
+        left.time_seconds
+            .total_cmp(&right.time_seconds)
+            .then_with(|| left.index.cmp(&right.index))
+    });
+    chapters
+}
+
 pub fn property_keys() -> impl Iterator<Item = &'static str> {
     PROPERTY_GROUPS
         .iter()
@@ -242,5 +280,36 @@ mod tests {
         ] {
             assert!(unique.contains(required));
         }
+    }
+
+    #[test]
+    fn typed_chapters_keep_real_titles_sort_times_and_supply_fallbacks() {
+        let info = MediaFileInfo {
+            chapters: vec![
+                MediaCollectionEntry {
+                    index: 1,
+                    properties: BTreeMap::from([
+                        ("title".to_string(), "Act II".to_string()),
+                        ("time".to_string(), "12.5".to_string()),
+                    ]),
+                },
+                MediaCollectionEntry {
+                    index: 0,
+                    properties: BTreeMap::from([("time".to_string(), "0".to_string())]),
+                },
+                MediaCollectionEntry {
+                    index: 2,
+                    properties: BTreeMap::from([("time".to_string(), "NaN".to_string())]),
+                },
+            ],
+            ..MediaFileInfo::default()
+        };
+
+        let chapters = chapters(&info);
+        assert_eq!(chapters.len(), 2);
+        assert_eq!(chapters[0].title, "Chapter 1");
+        assert_eq!(chapters[0].time_seconds, 0.0);
+        assert_eq!(chapters[1].title, "Act II");
+        assert_eq!(chapters[1].time_seconds, 12.5);
     }
 }

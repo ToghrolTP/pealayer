@@ -128,6 +128,11 @@ pub enum InteropCommand {
     Stop,
     Next,
     Previous,
+    PreviousChapter,
+    NextChapter,
+    SetChapter {
+        index: i64,
+    },
     Seek {
         seconds: f64,
     },
@@ -288,6 +293,9 @@ impl InteropCommand {
             {
                 Err("seek percentage must be a finite value from 0 to 100".to_string())
             }
+            Self::SetChapter { index } if *index < 0 => {
+                Err("chapter index must be zero or greater".to_string())
+            }
             Self::SetVolume { value } if !value.is_finite() || !(0.0..=130.0).contains(value) => {
                 Err("volume must be a finite value from 0 to 130".to_string())
             }
@@ -393,6 +401,7 @@ pub fn command_catalog() -> Value {
         "transports": ["native", "http", "json-rpc"],
         "commands": [
             "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
+            "chapter_previous", "chapter_next", "set_chapter",
             "seek", "seek_to", "seek_abs", "set_volume", "set_mute", "toggle_mute",
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
             "maximize", "restore", "open_preferences", "open_board_information", "show_message", "set_workspace",
@@ -463,6 +472,17 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "stop" => InteropCommand::Stop,
         "next" => InteropCommand::Next,
         "previous" | "prev" => InteropCommand::Previous,
+        "chapter_previous" | "chapter-previous" | "previous_chapter" | "previous-chapter" => {
+            InteropCommand::PreviousChapter
+        }
+        "chapter_next" | "chapter-next" | "next_chapter" | "next-chapter" => {
+            InteropCommand::NextChapter
+        }
+        "chapter" | "set_chapter" | "set-chapter" => InteropCommand::SetChapter {
+            index: argument
+                .parse::<i64>()
+                .map_err(|_| "chapter requires a zero-based chapter index".to_string())?,
+        },
         "seek" => InteropCommand::Seek {
             seconds: number("seek")?,
         },
@@ -532,6 +552,10 @@ pub struct PlayerStatusResponse {
     pub duration: f64,
     pub current_video: Option<String>,
     #[serde(default)]
+    pub chapters: Vec<WebMediaChapter>,
+    #[serde(default)]
+    pub current_chapter_index: Option<i64>,
+    #[serde(default)]
     pub seekable: bool,
     #[serde(default)]
     pub live: bool,
@@ -582,6 +606,13 @@ pub struct PlayerStatusResponse {
     pub hardware_details: Option<Value>,
     #[serde(default)]
     pub update: crate::update::UpdateStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebMediaChapter {
+    pub index: i64,
+    pub title: String,
+    pub time_seconds: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -722,6 +753,8 @@ impl Default for PlayerStatusResponse {
             playback_time: 0.0,
             duration: 0.0,
             current_video: None,
+            chapters: Vec::new(),
+            current_chapter_index: None,
             seekable: false,
             live: false,
             buffered_until: None,
@@ -803,6 +836,23 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "next" | "pealayer.next" | "pealayer.player.next" => Some(InteropCommand::Next),
         "previous" | "prev" | "pealayer.previous" | "pealayer.player.previous" => {
             Some(InteropCommand::Previous)
+        }
+        "chapter_previous"
+        | "previous_chapter"
+        | "pealayer.chapter.previous"
+        | "pealayer.player.chapter.previous" => Some(InteropCommand::PreviousChapter),
+        "chapter_next"
+        | "next_chapter"
+        | "pealayer.chapter.next"
+        | "pealayer.player.chapter.next" => Some(InteropCommand::NextChapter),
+        "chapter" | "set_chapter" | "pealayer.chapter.set" | "pealayer.player.chapter.set" => {
+            let index = request
+                .params
+                .get("index")
+                .or_else(|| request.params.get("chapter"))
+                .and_then(Value::as_i64)
+                .ok_or_else(|| "missing integer parameter: index".to_string())?;
+            Some(InteropCommand::SetChapter { index })
         }
         "seek" | "pealayer.seek" | "pealayer.player.seek" => Some(InteropCommand::Seek {
             seconds: number(&["seconds"])?,
@@ -1534,7 +1584,7 @@ pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<Interop
     rx
 }
 
-const PCCONTROLLER_ACTIONS: &str = "pealayer.play,pealayer.pause,pealayer.toggle,pealayer.stop,pealayer.next,pealayer.previous,pealayer.seek,pealayer.seek_to,pealayer.seek_absolute,pealayer.volume.set,pealayer.mute.set,pealayer.mute.toggle,pealayer.rate.set,pealayer.open,pealayer.fullscreen.set,pealayer.fullscreen.toggle,pealayer.workspace.set,pealayer.window.activate,pealayer.window.minimize,pealayer.window.maximize,pealayer.window.restore,pealayer.quit";
+const PCCONTROLLER_ACTIONS: &str = "pealayer.play,pealayer.pause,pealayer.toggle,pealayer.stop,pealayer.next,pealayer.previous,pealayer.chapter.next,pealayer.chapter.previous,pealayer.chapter.set,pealayer.seek,pealayer.seek_to,pealayer.seek_absolute,pealayer.volume.set,pealayer.mute.set,pealayer.mute.toggle,pealayer.rate.set,pealayer.open,pealayer.fullscreen.set,pealayer.fullscreen.toggle,pealayer.workspace.set,pealayer.window.activate,pealayer.window.minimize,pealayer.window.maximize,pealayer.window.restore,pealayer.quit";
 
 struct ControllerAction {
     command: Option<InteropCommand>,
@@ -1588,6 +1638,13 @@ fn controller_action_from_event(event: &Value, instance_id: &str) -> Option<Cont
             "pealayer.stop" => Some(InteropCommand::Stop),
             "pealayer.next" => Some(InteropCommand::Next),
             "pealayer.previous" => Some(InteropCommand::Previous),
+            "pealayer.chapter.next" => Some(InteropCommand::NextChapter),
+            "pealayer.chapter.previous" => Some(InteropCommand::PreviousChapter),
+            "pealayer.chapter.set" => value
+                .parse::<i64>()
+                .ok()
+                .filter(|index| *index >= 0)
+                .map(|index| InteropCommand::SetChapter { index }),
             "pealayer.seek" => value
                 .parse::<f64>()
                 .ok()
@@ -2108,6 +2165,34 @@ mod tests {
     }
 
     #[test]
+    fn chapter_navigation_is_shared_by_text_and_json_rpc_controls() {
+        assert_eq!(
+            parse_text_command("chapter-next").unwrap(),
+            InteropCommand::NextChapter
+        );
+        assert_eq!(
+            parse_text_command("chapter-previous").unwrap(),
+            InteropCommand::PreviousChapter
+        );
+        assert_eq!(
+            parse_text_command("chapter 3").unwrap(),
+            InteropCommand::SetChapter { index: 3 }
+        );
+        assert!(parse_text_command("chapter -1").is_err());
+
+        let request = JsonRpcRequest {
+            jsonrpc: Some("2.0".to_string()),
+            id: serde_json::json!(1),
+            method: "pealayer.chapter.set".to_string(),
+            params: serde_json::json!({"index": 2}),
+        };
+        assert_eq!(
+            command_from_json_rpc(&request).unwrap(),
+            Some(InteropCommand::SetChapter { index: 2 })
+        );
+    }
+
+    #[test]
     fn web_controller_effect_commands_are_typed_and_validated() {
         let cue: JsonRpcRequest = serde_json::from_str(
             r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.controller_effect_cue.add","params":{"reference":"effect:lighting-primary","start_time_ms":1250}}"#,
@@ -2437,6 +2522,9 @@ mod tests {
                 "pealayer.stop",
                 "pealayer.next",
                 "pealayer.previous",
+                "pealayer.chapter.next",
+                "pealayer.chapter.previous",
+                "pealayer.chapter.set",
                 "pealayer.seek",
                 "pealayer.seek_to",
                 "pealayer.seek_absolute",

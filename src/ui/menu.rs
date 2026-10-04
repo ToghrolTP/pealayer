@@ -375,6 +375,56 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
                 });
 
+                top_menu_button(ui, app.tr("Chapters"), |ui| {
+                    let chapters = app.media_chapters();
+                    let current = app.active_media_chapter().map(|chapter| chapter.index);
+                    if chapters.is_empty() {
+                        ui.add_enabled(false, egui::Label::new(app.tr("No chapters")));
+                    } else {
+                        ui.horizontal(|ui| {
+                            if ui
+                                .button(format!(
+                                    "{} {}",
+                                    crate::ui::icons::SKIP_BACK,
+                                    app.tr("Previous chapter")
+                                ))
+                                .clicked()
+                            {
+                                app.previous_media_chapter();
+                                ui.close();
+                            }
+                            if ui
+                                .button(format!(
+                                    "{} {}",
+                                    crate::ui::icons::SKIP_FORWARD,
+                                    app.tr("Next chapter")
+                                ))
+                                .clicked()
+                            {
+                                app.next_media_chapter();
+                                ui.close();
+                            }
+                        });
+                        ui.separator();
+                        for chapter in chapters {
+                            let label = format!(
+                                "{}  {}",
+                                crate::duration::format_time_value_ms(
+                                    (chapter.time_seconds * 1_000.0).round() as u64
+                                ),
+                                chapter.title
+                            );
+                            if ui
+                                .selectable_label(current == Some(chapter.index), label)
+                                .clicked()
+                            {
+                                app.jump_to_media_chapter(chapter.index);
+                                ui.close();
+                            }
+                        }
+                    }
+                });
+
                 // Workspace switcher
                 top_menu_button(ui, app.tr("Workspace"), |ui| {
                     for (id, profile) in app.ordered_workspace_profiles() {
