@@ -106,6 +106,20 @@ export interface PlayerState {
     default_fps?: number | null;
     default_pixels?: number | null;
   }>;
+  effect_recording?: {
+    active: boolean;
+    id: number;
+    name: string;
+    mode: string;
+    category: string;
+    color: string;
+    steps: number;
+    device_retained: boolean;
+    overwritten: number;
+    started_at: string;
+    last_error: string;
+    pending: boolean;
+  };
   cues?: Array<{
     id: string;
     effect_id: string;

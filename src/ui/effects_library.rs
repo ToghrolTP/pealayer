@@ -1617,11 +1617,16 @@ fn draw_sequence_step_editor(
     draft.duration_ms = sequence_duration_ms(&draft.steps);
 }
 
-fn draw_effect_recording_panel(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    let connected = app
-        .advertised_hardware()
+pub(crate) fn draw_effect_recording_panel(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    let hardware = app.advertised_hardware();
+    let connected = hardware
+        .as_ref()
         .is_some_and(|hardware| hardware.board_connected);
-    let active = app.hardware_effect_authoring.active;
+    let recording = hardware
+        .as_ref()
+        .map(|hardware| hardware.effect_recording.clone())
+        .unwrap_or_default();
+    let active = recording.active || app.hardware_effect_authoring.active;
     let busy = app.hardware_effect_authoring.pending_operation.is_some();
     let mut start = false;
     let mut refresh = false;
@@ -1629,33 +1634,126 @@ fn draw_effect_recording_panel(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let mut discard = false;
 
     egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(10))
+        .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.strong(format!(
-                    "{} Record live controls",
-                    crate::ui::icons::RECORD
-                ));
-                let (label, color) = if active {
-                    ("Recording", ui.visuals().warn_fg_color)
-                } else if busy {
-                    ("Working…", ui.visuals().weak_text_color())
-                } else if connected {
-                    ("Ready", ui.visuals().text_color())
+            ui.horizontal(|ui| {
+                let color = if active {
+                    ui.visuals().error_fg_color
                 } else {
-                    ("Board unavailable", ui.visuals().error_fg_color)
+                    ui.visuals().widgets.active.bg_fill
                 };
-                ui.label(egui::RichText::new(label).color(color).small());
-            });
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.add_enabled_ui(!active && !busy, |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut app.hardware_effect_authoring.name)
-                            .hint_text("Recorded effect name")
-                            .desired_width(220.0),
-                    );
+                ui.label(egui::RichText::new(crate::ui::icons::RECORD).color(color).size(18.0));
+                ui.vertical(|ui| {
+                    let title = if active && !recording.name.trim().is_empty() {
+                        recording.name.as_str()
+                    } else {
+                        "Record effect"
+                    };
+                    ui.strong(title);
+                    let state = if active {
+                        format!("Recording · {} steps", recording.steps)
+                    } else if busy {
+                        "Applying…".to_string()
+                    } else if connected {
+                        "Ready".to_string()
+                    } else {
+                        "Board unavailable".to_string()
+                    };
+                    ui.label(egui::RichText::new(state).small().weak());
                 });
+                if recording.device_retained {
+                    ui.label(egui::RichText::new("Board RAM").small().strong());
+                }
+                if active {
+                    ui.spinner();
+                }
+            });
+            ui.add_space(8.0);
+            ui.add_enabled_ui(!active && !busy, |ui| {
+                egui::Grid::new("effect_recording_setup")
+                    .num_columns(2)
+                    .spacing([12.0, 7.0])
+                    .show(ui, |ui| {
+                        ui.label("Name");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut app.hardware_effect_authoring.name)
+                                .hint_text("New recorded effect")
+                                .desired_width(260.0),
+                        );
+                        ui.end_row();
+                        ui.label("Category");
+                        ui.add(
+                            egui::TextEdit::singleline(
+                                &mut app.hardware_effect_authoring.category,
+                            )
+                            .desired_width(180.0),
+                        );
+                        ui.end_row();
+                        ui.label("Capture");
+                        egui::ComboBox::from_id_salt("effect_recording_mode")
+                            .selected_text(match app.hardware_effect_authoring.capture_mode.as_str() {
+                                "device-clock" => "Device clock",
+                                "board-retained" => "Board-retained relay take",
+                                _ => "Automatic · all live sources",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(
+                                    &mut app.hardware_effect_authoring.capture_mode,
+                                    "automatic".to_string(),
+                                    "Automatic · all live sources",
+                                )
+                                .on_hover_text("Capture acknowledged commands from Pealayer, PCController, physical controls, and RF using the best compatible clock");
+                                ui.selectable_value(
+                                    &mut app.hardware_effect_authoring.capture_mode,
+                                    "device-clock".to_string(),
+                                    "Device clock",
+                                )
+                                .on_hover_text("Use device acknowledgement timestamps for strict timing");
+                                ui.selectable_value(
+                                    &mut app.hardware_effect_authoring.capture_mode,
+                                    "board-retained".to_string(),
+                                    "Board-retained relay take",
+                                )
+                                .on_hover_text("Keep a bounded relay/motion capture in board RAM until it is saved");
+                            });
+                        ui.end_row();
+                        ui.label("Color");
+                        egui::ComboBox::from_id_salt("effect_recording_color")
+                            .selected_text(&app.hardware_effect_authoring.color)
+                            .show_ui(ui, |ui| {
+                                for color in ["violet", "green", "blue", "red", "white"] {
+                                    ui.selectable_value(
+                                        &mut app.hardware_effect_authoring.color,
+                                        color.to_string(),
+                                        color,
+                                    );
+                                }
+                            });
+                        ui.end_row();
+                    });
+            });
+            if active {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new("Sources").small().weak());
+                    for source in if recording.device_retained {
+                        ["Physical relays", "Board RAM"]
+                    } else {
+                        ["Pealayer / API", "Board / RF"]
+                    } {
+                        egui::Frame::group(ui.style())
+                            .corner_radius(egui::CornerRadius::same(9))
+                            .inner_margin(egui::Margin::symmetric(7, 2))
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new(source).small());
+                            });
+                    }
+                });
+                if !recording.last_error.trim().is_empty() {
+                    ui.colored_label(ui.visuals().error_fg_color, &recording.last_error);
+                }
+            }
+            ui.add_space(7.0);
+            ui.horizontal_wrapped(|ui| {
                 start = ui
                     .add_enabled(
                         connected && !active && !busy,
@@ -1696,13 +1794,6 @@ fn draw_effect_recording_panel(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     )
                     .clicked();
             });
-            ui.label(
-                egui::RichText::new(
-                    "Recording uses real commands acknowledged by PCController. Finish the take, then refine its cues on the timeline below.",
-                )
-                .small()
-                .weak(),
-            );
         });
 
     let result = if start {
@@ -2152,17 +2243,35 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             ui.add_space(12.0);
                             let saved = !app.effect_library_draft.is_new;
                             let reference = app.effect_library_draft.reference.clone();
+                            let controller_reachable = app
+                                .engine_handle
+                                .is_connected
+                                .load(std::sync::atomic::Ordering::Relaxed);
                             ui.horizontal_wrapped(|ui| {
                                 if ui
-                                    .button(format!(
-                                        "{} {}",
-                                        crate::ui::icons::FLOPPY_DISK,
-                                        app.tr("Save to PCController")
-                                    ))
+                                    .button(if controller_reachable {
+                                        format!(
+                                            "{} {}",
+                                            crate::ui::icons::FLOPPY_DISK,
+                                            app.tr("Publish to PCController")
+                                        )
+                                    } else {
+                                        format!(
+                                            "{} {}",
+                                            crate::ui::icons::FLOPPY_DISK,
+                                            app.tr("Keep offline draft")
+                                        )
+                                    })
                                     .clicked()
                                 {
-                                    if let Err(error) = app.save_controller_effect() {
-                                        app.set_osd(error);
+                                    if controller_reachable {
+                                        if let Err(error) = app.save_controller_effect() {
+                                            app.set_osd(error);
+                                        }
+                                    } else {
+                                        app.save_config();
+                                        app.hardware_effect_authoring.status =
+                                            "Offline working copy saved".to_string();
                                     }
                                 }
                                 if ui
@@ -2222,6 +2331,12 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
             );
         });
     });
+    if app.show_effect_library_editor && !open {
+        // Closing the editor never throws away an offline working copy. The
+        // catalog itself remains PCController-owned; only this single draft is
+        // persisted by Pealayer until it can be published.
+        app.save_config();
+    }
     app.show_effect_library_editor = open;
 }
 

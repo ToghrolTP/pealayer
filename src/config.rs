@@ -445,6 +445,11 @@ pub struct AppConfig {
     pub workspace_profiles_revision: u32,
     #[serde(default)]
     pub active_workspace_profile: Option<String>,
+    /// One unsynchronised working copy. PCController remains the effect
+    /// catalog owner; this lets authors keep editing while it is offline and
+    /// publish the draft when the coordinator returns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_working_draft: Option<crate::app::ControllerEffectDraft>,
 }
 
 impl Default for AppConfig {
@@ -532,6 +537,7 @@ impl Default for AppConfig {
             workspace_profiles_initialized: true,
             workspace_profiles_revision: 1,
             active_workspace_profile: Some("nle".to_string()),
+            effect_working_draft: None,
         }
     }
 }

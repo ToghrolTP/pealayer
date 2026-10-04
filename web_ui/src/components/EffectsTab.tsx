@@ -32,6 +32,7 @@ import {
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
 import { effectGlyph, effectIconOptions } from '../effectIcons';
+import { EffectRecorder } from './EffectRecorder';
 
 interface EffectsTabProps {
   state: PlayerState;
@@ -211,6 +212,8 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
         <Button type="primary" icon={<PlusOutlined />} onClick={() => openEditor()}>{tr(locale, 'New effect')}</Button>
       </Space>
     </header>
+
+    <EffectRecorder state={state} sendCmd={sendCmd} locale={locale} />
 
     {effects.length === 0 ? <Card className="surface-card"><Empty description={tr(locale, 'No effects')}><Button type="primary" icon={<PlusOutlined />} onClick={() => openEditor()}>{tr(locale, 'Create effect')}</Button></Empty></Card> :
       <Collapse className="effect-groups" defaultActiveKey={grouped.map(([group]) => group)} items={grouped.map(([group, items]) => ({

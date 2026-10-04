@@ -6,6 +6,12 @@ use std::time::Duration;
 fn test_loopback_tcp_interop_commands_and_status() {
     unsafe {
         std::env::set_var("PEALAYER_PORT", "18085");
+        // Keep this integration listener isolated from a real Pealayer that
+        // may already own the production native pipe on the developer host.
+        std::env::set_var(
+            "APP_NAME",
+            format!("PealayerInteropTest{}", std::process::id()),
+        );
         std::env::set_var(
             "PEALAYER_SOCKET_PATH",
             format!("/tmp/pealayer_tcp_{}.sock", std::process::id()),

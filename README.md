@@ -67,6 +67,10 @@ does not seed or persist an independent effect catalog.
 The PCController Web UI, TUI, CLI/IPC, and other Pealayer instances see edits
 from the same catalog on their next authoritative snapshot.
 
+See [Effects recording and authoring](docs/EFFECTS-RECORDING.md) for the
+end-user workflow, terminology, offline behavior, Relay 8 example, and
+hardware-free verification.
+
 ### 🎬 Cinema-Grade Video Core & OpenGL RTT
 * **Hardware-Accelerated Render-To-Texture (RTT)**: Decodes video frames via NVDEC, VA-API, or D3D11VA and renders directly into an offscreen OpenGL framebuffer texture inside egui's rendering context.
 * **Aspect-Ratio-Locked Viewport**: Automatically maintains pixel-perfect 16:9 letterboxing/pillarboxing with high-DPI scaling and zero frame stretching.

@@ -102,6 +102,7 @@ pub struct HardwareCapabilities {
     pub strip_control: Option<HardwareStripControl>,
     pub strip_effects: Vec<HardwareStripEffect>,
     pub macros: Vec<HardwareMacro>,
+    pub effect_recording: HardwareEffectRecording,
 }
 
 impl HardwareCapabilities {
@@ -374,6 +375,21 @@ pub struct HardwareWarning {
     pub code: String,
     pub severity: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HardwareEffectRecording {
+    pub active: bool,
+    pub id: u8,
+    pub name: String,
+    pub mode: String,
+    pub category: String,
+    pub color: String,
+    pub steps: usize,
+    pub device_retained: bool,
+    pub overwritten: usize,
+    pub started_at: String,
+    pub last_error: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -2067,6 +2083,62 @@ fn parse_hardware_capabilities_with_front_panel(
             })
         })
         .collect();
+    let recording = snapshot.pointer("/macros/recording");
+    let effect_recording = HardwareEffectRecording {
+        active: recording
+            .and_then(|value| value.get("active"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        id: recording
+            .and_then(|value| value.get("id"))
+            .and_then(Value::as_u64)
+            .and_then(|value| u8::try_from(value).ok())
+            .unwrap_or_default(),
+        name: recording
+            .and_then(|value| value.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        mode: recording
+            .and_then(|value| value.get("mode"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        category: recording
+            .and_then(|value| value.get("category"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        color: recording
+            .and_then(|value| value.get("color"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        steps: recording
+            .and_then(|value| value.get("steps"))
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or_default(),
+        device_retained: recording
+            .and_then(|value| value.get("device_retained"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        overwritten: recording
+            .and_then(|value| value.get("overwritten"))
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or_default(),
+        started_at: recording
+            .and_then(|value| value.get("started_at"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        last_error: recording
+            .and_then(|value| value.get("last_error"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    };
 
     let active_relays = active_relays_from_mask(&relays, active_relay_bits);
 
@@ -2107,6 +2179,7 @@ fn parse_hardware_capabilities_with_front_panel(
         strip_control,
         strip_effects,
         macros,
+        effect_recording,
     }
 }
 
@@ -2554,7 +2627,18 @@ mod tests {
                 "instance_id": "USB\\VID_1A86&PID_7523\\BOARD-1"
             },
             "status": {"active_relays": 16},
-            "macros": {"library": [{
+            "macros": {"recording": {
+                "active": true,
+                "id": 8,
+                "name": "Seat take",
+                "mode": "auto",
+                "category": "Motion",
+                "color": "violet",
+                "steps": 12,
+                "device_retained": false,
+                "overwritten": 0,
+                "started_at": "2026-10-05T12:00:00Z"
+            }, "library": [{
                 "id": 3,
                 "name": "Thunder",
                 "mode": "mcu",
@@ -2623,6 +2707,10 @@ mod tests {
         assert!(parsed.macros[0].keep_outputs_on_cancel);
         assert_eq!(parsed.macros[0].board_profile_key, "cafe-cinema");
         assert_eq!(parsed.macros[0].board_profile_mode, "motion");
+        assert!(parsed.effect_recording.active);
+        assert_eq!(parsed.effect_recording.id, 8);
+        assert_eq!(parsed.effect_recording.name, "Seat take");
+        assert_eq!(parsed.effect_recording.steps, 12);
     }
 
     #[test]

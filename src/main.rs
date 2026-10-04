@@ -618,7 +618,10 @@ fn main() -> eframe::Result {
                     .dialogs
                     .effects_selection
                     .clone(),
-                effect_library_draft: crate::app::ControllerEffectDraft::default(),
+                effect_library_draft: loaded_config
+                    .effect_working_draft
+                    .clone()
+                    .unwrap_or_default(),
                 effect_group_draft: None,
                 track_muted: std::collections::BTreeSet::new(),
                 track_soloed: std::collections::BTreeSet::new(),

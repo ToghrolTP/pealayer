@@ -65,7 +65,7 @@ pub enum EffectPresetSource {
     ControllerStrip,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ControllerEffectDraft {
     pub reference: String,
     pub id: String,
@@ -137,15 +137,38 @@ pub struct EffectDragPayload {
     pub controller_lane: Option<crate::four_d::models::ControllerEffectLane>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct HardwareEffectAuthoringState {
     pub name: String,
+    pub category: String,
+    pub color: String,
+    /// `automatic` records every acknowledged app/board action, `device-clock`
+    /// uses the stricter device timestamp, and `board-retained` leaves the
+    /// bounded relay take in board RAM until Pealayer imports it.
+    pub capture_mode: String,
     pub active: bool,
     pub preview_active: bool,
     pub anchor_ms: u64,
     pub pending_operation: Option<String>,
     pub pending_saved_macro_id: Option<u64>,
     pub status: String,
+}
+
+impl Default for HardwareEffectAuthoringState {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            category: "Recorded".to_string(),
+            color: "violet".to_string(),
+            capture_mode: "automatic".to_string(),
+            active: false,
+            preview_active: false,
+            anchor_ms: 0,
+            pending_operation: None,
+            pending_saved_macro_id: None,
+            status: String::new(),
+        }
+    }
 }
 
 pub struct RttState {
@@ -878,6 +901,34 @@ impl eframe::App for PealayerApp {
                 recording: self.is_recording,
                 recording_armed: self.timeline.analog_tracks.iter().any(|track| track.armed),
                 recordable_track_count: self.timeline.analog_tracks.len(),
+                effect_recording: hardware
+                    .as_ref()
+                    .map(|capabilities| {
+                        let recording = &capabilities.effect_recording;
+                        crate::platform::interop::WebEffectRecording {
+                            active: recording.active,
+                            id: recording.id,
+                            name: recording.name.clone(),
+                            mode: recording.mode.clone(),
+                            category: recording.category.clone(),
+                            color: recording.color.clone(),
+                            steps: recording.steps,
+                            device_retained: recording.device_retained,
+                            overwritten: recording.overwritten,
+                            started_at: recording.started_at.clone(),
+                            last_error: recording.last_error.clone(),
+                            pending: self.hardware_effect_authoring.pending_operation.is_some(),
+                        }
+                    })
+                    .unwrap_or_else(|| crate::platform::interop::WebEffectRecording {
+                        active: self.hardware_effect_authoring.active,
+                        name: self.hardware_effect_authoring.name.clone(),
+                        mode: self.hardware_effect_authoring.capture_mode.clone(),
+                        category: self.hardware_effect_authoring.category.clone(),
+                        color: self.hardware_effect_authoring.color.clone(),
+                        pending: self.hardware_effect_authoring.pending_operation.is_some(),
+                        ..Default::default()
+                    }),
                 effects: self
                     .timeline
                     .templates
@@ -2038,7 +2089,28 @@ impl PealayerApp {
             })?;
         self.hardware_effect_authoring.anchor_ms =
             (self.seek_pos.unwrap_or(self.playback_time).max(0.0) * 1_000.0) as u64;
-        let command = format!("effect record start {name} Pealayer violet");
+        let category = Self::controller_command_argument(&self.hardware_effect_authoring.category)
+            .ok_or_else(|| {
+                "Effect category must be 1–64 letters, numbers, spaces, dashes, or underscores"
+                    .to_string()
+            })?;
+        let color = self
+            .hardware_effect_authoring
+            .color
+            .trim()
+            .to_ascii_lowercase();
+        if !matches!(
+            color.as_str(),
+            "red" | "blue" | "violet" | "purple" | "green" | "white"
+        ) {
+            return Err("Effect color must be red, blue, violet, green, or white".to_string());
+        }
+        let operation = match self.hardware_effect_authoring.capture_mode.as_str() {
+            "device-clock" => "start-mcu",
+            "board-retained" => "start-board",
+            _ => "start",
+        };
+        let command = format!("effect record {operation} {name} {category} {color}");
         self.request_hardware_effect_command("macro-start", command)
     }
 
@@ -2870,6 +2942,58 @@ impl PealayerApp {
                     self.sync_timeline_engine();
                 }
             }
+            InteropCommand::UpdateEffectCue {
+                instance_id,
+                start_time_ms,
+                duration_ms,
+            } => {
+                let Ok(instance_id) = uuid::Uuid::parse_str(&instance_id) else {
+                    self.set_osd(self.tr("Cue is no longer available"));
+                    return;
+                };
+                let Some(instance_index) = self
+                    .timeline
+                    .instances
+                    .iter()
+                    .position(|instance| instance.id == instance_id)
+                else {
+                    self.set_osd(self.tr("Cue is no longer available"));
+                    return;
+                };
+
+                let effect_id = self.timeline.instances[instance_index].effect_id;
+                let Some(template) = self
+                    .timeline
+                    .templates
+                    .iter()
+                    .find(|template| template.id == effect_id)
+                    .cloned()
+                else {
+                    self.set_osd(self.tr("Effect is no longer available"));
+                    return;
+                };
+
+                // Duration is placement-specific. Give a resized cue its own
+                // template so another placement of the reusable effect never
+                // changes underneath the user.
+                let resolved_effect_id = if template.duration_ms != duration_ms {
+                    let mut placement_template = template;
+                    placement_template.id = uuid::Uuid::new_v4();
+                    update_effect_duration(&mut placement_template, duration_ms);
+                    let id = placement_template.id;
+                    self.timeline.templates.push(placement_template);
+                    id
+                } else {
+                    effect_id
+                };
+
+                let instance = &mut self.timeline.instances[instance_index];
+                instance.start_time_ms = start_time_ms;
+                instance.effect_id = resolved_effect_id;
+                self.selected_instance_ids.clear();
+                self.selected_instance_ids.insert(instance_id);
+                self.sync_timeline_engine();
+            }
             InteropCommand::AddControllerEffectCue {
                 reference,
                 start_time_ms,
@@ -2980,6 +3104,39 @@ impl PealayerApp {
                     is_new: effect.is_new,
                 };
                 if let Err(error) = self.save_controller_effect() {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::StartControllerEffectRecording {
+                name,
+                category,
+                color,
+                mode,
+            } => {
+                self.hardware_effect_authoring.name = name;
+                self.hardware_effect_authoring.category = category;
+                self.hardware_effect_authoring.color = color;
+                self.hardware_effect_authoring.capture_mode = mode;
+                if let Err(error) = self.start_hardware_effect_recording() {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::RefreshControllerEffectRecording => {
+                if let Err(error) = self.refresh_hardware_effect_recording() {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::SaveControllerEffectRecording => {
+                if let Err(error) = self.save_hardware_effect_recording() {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::DiscardControllerEffectRecording => {
+                if let Err(error) = self.discard_hardware_effect_recording() {
                     self.set_osd(error);
                     return;
                 }
@@ -4655,6 +4812,10 @@ impl PealayerApp {
         };
         cfg.workspace_profiles = self.workspace_profiles.clone();
         cfg.active_workspace_profile = self.active_workspace_profile.clone();
+        cfg.effect_working_draft = (!self.effect_library_draft.name.trim().is_empty()
+            || !self.effect_library_draft.steps.is_empty()
+            || !self.effect_library_draft.program_json.trim().is_empty())
+        .then(|| self.effect_library_draft.clone());
         cfg
     }
 
@@ -4780,6 +4941,9 @@ impl PealayerApp {
         self.status_bar = config.status_bar;
         self.workspace_profiles = config.workspace_profiles.clone();
         self.active_workspace_profile = config.active_workspace_profile.clone();
+        if let Some(draft) = config.effect_working_draft.clone() {
+            self.effect_library_draft = draft;
+        }
         crate::platform::windows::configure_window_composition(
             self.windows_dwm_theming,
             self.windows_mica_backdrop,
