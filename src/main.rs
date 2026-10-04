@@ -742,6 +742,8 @@ fn main() -> eframe::Result {
                 timeline_middle_button_pan: loaded_config.timeline_middle_button_pan,
                 timeline_middle_axis_lock_modifiers: loaded_config
                     .timeline_middle_axis_lock_modifiers,
+                timeline_animated_navigation: loaded_config.timeline_animated_navigation,
+                timeline_navigation_transition_ms: loaded_config.timeline_navigation_transition_ms,
                 non_user_control_visibility: loaded_config.non_user_control_visibility,
                 prefix_relay_identifiers: loaded_config.prefix_relay_identifiers,
                 live_pwm_updates: loaded_config.live_pwm_updates,

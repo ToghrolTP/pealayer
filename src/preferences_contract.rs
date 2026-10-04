@@ -494,6 +494,21 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Timeline navigation",
             "Constrain middle-button pan with Shift or Ctrl",
         ),
+        PreferenceControl::boolean(
+            "timeline_animated_navigation",
+            "input",
+            "Timeline navigation",
+            "Animate timeline navigation",
+        ),
+        PreferenceControl::number(
+            "timeline_navigation_transition_ms",
+            "input",
+            "Timeline navigation",
+            "Navigation transition duration (milliseconds)",
+            50.0,
+            2_000.0,
+            10.0,
+        ),
         PreferenceControl::select(
             "non_user_control_visibility",
             "hardware",
@@ -830,6 +845,8 @@ mod tests {
         assert!(config.timeline_shift_wheel_horizontal_scroll);
         assert!(config.timeline_middle_button_pan);
         assert!(config.timeline_middle_axis_lock_modifiers);
+        assert!(config.timeline_animated_navigation);
+        assert_eq!(config.timeline_navigation_transition_ms, 220);
 
         let controls = preference_controls(&config);
         for key in [
@@ -839,6 +856,7 @@ mod tests {
             "timeline_shift_wheel_horizontal_scroll",
             "timeline_middle_button_pan",
             "timeline_middle_axis_lock_modifiers",
+            "timeline_animated_navigation",
         ] {
             let control = controls
                 .iter()
@@ -848,6 +866,17 @@ mod tests {
             assert_eq!(control.section, "input");
             assert_eq!(control.group, "Timeline navigation");
         }
+
+        let transition = controls
+            .iter()
+            .find(|control| control.key == "timeline_navigation_transition_ms")
+            .expect("missing timeline navigation transition preference");
+        assert!(matches!(transition.kind, PreferenceControlKind::Number));
+        assert_eq!(transition.section, "input");
+        assert_eq!(transition.group, "Timeline navigation");
+        assert_eq!(transition.minimum, Some(50.0));
+        assert_eq!(transition.maximum, Some(2_000.0));
+        assert_eq!(transition.step, Some(10.0));
     }
 
     #[test]

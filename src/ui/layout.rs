@@ -499,6 +499,34 @@ fn timeline_offset_to_reveal_x(
     revealed.clamp(0.0, max_offset)
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct TimelineNavigationTransition {
+    start_offset_x: f32,
+    target_offset_x: f32,
+    started_at_seconds: f64,
+    duration_seconds: f32,
+}
+
+fn sample_timeline_navigation_transition(
+    transition: TimelineNavigationTransition,
+    now_seconds: f64,
+) -> (f32, bool) {
+    let duration = f64::from(transition.duration_seconds.max(f32::EPSILON));
+    let elapsed = (now_seconds - transition.started_at_seconds).max(0.0);
+    let complete = elapsed + 1.0e-6 >= duration;
+    let progress = if complete {
+        1.0
+    } else {
+        (elapsed / duration).clamp(0.0, 1.0)
+    };
+    // Smoothstep starts and stops gently while remaining deterministic and
+    // short enough that navigation never feels disconnected from its action.
+    let eased = progress * progress * (3.0 - 2.0 * progress);
+    let offset = f64::from(transition.start_offset_x)
+        + f64::from(transition.target_offset_x - transition.start_offset_x) * eased;
+    (offset as f32, complete)
+}
+
 fn timeline_frame_step_ms(media_fps: f64, frame_count: u32) -> u64 {
     if media_fps.is_finite() && media_fps > 0.0 {
         ((1_000.0 * f64::from(frame_count.max(1))) / media_fps)
@@ -5003,6 +5031,29 @@ mod timeline_row_tests {
         assert_eq!(
             timeline_offset_to_reveal_x(400.0, 50.0, 1_000.0, 400.0),
             26.0
+        );
+    }
+
+    #[test]
+    fn timeline_navigation_transition_eases_between_exact_endpoints() {
+        let transition = TimelineNavigationTransition {
+            start_offset_x: 100.0,
+            target_offset_x: 500.0,
+            started_at_seconds: 10.0,
+            duration_seconds: 0.2,
+        };
+
+        assert_eq!(
+            sample_timeline_navigation_transition(transition, 10.0),
+            (100.0, false)
+        );
+        assert_eq!(
+            sample_timeline_navigation_transition(transition, 10.1),
+            (300.0, false)
+        );
+        assert_eq!(
+            sample_timeline_navigation_transition(transition, 10.2),
+            (500.0, true)
         );
     }
 
@@ -12710,9 +12761,53 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let ((rect, response), clicked_any_clip, clicked_any_keyframe) = timeline_scroll.inner;
 
                             let mut timeline_scroll_changed = false;
+                            let navigation_transition_id =
+                                timeline_scroll_id.with("navigation-transition");
+                            if self.app.timeline_animated_navigation {
+                                if let Some(transition) = ui.data(|data| {
+                                    data.get_temp::<TimelineNavigationTransition>(
+                                        navigation_transition_id,
+                                    )
+                                }) {
+                                    let now_seconds = ui.input(|input| input.time);
+                                    let (offset_x, complete) =
+                                        sample_timeline_navigation_transition(
+                                            transition,
+                                            now_seconds,
+                                        );
+                                    let max_offset = (timeline_content_size.x
+                                        - timeline_viewport.width())
+                                        .max(0.0);
+                                    timeline_scroll_state.offset.x =
+                                        offset_x.clamp(0.0, max_offset);
+                                    timeline_scroll_changed = true;
+                                    if complete {
+                                        ui.data_mut(|data| {
+                                            data.remove_temp::<TimelineNavigationTransition>(
+                                                navigation_transition_id,
+                                            );
+                                        });
+                                    } else {
+                                        ui.ctx().request_repaint();
+                                    }
+                                }
+                            } else {
+                                ui.data_mut(|data| {
+                                    data.remove_temp::<TimelineNavigationTransition>(
+                                        navigation_transition_id,
+                                    );
+                                });
+                            }
                             if let Some((wheel_action, pointer_screen_x)) =
                                 pending_timeline_wheel
                             {
+                                // Direct manipulation always wins over a scripted
+                                // navigation transition.
+                                ui.data_mut(|data| {
+                                    data.remove_temp::<TimelineNavigationTransition>(
+                                        navigation_transition_id,
+                                    );
+                                });
                                 match wheel_action {
                                     TimelineWheelAction::Zoom(delta) => {
                                         let next_zoom =
@@ -12772,6 +12867,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 && pointer_position
                                     .is_some_and(|position| timeline_viewport.contains(position))
                             {
+                                ui.data_mut(|data| {
+                                    data.remove_temp::<TimelineNavigationTransition>(
+                                        navigation_transition_id,
+                                    );
+                                });
                                 middle_pan_active = true;
                                 self.app.lasso_origin = None;
                                 self.app.lasso_rect = None;
@@ -13015,14 +13115,43 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     let playhead_x =
                                         (self.app.playback_time.max(0.0) as f32 * zoom)
                                             .min(timeline_content_size.x);
-                                    timeline_scroll_state.offset.x =
-                                        timeline_offset_to_reveal_x(
-                                            timeline_scroll_state.offset.x,
-                                            playhead_x,
-                                            timeline_content_size.x,
-                                            timeline_viewport.width(),
-                                        );
-                                    timeline_scroll_state.store(ui.ctx(), timeline_scroll_id);
+                                    let target_offset_x = timeline_offset_to_reveal_x(
+                                        timeline_scroll_state.offset.x,
+                                        playhead_x,
+                                        timeline_content_size.x,
+                                        timeline_viewport.width(),
+                                    );
+                                    if self.app.timeline_animated_navigation
+                                        && (target_offset_x - timeline_scroll_state.offset.x).abs()
+                                            > 0.5
+                                    {
+                                        let started_at_seconds = ui.input(|input| input.time);
+                                        ui.data_mut(|data| {
+                                            data.insert_temp(
+                                                navigation_transition_id,
+                                                TimelineNavigationTransition {
+                                                    start_offset_x: timeline_scroll_state.offset.x,
+                                                    target_offset_x,
+                                                    started_at_seconds,
+                                                    duration_seconds: self
+                                                        .app
+                                                        .timeline_navigation_transition_ms
+                                                        as f32
+                                                        / 1_000.0,
+                                                },
+                                            );
+                                        });
+                                        ui.ctx().request_repaint();
+                                    } else {
+                                        ui.data_mut(|data| {
+                                            data.remove_temp::<TimelineNavigationTransition>(
+                                                navigation_transition_id,
+                                            );
+                                        });
+                                        timeline_scroll_state.offset.x = target_offset_x;
+                                        timeline_scroll_state
+                                            .store(ui.ctx(), timeline_scroll_id);
+                                    }
                                     ui.close();
                                 }
                                 ui.separator();

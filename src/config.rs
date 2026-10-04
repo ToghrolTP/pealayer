@@ -416,6 +416,8 @@ pub struct AppConfig {
     pub timeline_shift_wheel_horizontal_scroll: bool,
     pub timeline_middle_button_pan: bool,
     pub timeline_middle_axis_lock_modifiers: bool,
+    pub timeline_animated_navigation: bool,
+    pub timeline_navigation_transition_ms: u32,
     pub non_user_control_visibility: NonUserControlVisibility,
     #[serde(alias = "prefix_relay_numbers")]
     pub prefix_relay_identifiers: bool,
@@ -501,6 +503,8 @@ impl Default for AppConfig {
             timeline_shift_wheel_horizontal_scroll: true,
             timeline_middle_button_pan: true,
             timeline_middle_axis_lock_modifiers: true,
+            timeline_animated_navigation: true,
+            timeline_navigation_transition_ms: 220,
             non_user_control_visibility: NonUserControlVisibility::Dimmed,
             prefix_relay_identifiers: true,
             live_pwm_updates: true,
@@ -1221,6 +1225,11 @@ impl AppConfig {
         }
         if !(1..=120).contains(&self.frame_step_count) {
             return Err("frame_step_count must be between 1 and 120".to_string());
+        }
+        if !(50..=2_000).contains(&self.timeline_navigation_transition_ms) {
+            return Err(
+                "timeline_navigation_transition_ms must be between 50 and 2000".to_string(),
+            );
         }
         if self.subtitle_text_replacements.len() > 128 {
             return Err("subtitle_text_replacements contains more than 128 entries".to_string());
