@@ -162,7 +162,7 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 {
                     if let Some(path_str) = path.to_str() {
                         let _ = app.mpv.command("audio-add", &[path_str]);
-                        app.refresh_audio_tracks();
+                        app.refresh_media_tracks();
                     }
                 }
             }

@@ -213,7 +213,7 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             // Ideally we observe track-list changes, but we can also just
                             // refresh manually or rely on the user to see the new track.
                             // Let's manually refresh after a slight delay or just call it directly.
-                            app.refresh_sub_tracks();
+                            app.refresh_media_tracks();
                         }
                     }
                 }

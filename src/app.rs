@@ -269,6 +269,8 @@ pub struct PealayerApp {
     pub(crate) audio_delay: f64,
     pub(crate) current_aid: String,
     pub(crate) audio_tracks: Vec<AudioTrack>,
+    pub(crate) media_tracks: Vec<MediaTrackInfo>,
+    pub(crate) media_track_properties: Option<MediaTrackKey>,
 
     // 4D Cinema state
     pub(crate) show_four_d_editor: bool,
@@ -455,6 +457,92 @@ pub struct AudioTrack {
     pub id: i64,
     pub title: Option<String>,
     pub lang: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MediaTrackType {
+    Video,
+    Audio,
+    Subtitle,
+}
+
+impl MediaTrackType {
+    pub const fn mpv_name(self) -> &'static str {
+        match self {
+            Self::Video => "video",
+            Self::Audio => "audio",
+            Self::Subtitle => "sub",
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Video => "Video",
+            Self::Audio => "Audio",
+            Self::Subtitle => "Subtitles",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MediaTrackKey {
+    pub kind: MediaTrackType,
+    pub id: i64,
+}
+
+/// A factual snapshot of one `track-list/N` entry exposed by libmpv.
+///
+/// Fields stay optional because containers, demuxers, and stream types expose
+/// different subsets. The properties UI omits unavailable values instead of
+/// inventing placeholders or inferring technical details.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MediaTrackInfo {
+    pub list_index: i64,
+    pub kind: MediaTrackType,
+    pub id: i64,
+    pub source_id: Option<i64>,
+    pub title: Option<String>,
+    pub language: Option<String>,
+    pub image: Option<bool>,
+    pub album_art: Option<bool>,
+    pub is_default: Option<bool>,
+    pub forced: Option<bool>,
+    pub dependent: Option<bool>,
+    pub visual_impaired: Option<bool>,
+    pub hearing_impaired: Option<bool>,
+    pub hls_bitrate: Option<i64>,
+    pub program_id: Option<i64>,
+    pub codec: Option<String>,
+    pub codec_description: Option<String>,
+    pub codec_profile: Option<String>,
+    pub external: Option<bool>,
+    pub external_filename: Option<String>,
+    pub selected: Option<bool>,
+    pub main_selection: Option<i64>,
+    pub ffmpeg_index: Option<i64>,
+    pub decoder: Option<String>,
+    pub decoder_description: Option<String>,
+    pub demux_width: Option<i64>,
+    pub demux_height: Option<i64>,
+    pub crop_x: Option<i64>,
+    pub crop_y: Option<i64>,
+    pub crop_width: Option<i64>,
+    pub crop_height: Option<i64>,
+    pub channel_count: Option<i64>,
+    pub channel_layout: Option<String>,
+    pub sample_rate: Option<i64>,
+    pub fps: Option<f64>,
+    pub bitrate: Option<f64>,
+    pub rotation: Option<i64>,
+    pub pixel_aspect_ratio: Option<f64>,
+    pub format_name: Option<String>,
+    pub replaygain_track_peak: Option<f64>,
+    pub replaygain_track_gain: Option<f64>,
+    pub replaygain_album_peak: Option<f64>,
+    pub replaygain_album_gain: Option<f64>,
+    pub dolby_vision_profile: Option<i64>,
+    pub dolby_vision_level: Option<i64>,
+    pub metadata: std::collections::BTreeMap<String, String>,
 }
 
 impl eframe::App for PealayerApp {
@@ -1256,6 +1344,7 @@ impl eframe::App for PealayerApp {
                 crate::ui::effects_library::draw_editor(self, ui);
                 crate::ui::board_info::draw(self, ui);
                 crate::ui::hardware_control::draw(self, ui);
+                crate::ui::media_track_properties::draw(self, ui);
                 crate::ui::workspace_profiles::draw(self, ui);
 
                 crate::ui::open_url::draw(self, ui);
@@ -3187,9 +3276,7 @@ impl PealayerApp {
                     self.subtitle_text.clear();
                     self.clear_subtitle_overlay();
                     self.reset_scrub_state();
-                    self.refresh_sub_tracks();
-                    self.refresh_audio_tracks();
-                    self.refresh_video_tracks();
+                    self.refresh_media_tracks();
                     self.sync_subtitle_rendering();
                 }
                 Some(Ok(Event::FileLoaded)) => {
@@ -3229,9 +3316,7 @@ impl PealayerApp {
                             }
                         }
                     }
-                    self.refresh_sub_tracks();
-                    self.refresh_audio_tracks();
-                    self.refresh_video_tracks();
+                    self.refresh_media_tracks();
                 }
                 Some(Ok(_)) => {}
                 _ => break,
@@ -3850,29 +3935,6 @@ impl PealayerApp {
         self.is_scrubbing = false;
     }
 
-    pub(crate) fn refresh_sub_tracks(&mut self) {
-        self.sub_tracks.clear();
-        if let Ok(count) = self.mpv.get_property::<i64>("track-list/count") {
-            for i in 0..count {
-                let track_type_prop = format!("track-list/{}/type", i);
-                if let Ok(track_type) = self.mpv.get_property::<String>(&track_type_prop) {
-                    if track_type == "sub" {
-                        let id_prop = format!("track-list/{}/id", i);
-                        let lang_prop = format!("track-list/{}/lang", i);
-                        let title_prop = format!("track-list/{}/title", i);
-
-                        if let Ok(id) = self.mpv.get_property::<i64>(&id_prop) {
-                            let lang = self.mpv.get_property::<String>(&lang_prop).ok();
-                            let title = self.mpv.get_property::<String>(&title_prop).ok();
-
-                            self.sub_tracks.push(SubtitleTrack { id, title, lang });
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     fn selected_subtitle_is_bitmap(&self) -> bool {
         self.current_sid != "no"
             && self
@@ -3933,46 +3995,173 @@ impl PealayerApp {
         self.sync_subtitle_rendering();
     }
 
-    pub(crate) fn refresh_audio_tracks(&mut self) {
-        self.audio_tracks.clear();
-        if let Ok(count) = self.mpv.get_property::<i64>("track-list/count") {
-            for i in 0..count {
-                let track_type_prop = format!("track-list/{}/type", i);
-                if let Ok(track_type) = self.mpv.get_property::<String>(&track_type_prop) {
-                    if track_type == "audio" {
-                        let id_prop = format!("track-list/{}/id", i);
-                        let lang_prop = format!("track-list/{}/lang", i);
-                        let title_prop = format!("track-list/{}/title", i);
+    pub(crate) fn refresh_media_tracks(&mut self) {
+        let mut media_tracks = Vec::new();
+        let count = self
+            .mpv
+            .get_property::<i64>("track-list/count")
+            .unwrap_or(0);
+        for list_index in 0..count {
+            let prefix = format!("track-list/{list_index}");
+            let Ok(kind_name) = self.mpv.get_property::<String>(&format!("{prefix}/type")) else {
+                continue;
+            };
+            let kind = match kind_name.as_str() {
+                "video" => MediaTrackType::Video,
+                "audio" => MediaTrackType::Audio,
+                "sub" => MediaTrackType::Subtitle,
+                _ => continue,
+            };
+            let Ok(id) = self.mpv.get_property::<i64>(&format!("{prefix}/id")) else {
+                continue;
+            };
 
-                        if let Ok(id) = self.mpv.get_property::<i64>(&id_prop) {
-                            let lang = self.mpv.get_property::<String>(&lang_prop).ok();
-                            let title = self.mpv.get_property::<String>(&title_prop).ok();
+            let property = |name: &str| format!("{prefix}/{name}");
+            let string = |name: &str| self.mpv.get_property::<String>(&property(name)).ok();
+            let integer = |name: &str| self.mpv.get_property::<i64>(&property(name)).ok();
+            let number = |name: &str| {
+                self.mpv
+                    .get_property::<f64>(&property(name))
+                    .ok()
+                    .or_else(|| integer(name).map(|value| value as f64))
+            };
+            let boolean = |name: &str| self.mpv.get_property::<bool>(&property(name)).ok();
 
-                            self.audio_tracks.push(AudioTrack { id, title, lang });
-                        }
-                    }
+            let mut metadata = std::collections::BTreeMap::new();
+            let metadata_count = self
+                .mpv
+                .get_property::<i64>(&format!("{prefix}/metadata/list/count"))
+                .unwrap_or(0);
+            for metadata_index in 0..metadata_count {
+                let metadata_prefix = format!("{prefix}/metadata/list/{metadata_index}");
+                if let (Ok(key), Ok(value)) = (
+                    self.mpv
+                        .get_property::<String>(&format!("{metadata_prefix}/key")),
+                    self.mpv
+                        .get_property::<String>(&format!("{metadata_prefix}/value")),
+                ) {
+                    metadata.insert(key, value);
                 }
             }
+
+            media_tracks.push(MediaTrackInfo {
+                list_index,
+                kind,
+                id,
+                source_id: integer("src-id"),
+                title: string("title"),
+                language: string("lang"),
+                image: boolean("image"),
+                album_art: boolean("albumart"),
+                is_default: boolean("default"),
+                forced: boolean("forced"),
+                dependent: boolean("dependent"),
+                visual_impaired: boolean("visual-impaired"),
+                hearing_impaired: boolean("hearing-impaired"),
+                hls_bitrate: integer("hls-bitrate"),
+                program_id: integer("program-id"),
+                codec: string("codec"),
+                codec_description: string("codec-desc"),
+                codec_profile: string("codec-profile"),
+                external: boolean("external"),
+                external_filename: string("external-filename"),
+                selected: boolean("selected"),
+                main_selection: integer("main-selection"),
+                ffmpeg_index: integer("ff-index"),
+                decoder: string("decoder"),
+                decoder_description: string("decoder-desc"),
+                demux_width: integer("demux-w"),
+                demux_height: integer("demux-h"),
+                crop_x: integer("demux-crop-x"),
+                crop_y: integer("demux-crop-y"),
+                crop_width: integer("demux-crop-w"),
+                crop_height: integer("demux-crop-h"),
+                channel_count: integer("demux-channel-count"),
+                channel_layout: string("demux-channels"),
+                sample_rate: integer("demux-samplerate"),
+                fps: number("demux-fps"),
+                bitrate: number("demux-bitrate"),
+                rotation: integer("demux-rotation"),
+                pixel_aspect_ratio: number("demux-par"),
+                format_name: string("format-name"),
+                replaygain_track_peak: number("replaygain-track-peak"),
+                replaygain_track_gain: number("replaygain-track-gain"),
+                replaygain_album_peak: number("replaygain-album-peak"),
+                replaygain_album_gain: number("replaygain-album-gain"),
+                dolby_vision_profile: integer("dolby-vision-profile"),
+                dolby_vision_level: integer("dolby-vision-level"),
+                metadata,
+            });
+        }
+
+        self.video_tracks = media_tracks
+            .iter()
+            .filter(|track| track.kind == MediaTrackType::Video)
+            .map(|track| VideoTrack {
+                id: track.id,
+                title: track.title.clone(),
+                lang: track.language.clone(),
+            })
+            .collect();
+        self.audio_tracks = media_tracks
+            .iter()
+            .filter(|track| track.kind == MediaTrackType::Audio)
+            .map(|track| AudioTrack {
+                id: track.id,
+                title: track.title.clone(),
+                lang: track.language.clone(),
+            })
+            .collect();
+        self.sub_tracks = media_tracks
+            .iter()
+            .filter(|track| track.kind == MediaTrackType::Subtitle)
+            .map(|track| SubtitleTrack {
+                id: track.id,
+                title: track.title.clone(),
+                lang: track.language.clone(),
+            })
+            .collect();
+        self.media_tracks = media_tracks;
+        if self.media_track_properties.is_some_and(|selection| {
+            !self
+                .media_tracks
+                .iter()
+                .any(|track| track.kind == selection.kind && track.id == selection.id)
+        }) {
+            self.media_track_properties = None;
         }
     }
 
-    pub(crate) fn refresh_video_tracks(&mut self) {
-        self.video_tracks.clear();
-        if let Ok(count) = self.mpv.get_property::<i64>("track-list/count") {
-            for i in 0..count {
-                let track_type_prop = format!("track-list/{}/type", i);
-                if let Ok(track_type) = self.mpv.get_property::<String>(&track_type_prop)
-                    && track_type == "video"
-                {
-                    let id_prop = format!("track-list/{}/id", i);
-                    let lang_prop = format!("track-list/{}/lang", i);
-                    let title_prop = format!("track-list/{}/title", i);
+    pub(crate) fn media_track(&self, selection: MediaTrackKey) -> Option<&MediaTrackInfo> {
+        self.media_tracks
+            .iter()
+            .find(|track| track.kind == selection.kind && track.id == selection.id)
+    }
 
-                    if let Ok(id) = self.mpv.get_property::<i64>(&id_prop) {
-                        let lang = self.mpv.get_property::<String>(&lang_prop).ok();
-                        let title = self.mpv.get_property::<String>(&title_prop).ok();
-                        self.video_tracks.push(VideoTrack { id, title, lang });
-                    }
+    pub(crate) fn select_media_track(&mut self, selection: MediaTrackKey) {
+        let id = selection.id.to_string();
+        let applied = match selection.kind {
+            MediaTrackType::Video => {
+                self.current_vid = id.clone();
+                self.mpv.set_property("vid", id)
+            }
+            MediaTrackType::Audio => {
+                self.current_aid = id.clone();
+                self.mpv.set_property("aid", id)
+            }
+            MediaTrackType::Subtitle => {
+                self.current_sid = id.clone();
+                let result = self.mpv.set_property("sid", id);
+                if result.is_ok() {
+                    self.set_subtitle_visibility(true);
+                }
+                result
+            }
+        };
+        if applied.is_ok() {
+            for track in &mut self.media_tracks {
+                if track.kind == selection.kind {
+                    track.selected = Some(track.id == selection.id);
                 }
             }
         }
@@ -4058,7 +4247,7 @@ impl PealayerApp {
             }
         }
         if subtitle_added {
-            self.refresh_sub_tracks();
+            self.refresh_media_tracks();
         }
 
         for path in paths
@@ -5455,6 +5644,8 @@ impl Default for PealayerApp {
             audio_delay: 0.0,
             current_aid: "no".to_string(),
             audio_tracks: Vec::new(),
+            media_tracks: Vec::new(),
+            media_track_properties: None,
             show_four_d_editor: true,
             dock_state: crate::ui::layout::create_initial_layout(),
             timeline: crate::four_d::models::Timeline::new(),

@@ -499,6 +499,8 @@ fn main() -> eframe::Result {
                 audio_delay: 0.0,
                 current_aid: "no".to_string(),
                 audio_tracks: Vec::new(),
+                media_tracks: Vec::new(),
+                media_track_properties: None,
                 seek_pos: None,
                 seek_controller: crate::mpv::seek::SeekController::new(
                     crate::mpv::seek::MpvSeekBackend::new(mpv_static),

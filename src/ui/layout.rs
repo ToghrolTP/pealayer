@@ -1003,7 +1003,7 @@ fn effect_drag_source_with_action_gutter<R>(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum TimelineTrackKind {
-    Video,
+    Video(Option<i64>),
     Audio(i64),
     Subtitle(i64),
     ControllerEffect(crate::four_d::models::ControllerEffectLane),
@@ -1105,9 +1105,30 @@ fn manage_timeline_track(app: &mut PealayerApp, row: &TimelineTrackRow) {
         TimelineTrackKind::ControllerEffect(_) => {
             app.open_or_focus_tab(PealayerTab::EffectControls)
         }
-        TimelineTrackKind::Video => app.open_or_focus_tab(PealayerTab::ProgramMonitor),
+        TimelineTrackKind::Video(_) => app.open_or_focus_tab(PealayerTab::ProgramMonitor),
         TimelineTrackKind::Relay(_) | TimelineTrackKind::Hardware(_) => {}
     }
+}
+
+fn media_track_key(row: &TimelineTrackRow) -> Option<crate::app::MediaTrackKey> {
+    let (kind, id) = match row.kind {
+        TimelineTrackKind::Video(Some(id)) => (crate::app::MediaTrackType::Video, id),
+        TimelineTrackKind::Audio(id) => (crate::app::MediaTrackType::Audio, id),
+        TimelineTrackKind::Subtitle(id) => (crate::app::MediaTrackType::Subtitle, id),
+        TimelineTrackKind::Video(None)
+        | TimelineTrackKind::ControllerEffect(_)
+        | TimelineTrackKind::Relay(_)
+        | TimelineTrackKind::Hardware(_) => return None,
+    };
+    Some(crate::app::MediaTrackKey { kind, id })
+}
+
+fn open_media_track_properties(app: &mut PealayerApp, row: &TimelineTrackRow) -> bool {
+    let Some(selection) = media_track_key(row) else {
+        return false;
+    };
+    crate::ui::media_track_properties::open(app, selection.kind, selection.id);
+    true
 }
 
 fn default_hardware_track_state(
@@ -1261,7 +1282,7 @@ fn all_timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
                 control_key: None,
                 relay_ids: Vec::new(),
                 dimmed: false,
-                kind: TimelineTrackKind::Video,
+                kind: TimelineTrackKind::Video(None),
             });
         } else {
             for (ordinal, track) in app.video_tracks.iter().enumerate() {
@@ -1291,7 +1312,7 @@ fn all_timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
                     control_key: None,
                     relay_ids: Vec::new(),
                     dimmed: false,
-                    kind: TimelineTrackKind::Video,
+                    kind: TimelineTrackKind::Video(Some(track.id)),
                 });
             }
         }
@@ -4955,7 +4976,7 @@ mod timeline_row_tests {
                 control_key: None,
                 relay_ids: Vec::new(),
                 dimmed: false,
-                kind: TimelineTrackKind::Video,
+                kind: TimelineTrackKind::Video(Some(1)),
             },
             TimelineTrackRow {
                 key: "media:audio:1".to_string(),
@@ -5048,7 +5069,7 @@ mod timeline_row_tests {
 
         let rows = timeline_track_rows(&app);
         assert_eq!(rows.len(), 5);
-        assert_eq!(rows[0].kind, TimelineTrackKind::Video);
+        assert_eq!(rows[0].kind, TimelineTrackKind::Video(Some(1)));
         assert_eq!(rows[1].kind, TimelineTrackKind::Audio(7));
         assert_eq!(rows[2].kind, TimelineTrackKind::Audio(8));
         assert_eq!(rows[3].kind, TimelineTrackKind::Subtitle(11));
@@ -9306,6 +9327,18 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     );
                                                 }
                                                 ui.separator();
+                                                if media_track_key(row).is_some()
+                                                    && ui
+                                                        .button(format!(
+                                                            "{}  {}",
+                                                            crate::ui::icons::INFO,
+                                                            self.app.tr("Properties...")
+                                                        ))
+                                                        .clicked()
+                                                {
+                                                    open_media_track_properties(self.app, row);
+                                                    ui.close();
+                                                }
                                                 if ui
                                                     .button(format!(
                                                         "{}  {}",
@@ -9656,6 +9689,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     }
                                     if response.clicked() && !media_control_clicked {
                                         match track_row.kind {
+                                            TimelineTrackKind::Video(Some(track_id)) => {
+                                                self.app.select_media_track(crate::app::MediaTrackKey {
+                                                    kind: crate::app::MediaTrackType::Video,
+                                                    id: track_id,
+                                                });
+                                            }
                                             TimelineTrackKind::Audio(track_id) => {
                                                 let track_id = track_id.to_string();
                                                 self.app.current_aid = track_id.clone();
@@ -9671,6 +9710,20 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
                                     }
                                     response.context_menu(|ui| {
+                                        if media_track_key(track_row).is_some() {
+                                            if ui
+                                                .button(format!(
+                                                    "{}  {}",
+                                                    crate::ui::icons::INFO,
+                                                    self.app.tr("Properties...")
+                                                ))
+                                                .clicked()
+                                            {
+                                                open_media_track_properties(self.app, track_row);
+                                                ui.close();
+                                            }
+                                            ui.separator();
+                                        }
                                         if let Some(control_key) = track_row.control_key.as_ref() {
                                             let capabilities = self.app.advertised_hardware();
                                             let control = capabilities.as_ref().and_then(|capabilities| {
@@ -10467,7 +10520,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         if self.app.duration > 0.0 {
                                             for (row_index, track_row) in timeline_rows.iter().enumerate() {
                                                 let (icon, color) = match track_row.kind {
-                                                    TimelineTrackKind::Video => (crate::ui::icons::FILE_VIDEO, egui::Color32::from_rgb(41, 128, 185)),
+                                                    TimelineTrackKind::Video(_) => (crate::ui::icons::FILE_VIDEO, egui::Color32::from_rgb(41, 128, 185)),
                                                     TimelineTrackKind::Audio(_) => (crate::ui::icons::SPEAKER_HIGH, egui::Color32::from_rgb(39, 174, 96)),
                                                     TimelineTrackKind::Subtitle(_) => (crate::ui::icons::SUBTITLES, egui::Color32::from_rgb(124, 92, 190)),
                                                     TimelineTrackKind::ControllerEffect(_)
