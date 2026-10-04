@@ -2006,6 +2006,54 @@ pub(crate) fn update_control_presentation(
     }
 }
 
+fn draw_control_icon_picker(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl,
+    size: f32,
+) {
+    let icon = crate::ui::icons::control(&control.kind, &control.icon);
+    let response = ui
+        .add(
+            egui::Button::new(egui::RichText::new(icon).size(size))
+                .frame(false)
+                .min_size(egui::vec2(size + 6.0, size + 6.0)),
+        )
+        .on_hover_text(app.tr("Choose channel icon"));
+    let popup_id = ui.make_persistent_id(("hardware-card-icon-picker", control.key.as_str()));
+    let search_id = ui.make_persistent_id(("hardware-card-icon-search", control.key.as_str()));
+    egui::Popup::menu(&response)
+        .id(popup_id)
+        .open_memory(
+            response
+                .clicked()
+                .then_some(egui::SetOpenCommand::Bool(true)),
+        )
+        .show(|ui| {
+            ui.set_min_width(220.0);
+            let mut selected = control.icon.clone();
+            let mut search = ui
+                .data_mut(|data| data.get_temp::<String>(search_id))
+                .unwrap_or_default();
+            if crate::ui::hardware_control::draw_control_icon_choices(
+                app.language,
+                ui,
+                &mut selected,
+                &mut search,
+            ) {
+                update_control_presentation(
+                    app,
+                    capabilities,
+                    control,
+                    "presentation-icon",
+                    serde_json::json!({"icon": selected}),
+                );
+            }
+            ui.data_mut(|data| data.insert_temp(search_id, search));
+        });
+}
+
 fn reordered_channel_rank(
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     drop: &HardwareChannelDrop,
@@ -3357,10 +3405,7 @@ fn draw_compact_control_card(
             configure_hardware_card_controls(ui);
             ui.set_width(card_content_width);
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(crate::ui::icons::control(&control.kind, &control.icon))
-                        .size(17.0),
-                );
+                draw_control_icon_picker(app, ui, capabilities, control, 17.0);
                 let indicator = draw_control_indicator(
                     app,
                     ui,
@@ -3687,13 +3732,7 @@ fn draw_control_card(
                     let mut editing =
                         ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
                     ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(crate::ui::icons::control(
-                                &control.kind,
-                                &control.icon,
-                            ))
-                            .size(18.0),
-                        );
+                        draw_control_icon_picker(app, ui, capabilities, control, 18.0);
                         let indicator = draw_control_indicator(
                             app,
                             ui,

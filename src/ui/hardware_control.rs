@@ -296,6 +296,54 @@ fn open_detail(
         .unwrap_or(0.0);
 }
 
+pub(crate) fn draw_control_icon_choices(
+    language: crate::config::AppLanguage,
+    ui: &mut egui::Ui,
+    selected_icon: &mut String,
+    search: &mut String,
+) -> bool {
+    let mut changed = false;
+    let search_hint = crate::ui::i18n::tr(language, "Search icons");
+    ui.add(
+        egui::TextEdit::singleline(search)
+            .hint_text(search_hint)
+            .desired_width(ui.available_width()),
+    );
+    if ui
+        .selectable_label(
+            selected_icon.is_empty(),
+            crate::ui::i18n::tr(language, "Use channel default"),
+        )
+        .clicked()
+    {
+        changed = !selected_icon.is_empty();
+        selected_icon.clear();
+        ui.close();
+    }
+    ui.separator();
+    let query = search.trim().to_ascii_lowercase();
+    for (key, label, glyph) in crate::ui::icons::CONTROL_ICON_PRESETS {
+        if !query.is_empty()
+            && !key.contains(&query)
+            && !label.to_ascii_lowercase().contains(&query)
+        {
+            continue;
+        }
+        if ui
+            .selectable_label(
+                selected_icon == *key,
+                format!("{glyph}  {}", crate::ui::i18n::tr(language, label)),
+            )
+            .clicked()
+        {
+            changed = selected_icon != *key;
+            *selected_icon = (*key).to_string();
+            ui.close();
+        }
+    }
+    changed
+}
+
 fn parse_display_order(value: &str, peer_count: usize) -> Option<u16> {
     let display_order = value.trim().parse::<usize>().ok()?;
     if peer_count == 0 || !(1..=peer_count).contains(&display_order) {
@@ -1006,41 +1054,12 @@ fn draw_channel_detail_page(
                         .width(ui.available_width().max(180.0))
                         .selected_text(format!("{selected_icon}  {}", app.tr(selected_name)))
                         .show_ui(ui, |ui| {
-                            let search_hint = app.tr("Search icons");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut app.hardware_control_icon_search)
-                                    .hint_text(search_hint)
-                                    .desired_width(ui.available_width()),
+                            draw_control_icon_choices(
+                                app.language,
+                                ui,
+                                &mut app.hardware_control_icon_draft,
+                                &mut app.hardware_control_icon_search,
                             );
-                            if ui
-                                .selectable_label(
-                                    app.hardware_control_icon_draft.is_empty(),
-                                    app.tr("Use channel default"),
-                                )
-                                .clicked()
-                            {
-                                app.hardware_control_icon_draft.clear();
-                            }
-                            ui.separator();
-                            let query =
-                                app.hardware_control_icon_search.trim().to_ascii_lowercase();
-                            for (key, label, glyph) in crate::ui::icons::CONTROL_ICON_PRESETS {
-                                if !query.is_empty()
-                                    && !key.contains(&query)
-                                    && !label.to_ascii_lowercase().contains(&query)
-                                {
-                                    continue;
-                                }
-                                if ui
-                                    .selectable_label(
-                                        app.hardware_control_icon_draft == *key,
-                                        format!("{glyph}  {}", app.tr(label)),
-                                    )
-                                    .clicked()
-                                {
-                                    app.hardware_control_icon_draft = (*key).to_string();
-                                }
-                            }
                         });
                     ui.end_row();
                     if matches!(control.kind.as_str(), "mosfet" | "pwm") {
