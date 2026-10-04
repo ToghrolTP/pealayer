@@ -720,14 +720,15 @@ fn hardware_control_activation(
     }
 }
 
-fn send_pwm_raw(app: &PealayerApp, channel: u8, raw: u16) {
-    let _ = app
-        .engine_handle
-        .sender
-        .send(crate::four_d::engine::EngineMessage::ControllerCall {
-            method: "controller.pwm.set".to_string(),
-            params: serde_json::json!({"channel": channel, "value": raw}),
-        });
+fn send_pwm_raw_with(
+    sender: &std::sync::mpsc::Sender<crate::four_d::engine::EngineMessage>,
+    channel: u8,
+    raw: u16,
+) {
+    let _ = sender.send(crate::four_d::engine::EngineMessage::ControllerCall {
+        method: "controller.pwm.set".to_string(),
+        params: serde_json::json!({"channel": channel, "value": raw}),
+    });
 }
 
 const PWM_LIVE_INTERVAL: std::time::Duration = std::time::Duration::from_micros(33_334);
@@ -756,6 +757,24 @@ pub(crate) fn transmit_pwm_editor_response(
     raw: u16,
     response: PwmEditorResponse,
 ) {
+    transmit_pwm_editor_response_with(
+        &app.engine_handle.sender,
+        app.live_pwm_updates,
+        ui,
+        channel,
+        raw,
+        response,
+    );
+}
+
+fn transmit_pwm_editor_response_with(
+    sender: &std::sync::mpsc::Sender<crate::four_d::engine::EngineMessage>,
+    live_updates: bool,
+    ui: &mut egui::Ui,
+    channel: u8,
+    raw: u16,
+    response: PwmEditorResponse,
+) {
     let sent_id = ui.make_persistent_id(("pwm_sent_value", channel));
     let last_send_id = ui.make_persistent_id(("pwm_last_send", channel));
     let now = std::time::Instant::now();
@@ -763,7 +782,7 @@ pub(crate) fn transmit_pwm_editor_response(
     let last_send = ui.data_mut(|data| data.get_temp::<std::time::Instant>(last_send_id));
     let due = pwm_transmit_due(
         response,
-        app.live_pwm_updates,
+        live_updates,
         last_send.map(|last| now.duration_since(last)),
         last_sent != Some(raw),
     );
@@ -771,7 +790,7 @@ pub(crate) fn transmit_pwm_editor_response(
     // rounded value matches the last live tick. That final acknowledged write
     // makes the board converge on exactly what the user sees.
     if due {
-        send_pwm_raw(app, channel, raw);
+        send_pwm_raw_with(sender, channel, raw);
         ui.data_mut(|data| {
             data.insert_temp(sent_id, raw);
             data.insert_temp(last_send_id, now);
@@ -992,6 +1011,14 @@ struct TimelineTrackRow {
     relay_ids: Vec<u8>,
     dimmed: bool,
     kind: TimelineTrackKind,
+}
+
+fn timeline_track_row_id(key: &str) -> egui::Id {
+    egui::Id::new(("timeline_track_row", key))
+}
+
+fn timeline_analog_track_row_id(key: &str) -> egui::Id {
+    egui::Id::new(("timeline_analog_track_row", key))
 }
 
 fn default_hardware_track_state(
@@ -4442,6 +4469,18 @@ fn draw_control_card_grid(
 #[cfg(test)]
 mod timeline_row_tests {
     use super::*;
+
+    #[test]
+    fn timeline_context_menu_identity_is_stable_per_channel_and_kind() {
+        assert_ne!(
+            timeline_track_row_id("hardware:relay.5"),
+            timeline_track_row_id("hardware:pwm.0")
+        );
+        assert_ne!(
+            timeline_track_row_id("hardware:pwm.0"),
+            timeline_analog_track_row_id("hardware:pwm.0")
+        );
+    }
 
     fn discard_ui_output(mut output: egui::FullOutput) {
         output.textures_delta.clear();
@@ -8920,8 +8959,18 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let rename_draft_id = egui::Id::new("timeline_track_rename_draft");
                                 let rename_focus_id = egui::Id::new("timeline_track_rename_focus");
                                 for track_row in &timeline_rows {
-                                    let (rect, response) = ui.allocate_exact_size(
+                                    let (rect, _) = ui.allocate_exact_size(
                                         egui::vec2(250.0, 32.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    // A popup remains open across frames. Auto-generated row IDs
+                                    // can be rebound to a different channel when the live catalog
+                                    // inserts/removes/reorders rows, which made a relay menu render
+                                    // a PWM channel on the next frame. Bind interaction identity to
+                                    // the stable track key instead.
+                                    let response = ui.interact(
+                                        rect,
+                                        timeline_track_row_id(&track_row.key),
                                         egui::Sense::click(),
                                     );
                                     let row_fill = if track_row.active {
@@ -9198,6 +9247,40 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     }
                                     response.context_menu(|ui| {
                                         if let Some(control_key) = track_row.control_key.as_ref() {
+                                            let capabilities = self.app.advertised_hardware();
+                                            let control = capabilities.as_ref().and_then(|capabilities| {
+                                                crate::ui::hardware_control::managed_controls(capabilities)
+                                                    .into_iter()
+                                                    .find(|control| control.key == *control_key)
+                                            });
+                                            if let (Some(capabilities), Some(control)) =
+                                                (capabilities.as_ref(), control.as_ref())
+                                            {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(crate::ui::icons::control(
+                                                        &control.kind,
+                                                        &control.icon,
+                                                    ));
+                                                    ui.strong(crate::ui::i18n::visual_text(
+                                                        self.app.language,
+                                                        &control.name,
+                                                    ));
+                                                });
+                                                ui.label(
+                                                    egui::RichText::new(&control.key)
+                                                        .monospace()
+                                                        .weak()
+                                                        .small(),
+                                                );
+                                                ui.separator();
+                                                crate::ui::hardware_control::draw_timeline_live_control(
+                                                    self.app,
+                                                    ui,
+                                                    capabilities,
+                                                    control,
+                                                );
+                                                ui.separator();
+                                            }
                                             if ui
                                                 .button(format!(
                                                     "{}  {}",
@@ -9271,6 +9354,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     self.app.tr("Unlink from timeline");
                                 let rename_track_label = self.app.tr("Rename");
                                 let manage_track_label = self.app.tr("Manage...");
+                                let analog_menu_capabilities = self.app.advertised_hardware();
+                                let analog_menu_controls = analog_menu_capabilities
+                                    .as_ref()
+                                    .map(crate::ui::hardware_control::managed_controls)
+                                    .unwrap_or_default();
+                                let analog_menu_sender = self.app.engine_handle.sender.clone();
+                                let analog_menu_live_updates = self.app.live_pwm_updates;
+                                let analog_menu_estop = self.app.estop_active;
                                 for track in self
                                     .app
                                     .timeline
@@ -9286,8 +9377,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     let advertised_row = all_timeline_rows
                                         .iter()
                                         .find(|row| row.key == track_key);
-                                    let (rect, response) = ui.allocate_exact_size(
+                                    let (rect, _) = ui.allocate_exact_size(
                                         egui::vec2(250.0, 40.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    let response = ui.interact(
+                                        rect,
+                                        timeline_analog_track_row_id(&track_key),
                                         egui::Sense::click(),
                                     );
                                     ui.painter().rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
@@ -9464,6 +9560,76 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         });
                                     }
                                     response.context_menu(|ui| {
+                                        if let Some(capabilities) = analog_menu_capabilities.as_ref()
+                                            && let Some(control) = analog_menu_controls
+                                                .iter()
+                                                .find(|control| control.key == control_key)
+                                        {
+                                            ui.horizontal(|ui| {
+                                                ui.label(crate::ui::icons::control(
+                                                    &control.kind,
+                                                    &control.icon,
+                                                ));
+                                                ui.strong(crate::ui::i18n::visual_text(
+                                                    display_language,
+                                                    &control.name,
+                                                ));
+                                            });
+                                            ui.label(
+                                                egui::RichText::new(&control.key)
+                                                    .monospace()
+                                                    .weak()
+                                                    .small(),
+                                            );
+                                            ui.separator();
+                                            if let Some(channel) = capabilities
+                                                .pwm_channels
+                                                .iter()
+                                                .find(|channel| channel.key == control_key)
+                                            {
+                                                let value_id = ui.make_persistent_id((
+                                                    "timeline_context_pwm_value",
+                                                    &control_key,
+                                                ));
+                                                let telemetry_raw = capabilities
+                                                    .telemetry
+                                                    .pwm_values
+                                                    .get(usize::from(channel.id))
+                                                    .copied()
+                                                    .flatten()
+                                                    .or_else(|| {
+                                                        (capabilities.telemetry.pwm_channel
+                                                            == Some(channel.id))
+                                                        .then_some(
+                                                            capabilities
+                                                                .telemetry
+                                                                .pwm_value
+                                                                .unwrap_or(0),
+                                                        )
+                                                    })
+                                                    .unwrap_or(0);
+                                                let mut percent = ui
+                                                    .data_mut(|data| data.get_temp::<f64>(value_id))
+                                                    .unwrap_or_else(|| pwm_percent(telemetry_raw));
+                                                let pwm_response = draw_pwm_editor_row(
+                                                    ui,
+                                                    &mut percent,
+                                                    !analog_menu_estop && !control.locked,
+                                                );
+                                                ui.data_mut(|data| {
+                                                    data.insert_temp(value_id, percent)
+                                                });
+                                                transmit_pwm_editor_response_with(
+                                                    &analog_menu_sender,
+                                                    analog_menu_live_updates,
+                                                    ui,
+                                                    channel.id,
+                                                    pwm_raw(percent),
+                                                    pwm_response,
+                                                );
+                                            }
+                                            ui.separator();
+                                        }
                                         if ui
                                             .button(format!(
                                                 "{}  {}",

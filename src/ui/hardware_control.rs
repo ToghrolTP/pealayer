@@ -352,7 +352,11 @@ fn parse_display_order(value: &str, peer_count: usize) -> Option<u16> {
     u16::try_from(display_order - 1).ok()
 }
 
-fn draw_manager_live_action(
+fn is_motion_live_verb(verb: &str) -> bool {
+    matches!(verb.to_ascii_lowercase().as_str(), "up" | "down" | "stop")
+}
+
+pub(crate) fn draw_manager_live_action(
     app: &mut PealayerApp,
     ui: &mut egui::Ui,
     capabilities: &HardwareCapabilities,
@@ -371,11 +375,9 @@ fn draw_manager_live_action(
             .actions
             .iter()
             .find(|action| action.verb.eq_ignore_ascii_case("stop"));
-        for action in control
-            .actions
-            .iter()
-            .filter(|action| matches!(action.verb.to_ascii_lowercase().as_str(), "up" | "down"))
-        {
+        for action in control.actions.iter().filter(|action| {
+            is_motion_live_verb(&action.verb) && !action.verb.eq_ignore_ascii_case("stop")
+        }) {
             let response = ui
                 .add_enabled(
                     enabled,
@@ -537,6 +539,56 @@ fn draw_manager_live_action(
             }
         }
     }
+}
+
+/// Draw the compact, type-aware live control used by a Timeline track menu.
+///
+/// Timeline rows must retain the semantic shape of the advertised channel:
+/// seats expose Up/Down/Stop, relays expose On/Off, and PWM channels expose a
+/// continuous value editor.  Keeping this in the shared hardware-control
+/// module prevents the Timeline from inventing a second (and previously
+/// incorrect) generic boolean model for every peripheral.
+pub(crate) fn draw_timeline_live_control(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    capabilities: &HardwareCapabilities,
+    control: &HardwareControl,
+) {
+    if let Some(channel) = pwm_channel(capabilities, &control.key) {
+        let value_id = ui.make_persistent_id(("timeline_context_pwm_value", &control.key));
+        let telemetry_raw = capabilities
+            .telemetry
+            .pwm_values
+            .get(usize::from(channel))
+            .copied()
+            .flatten()
+            .or_else(|| {
+                (capabilities.telemetry.pwm_channel == Some(channel))
+                    .then_some(capabilities.telemetry.pwm_value.unwrap_or(0))
+            })
+            .unwrap_or(0);
+        let mut percent = ui
+            .data_mut(|data| data.get_temp::<f64>(value_id))
+            .unwrap_or_else(|| f64::from(telemetry_raw) * 100.0 / 4095.0);
+        let response = crate::ui::layout::draw_pwm_editor_row(
+            ui,
+            &mut percent,
+            !app.estop_active && !control.locked,
+        );
+        ui.data_mut(|data| data.insert_temp(value_id, percent));
+        crate::ui::layout::transmit_pwm_editor_response(
+            app,
+            ui,
+            channel,
+            crate::ui::layout::pwm_raw(percent),
+            response,
+        );
+        return;
+    }
+
+    ui.horizontal_wrapped(|ui| {
+        draw_manager_live_action(app, ui, capabilities, control);
+    });
 }
 
 fn draw_motion_mode_selector(app: &mut PealayerApp, ui: &mut egui::Ui) {
@@ -1904,6 +1956,15 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn motion_live_controls_never_reuse_generic_boolean_verbs() {
+        assert!(is_motion_live_verb("up"));
+        assert!(is_motion_live_verb("Down"));
+        assert!(is_motion_live_verb("STOP"));
+        assert!(!is_motion_live_verb("on"));
+        assert!(!is_motion_live_verb("off"));
+    }
 
     #[test]
     fn display_order_accepts_only_editable_one_based_values() {
