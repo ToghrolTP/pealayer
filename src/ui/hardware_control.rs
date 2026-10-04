@@ -360,6 +360,61 @@ fn draw_manager_live_action(
 ) {
     let enabled = !app.estop_active && !control.locked;
     let on = channel_is_active(capabilities, control);
+    let is_motion = crate::ui::layout::is_motion_control(control);
+    // Motion is directional, not boolean. It must never fall through to the
+    // generic relay On/Off presentation merely because a profile maps the
+    // semantic control onto relay-backed outputs. A timed motion cue means
+    // Up or Down at its start and Stop at its end; the live manager exposes
+    // those same semantic actions.
+    if is_motion {
+        let stop = control
+            .actions
+            .iter()
+            .find(|action| action.verb.eq_ignore_ascii_case("stop"));
+        for action in control
+            .actions
+            .iter()
+            .filter(|action| matches!(action.verb.to_ascii_lowercase().as_str(), "up" | "down"))
+        {
+            let response = ui
+                .add_enabled(
+                    enabled,
+                    egui::Button::new(format!(
+                        "{} {}",
+                        crate::ui::icons::action(&action.verb),
+                        crate::ui::i18n::visual_text(app.language, &action.name)
+                    ))
+                    .min_size(egui::vec2(56.0, 25.0)),
+                )
+                .on_hover_text(crate::ui::i18n::visual_text(app.language, &action.name));
+            if app.motion_control_mode == crate::config::MotionControlMode::Hold
+                && let Some(stop) = stop
+            {
+                crate::ui::layout::update_held_motion_action(
+                    app, ui, &response, control, action, stop,
+                );
+            } else if crate::ui::layout::hardware_control_activated(app, ui, &response) {
+                invoke_action(app, control, action);
+            }
+        }
+        if let Some(stop) = crate::ui::layout::contextual_stop_action(capabilities, control) {
+            let response = ui
+                .add_enabled(
+                    enabled,
+                    egui::Button::new(format!(
+                        "{} {}",
+                        crate::ui::icons::action(&stop.verb),
+                        crate::ui::i18n::visual_text(app.language, &stop.name)
+                    ))
+                    .min_size(egui::vec2(56.0, 25.0)),
+                )
+                .on_hover_text(crate::ui::i18n::visual_text(app.language, &stop.name));
+            if crate::ui::layout::hardware_control_activated(app, ui, &response) {
+                invoke_action(app, control, stop);
+            }
+        }
+        return;
+    }
     let advertised = |verb: &str| {
         control
             .actions
@@ -433,7 +488,6 @@ fn draw_manager_live_action(
             }
         }
     } else {
-        let is_motion = crate::ui::layout::is_motion_control(control);
         let stop = control
             .actions
             .iter()
@@ -607,15 +661,22 @@ fn draw_channel_manager_page(
                     row_hovered || order_focused,
                 );
                 let dragging = crate::ui::layout::hardware_channel_is_dragging(ui, &control.key);
-                // Keep ordinary rows in the same interaction order as the
-                // containing window. A permanently-Foreground child layer
-                // sits above the window resize grip and menu popups, which
-                // made the row look correct while swallowing its controls.
-                // The row is still transformed as one unit while dragging.
-                let layer_id = egui::LayerId::new(
-                    egui::Order::Middle,
-                    egui::Id::new(("hardware-channel-manager-row", &control.key)),
+                // Ordinary rows must stay on the modal's own layer. Painting
+                // them on `Order::Middle` puts them behind this foreground
+                // window, producing a list made only of blank separators.
+                // Promote just the actively dragged row to its own layer so
+                // its shapes can move without covering menus, row actions, or
+                // the window resize grip during normal interaction.
+                let parent_layer_id = ui.layer_id();
+                let drag_layer_id = egui::LayerId::new(
+                    parent_layer_id.order,
+                    egui::Id::new(("hardware-channel-manager-drag", &control.key)),
                 );
+                let layer_id = if dragging {
+                    drag_layer_id
+                } else {
+                    parent_layer_id
+                };
                 let row = ui.scope_builder(egui::UiBuilder::new().layer_id(layer_id), |ui| {
                     if dragging {
                         ui.set_opacity(0.58);
@@ -951,7 +1012,25 @@ fn draw_channel_manager_page(
                     )
                 });
                 let row_rect = row.response.rect;
-                crate::ui::layout::finish_hardware_channel_card(ui, control, row_rect, layer_id);
+                // If this frame started the drag, the row was still painted
+                // on the parent layer. Transform an empty private layer for
+                // that one frame rather than accidentally moving the entire
+                // dialog. The next frame paints and moves the row on the
+                // private drag layer.
+                let transform_layer_id = if dragging {
+                    drag_layer_id
+                } else {
+                    egui::LayerId::new(
+                        parent_layer_id.order,
+                        egui::Id::new(("hardware-channel-manager-drag-pending", &control.key)),
+                    )
+                };
+                crate::ui::layout::finish_hardware_channel_card(
+                    ui,
+                    control,
+                    row_rect,
+                    transform_layer_id,
+                );
                 if let Some(drop) =
                     crate::ui::layout::hardware_channel_drop_target(ui, row_rect, control)
                 {
@@ -1674,9 +1753,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .advertised_hardware()
         .filter(|capabilities| capabilities.board_connected)
     else {
-        app.show_hardware_channels_dialog = false;
-        app.hardware_control_dialog_key = None;
-        app.hardware_channel_detail_active = false;
+        // Capability discovery is asynchronous during startup and reconnect.
+        // Keep the requested dialog state intact so an open channel manager
+        // returns as soon as the same board becomes available instead of
+        // silently destroying the user's persisted workspace state.
         return;
     };
     let selected = app
