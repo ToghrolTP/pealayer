@@ -1021,6 +1021,81 @@ fn timeline_analog_track_row_id(key: &str) -> egui::Id {
     egui::Id::new(("timeline_analog_track_row", key))
 }
 
+fn timeline_track_bring_into_view_id() -> egui::Id {
+    egui::Id::new("timeline_track_bring_into_view")
+}
+
+fn timeline_track_picker_item_is_dimmed(row: &TimelineTrackRow) -> bool {
+    !row.linked || !row.visible
+}
+
+fn request_timeline_track_into_view(
+    app: &mut PealayerApp,
+    ctx: &egui::Context,
+    filter_id: egui::Id,
+    row: &TimelineTrackRow,
+) {
+    // "Bring into view" is useful even for a currently hidden or unlinked
+    // track. Make the track renderable first, clear a filter that could still
+    // exclude it, then let the next layout pass scroll its real row into view.
+    if !row.linked {
+        app.set_timeline_track_linked(&row.key, true);
+    }
+    if !row.visible {
+        app.set_timeline_track_visible(&row.key, true);
+    }
+    ctx.data_mut(|data| {
+        data.insert_temp(filter_id, String::new());
+        data.insert_temp(timeline_track_bring_into_view_id(), row.key.clone());
+    });
+    ctx.request_repaint();
+}
+
+fn scroll_requested_timeline_track_into_view(
+    ui: &mut egui::Ui,
+    key: &str,
+    rect: egui::Rect,
+) -> bool {
+    let requested = ui.ctx().data_mut(|data| {
+        data.get_temp::<String>(timeline_track_bring_into_view_id())
+            .is_some_and(|requested| requested == key)
+    });
+    if requested {
+        // This row lives inside egui_dock's scrollable tab body. Scrolling the
+        // allocated row rectangle keeps the track caption and its canvas lane
+        // aligned instead of guessing an offset from the item index.
+        ui.scroll_to_rect(rect, Some(egui::Align::Center));
+        ui.ctx().data_mut(|data| {
+            data.remove_temp::<String>(timeline_track_bring_into_view_id());
+        });
+    }
+    requested
+}
+
+fn manage_timeline_track(app: &mut PealayerApp, row: &TimelineTrackRow) {
+    if let Some(control_key) = row.control_key.as_deref() {
+        if let Some(capabilities) = app.advertised_hardware() {
+            if let Some(control) = crate::ui::hardware_control::managed_controls(&capabilities)
+                .into_iter()
+                .find(|control| control.key == control_key)
+            {
+                open_control_dialog(app, &capabilities, &control);
+                return;
+            }
+        }
+    }
+
+    match &row.kind {
+        TimelineTrackKind::Audio(_) => app.show_audio_settings = true,
+        TimelineTrackKind::Subtitle(_) => app.show_sub_settings = true,
+        TimelineTrackKind::ControllerEffect(_) => {
+            app.open_or_focus_tab(PealayerTab::EffectControls)
+        }
+        TimelineTrackKind::Video => app.open_or_focus_tab(PealayerTab::ProgramMonitor),
+        TimelineTrackKind::Relay(_) | TimelineTrackKind::Hardware(_) => {}
+    }
+}
+
 fn default_hardware_track_state(
     app: &PealayerApp,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
@@ -6411,6 +6486,29 @@ mod timeline_row_tests {
             ControlIndicatorState::Unknown
         );
     }
+
+    #[test]
+    fn timeline_track_picker_dims_every_track_that_is_not_actually_shown() {
+        let row = |linked, visible| TimelineTrackRow {
+            key: "hardware:relay.5".to_string(),
+            name: "User Relay 5".to_string(),
+            detail: None,
+            active: false,
+            enabled: true,
+            linked,
+            visible,
+            icon: crate::ui::icons::PLUG.to_string(),
+            control_key: Some("relay.5".to_string()),
+            relay_ids: vec![5],
+            dimmed: false,
+            kind: TimelineTrackKind::Relay(5),
+        };
+
+        assert!(!timeline_track_picker_item_is_dimmed(&row(true, true)));
+        assert!(timeline_track_picker_item_is_dimmed(&row(true, false)));
+        assert!(timeline_track_picker_item_is_dimmed(&row(false, true)));
+        assert!(timeline_track_picker_item_is_dimmed(&row(false, false)));
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -8937,9 +9035,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     );
                                     ui.separator();
                                     for row in &all_timeline_rows {
-                                        ui.menu_button(
-                                            format!("{}  {}", row.icon, row.name),
-                                            |ui| {
+                                        let label = format!("{}  {}", row.icon, row.name);
+                                        let label = if timeline_track_picker_item_is_dimmed(row) {
+                                            egui::RichText::new(label)
+                                                .color(ui.visuals().weak_text_color())
+                                        } else {
+                                            egui::RichText::new(label)
+                                        };
+                                        ui.menu_button(label, |ui| {
                                                 let mut linked = row.linked;
                                                 if ui
                                                     .checkbox(
@@ -8967,8 +9070,35 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         &row.key, visible,
                                                     );
                                                 }
-                                            },
-                                        );
+                                                ui.separator();
+                                                if ui
+                                                    .button(format!(
+                                                        "{}  {}",
+                                                        crate::ui::icons::SLIDERS_HORIZONTAL,
+                                                        self.app.tr("Manage...")
+                                                    ))
+                                                    .clicked()
+                                                {
+                                                    manage_timeline_track(self.app, row);
+                                                    ui.close();
+                                                }
+                                                if ui
+                                                    .button(format!(
+                                                        "{}  {}",
+                                                        crate::ui::icons::FRAME_CORNERS,
+                                                        self.app.tr("Bring into view")
+                                                    ))
+                                                    .clicked()
+                                                {
+                                                    request_timeline_track_into_view(
+                                                        self.app,
+                                                        ui.ctx(),
+                                                        timeline_filter_id,
+                                                        row,
+                                                    );
+                                                    ui.close();
+                                                }
+                                            });
                                     }
                                 });
                                 let filter_response = header_ui.add_sized(
@@ -9006,7 +9136,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         timeline_track_row_id(&track_row.key),
                                         egui::Sense::click(),
                                     );
-                                    let row_fill = if track_row.active {
+                                    let brought_into_view = scroll_requested_timeline_track_into_view(
+                                        ui,
+                                        &track_row.key,
+                                        rect,
+                                    );
+                                    let row_fill = if brought_into_view {
+                                        ui.visuals().selection.bg_fill.gamma_multiply(0.24)
+                                    } else if track_row.active {
                                         ui.visuals().selection.bg_fill.gamma_multiply(
                                             if ui.visuals().dark_mode { 0.16 } else { 0.08 },
                                         )
@@ -9419,7 +9556,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         timeline_analog_track_row_id(&track_key),
                                         egui::Sense::click(),
                                     );
-                                    ui.painter().rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+                                    let brought_into_view = scroll_requested_timeline_track_into_view(
+                                        ui,
+                                        &track_key,
+                                        rect,
+                                    );
+                                    let row_fill = if brought_into_view {
+                                        ui.visuals().selection.bg_fill.gamma_multiply(0.24)
+                                    } else {
+                                        ui.visuals().extreme_bg_color
+                                    };
+                                    ui.painter().rect_filled(rect, 0.0, row_fill);
                                     ui.painter().rect_stroke(rect, 0.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
 
                                     // Amplitude Y-axis tick labels on track header right margin
