@@ -8401,26 +8401,36 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                     PealayerTab::EffectsLibrary => {
                         ui.horizontal(|ui| {
                             ui.heading(self.app.tr("Effects Library"));
-                            if ui
-                                .button(format!(
-                                    "{} {}",
-                                    crate::ui::icons::PLUS,
-                                    self.app.tr("New effect")
-                                ))
-                                .clicked()
-                            {
-                                crate::ui::effects_library::begin_new_effect(self.app, None);
-                            }
-                            if ui
-                                .button(format!(
-                                    "{} {}",
-                                    crate::ui::icons::PENCIL_SIMPLE,
-                                    self.app.tr("Manage effects")
-                                ))
-                                .clicked()
-                            {
-                                self.app.show_effect_library_editor = true;
-                            }
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    // Add in reverse declaration order because the
+                                    // layout anchors its first child at the trailing
+                                    // edge. The visible order remains New, Manage.
+                                    if ui
+                                        .button(format!(
+                                            "{} {}",
+                                            crate::ui::icons::PENCIL_SIMPLE,
+                                            self.app.tr("Manage effects")
+                                        ))
+                                        .clicked()
+                                    {
+                                        self.app.show_effect_library_editor = true;
+                                    }
+                                    if ui
+                                        .button(format!(
+                                            "{} {}",
+                                            crate::ui::icons::PLUS,
+                                            self.app.tr("New effect")
+                                        ))
+                                        .clicked()
+                                    {
+                                        crate::ui::effects_library::begin_new_effect(
+                                            self.app, None,
+                                        );
+                                    }
+                                },
+                            );
                         });
                         ui.add_space(4.0);
 
