@@ -5,6 +5,7 @@ pub mod cli;
 pub mod config;
 pub mod duration;
 pub mod four_d;
+pub mod hardware_shortcuts;
 pub mod media;
 pub mod mpv;
 pub mod platform;
@@ -582,6 +583,13 @@ fn main() -> eframe::Result {
                 hardware_control_up_color_draft: String::new(),
                 hardware_control_down_color_draft: String::new(),
                 hardware_control_pwm_percent: 0.0,
+                hardware_key_bindings: loaded_config.hardware_key_bindings.clone(),
+                hardware_binding_dialog_channel: None,
+                hardware_binding_draft: None,
+                hardware_binding_capturing: false,
+                hardware_hotkey_runtime:
+                    crate::hardware_shortcuts::GlobalHardwareShortcutRuntime::default(),
+                active_hardware_bindings: std::collections::BTreeSet::new(),
                 board_operation: None,
                 board_operation_status: String::new(),
                 board_settings_draft: None,

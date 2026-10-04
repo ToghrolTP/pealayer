@@ -330,6 +330,12 @@ pub struct PealayerApp {
     pub(crate) hardware_control_up_color_draft: String,
     pub(crate) hardware_control_down_color_draft: String,
     pub(crate) hardware_control_pwm_percent: f64,
+    pub(crate) hardware_key_bindings: Vec<crate::config::HardwareKeyBinding>,
+    pub(crate) hardware_binding_dialog_channel: Option<String>,
+    pub(crate) hardware_binding_draft: Option<crate::config::HardwareKeyBinding>,
+    pub(crate) hardware_binding_capturing: bool,
+    pub(crate) hardware_hotkey_runtime: crate::hardware_shortcuts::GlobalHardwareShortcutRuntime,
+    pub(crate) active_hardware_bindings: std::collections::BTreeSet<String>,
     pub(crate) board_operation: Option<String>,
     pub(crate) board_operation_status: String,
     pub(crate) board_settings_draft: Option<crate::four_d::controller::HardwareBoardSettings>,
@@ -916,6 +922,10 @@ impl eframe::App for PealayerApp {
             ctx.memory(|memory| memory.has_focus(crate::ui::layout::timeline_keyboard_focus_id()));
         let transport_shortcuts_enabled =
             !ctx.egui_wants_keyboard_input() && !timeline_keyboard_active;
+        self.process_hardware_key_bindings(
+            &ctx,
+            transport_shortcuts_enabled && self.hardware_binding_dialog_channel.is_none(),
+        );
         if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::Space)) {
             self.toggle_playback();
         }
@@ -1263,6 +1273,9 @@ impl eframe::App for PealayerApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // Never leave a press-and-hold channel active merely because Pealayer
+        // was closed before the operating system delivered the key-up event.
+        self.release_active_hardware_bindings();
         if let Some(hwnd) = self.window_handle {
             let _ = crate::platform::windows::remove_system_tray_icon(hwnd);
         } else {
@@ -1348,6 +1361,243 @@ fn board_settings_command(
 }
 
 impl PealayerApp {
+    pub(crate) fn open_hardware_bindings_for_channel(&mut self, channel_key: &str) {
+        self.hardware_binding_dialog_channel = Some(channel_key.to_string());
+        self.hardware_binding_draft = None;
+        self.hardware_binding_capturing = false;
+    }
+
+    pub(crate) fn open_hardware_binding_editor(
+        &mut self,
+        control: &crate::four_d::controller::HardwareControl,
+        existing_id: Option<&str>,
+    ) {
+        let binding = existing_id
+            .and_then(|id| {
+                self.hardware_key_bindings
+                    .iter()
+                    .find(|binding| binding.id == id)
+            })
+            .cloned()
+            .unwrap_or_else(|| {
+                let action = if matches!(control.kind.as_str(), "pwm" | "mosfet") {
+                    crate::config::HardwareKeyBindingAction::SetPwm { percent: 100.0 }
+                } else if let Some(action) = control.actions.first() {
+                    crate::config::HardwareKeyBindingAction::Invoke {
+                        action_id: action.id.clone(),
+                        label: action.name.clone(),
+                    }
+                } else {
+                    crate::config::HardwareKeyBindingAction::default()
+                };
+                crate::config::HardwareKeyBinding {
+                    channel_key: control.key.clone(),
+                    action,
+                    ..Default::default()
+                }
+            });
+        self.hardware_binding_dialog_channel = Some(control.key.clone());
+        self.hardware_binding_draft = Some(binding);
+        self.hardware_binding_capturing = false;
+    }
+
+    pub(crate) fn save_hardware_binding_draft(&mut self) -> Result<(), String> {
+        let binding = self
+            .hardware_binding_draft
+            .clone()
+            .ok_or_else(|| "No keyboard binding is being edited".to_string())?;
+        let mut candidate = self.runtime_config_snapshot();
+        if let Some(existing) = candidate
+            .hardware_key_bindings
+            .iter_mut()
+            .find(|existing| existing.id == binding.id)
+        {
+            *existing = binding.clone();
+        } else {
+            candidate.hardware_key_bindings.push(binding.clone());
+        }
+        candidate.validate()?;
+        if self.active_hardware_bindings.contains(&binding.id) {
+            self.dispatch_hardware_binding(&binding.id, false);
+        }
+        if let Some(existing) = self
+            .hardware_key_bindings
+            .iter_mut()
+            .find(|existing| existing.id == binding.id)
+        {
+            *existing = binding;
+        } else {
+            self.hardware_key_bindings.push(binding);
+        }
+        self.hardware_binding_draft = None;
+        self.hardware_binding_capturing = false;
+        self.save_config();
+        Ok(())
+    }
+
+    pub(crate) fn delete_hardware_binding(&mut self, id: &str) {
+        if self.active_hardware_bindings.contains(id) {
+            self.dispatch_hardware_binding(id, false);
+        }
+        self.hardware_key_bindings
+            .retain(|binding| binding.id != id);
+        self.active_hardware_bindings.remove(id);
+        self.hardware_binding_draft = None;
+        self.hardware_binding_capturing = false;
+        self.save_config();
+    }
+
+    fn release_active_hardware_bindings(&mut self) {
+        let active = self
+            .active_hardware_bindings
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        for binding_id in active {
+            self.dispatch_hardware_binding(&binding_id, false);
+        }
+        self.active_hardware_bindings.clear();
+    }
+
+    fn dispatch_hardware_binding(&mut self, binding_id: &str, pressed: bool) {
+        let Some(binding) = self
+            .hardware_key_bindings
+            .iter()
+            .find(|binding| binding.id == binding_id && binding.enabled)
+            .cloned()
+        else {
+            return;
+        };
+        if pressed {
+            if !self.active_hardware_bindings.insert(binding.id.clone()) {
+                return;
+            }
+        } else if !self.active_hardware_bindings.remove(&binding.id) {
+            return;
+        }
+
+        let Some(capabilities) = self
+            .advertised_hardware()
+            .filter(|capabilities| capabilities.board_connected)
+        else {
+            if pressed {
+                self.set_osd(self.tr("Keyboard shortcut ignored: no board is connected"));
+            }
+            return;
+        };
+        let control = crate::ui::hardware_control::managed_controls(&capabilities)
+            .into_iter()
+            .find(|control| control.key == binding.channel_key);
+        if pressed && self.estop_active {
+            self.active_hardware_bindings.remove(&binding.id);
+            self.set_osd(self.tr("Keyboard shortcut ignored: all outputs are disabled"));
+            return;
+        }
+        if pressed && control.as_ref().is_some_and(|control| control.locked) {
+            self.active_hardware_bindings.remove(&binding.id);
+            self.set_osd(self.tr("Keyboard shortcut ignored: this channel is locked"));
+            return;
+        }
+        let invoke = |app: &mut Self, action_id: &str| {
+            if let Err(error) =
+                crate::ui::hardware_control::invoke_action_by_id(app, &capabilities, action_id)
+            {
+                app.set_osd(error);
+            }
+        };
+
+        match binding.action {
+            crate::config::HardwareKeyBindingAction::Invoke { action_id, .. } => {
+                if pressed {
+                    invoke(self, &action_id);
+                }
+            }
+            crate::config::HardwareKeyBindingAction::Toggle {
+                on_action_id,
+                off_action_id,
+            } => {
+                if pressed {
+                    let active = control.as_ref().is_some_and(|control| {
+                        crate::ui::hardware_control::channel_is_active(&capabilities, control)
+                    });
+                    invoke(
+                        self,
+                        if active {
+                            &off_action_id
+                        } else {
+                            &on_action_id
+                        },
+                    );
+                }
+            }
+            crate::config::HardwareKeyBindingAction::SetPwm { percent } => {
+                if pressed {
+                    if let Some(channel) = capabilities
+                        .pwm_channels
+                        .iter()
+                        .find(|channel| channel.key == binding.channel_key)
+                        .map(|channel| channel.id)
+                    {
+                        crate::ui::hardware_control::set_pwm(self, channel, percent);
+                    } else {
+                        self.set_osd(self.tr("PWM channel is no longer advertised"));
+                    }
+                }
+            }
+            crate::config::HardwareKeyBindingAction::Hold {
+                press_action_id,
+                release_action_id,
+                ..
+            } => invoke(
+                self,
+                if pressed {
+                    &press_action_id
+                } else {
+                    &release_action_id
+                },
+            ),
+        }
+    }
+
+    fn process_hardware_key_bindings(&mut self, ctx: &egui::Context, allow_local: bool) {
+        self.hardware_hotkey_runtime
+            .sync(&self.hardware_key_bindings);
+        let global_events = self.hardware_hotkey_runtime.drain_events();
+        for event in global_events {
+            // Recording a new chord must never trigger another binding, but a
+            // key-up from a previously active hold binding is safety-critical:
+            // it still has to send the configured release/stop action.
+            if !event.pressed || !self.hardware_binding_capturing {
+                self.dispatch_hardware_binding(&event.binding_id, event.pressed);
+            }
+        }
+
+        let events = ctx.input(|input| input.events.clone());
+        let bindings = self
+            .hardware_key_bindings
+            .iter()
+            .filter(|binding| binding.enabled && !binding.global)
+            .cloned()
+            .collect::<Vec<_>>();
+        for event in &events {
+            let mut matched = false;
+            for binding in &bindings {
+                if let Some(pressed) =
+                    crate::hardware_shortcuts::event_matches_chord(event, &binding.chord)
+                    && (!pressed || (allow_local && !self.hardware_binding_capturing))
+                {
+                    self.dispatch_hardware_binding(&binding.id, pressed);
+                    matched = true;
+                }
+            }
+            if matched && let egui::Event::Key { key, modifiers, .. } = event {
+                ctx.input_mut(|input| {
+                    input.consume_key(*modifiers, *key);
+                });
+            }
+        }
+    }
+
     /// Ensures Windows Shell components (thumbnail toolbar and system tray icon)
     /// are initialized once a valid window handle is registered.
     pub fn ensure_shell_initialized(&mut self) {
@@ -3713,6 +3963,7 @@ impl PealayerApp {
         cfg.prefix_relay_identifiers = self.prefix_relay_identifiers;
         cfg.live_pwm_updates = self.live_pwm_updates;
         cfg.hardware_actions_on_press = self.hardware_actions_on_press;
+        cfg.hardware_key_bindings = self.hardware_key_bindings.clone();
         cfg.show_estop_control = self.show_estop_control;
         cfg.confirm_estop_release = self.confirm_estop_release;
         cfg.single_instance = self.single_instance;
@@ -3846,6 +4097,12 @@ impl PealayerApp {
         self.prefix_relay_identifiers = config.prefix_relay_identifiers;
         self.live_pwm_updates = config.live_pwm_updates;
         self.hardware_actions_on_press = config.hardware_actions_on_press;
+        if self.hardware_key_bindings != config.hardware_key_bindings {
+            // A file-watcher/API update may unregister or alter a held global
+            // shortcut. Release against the old contract before replacing it.
+            self.release_active_hardware_bindings();
+            self.hardware_key_bindings = config.hardware_key_bindings.clone();
+        }
         self.show_estop_control = config.show_estop_control;
         self.confirm_estop_release = config.confirm_estop_release;
         self.single_instance = config.single_instance;
@@ -4927,6 +5184,13 @@ impl Default for PealayerApp {
             hardware_control_up_color_draft: String::new(),
             hardware_control_down_color_draft: String::new(),
             hardware_control_pwm_percent: 0.0,
+            hardware_key_bindings: Vec::new(),
+            hardware_binding_dialog_channel: None,
+            hardware_binding_draft: None,
+            hardware_binding_capturing: false,
+            hardware_hotkey_runtime:
+                crate::hardware_shortcuts::GlobalHardwareShortcutRuntime::default(),
+            active_hardware_bindings: std::collections::BTreeSet::new(),
             board_operation: None,
             board_operation_status: String::new(),
             board_settings_draft: None,

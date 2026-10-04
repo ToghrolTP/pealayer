@@ -105,6 +105,156 @@ pub enum NonUserControlVisibility {
     Shown,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(default)]
+pub struct KeyChord {
+    /// Portable physical-key name using the keyboard-types/USB code vocabulary
+    /// (for example `KeyR`, `Digit5`, `F8`, or `Space`).
+    pub key: String,
+    pub control: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub super_key: bool,
+}
+
+impl Default for KeyChord {
+    fn default() -> Self {
+        Self {
+            key: "KeyA".to_string(),
+            control: false,
+            alt: false,
+            shift: false,
+            super_key: false,
+        }
+    }
+}
+
+impl KeyChord {
+    pub fn native_hotkey_string(&self) -> String {
+        let mut parts = Vec::new();
+        if self.shift {
+            parts.push("shift".to_string());
+        }
+        if self.control {
+            parts.push("control".to_string());
+        }
+        if self.alt {
+            parts.push("alt".to_string());
+        }
+        if self.super_key {
+            parts.push("super".to_string());
+        }
+        parts.push(self.key.clone());
+        parts.join("+")
+    }
+
+    pub fn display_name(&self) -> String {
+        let mut parts = Vec::new();
+        if self.control {
+            parts.push(
+                if cfg!(target_os = "macos") {
+                    "⌃"
+                } else {
+                    "Ctrl"
+                }
+                .to_string(),
+            );
+        }
+        if self.alt {
+            parts.push(
+                if cfg!(target_os = "macos") {
+                    "⌥"
+                } else {
+                    "Alt"
+                }
+                .to_string(),
+            );
+        }
+        if self.shift {
+            parts.push(
+                if cfg!(target_os = "macos") {
+                    "⇧"
+                } else {
+                    "Shift"
+                }
+                .to_string(),
+            );
+        }
+        if self.super_key {
+            parts.push(
+                if cfg!(target_os = "macos") {
+                    "⌘"
+                } else {
+                    "Super"
+                }
+                .to_string(),
+            );
+        }
+        let key = self
+            .key
+            .strip_prefix("Key")
+            .or_else(|| self.key.strip_prefix("Digit"))
+            .unwrap_or(&self.key);
+        parts.push(key.to_string());
+        parts.join(if cfg!(target_os = "macos") { "" } else { "+" })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum HardwareKeyBindingAction {
+    Invoke {
+        action_id: String,
+        label: String,
+    },
+    Toggle {
+        on_action_id: String,
+        off_action_id: String,
+    },
+    SetPwm {
+        percent: f64,
+    },
+    Hold {
+        press_action_id: String,
+        release_action_id: String,
+        press_label: String,
+        release_label: String,
+    },
+}
+
+impl Default for HardwareKeyBindingAction {
+    fn default() -> Self {
+        Self::Invoke {
+            action_id: String::new(),
+            label: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct HardwareKeyBinding {
+    pub id: String,
+    pub channel_key: String,
+    pub chord: KeyChord,
+    pub action: HardwareKeyBindingAction,
+    pub global: bool,
+    pub enabled: bool,
+}
+
+impl Default for HardwareKeyBinding {
+    fn default() -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            channel_key: String::new(),
+            chord: KeyChord::default(),
+            action: HardwareKeyBindingAction::default(),
+            global: false,
+            enabled: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct StatusBarConfig {
@@ -257,6 +407,7 @@ pub struct AppConfig {
     pub prefix_relay_identifiers: bool,
     pub live_pwm_updates: bool,
     pub hardware_actions_on_press: bool,
+    pub hardware_key_bindings: Vec<HardwareKeyBinding>,
     pub show_estop_control: bool,
     pub confirm_estop_release: bool,
     pub single_instance: bool,
@@ -326,6 +477,7 @@ impl Default for AppConfig {
             prefix_relay_identifiers: true,
             live_pwm_updates: true,
             hardware_actions_on_press: true,
+            hardware_key_bindings: Vec::new(),
             show_estop_control: true,
             confirm_estop_release: true,
             single_instance: true,
@@ -1122,6 +1274,64 @@ impl AppConfig {
                 return Err(format!("workspace profile icon is invalid: {id}"));
             }
         }
+        if self.hardware_key_bindings.len() > 512 {
+            return Err("hardware_key_bindings contains more than 512 bindings".to_string());
+        }
+        let mut binding_ids = std::collections::BTreeSet::new();
+        for binding in &self.hardware_key_bindings {
+            if binding.id.trim().is_empty() || !binding_ids.insert(binding.id.as_str()) {
+                return Err("hardware_key_bindings contains an empty or duplicate ID".to_string());
+            }
+            if binding.channel_key.trim().is_empty() || binding.channel_key.len() > 256 {
+                return Err(format!(
+                    "hardware binding {} has an invalid channel key",
+                    binding.id
+                ));
+            }
+            binding
+                .chord
+                .native_hotkey_string()
+                .parse::<global_hotkey::hotkey::HotKey>()
+                .map_err(|error| format!("hardware binding {}: {error}", binding.id))?;
+            match &binding.action {
+                HardwareKeyBindingAction::Invoke { action_id, .. } => {
+                    if action_id.trim().is_empty() {
+                        return Err(format!("hardware binding {} has no action", binding.id));
+                    }
+                }
+                HardwareKeyBindingAction::Toggle {
+                    on_action_id,
+                    off_action_id,
+                } => {
+                    if on_action_id.trim().is_empty() || off_action_id.trim().is_empty() {
+                        return Err(format!(
+                            "hardware binding {} has an invalid toggle",
+                            binding.id
+                        ));
+                    }
+                }
+                HardwareKeyBindingAction::SetPwm { percent } => {
+                    if !percent.is_finite() || !(0.0..=100.0).contains(percent) {
+                        return Err(format!(
+                            "hardware binding {} PWM percentage must be between 0 and 100",
+                            binding.id
+                        ));
+                    }
+                }
+                HardwareKeyBindingAction::Hold {
+                    press_action_id,
+                    release_action_id,
+                    ..
+                } => {
+                    if press_action_id.trim().is_empty() || release_action_id.trim().is_empty() {
+                        return Err(format!(
+                            "hardware binding {} has an invalid hold pair",
+                            binding.id
+                        ));
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -1647,6 +1857,49 @@ mod tests {
         assert_eq!(
             restored.non_user_control_visibility,
             NonUserControlVisibility::Shown
+        );
+    }
+
+    #[test]
+    fn hardware_key_bindings_round_trip_and_reject_unsafe_values() {
+        let binding = HardwareKeyBinding {
+            id: "seat-a-hold".to_string(),
+            channel_key: "seat.a".to_string(),
+            chord: KeyChord {
+                key: "KeyU".to_string(),
+                control: true,
+                ..Default::default()
+            },
+            action: HardwareKeyBindingAction::Hold {
+                press_action_id: "seat.a.up".to_string(),
+                release_action_id: "seat.a.stop".to_string(),
+                press_label: "Up".to_string(),
+                release_label: "Stop".to_string(),
+            },
+            global: true,
+            enabled: true,
+        };
+        let config = AppConfig {
+            hardware_key_bindings: vec![binding.clone()],
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+        let restored: AppConfig = serde_json::from_value(serde_json::to_value(&config).unwrap())
+            .expect("binding configuration round trip");
+        assert_eq!(restored.hardware_key_bindings, vec![binding]);
+
+        let mut invalid = config;
+        invalid.hardware_key_bindings.push(HardwareKeyBinding {
+            id: "bad-level".to_string(),
+            channel_key: "pwm.0".to_string(),
+            action: HardwareKeyBindingAction::SetPwm { percent: 101.0 },
+            ..Default::default()
+        });
+        assert!(
+            invalid
+                .validate()
+                .unwrap_err()
+                .contains("between 0 and 100")
         );
     }
 

@@ -21,6 +21,7 @@ fn selected_control(capabilities: &HardwareCapabilities, key: &str) -> Option<Ha
                     default_name: output.name.clone(),
                     control: output.control.clone(),
                     group: output.role.clone(),
+                    actions: raw_relay_actions(&output.key),
                     ..Default::default()
                 })
         })
@@ -39,6 +40,21 @@ fn selected_control(capabilities: &HardwareCapabilities, key: &str) -> Option<Ha
                     ..Default::default()
                 })
         })
+}
+
+fn raw_relay_actions(key: &str) -> Vec<HardwareAction> {
+    [
+        ("on", "On", crate::ui::icons::LIGHTNING),
+        ("off", "Off", crate::ui::icons::STOP_CIRCLE),
+    ]
+    .into_iter()
+    .map(|(verb, name, icon)| HardwareAction {
+        id: format!("{key}.{verb}"),
+        verb: verb.to_string(),
+        name: name.to_string(),
+        icon: icon.to_string(),
+    })
+    .collect()
 }
 
 fn relay_id(key: &str) -> Option<u8> {
@@ -117,8 +133,8 @@ pub(crate) fn invoke_action_by_id(
     capabilities: &HardwareCapabilities,
     action_id: &str,
 ) -> Result<(), String> {
-    let (control, action) = capabilities
-        .controls
+    let controls = managed_controls(capabilities);
+    let (control, action) = controls
         .iter()
         .find_map(|control| {
             control
@@ -144,7 +160,7 @@ fn set_relay(app: &PealayerApp, relay: u8, on: bool) {
         });
 }
 
-fn set_pwm(app: &PealayerApp, channel: u8, percent: f64) {
+pub(crate) fn set_pwm(app: &PealayerApp, channel: u8, percent: f64) {
     let raw = (percent.clamp(0.0, 100.0) * 4095.0 / 100.0).round() as u16;
     let _ = app
         .engine_handle
@@ -176,6 +192,7 @@ pub(crate) fn managed_controls(capabilities: &HardwareCapabilities) -> Vec<Hardw
                 default_name: output.name.clone(),
                 control: output.control.clone(),
                 group: output.role.clone(),
+                actions: raw_relay_actions(&output.key),
                 ..Default::default()
             });
         }
@@ -245,6 +262,92 @@ enum ChannelBulkAction {
     UnlinkTimeline,
     ShowTimelineTracks,
     HideTimelineTracks,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BindingEditorMode {
+    Action,
+    Toggle,
+    Pwm,
+    Hold,
+}
+
+fn binding_editor_mode(action: &crate::config::HardwareKeyBindingAction) -> BindingEditorMode {
+    match action {
+        crate::config::HardwareKeyBindingAction::Invoke { .. } => BindingEditorMode::Action,
+        crate::config::HardwareKeyBindingAction::Toggle { .. } => BindingEditorMode::Toggle,
+        crate::config::HardwareKeyBindingAction::SetPwm { .. } => BindingEditorMode::Pwm,
+        crate::config::HardwareKeyBindingAction::Hold { .. } => BindingEditorMode::Hold,
+    }
+}
+
+fn hardware_binding_action_label(
+    binding: &crate::config::HardwareKeyBinding,
+    app: &PealayerApp,
+) -> String {
+    match &binding.action {
+        crate::config::HardwareKeyBindingAction::Invoke { label, action_id } => {
+            if label.trim().is_empty() {
+                action_id.clone()
+            } else {
+                label.clone()
+            }
+        }
+        crate::config::HardwareKeyBindingAction::Toggle { .. } => app.tr("Toggle"),
+        crate::config::HardwareKeyBindingAction::SetPwm { percent } => {
+            format!("{} {:.1}%", app.tr("Set to"), percent)
+        }
+        crate::config::HardwareKeyBindingAction::Hold {
+            press_label,
+            release_label,
+            ..
+        } => format!(
+            "{} → {} · {} → {}",
+            app.tr("Press"),
+            press_label,
+            app.tr("Release"),
+            release_label
+        ),
+    }
+}
+
+fn channel_binding_summary(app: &PealayerApp, channel_key: &str) -> Option<(String, String)> {
+    let bindings = app
+        .hardware_key_bindings
+        .iter()
+        .filter(|binding| binding.channel_key == channel_key && binding.enabled)
+        .collect::<Vec<_>>();
+    if bindings.is_empty() {
+        return None;
+    }
+    let short = bindings
+        .iter()
+        .take(2)
+        .map(|binding| binding.chord.display_name())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let short = if bindings.len() > 2 {
+        format!("{short} +{}", bindings.len() - 2)
+    } else {
+        short
+    };
+    let details = bindings
+        .iter()
+        .map(|binding| {
+            format!(
+                "{} — {}{}",
+                binding.chord.display_name(),
+                hardware_binding_action_label(binding, app),
+                if binding.global {
+                    format!(" ({})", app.tr("Global"))
+                } else {
+                    String::new()
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some((short, details))
 }
 
 fn selected_channel_controls(
@@ -977,6 +1080,12 @@ fn draw_channel_manager_page(
                     ui.make_persistent_id(("manager-channel-order-input", &control.key));
                 let timeline_track_key =
                     crate::four_d::models::hardware_timeline_track_key(&control.key);
+                let binding_summary = channel_binding_summary(app, &control.key);
+                let binding_width = if binding_summary.is_some() {
+                    128.0
+                } else {
+                    0.0
+                };
                 let editing = ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
                 let row_height = 32.0;
                 let row_width = ui.available_width();
@@ -1080,7 +1189,10 @@ fn draw_channel_manager_page(
                                         .unwrap_or_else(|| control.name.clone())
                                 });
                                 let edit = ui.add_sized(
-                                    [(ui.available_width() - 348.0).max(130.0), 27.0],
+                                    [
+                                        (ui.available_width() - 348.0 - binding_width).max(130.0),
+                                        27.0,
+                                    ],
                                     egui::TextEdit::singleline(&mut draft).id(text_edit_id),
                                 );
                                 if ui.data_mut(|data| {
@@ -1112,7 +1224,7 @@ fn draw_channel_manager_page(
                                 let response = crate::ui::layout::left_aligned_click_label(
                                     ui,
                                     &name,
-                                    (ui.available_width() - 348.0).max(130.0),
+                                    (ui.available_width() - 348.0 - binding_width).max(130.0),
                                     27.0,
                                     13.0,
                                 );
@@ -1128,6 +1240,22 @@ fn draw_channel_manager_page(
                                         data.insert_temp(focus_pending_id, true);
                                     });
                                 }
+                            }
+
+                            if let Some((shortcut, details)) = binding_summary.as_ref()
+                                && ui
+                                    .add_sized(
+                                        [124.0, 25.0],
+                                        egui::Button::new(format!(
+                                            "{} {}",
+                                            crate::ui::icons::KEYBOARD,
+                                            shortcut
+                                        )),
+                                    )
+                                    .on_hover_text(details)
+                                    .clicked()
+                            {
+                                app.open_hardware_bindings_for_channel(&control.key);
                             }
 
                             draw_manager_live_action(app, ui, &capabilities, control);
@@ -1247,6 +1375,17 @@ fn draw_channel_manager_page(
                                     .clicked()
                                 {
                                     open_detail(app, &capabilities, control);
+                                    ui.close();
+                                }
+                                if ui
+                                    .button(format!(
+                                        "{} {}",
+                                        crate::ui::icons::KEYBOARD,
+                                        app.tr("Keyboard bindings...")
+                                    ))
+                                    .clicked()
+                                {
+                                    app.open_hardware_bindings_for_channel(&control.key);
                                     ui.close();
                                 }
                                 if ui
@@ -1428,6 +1567,582 @@ fn channel_detail_section(
             body(ui);
         });
     ui.add_space(9.0);
+}
+
+fn hardware_binding_platform_label(app: &PealayerApp) -> String {
+    if cfg!(target_os = "windows") {
+        app.tr("Windows global hotkey")
+    } else if cfg!(target_os = "macos") {
+        app.tr("macOS global hotkey")
+    } else {
+        app.tr("X11 global hotkey")
+    }
+}
+
+fn default_binding_action(
+    control: &HardwareControl,
+    mode: BindingEditorMode,
+) -> crate::config::HardwareKeyBindingAction {
+    let action_with_verb = |verb: &str| {
+        control
+            .actions
+            .iter()
+            .find(|action| action.verb.eq_ignore_ascii_case(verb))
+    };
+    let first = control.actions.first();
+    match mode {
+        BindingEditorMode::Action => first
+            .map(|action| crate::config::HardwareKeyBindingAction::Invoke {
+                action_id: action.id.clone(),
+                label: action.name.clone(),
+            })
+            .unwrap_or_default(),
+        BindingEditorMode::Toggle => {
+            let on = action_with_verb("on");
+            let off = action_with_verb("off");
+            match (on, off) {
+                (Some(on), Some(off)) => crate::config::HardwareKeyBindingAction::Toggle {
+                    on_action_id: on.id.clone(),
+                    off_action_id: off.id.clone(),
+                },
+                _ => default_binding_action(control, BindingEditorMode::Action),
+            }
+        }
+        BindingEditorMode::Pwm => {
+            crate::config::HardwareKeyBindingAction::SetPwm { percent: 100.0 }
+        }
+        BindingEditorMode::Hold => {
+            let press = action_with_verb("on")
+                .or_else(|| action_with_verb("up"))
+                .or(first);
+            let release = action_with_verb("off")
+                .or_else(|| action_with_verb("stop"))
+                .or(first);
+            match (press, release) {
+                (Some(press), Some(release)) => crate::config::HardwareKeyBindingAction::Hold {
+                    press_action_id: press.id.clone(),
+                    release_action_id: release.id.clone(),
+                    press_label: press.name.clone(),
+                    release_label: release.name.clone(),
+                },
+                _ => default_binding_action(control, BindingEditorMode::Action),
+            }
+        }
+    }
+}
+
+fn draw_binding_action_editor(
+    app: &PealayerApp,
+    ui: &mut egui::Ui,
+    control: &HardwareControl,
+    draft: &mut crate::config::HardwareKeyBinding,
+) {
+    let has_toggle = control
+        .actions
+        .iter()
+        .any(|action| action.verb.eq_ignore_ascii_case("on"))
+        && control
+            .actions
+            .iter()
+            .any(|action| action.verb.eq_ignore_ascii_case("off"));
+    let is_pwm = matches!(control.kind.as_str(), "pwm" | "mosfet");
+    let has_hold_pair = control.actions.len() >= 2;
+    let mut mode = binding_editor_mode(&draft.action);
+    egui::ComboBox::from_id_salt(("hardware-binding-mode", &draft.id))
+        .selected_text(match mode {
+            BindingEditorMode::Action => app.tr("Run one action"),
+            BindingEditorMode::Toggle => app.tr("Toggle On / Off"),
+            BindingEditorMode::Pwm => app.tr("Set PWM level"),
+            BindingEditorMode::Hold => app.tr("While key is held"),
+        })
+        .width(250.0)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(
+                &mut mode,
+                BindingEditorMode::Action,
+                app.tr("Run one action"),
+            );
+            ui.add_enabled_ui(has_toggle, |ui| {
+                ui.selectable_value(
+                    &mut mode,
+                    BindingEditorMode::Toggle,
+                    app.tr("Toggle On / Off"),
+                );
+            });
+            ui.add_enabled_ui(is_pwm, |ui| {
+                ui.selectable_value(&mut mode, BindingEditorMode::Pwm, app.tr("Set PWM level"));
+            });
+            ui.add_enabled_ui(has_hold_pair, |ui| {
+                ui.selectable_value(
+                    &mut mode,
+                    BindingEditorMode::Hold,
+                    app.tr("While key is held"),
+                );
+            });
+        });
+    if mode != binding_editor_mode(&draft.action) {
+        draft.action = default_binding_action(control, mode);
+    }
+    ui.add_space(8.0);
+
+    match &mut draft.action {
+        crate::config::HardwareKeyBindingAction::Invoke { action_id, label } => {
+            let selected = control
+                .actions
+                .iter()
+                .find(|action| action.id == *action_id)
+                .map(|action| action.name.as_str())
+                .unwrap_or(action_id);
+            egui::ComboBox::from_id_salt(("hardware-binding-action", &draft.id))
+                .selected_text(selected)
+                .width(250.0)
+                .show_ui(ui, |ui| {
+                    for action in &control.actions {
+                        if ui
+                            .selectable_label(action.id == *action_id, &action.name)
+                            .clicked()
+                        {
+                            *action_id = action.id.clone();
+                            *label = action.name.clone();
+                            ui.close();
+                        }
+                    }
+                });
+        }
+        crate::config::HardwareKeyBindingAction::Toggle { .. } => {
+            ui.label(
+                app.tr(
+                    "Each press chooses On or Off from the latest board-reported channel state.",
+                ),
+            );
+        }
+        crate::config::HardwareKeyBindingAction::SetPwm { percent } => {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::Slider::new(percent, 0.0..=100.0)
+                        .suffix("%")
+                        .fixed_decimals(1),
+                );
+                ui.add(
+                    egui::DragValue::new(percent)
+                        .range(0.0..=100.0)
+                        .speed(0.1)
+                        .suffix("%"),
+                );
+            });
+        }
+        crate::config::HardwareKeyBindingAction::Hold {
+            press_action_id,
+            release_action_id,
+            press_label,
+            release_label,
+        } => {
+            egui::Grid::new(("hardware-binding-hold-grid", &draft.id))
+                .num_columns(2)
+                .spacing(egui::vec2(12.0, 8.0))
+                .show(ui, |ui| {
+                    ui.label(app.tr("Key pressed"));
+                    egui::ComboBox::from_id_salt(("binding-press", &draft.id))
+                        .selected_text(press_label.as_str())
+                        .width(220.0)
+                        .show_ui(ui, |ui| {
+                            for action in &control.actions {
+                                if ui
+                                    .selectable_label(action.id == *press_action_id, &action.name)
+                                    .clicked()
+                                {
+                                    *press_action_id = action.id.clone();
+                                    *press_label = action.name.clone();
+                                    ui.close();
+                                }
+                            }
+                        });
+                    ui.end_row();
+                    ui.label(app.tr("Key released"));
+                    egui::ComboBox::from_id_salt(("binding-release", &draft.id))
+                        .selected_text(release_label.as_str())
+                        .width(220.0)
+                        .show_ui(ui, |ui| {
+                            for action in &control.actions {
+                                if ui
+                                    .selectable_label(action.id == *release_action_id, &action.name)
+                                    .clicked()
+                                {
+                                    *release_action_id = action.id.clone();
+                                    *release_label = action.name.clone();
+                                    ui.close();
+                                }
+                            }
+                        });
+                    ui.end_row();
+                });
+        }
+    }
+}
+
+fn draw_hardware_binding_dialog(
+    app: &mut PealayerApp,
+    ctx: &egui::Context,
+    capabilities: &HardwareCapabilities,
+) {
+    let Some(channel_key) = app.hardware_binding_dialog_channel.clone() else {
+        return;
+    };
+    let Some(control) = managed_controls(capabilities)
+        .into_iter()
+        .find(|control| control.key == channel_key)
+    else {
+        app.hardware_binding_dialog_channel = None;
+        app.hardware_binding_draft = None;
+        return;
+    };
+
+    let mut draft = app.hardware_binding_draft.clone();
+    if app.hardware_binding_capturing {
+        let events = ctx.input(|input| input.events.clone());
+        if let Some(chord) = events
+            .iter()
+            .find_map(crate::hardware_shortcuts::chord_from_egui_event)
+            && let Some(binding) = draft.as_mut()
+        {
+            binding.chord = chord;
+            app.hardware_binding_capturing = false;
+        }
+    }
+
+    let mut close_dialog = false;
+    let mut add_binding = false;
+    let mut edit_binding = None;
+    let mut delete_binding = None;
+    let mut toggle_binding = None;
+    let mut save_binding = false;
+    let mut cancel_edit = false;
+    let geometry = crate::ui::dialog::bounded_geometry(
+        ctx.content_rect(),
+        28.0,
+        egui::vec2(720.0, 570.0),
+        egui::vec2(560.0, 420.0),
+        egui::vec2(900.0, 760.0),
+    );
+    egui::Window::new(format!(
+        "{} {}",
+        crate::ui::icons::KEYBOARD,
+        app.tr("Keyboard bindings")
+    ))
+    .id(egui::Id::new("hardware_keyboard_binding_dialog_v1"))
+    .default_rect(geometry.default_rect)
+    .min_size(geometry.min_size)
+    .max_size(geometry.max_size)
+    .constrain_to(geometry.bounds)
+    .resizable(true)
+    .collapsible(false)
+    .title_bar(false)
+    .order(egui::Order::Foreground)
+    .frame(crate::ui::dialog::opaque_window_frame_from_context(ctx))
+    .show(ctx, |ui| {
+        let accent = ui.visuals().selection.bg_fill;
+        egui::Frame::new()
+            .fill(ui.visuals().faint_bg_color.gamma_multiply(0.42))
+            .corner_radius(9.0)
+            .inner_margin(egui::Margin::symmetric(12, 9))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(crate::ui::icons::KEYBOARD)
+                            .size(22.0)
+                            .color(accent),
+                    );
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new(app.tr("Keyboard bindings"))
+                                .size(16.0)
+                                .strong(),
+                        );
+                        ui.label(
+                            egui::RichText::new(crate::ui::i18n::visual_text(
+                                app.language,
+                                &control.name,
+                            ))
+                            .small()
+                            .weak(),
+                        );
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(crate::ui::icons::X)
+                                    .frame(false)
+                                    .min_size(egui::vec2(30.0, 30.0)),
+                            )
+                            .on_hover_text(app.tr("Close"))
+                            .clicked()
+                        {
+                            close_dialog = true;
+                        }
+                    });
+                });
+            });
+        ui.add_space(10.0);
+
+        if let Some(binding) = draft.as_mut() {
+            ui.horizontal(|ui| {
+                if ui
+                    .button(format!(
+                        "{} {}",
+                        crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                        app.tr("All bindings")
+                    ))
+                    .clicked()
+                {
+                    cancel_edit = true;
+                }
+                ui.label(egui::RichText::new(app.tr("Edit binding")).strong());
+            });
+            ui.add_space(8.0);
+            crate::ui::dialog::scroll_column(ui, "hardware_binding_editor", None, |ui| {
+                channel_detail_section(
+                    ui,
+                    crate::ui::icons::KEYBOARD,
+                    &app.tr("Keyboard shortcut or hotkey"),
+                    |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            let label = if app.hardware_binding_capturing {
+                                app.tr("Press a key or key combination…")
+                            } else {
+                                binding.chord.display_name()
+                            };
+                            let button = egui::Button::new(
+                                egui::RichText::new(label).size(16.0).strong(),
+                            )
+                            .min_size(egui::vec2(270.0, 42.0));
+                            if ui.add(button).clicked() {
+                                app.hardware_binding_capturing = true;
+                            }
+                            if app.hardware_binding_capturing
+                                && ui
+                                    .button(format!(
+                                        "{} {}",
+                                        crate::ui::icons::X,
+                                        app.tr("Cancel recording")
+                                    ))
+                                    .clicked()
+                            {
+                                app.hardware_binding_capturing = false;
+                            }
+                        });
+                        ui.label(
+                            egui::RichText::new(app.tr(
+                                "Choose the field, then press the exact key combination to record it.",
+                            ))
+                            .small()
+                            .weak(),
+                        );
+                    },
+                );
+                ui.add_space(9.0);
+                channel_detail_section(
+                    ui,
+                    crate::ui::icons::LIGHTNING,
+                    &app.tr("Channel action"),
+                    |ui| draw_binding_action_editor(app, ui, &control, binding),
+                );
+                ui.add_space(9.0);
+                channel_detail_section(
+                    ui,
+                    crate::ui::icons::GLOBE,
+                    &app.tr("Availability"),
+                    |ui| {
+                        ui.checkbox(&mut binding.enabled, app.tr("Binding enabled"));
+                        ui.checkbox(
+                            &mut binding.global,
+                            format!(
+                                "{} ({})",
+                                app.tr("Work when Pealayer is not in the foreground"),
+                                hardware_binding_platform_label(app)
+                            ),
+                        );
+                        ui.label(
+                            egui::RichText::new(if binding.global {
+                                app.tr("The operating system registers and delivers this hotkey to Pealayer.")
+                            } else {
+                                app.tr("This shortcut is active only while Pealayer has keyboard focus.")
+                            })
+                            .small()
+                            .weak(),
+                        );
+                        if binding.global
+                            && !binding.chord.control
+                            && !binding.chord.alt
+                            && !binding.chord.shift
+                            && !binding.chord.super_key
+                        {
+                            ui.colored_label(
+                                ui.visuals().warn_fg_color,
+                                app.tr("A global single-key binding may conflict with normal typing or another application."),
+                            );
+                        }
+                        if let Some(error) = app.hardware_hotkey_runtime.errors.get(&binding.id) {
+                            ui.colored_label(ui.visuals().error_fg_color, error);
+                        }
+                    },
+                );
+            });
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(7.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::ui::dialog::primary_action_button(
+                    ui,
+                    crate::ui::icons::FLOPPY_DISK,
+                    &app.tr("Save binding"),
+                )
+                .clicked()
+                {
+                    save_binding = true;
+                }
+                if crate::ui::dialog::action_button(
+                    ui,
+                    crate::ui::icons::X,
+                    &app.tr("Cancel"),
+                )
+                .clicked()
+                {
+                    cancel_edit = true;
+                }
+            });
+        } else {
+            let bindings = app
+                .hardware_key_bindings
+                .iter()
+                .filter(|binding| binding.channel_key == control.key)
+                .cloned()
+                .collect::<Vec<_>>();
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} · {}",
+                        app.tr("Assigned bindings"),
+                        bindings.len()
+                    ))
+                    .strong(),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .button(format!(
+                            "{} {}",
+                            crate::ui::icons::PLUS,
+                            app.tr("Add binding")
+                        ))
+                        .clicked()
+                    {
+                        add_binding = true;
+                    }
+                });
+            });
+            ui.add_space(7.0);
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    if bindings.is_empty() {
+                        ui.centered_and_justified(|ui| {
+                            ui.label(
+                                egui::RichText::new(app.tr(
+                                    "No keyboard bindings are assigned to this channel.",
+                                ))
+                                .weak(),
+                            );
+                        });
+                    }
+                    for binding in bindings {
+                        egui::Frame::new()
+                            .fill(ui.visuals().faint_bg_color.gamma_multiply(0.45))
+                            .stroke(egui::Stroke::new(
+                                1.0,
+                                ui.visuals().widgets.noninteractive.bg_stroke.color,
+                            ))
+                            .corner_radius(8.0)
+                            .inner_margin(egui::Margin::symmetric(11, 8))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    let mut enabled = binding.enabled;
+                                    if ui.checkbox(&mut enabled, "").changed() {
+                                        toggle_binding = Some((binding.id.clone(), enabled));
+                                    }
+                                    ui.label(
+                                        egui::RichText::new(binding.chord.display_name())
+                                            .strong()
+                                            .color(accent),
+                                    );
+                                    ui.label(hardware_binding_action_label(&binding, app));
+                                    if binding.global {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{} {}",
+                                                crate::ui::icons::GLOBE,
+                                                app.tr("Global")
+                                            ))
+                                            .small(),
+                                        );
+                                    }
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui
+                                                .button(crate::ui::icons::TRASH)
+                                                .on_hover_text(app.tr("Delete binding"))
+                                                .clicked()
+                                            {
+                                                delete_binding = Some(binding.id.clone());
+                                            }
+                                            if ui
+                                                .button(crate::ui::icons::PENCIL_SIMPLE)
+                                                .on_hover_text(app.tr("Edit binding"))
+                                                .clicked()
+                                            {
+                                                edit_binding = Some(binding.id.clone());
+                                            }
+                                        },
+                                    );
+                                });
+                            });
+                        ui.add_space(6.0);
+                    }
+                });
+        }
+    });
+
+    if close_dialog {
+        app.hardware_binding_dialog_channel = None;
+        app.hardware_binding_draft = None;
+        app.hardware_binding_capturing = false;
+    } else if cancel_edit {
+        app.hardware_binding_draft = None;
+        app.hardware_binding_capturing = false;
+    } else if let Some(id) = delete_binding {
+        app.delete_hardware_binding(&id);
+    } else if let Some((id, enabled)) = toggle_binding {
+        if let Some(binding) = app
+            .hardware_key_bindings
+            .iter_mut()
+            .find(|binding| binding.id == id)
+        {
+            binding.enabled = enabled;
+            app.save_config();
+        }
+    } else if add_binding {
+        app.open_hardware_binding_editor(&control, None);
+    } else if let Some(id) = edit_binding {
+        app.open_hardware_binding_editor(&control, Some(&id));
+    } else if save_binding {
+        app.hardware_binding_draft = draft;
+        if let Err(error) = app.save_hardware_binding_draft() {
+            app.set_osd(error);
+        }
+    } else {
+        app.hardware_binding_draft = draft;
+    }
 }
 
 fn channel_metadata_tile(ui: &mut egui::Ui, icon: &str, label: &str, value: &str) {
@@ -2092,6 +2807,58 @@ fn draw_channel_detail_page(
 
                     channel_detail_section(
                         ui,
+                        crate::ui::icons::KEYBOARD,
+                        &app.tr("Keyboard bindings"),
+                        |ui| {
+                            let bindings = app
+                                .hardware_key_bindings
+                                .iter()
+                                .filter(|binding| binding.channel_key == control.key)
+                                .cloned()
+                                .collect::<Vec<_>>();
+                            ui.horizontal_wrapped(|ui| {
+                                if bindings.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new(app.tr(
+                                            "No keyboard shortcut or global hotkey is assigned.",
+                                        ))
+                                        .weak(),
+                                    );
+                                } else {
+                                    for binding in &bindings {
+                                        let state = if binding.enabled {
+                                            binding.chord.display_name()
+                                        } else {
+                                            format!(
+                                                "{} ({})",
+                                                binding.chord.display_name(),
+                                                app.tr("disabled")
+                                            )
+                                        };
+                                        ui.label(
+                                            egui::RichText::new(state)
+                                                .strong()
+                                                .color(ui.visuals().selection.bg_fill),
+                                        )
+                                        .on_hover_text(hardware_binding_action_label(binding, app));
+                                    }
+                                }
+                                if ui
+                                    .button(format!(
+                                        "{} {}",
+                                        crate::ui::icons::KEYBOARD,
+                                        app.tr("Manage bindings…")
+                                    ))
+                                    .clicked()
+                                {
+                                    app.open_hardware_bindings_for_channel(&control.key);
+                                }
+                            });
+                        },
+                    );
+
+                    channel_detail_section(
+                        ui,
                         crate::ui::icons::LIGHTNING,
                         &app.tr("Live control"),
                         |ui| draw_channel_live_control(app, ui, capabilities, control),
@@ -2102,7 +2869,10 @@ fn draw_channel_detail_page(
 }
 
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    if !app.show_hardware_channels_dialog && app.hardware_control_dialog_key.is_none() {
+    if !app.show_hardware_channels_dialog
+        && app.hardware_control_dialog_key.is_none()
+        && app.hardware_binding_dialog_channel.is_none()
+    {
         return;
     }
     let Some(capabilities) = app
@@ -2250,10 +3020,15 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         }
     });
 
+    draw_hardware_binding_dialog(app, ui.ctx(), &capabilities);
+
     if close_requested {
         app.show_hardware_channels_dialog = false;
         app.hardware_control_dialog_key = None;
         app.hardware_channel_detail_active = false;
+        app.hardware_binding_dialog_channel = None;
+        app.hardware_binding_draft = None;
+        app.hardware_binding_capturing = false;
     }
 }
 
@@ -2325,6 +3100,64 @@ mod tests {
         assert!(is_motion_live_verb("STOP"));
         assert!(!is_motion_live_verb("on"));
         assert!(!is_motion_live_verb("off"));
+    }
+
+    #[test]
+    fn binding_modes_derive_actions_from_advertised_channel_contract() {
+        let relay = HardwareControl {
+            key: "relay.5".to_string(),
+            kind: "relay".to_string(),
+            actions: vec![
+                HardwareAction {
+                    id: "relay.5.on".to_string(),
+                    verb: "on".to_string(),
+                    name: "On".to_string(),
+                    ..Default::default()
+                },
+                HardwareAction {
+                    id: "relay.5.off".to_string(),
+                    verb: "off".to_string(),
+                    name: "Off".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(matches!(
+            default_binding_action(&relay, BindingEditorMode::Toggle),
+            crate::config::HardwareKeyBindingAction::Toggle {
+                on_action_id,
+                off_action_id
+            } if on_action_id == "relay.5.on" && off_action_id == "relay.5.off"
+        ));
+
+        let motion = HardwareControl {
+            key: "seat.a".to_string(),
+            kind: "motion".to_string(),
+            actions: vec![
+                HardwareAction {
+                    id: "seat.a.up".to_string(),
+                    verb: "up".to_string(),
+                    name: "Up".to_string(),
+                    ..Default::default()
+                },
+                HardwareAction {
+                    id: "seat.a.stop".to_string(),
+                    verb: "stop".to_string(),
+                    name: "Stop".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(matches!(
+            default_binding_action(&motion, BindingEditorMode::Hold),
+            crate::config::HardwareKeyBindingAction::Hold {
+                press_action_id,
+                release_action_id,
+                ..
+            } if press_action_id == "seat.a.up" && release_action_id == "seat.a.stop"
+        ));
     }
 
     #[test]

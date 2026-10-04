@@ -100,6 +100,11 @@ pub fn opaque_window_frame(ui: &egui::Ui) -> egui::Frame {
     egui::Frame::window(ui.style()).fill(opaque_color(ui.visuals().window_fill()))
 }
 
+pub fn opaque_window_frame_from_context(ctx: &egui::Context) -> egui::Frame {
+    let style = ctx.global_style();
+    egui::Frame::window(&style).fill(opaque_color(style.visuals.window_fill()))
+}
+
 fn opaque_color(fill: egui::Color32) -> egui::Color32 {
     let [red, green, blue, _alpha] = fill.to_srgba_unmultiplied();
     egui::Color32::from_rgb(red, green, blue)

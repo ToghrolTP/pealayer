@@ -3,6 +3,7 @@ pub mod cli;
 pub mod config;
 pub mod duration;
 pub mod four_d;
+pub mod hardware_shortcuts;
 pub mod media;
 pub mod mpv;
 pub mod platform;
