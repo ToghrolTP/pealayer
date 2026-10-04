@@ -1300,11 +1300,21 @@ pub fn spawn_engine() -> EngineHandle {
                     }
                 }
 
-                // Evaluate continuous analog curves
+                // Evaluate continuous analog curves. Muting or soloing must
+                // actively transmit zero once; merely skipping a track leaves
+                // the physical PWM output latched at its previous value.
+                let analog_solo_active = analog_tracks
+                    .iter()
+                    .any(|track| track.enabled && track.soloed);
                 for track in &analog_tracks {
-                    if track.enabled && !track.muted && (track.channel as usize) < 16 {
+                    if (track.channel as usize) < 16 {
                         let ch = track.channel as usize;
-                        let val = track.evaluate_u8(current_time);
+                        let outputs = track.allows_output(analog_solo_active);
+                        let val = if outputs {
+                            track.evaluate_u8(current_time)
+                        } else {
+                            0
+                        };
                         if val != last_pwm_values[ch] {
                             last_pwm_values[ch] = val;
                             if connected {

@@ -9727,34 +9727,67 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     });
                                                 }
                                             } else {
-                                                let title = egui::RichText::new(&track_row.name)
-                                                    .size(11.0)
-                                                    .strong();
+                                                // Track identity is painted against the left edge
+                                                // explicitly. Widget allocation previously left
+                                                // enough free width for egui to make hardware and
+                                                // effect captions look centered even though the
+                                                // label requested `Align::Min`.
+                                                let painter = ui.painter().with_clip_rect(identity_rect);
+                                                let title_color = ui.visuals().strong_text_color();
+                                                let detail_color = ui.visuals().weak_text_color();
+                                                let title_galley = egui::WidgetText::from(
+                                                    egui::RichText::new(&track_row.name)
+                                                        .size(11.0)
+                                                        .strong(),
+                                                )
+                                                .into_galley(
+                                                    ui,
+                                                    Some(egui::TextWrapMode::Truncate),
+                                                    label_width,
+                                                    egui::TextStyle::Body,
+                                                );
                                                 if let Some(detail) = track_row.detail.as_deref() {
-                                                    ui.add_space(2.0);
-                                                    ui.add_sized(
-                                                        [label_width, 15.0],
-                                                        egui::Label::new(title)
-                                                            .truncate()
-                                                            .halign(egui::Align::Min),
+                                                    let title_pos = egui::pos2(
+                                                        identity_rect.left(),
+                                                        identity_rect.center().y
+                                                            - 7.0
+                                                            - title_galley.size().y * 0.5,
                                                     );
-                                                    ui.add_sized(
-                                                        [label_width, 13.0],
-                                                        egui::Label::new(
-                                                            egui::RichText::new(detail)
-                                                                .size(9.0)
-                                                                .weak(),
-                                                        )
-                                                        .truncate()
-                                                        .halign(egui::Align::Min),
+                                                    painter.galley(
+                                                        title_pos,
+                                                        title_galley,
+                                                        title_color,
+                                                    );
+                                                    let detail_galley = egui::WidgetText::from(
+                                                        egui::RichText::new(detail).size(9.0).weak(),
+                                                    )
+                                                    .into_galley(
+                                                        ui,
+                                                        Some(egui::TextWrapMode::Truncate),
+                                                        label_width,
+                                                        egui::TextStyle::Body,
+                                                    );
+                                                    let detail_pos = egui::pos2(
+                                                        identity_rect.left(),
+                                                        identity_rect.center().y
+                                                            + 7.0
+                                                            - detail_galley.size().y * 0.5,
+                                                    );
+                                                    painter.galley(
+                                                        detail_pos,
+                                                        detail_galley,
+                                                        detail_color,
                                                     );
                                                 } else {
-                                                    ui.add_space(7.0);
-                                                    ui.add_sized(
-                                                        [label_width, 18.0],
-                                                        egui::Label::new(title)
-                                                            .truncate()
-                                                            .halign(egui::Align::Min),
+                                                    let title_pos = egui::pos2(
+                                                        identity_rect.left(),
+                                                        identity_rect.center().y
+                                                            - title_galley.size().y * 0.5,
+                                                    );
+                                                    painter.galley(
+                                                        title_pos,
+                                                        title_galley,
+                                                        title_color,
                                                     );
                                                 }
                                             }
@@ -9871,7 +9904,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 self.app.track_soloed.contains(relay)
                                             });
                                             if ui
-                                                .selectable_label(soloed, crate::ui::icons::HEADPHONES)
+                                                .selectable_label(soloed, crate::ui::icons::TARGET)
                                                 .on_hover_text(&relay_solo_help)
                                                 .clicked()
                                             {
@@ -9890,7 +9923,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 self.app.track_muted.contains(relay)
                                             });
                                             if ui
-                                                .selectable_label(muted, crate::ui::icons::SPEAKER_SLASH)
+                                                .selectable_label(muted, crate::ui::icons::PROHIBIT)
                                                 .on_hover_text(&relay_mute_help)
                                                 .clicked()
                                             {
@@ -10228,16 +10261,35 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     });
                                                 }
                                             } else {
-                                                ui.add(
-                                                    egui::Label::new(
-                                                        egui::RichText::new(track_name.clone())
-                                                            .size(10.5)
-                                                            .strong(),
-                                                    )
-                                                    .truncate()
-                                                    .halign(egui::Align::Min),
+                                                let (name_rect, name_response) = ui.allocate_exact_size(
+                                                    egui::vec2(88.0, 24.0),
+                                                    egui::Sense::hover(),
+                                                );
+                                                let name_galley = egui::WidgetText::from(
+                                                    egui::RichText::new(&track_name)
+                                                        .size(10.5)
+                                                        .strong(),
                                                 )
-                                                    .on_hover_text(format!("{analog_track_label}: {}\n{port_channel_label}: P{}", track_name, track.channel));
+                                                .into_galley(
+                                                    ui,
+                                                    Some(egui::TextWrapMode::Truncate),
+                                                    name_rect.width(),
+                                                    egui::TextStyle::Body,
+                                                );
+                                                let name_pos = egui::pos2(
+                                                    name_rect.left(),
+                                                    name_rect.center().y
+                                                        - name_galley.size().y * 0.5,
+                                                );
+                                                ui.painter().with_clip_rect(name_rect).galley(
+                                                    name_pos,
+                                                    name_galley,
+                                                    ui.visuals().strong_text_color(),
+                                                );
+                                                name_response.on_hover_text(format!(
+                                                    "{analog_track_label}: {}\n{port_channel_label}: P{}",
+                                                    track_name, track.channel
+                                                ));
                                             }
                                         });
                                         ui.allocate_ui_with_layout(
@@ -10256,7 +10308,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         let add_btn = ui
                                             .add_enabled(
-                                                can_add_keyframe,
+                                                can_add_keyframe && !track.locked,
                                                 egui::Button::new(crate::ui::icons::DIAMOND),
                                             )
                                             .on_hover_text(&add_keyframe_help);
@@ -10273,13 +10325,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         } else {
                                             egui::Color32::from_rgb(120, 120, 120)
                                         };
-                                        let arm_btn = ui.selectable_label(
-                                            track.armed,
-                                            egui::RichText::new(crate::ui::icons::RECORD)
-                                                .size(12.0)
-                                                .color(arm_color),
-                                        )
-                                        .on_hover_text(&record_arm_help);
+                                        let arm_btn = ui
+                                            .add_enabled_ui(!track.locked, |ui| {
+                                                ui.selectable_label(
+                                                    track.armed,
+                                                    egui::RichText::new(crate::ui::icons::RECORD)
+                                                        .size(12.0)
+                                                        .color(arm_color),
+                                                )
+                                            })
+                                            .inner
+                                            .on_hover_text(&record_arm_help);
                                         if arm_btn.clicked() {
                                             track.armed = !track.armed;
                                             analog_tracks_changed = true;
@@ -10298,9 +10354,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             let slider = egui::Slider::new(&mut val, 0.0..=1.0)
                                                 .show_value(false)
                                                 .text("");
-                                            if ui.add_sized([65.0, 16.0], slider)
+                                            if ui
+                                                .add_enabled_ui(!track.locked, |ui| {
+                                                    ui.add_sized([65.0, 16.0], slider)
+                                                })
+                                                .inner
                                                 .on_hover_text(&live_fader_help)
-                                                .changed() {
+                                                .changed()
+                                            {
                                                 self.app.input_capture.set_throttle(val);
                                                 let byte_val = (val * 255.0).round() as u8;
                                                 let _ = self.app.engine_handle.sender.send(
@@ -10312,13 +10373,29 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
                                         }
 
-                                        let m_btn = ui
-                                            .selectable_label(
-                                                track.muted,
-                                                crate::ui::icons::SPEAKER_SLASH,
-                                            )
+                                        let lock_btn = ui
+                                            .selectable_label(track.locked, crate::ui::icons::LOCK)
+                                            .on_hover_text(&lock_help);
+                                        if lock_btn.clicked() {
+                                            track.locked = !track.locked;
+                                            if track.locked {
+                                                track.armed = false;
+                                            }
+                                            analog_tracks_changed = true;
+                                        }
+
+                                        let solo_btn = ui
+                                            .selectable_label(track.soloed, crate::ui::icons::TARGET)
+                                            .on_hover_text(&relay_solo_help);
+                                        if solo_btn.clicked() {
+                                            track.soloed = !track.soloed;
+                                            analog_tracks_changed = true;
+                                        }
+
+                                        let mute_btn = ui
+                                            .selectable_label(track.muted, crate::ui::icons::PROHIBIT)
                                             .on_hover_text(&actuator_mute_help);
-                                        if m_btn.clicked() {
+                                        if mute_btn.clicked() {
                                             track.muted = !track.muted;
                                             analog_tracks_changed = true;
                                         }
@@ -10627,7 +10704,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             );
                                             let marker_rect = egui::Rect::from_center_size(
                                                 marker_center,
-                                                egui::vec2(20.0, 14.0),
+                                                egui::vec2(32.0, 22.0),
                                             );
                                             let marker_response = ui
                                                 .interact(marker_rect, egui::Id::new(("timeline-keyframe", marker.id)), egui::Sense::click())
@@ -10641,9 +10718,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 self.app.selected_timeline_keyframe = Some(marker.id);
                                                 self.app.selected_instance_ids.clear();
                                                 self.app.selected_keyframes.clear();
-                                            }
-                                            if marker_response.double_clicked() {
-                                                self.app.seek_absolute(marker.time_ms as f64 / 1_000.0);
                                             }
                                             marker_response.context_menu(|ui| {
                                                 ui.label(egui::RichText::new(self.app.tr("Exact timeline keyframe")).strong());
@@ -10700,6 +10774,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         if let Some(pos) = pointer_pos {
                                             if (ruler_rect.contains(pos) || ruler_response.dragged())
+                                                && !clicked_any_keyframe
                                                 && self.app.active_drag.is_none()
                                                 && self.app.lasso_origin.is_none()
                                                 && self.app.active_keyframe_drag.is_none()
@@ -11595,7 +11670,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let hover_dist = 16.0;
                                                 let is_hovered = pointer_pos.map_or(false, |pos| pos.distance(center) <= hover_dist);
 
-                                                if is_hovered && self.app.active_keyframe_drag.is_none() {
+                                                if is_hovered
+                                                    && !track.locked
+                                                    && self.app.active_keyframe_drag.is_none()
+                                                {
                                                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
                                                 }
 
@@ -11686,6 +11764,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                                 // Primary click: Selection & Active Drag Lock initialization on mouse press/down
                                                 if is_hovered
+                                                    && !track.locked
                                                     && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary) || i.pointer.primary_down())
                                                     && self.app.active_keyframe_drag.is_none()
                                                 {
@@ -11701,7 +11780,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 }
                                             }
 
-                                            if response.double_clicked() && !clicked_any_keyframe {
+                                            if response.double_clicked()
+                                                && !track.locked
+                                                && !clicked_any_keyframe
+                                            {
                                                 if let Some(pos) = response.interact_pointer_pos() {
                                                     if row_rect.contains(pos) {
                                                         self.app.selected_timeline_track = Some(
@@ -12354,13 +12436,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             .map(|row| row.key.clone());
                                         self.app.selected_instance_ids.clear();
                                         self.app.selected_timeline_keyframe = None;
-                                        let relative_x = mouse_pos.x - rect.min.x;
-                                        let seek_time = (relative_x / zoom) as f64;
-                                        let target_time = seek_time.clamp(0.0, total_seconds);
-                                        // Punch out on seek
-                                        self.app.commit_recorded_samples();
-
-                                        let _ = self.app.mpv.command("seek", &[&target_time.to_string(), "absolute"]);
                                     } else if mouse_pos.y >= tracks_top + track_area_height {
                                         let analog_index = ((mouse_pos.y
                                             - tracks_top
