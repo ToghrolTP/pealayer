@@ -7072,12 +7072,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 )
                                                 .show_value(false)
                                                 .trailing_fill(true);
-                                                let seekbar_width =
-                                                    ui.available_width().max(1.0);
-                                                let old_width = ui.spacing().slider_width;
-                                                ui.spacing_mut().slider_width = seekbar_width;
-                                                let response = ui.add_enabled(can_seek, slider);
-                                                ui.spacing_mut().slider_width = old_width;
+                                                let response = crate::ui::controls::add_fill_width_slider(
+                                                    ui,
+                                                    can_seek,
+                                                    slider,
+                                                );
                                                 response.context_menu(|ui| {
                                                     crate::ui::controls::transport_context_menu(
                                                         self.app, ui,

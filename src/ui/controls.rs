@@ -7,6 +7,25 @@ pub fn timecode_text(value: impl Into<String>) -> egui::RichText {
     egui::RichText::new(value).monospace()
 }
 
+/// Add a slider that consumes the horizontal space remaining in its row.
+///
+/// `Ui::add_sized` does not override egui's slider-track width; sliders read
+/// `Spacing::slider_width` while laying themselves out. Keeping that detail in
+/// one helper prevents the Simple and NLE transports from drifting back to the
+/// short default slider width.
+pub(crate) fn add_fill_width_slider(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    slider: egui::Slider<'_>,
+) -> egui::Response {
+    let seekbar_width = ui.available_width().max(1.0);
+    let old_width = ui.spacing().slider_width;
+    ui.spacing_mut().slider_width = seekbar_width;
+    let response = ui.add_enabled(enabled, slider);
+    ui.spacing_mut().slider_width = old_width;
+    response
+}
+
 fn compact_number(value: f64) -> String {
     let mut rendered = format!("{value:.3}");
     while rendered.contains('.') && rendered.ends_with('0') {
@@ -547,12 +566,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         let slider = egui::Slider::new(&mut current_pos, 0.0..=max_duration)
                             .show_value(false)
                             .trailing_fill(true);
-                        let seekbar_width = ui.available_width().max(1.0);
-                        let response = ui
-                            .add_enabled_ui(can_seek, |ui| {
-                                ui.add_sized([seekbar_width, 22.0], slider)
-                            })
-                            .inner;
+                        let response = add_fill_width_slider(ui, can_seek, slider);
                         let response = if can_seek {
                             response.on_hover_text(&seek_tooltip)
                         } else {
@@ -965,5 +979,25 @@ mod tests {
 
         assert_eq!(current_pos, 0.0);
         assert_eq!(max_dur, 1.0);
+    }
+
+    #[test]
+    fn fill_width_slider_uses_the_remaining_transport_width() {
+        let mut measured_width = 0.0;
+        let mut value = 25.0;
+
+        egui::__run_test_ui(|ui| {
+            ui.set_width(640.0);
+            ui.horizontal(|ui| {
+                ui.add_sized([120.0, 22.0], egui::Label::new("transport"));
+                let slider = egui::Slider::new(&mut value, 0.0..=100.0).show_value(false);
+                measured_width = add_fill_width_slider(ui, true, slider).rect.width();
+            });
+        });
+
+        assert!(
+            measured_width > 450.0,
+            "seekbar should consume the remaining row, got {measured_width}px"
+        );
     }
 }
