@@ -17,9 +17,10 @@ fn test_config_workspace_dock_layout_field() {
 }
 
 #[test]
-fn test_pealayer_tab_all_contains_five_tabs() {
-    assert_eq!(PealayerTab::ALL.len(), 5);
+fn test_pealayer_tab_all_contains_six_tabs() {
+    assert_eq!(PealayerTab::ALL.len(), 6);
     assert!(PealayerTab::ALL.contains(&PealayerTab::ProgramMonitor));
+    assert!(PealayerTab::ALL.contains(&PealayerTab::MediaInspector));
     assert!(PealayerTab::ALL.contains(&PealayerTab::Timeline));
     assert!(PealayerTab::ALL.contains(&PealayerTab::EffectControls));
     assert!(PealayerTab::ALL.contains(&PealayerTab::EffectsLibrary));
@@ -35,13 +36,22 @@ fn test_dock_state_serde_roundtrip() {
     let deserialized: DockState<PealayerTab> =
         serde_json::from_str(&json_str).expect("deserialize dock state from JSON");
 
-    for tab in PealayerTab::ALL {
+    for tab in PealayerTab::ALL
+        .into_iter()
+        .filter(|tab| *tab != PealayerTab::MediaInspector)
+    {
         assert!(
             deserialized.find_tab(&tab).is_some(),
             "tab {:?} should be present after round-trip",
             tab
         );
     }
+    assert!(
+        deserialized
+            .find_tab(&PealayerTab::MediaInspector)
+            .is_none(),
+        "the optional Media Inspector must remain hidden in the default workspace"
+    );
 }
 
 #[test]
@@ -52,6 +62,7 @@ fn test_pealayer_tab_titles_and_icons() {
         assert!(!tab.icon().is_empty());
     }
     assert_eq!(PealayerTab::ProgramMonitor.title(&app), "Program Monitor");
+    assert_eq!(PealayerTab::MediaInspector.title(&app), "Media Inspector");
     assert_eq!(PealayerTab::Timeline.title(&app), "Timeline");
     assert_eq!(PealayerTab::EffectControls.title(&app), "Effect Controls");
     assert_eq!(PealayerTab::EffectsLibrary.title(&app), "Effects Library");
@@ -84,6 +95,15 @@ fn test_restore_controls_next_to_hardware_monitor() {
 
     restore_tab_to_canonical_slot(&mut dock_state, PealayerTab::EffectControls);
     assert!(dock_state.find_tab(&PealayerTab::EffectControls).is_some());
+}
+
+#[test]
+fn test_restore_optional_media_inspector() {
+    let mut dock_state = create_initial_layout();
+    assert!(dock_state.find_tab(&PealayerTab::MediaInspector).is_none());
+
+    restore_tab_to_canonical_slot(&mut dock_state, PealayerTab::MediaInspector);
+    assert!(dock_state.find_tab(&PealayerTab::MediaInspector).is_some());
 }
 
 #[test]
@@ -141,9 +161,13 @@ fn test_corrupt_dock_json_fallback() {
     let fallback = serde_json::from_str::<DockState<PealayerTab>>(invalid_json)
         .unwrap_or_else(|_| create_initial_layout());
 
-    for tab in PealayerTab::ALL {
+    for tab in PealayerTab::ALL
+        .into_iter()
+        .filter(|tab| *tab != PealayerTab::MediaInspector)
+    {
         assert!(fallback.find_tab(&tab).is_some());
     }
+    assert!(fallback.find_tab(&PealayerTab::MediaInspector).is_none());
 }
 
 #[test]

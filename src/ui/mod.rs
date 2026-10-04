@@ -10,6 +10,7 @@ pub mod hardware_control;
 pub mod i18n;
 pub mod icons;
 pub mod layout;
+pub mod media_inspector;
 pub mod media_track_properties;
 pub mod media_tracks;
 pub mod menu;

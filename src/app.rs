@@ -270,6 +270,7 @@ pub struct PealayerApp {
     pub(crate) current_aid: String,
     pub(crate) audio_tracks: Vec<AudioTrack>,
     pub(crate) media_tracks: Vec<MediaTrackInfo>,
+    pub(crate) media_file_info: crate::media_info::MediaFileInfo,
     pub(crate) media_track_properties: Option<MediaTrackKey>,
     pub(crate) selected_timeline_track: Option<String>,
 
@@ -3261,6 +3262,7 @@ impl PealayerApp {
                     self.duration = 0.0;
                     self.is_seekable = false;
                     self.media_metadata_loaded = false;
+                    self.media_file_info = crate::media_info::MediaFileInfo::default();
                     self.cache_duration = None;
                     self.cache_buffering_percent = None;
                     self.subtitle_text.clear();
@@ -4112,6 +4114,7 @@ impl PealayerApp {
             })
             .collect();
         self.media_tracks = media_tracks;
+        self.media_file_info = crate::media_info::capture(self.mpv);
         if self.media_track_properties.is_some_and(|selection| {
             !self
                 .media_tracks
@@ -4404,6 +4407,7 @@ impl PealayerApp {
         self.duration = 0.0;
         self.is_seekable = false;
         self.media_metadata_loaded = false;
+        self.media_file_info = crate::media_info::MediaFileInfo::default();
         self.cache_duration = None;
         self.cache_buffering_percent = None;
         self.is_eof = false;
@@ -5686,6 +5690,7 @@ impl Default for PealayerApp {
             current_aid: "no".to_string(),
             audio_tracks: Vec::new(),
             media_tracks: Vec::new(),
+            media_file_info: crate::media_info::MediaFileInfo::default(),
             media_track_properties: None,
             selected_timeline_track: None,
             show_four_d_editor: true,

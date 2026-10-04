@@ -7,6 +7,7 @@ pub mod duration;
 pub mod four_d;
 pub mod hardware_shortcuts;
 pub mod media;
+pub mod media_info;
 pub mod mpv;
 pub mod platform;
 pub mod preferences_contract;
@@ -520,6 +521,7 @@ fn main() -> eframe::Result {
                 current_aid: "no".to_string(),
                 audio_tracks: Vec::new(),
                 media_tracks: Vec::new(),
+                media_file_info: crate::media_info::MediaFileInfo::default(),
                 media_track_properties: None,
                 selected_timeline_track: None,
                 seek_pos: None,

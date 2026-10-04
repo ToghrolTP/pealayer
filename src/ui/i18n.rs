@@ -180,6 +180,14 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Show E-STOP in the application header" => "نمایش توقف اضطراری در سربرگ برنامه",
         "Confirm before releasing E-STOP" => "تأیید پیش از آزادکردن توقف اضطراری",
         "Program Monitor" => "نمایش برنامه",
+        "Media Inspector" => "بازرسی رسانه",
+        "Refresh from libmpv" => "تازه‌سازی از libmpv",
+        "Copy all" => "کپی همه",
+        "Search properties" => "جست‌وجوی ویژگی‌ها",
+        "No media loaded" => "هیچ رسانه‌ای بارگذاری نشده است",
+        "Open media to inspect its libmpv properties." => {
+            "برای بررسی ویژگی‌های libmpv یک رسانه باز کنید."
+        }
         "Effect Controls" => "کنترل جلوه‌ها",
         "Identity" => "هویت",
         "Timing constraints" => "محدودیت‌های زمانی",

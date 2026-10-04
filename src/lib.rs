@@ -5,6 +5,7 @@ pub mod duration;
 pub mod four_d;
 pub mod hardware_shortcuts;
 pub mod media;
+pub mod media_info;
 pub mod mpv;
 pub mod platform;
 pub mod preferences_contract;

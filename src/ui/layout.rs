@@ -6930,6 +6930,7 @@ mod timeline_row_tests {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum PealayerTab {
     ProgramMonitor,
+    MediaInspector,
     EffectControls,
     EffectsLibrary,
     HardwareMonitor,
@@ -6937,8 +6938,9 @@ pub enum PealayerTab {
 }
 
 impl PealayerTab {
-    pub const ALL: [PealayerTab; 5] = [
+    pub const ALL: [PealayerTab; 6] = [
         PealayerTab::ProgramMonitor,
+        PealayerTab::MediaInspector,
         PealayerTab::Timeline,
         PealayerTab::EffectControls,
         PealayerTab::EffectsLibrary,
@@ -6948,6 +6950,7 @@ impl PealayerTab {
     pub fn title(self, app: &crate::app::PealayerApp) -> String {
         match self {
             PealayerTab::ProgramMonitor => app.tr("Program Monitor"),
+            PealayerTab::MediaInspector => app.tr("Media Inspector"),
             PealayerTab::Timeline => app.tr("Timeline"),
             PealayerTab::EffectControls => app.tr("Effect Controls"),
             PealayerTab::EffectsLibrary => app.tr("Effects Library"),
@@ -6958,6 +6961,7 @@ impl PealayerTab {
     pub fn icon(self) -> &'static str {
         match self {
             PealayerTab::ProgramMonitor => crate::ui::icons::MONITOR_PLAY,
+            PealayerTab::MediaInspector => crate::ui::icons::MAGNIFYING_GLASS,
             PealayerTab::Timeline => crate::ui::icons::WAVEFORM,
             PealayerTab::EffectControls => crate::ui::icons::SLIDERS_HORIZONTAL,
             PealayerTab::EffectsLibrary => crate::ui::icons::SPARKLE,
@@ -7073,6 +7077,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                     ui.close();
                 }
             }
+            PealayerTab::MediaInspector => {
+                if ui
+                    .add_enabled(
+                        self.app.current_video_path.is_some(),
+                        egui::Button::new(format!(
+                            "{} {}",
+                            crate::ui::icons::ARROW_CLOCKWISE,
+                            self.app.tr("Refresh from libmpv")
+                        )),
+                    )
+                    .clicked()
+                {
+                    self.app.refresh_media_tracks();
+                    ui.close();
+                }
+            }
             _ => {}
         }
         ui.separator();
@@ -7103,7 +7123,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
     fn scroll_bars(&self, tab: &Self::Tab) -> [bool; 2] {
         match tab {
-            PealayerTab::EffectsLibrary | PealayerTab::HardwareMonitor => [false, true],
+            PealayerTab::EffectsLibrary
+            | PealayerTab::HardwareMonitor
+            | PealayerTab::MediaInspector => [false, false],
             _ => [true, true],
         }
     }
@@ -7158,6 +7180,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
             .show(ui, |ui| {
               ui.with_layout(crate::ui::i18n::vertical_layout(self.app.rtl), |ui| {
                 match tab {
+                    PealayerTab::MediaInspector => {
+                        crate::ui::media_inspector::draw(self.app, ui);
+                    }
                     PealayerTab::ProgramMonitor => {
                         ui.vertical(|ui| {
                             // ponytail: reserve 35px at bottom for inline transport controls
@@ -13002,6 +13027,27 @@ pub fn restore_tab_to_canonical_slot(
                 dock_state
                     .main_surface_mut()
                     .split_right(node_index, 0.75, vec![tab]);
+                sanitize_dock_rects(dock_state);
+                return;
+            }
+        }
+        PealayerTab::MediaInspector => {
+            if let Some(sibling_path) = dock_state.find_tab(&PealayerTab::EffectsLibrary) {
+                let node_path = sibling_path.node_path();
+                if let Ok(leaf) = dock_state.leaf_mut(node_path) {
+                    leaf.tabs.push(tab);
+                    sanitize_dock_rects(dock_state);
+                    return;
+                }
+            }
+            if let Some(anchor_path) = dock_state
+                .find_tab(&PealayerTab::ProgramMonitor)
+                .or_else(|| dock_state.find_tab(&PealayerTab::Timeline))
+            {
+                let node_index = anchor_path.node;
+                dock_state
+                    .main_surface_mut()
+                    .split_right(node_index, 0.72, vec![tab]);
                 sanitize_dock_rects(dock_state);
                 return;
             }

@@ -282,6 +282,60 @@ fn section(ui: &mut egui::Ui, section: &PropertySection, track: &MediaTrackInfo)
         });
 }
 
+fn matches_filter(filter: &str, values: &[&str]) -> bool {
+    let filter = filter.trim().to_lowercase();
+    filter.is_empty()
+        || values
+            .iter()
+            .any(|value| value.to_lowercase().contains(&filter))
+}
+
+/// Render the shared, factual libmpv track-property surface inside either the
+/// movable Properties dialog or the optional Media Inspector workspace panel.
+/// Keeping one renderer prevents the two inspection entry points from drifting.
+pub(crate) fn draw_embedded(ui: &mut egui::Ui, track: &MediaTrackInfo, filter: &str) -> bool {
+    let mut rendered = false;
+    for mut section_info in property_sections(track) {
+        if section_info.title == "Track metadata" {
+            if !track
+                .metadata
+                .iter()
+                .any(|(key, value)| matches_filter(filter, &[section_info.title, key, value]))
+            {
+                continue;
+            }
+        } else if !matches_filter(filter, &[section_info.title]) {
+            section_info
+                .rows
+                .retain(|(label, value)| matches_filter(filter, &[label, value]));
+            if section_info.rows.is_empty() {
+                continue;
+            }
+        }
+        section(ui, &section_info, track);
+        ui.add_space(8.0);
+        rendered = true;
+    }
+    rendered
+}
+
+pub(crate) fn as_text(track: &MediaTrackInfo) -> String {
+    let mut output = format!("{} track {}\n", track.kind.label(), track.id);
+    for section_info in property_sections(track) {
+        output.push_str(&format!("\n[{}]\n", section_info.title));
+        if section_info.title == "Track metadata" {
+            for (key, value) in &track.metadata {
+                output.push_str(&format!("{key}: {value}\n"));
+            }
+        } else {
+            for (label, value) in section_info.rows {
+                output.push_str(&format!("{label}: {value}\n"));
+            }
+        }
+    }
+    output
+}
+
 fn track_icon(kind: MediaTrackType) -> &'static str {
     match kind {
         MediaTrackType::Video => crate::ui::icons::FILE_VIDEO,
@@ -350,10 +404,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    for section_info in property_sections(&track) {
-                        section(ui, &section_info, &track);
-                        ui.add_space(8.0);
-                    }
+                    draw_embedded(ui, &track, "");
                     if track.metadata.is_empty() {
                         ui.label(
                             egui::RichText::new(
