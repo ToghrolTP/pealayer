@@ -388,6 +388,22 @@ pub(crate) fn timeline_keyboard_focus_id() -> egui::Id {
     egui::Id::new("timeline-keyboard-focus")
 }
 
+fn pan_timeline_offset(
+    offset: egui::Vec2,
+    pointer_delta: egui::Vec2,
+    content_size: egui::Vec2,
+    viewport_size: egui::Vec2,
+) -> egui::Vec2 {
+    let max_offset = egui::vec2(
+        (content_size.x - viewport_size.x).max(0.0),
+        (content_size.y - viewport_size.y).max(0.0),
+    );
+    egui::vec2(
+        (offset.x - pointer_delta.x).clamp(0.0, max_offset.x),
+        (offset.y - pointer_delta.y).clamp(0.0, max_offset.y),
+    )
+}
+
 fn timeline_frame_step_ms(media_fps: f64, frame_count: u32) -> u64 {
     if media_fps.is_finite() && media_fps > 0.0 {
         ((1_000.0 * f64::from(frame_count.max(1))) / media_fps)
@@ -4802,6 +4818,40 @@ fn draw_control_card_grid(
 #[cfg(test)]
 mod timeline_row_tests {
     use super::*;
+
+    #[test]
+    fn middle_button_timeline_pan_tracks_the_grab_offset_on_both_axes() {
+        let offset = pan_timeline_offset(
+            egui::vec2(120.0, 70.0),
+            egui::vec2(-35.0, 20.0),
+            egui::vec2(1_000.0, 600.0),
+            egui::vec2(400.0, 300.0),
+        );
+
+        assert_eq!(offset, egui::vec2(155.0, 50.0));
+    }
+
+    #[test]
+    fn middle_button_timeline_pan_clamps_to_scrollable_content() {
+        assert_eq!(
+            pan_timeline_offset(
+                egui::vec2(5.0, 10.0),
+                egui::vec2(100.0, 100.0),
+                egui::vec2(1_000.0, 600.0),
+                egui::vec2(400.0, 300.0),
+            ),
+            egui::Vec2::ZERO
+        );
+        assert_eq!(
+            pan_timeline_offset(
+                egui::vec2(590.0, 290.0),
+                egui::vec2(-100.0, -100.0),
+                egui::vec2(1_000.0, 600.0),
+                egui::vec2(400.0, 300.0),
+            ),
+            egui::vec2(600.0, 300.0)
+        );
+    }
 
     #[test]
     fn timeline_context_menu_identity_is_stable_per_channel_and_kind() {
@@ -10824,14 +10874,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
 
                                         if let Some(pos) = pointer_pos {
-                                            if (ruler_rect.contains(pos) || ruler_response.dragged())
+                                            if (ruler_rect.contains(pos)
+                                                || ruler_response.dragged_by(egui::PointerButton::Primary))
                                                 && !clicked_any_keyframe
                                                 && self.app.active_drag.is_none()
                                                 && self.app.lasso_origin.is_none()
                                                 && self.app.active_keyframe_drag.is_none()
                                             {
                                                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-                                                if ui.input(|i| i.pointer.primary_down()) || ruler_response.dragged() {
+                                                if ui.input(|i| i.pointer.primary_down())
+                                                    || ruler_response.dragged_by(egui::PointerButton::Primary)
+                                                {
                                                     let relative_x = (pos.x - rect.min.x).max(0.0);
                                                     let target_time = ((relative_x / zoom) as f64).clamp(0.0, total_seconds);
                                                     self.app.scrub_to(target_time);
@@ -10840,7 +10893,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
                                         }
 
-                                        if self.app.is_scrubbing && (!ui.input(|i| i.pointer.primary_down()) || ruler_response.drag_stopped()) {
+                                        if self.app.is_scrubbing
+                                            && (!ui.input(|i| i.pointer.primary_down())
+                                                || ruler_response.drag_stopped_by(egui::PointerButton::Primary))
+                                        {
                                             let current_target = self.app.seek_pos.unwrap_or(self.app.playback_time);
                                             self.app.finish_scrub(current_target);
                                         }
@@ -11152,7 +11208,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     }
                                                 }
 
-                                                if clip_response.drag_started() && !is_track_locked {
+                                                if clip_response.drag_started_by(egui::PointerButton::Primary)
+                                                    && !is_track_locked
+                                                {
                                                     clicked_any_clip = true;
                                                     self.app.selected_timeline_track = timeline_rows
                                                         .get(track_index)
@@ -11357,7 +11415,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 }
                                             }
 
-                                            if ui.ctx().input(|i| i.pointer.any_released()) {
+                                            if ui.ctx().input(|i| {
+                                                i.pointer.button_released(egui::PointerButton::Primary)
+                                            }) {
                                                 drag_ended = true;
                                             } else {
                                                 let delta_x = ui.ctx().pointer_latest_pos().map(|p| p.x).unwrap_or(drag_state.drag_start_x) - drag_state.drag_start_x;
@@ -11923,7 +11983,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                                             ui.ctx().request_repaint();
 
-                                            let drag_ended = ui.ctx().input(|i| i.pointer.any_released());
+                                            let drag_ended = ui.ctx().input(|i| {
+                                                i.pointer.button_released(egui::PointerButton::Primary)
+                                            });
 
                                             if drag_ended {
                                                 // Reconstruct pre-drag snapshot
@@ -12353,6 +12415,62 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let timeline_viewport = timeline_scroll.inner_rect;
                             let ((rect, response), clicked_any_clip, clicked_any_keyframe) = timeline_scroll.inner;
 
+                            // Middle-button dragging pans the existing two-axis
+                            // ScrollArea viewport. Track the gesture independently
+                            // of child responses so panning also works when it starts
+                            // over a cue, keyframe, or ruler, and remains active if
+                            // the pointer leaves the viewport before release.
+                            let middle_pan_id = timeline_scroll_id.with("middle-button-pan");
+                            let (
+                                middle_pressed,
+                                middle_down,
+                                middle_released,
+                                pointer_position,
+                                pointer_delta,
+                            ) = ui.input(|input| {
+                                (
+                                    input.pointer.button_pressed(egui::PointerButton::Middle),
+                                    input.pointer.button_down(egui::PointerButton::Middle),
+                                    input.pointer.button_released(egui::PointerButton::Middle),
+                                    input.pointer.latest_pos(),
+                                    input.pointer.delta(),
+                                )
+                            });
+                            let mut middle_pan_active = ui
+                                .data(|data| data.get_temp::<bool>(middle_pan_id))
+                                .unwrap_or(false);
+                            if middle_pressed
+                                && pointer_position
+                                    .is_some_and(|position| timeline_viewport.contains(position))
+                            {
+                                middle_pan_active = true;
+                                self.app.lasso_origin = None;
+                                self.app.lasso_rect = None;
+                            }
+
+                            let mut middle_pan_changed = false;
+                            if middle_pan_active && middle_down {
+                                let previous_offset = timeline_scroll_state.offset;
+                                timeline_scroll_state.offset = pan_timeline_offset(
+                                    previous_offset,
+                                    pointer_delta,
+                                    timeline_content_size,
+                                    timeline_viewport.size(),
+                                );
+                                middle_pan_changed = timeline_scroll_state.offset != previous_offset;
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                ui.ctx().request_repaint();
+                            }
+                            if middle_released || !middle_down {
+                                middle_pan_active = false;
+                            }
+                            ui.data_mut(|data| {
+                                data.insert_temp(middle_pan_id, middle_pan_active);
+                            });
+                            if middle_pan_changed {
+                                timeline_scroll_state.store(ui.ctx(), timeline_scroll_id);
+                            }
+
                             if ui.input(|input| input.pointer.any_pressed()) {
                                 if ui
                                     .ctx()
@@ -12391,7 +12509,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             // Background click, seek, or lasso selection logic
                             let ruler_bottom = tracks_top;
 
-                            if response.drag_started() && !clicked_any_clip && !clicked_any_keyframe && self.app.active_drag.is_none() && self.app.active_keyframe_drag.is_none() {
+                            if response.drag_started_by(egui::PointerButton::Primary)
+                                && !clicked_any_clip
+                                && !clicked_any_keyframe
+                                && self.app.active_drag.is_none()
+                                && self.app.active_keyframe_drag.is_none()
+                            {
                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                     if mouse_pos.y >= ruler_bottom {
                                         self.app.lasso_origin = Some(mouse_pos);
@@ -12399,7 +12522,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 }
                             }
 
-                            if response.dragged() && self.app.lasso_origin.is_some() {
+                            if response.dragged_by(egui::PointerButton::Primary)
+                                && self.app.lasso_origin.is_some()
+                            {
                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                     let origin = self.app.lasso_origin.unwrap();
                                     let lasso_rect = egui::Rect::from_two_pos(origin, mouse_pos);
@@ -12466,7 +12591,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                             let mut lasso_ended = false;
-                            if ui.ctx().input(|i| i.pointer.any_released()) {
+                            if ui.ctx().input(|i| {
+                                i.pointer.button_released(egui::PointerButton::Primary)
+                            }) {
                                 lasso_ended = true;
                             }
 
@@ -12475,7 +12602,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 self.app.lasso_rect = None;
                             }
 
-                            if response.clicked() && !clicked_any_clip && !clicked_any_keyframe && self.app.active_drag.is_none() && self.app.active_keyframe_drag.is_none() {
+                            if response.clicked_by(egui::PointerButton::Primary)
+                                && !clicked_any_clip
+                                && !clicked_any_keyframe
+                                && self.app.active_drag.is_none()
+                                && self.app.active_keyframe_drag.is_none()
+                            {
                                 if let Some(mouse_pos) = response.interact_pointer_pos() {
                                     if mouse_pos.y >= tracks_top && mouse_pos.y < tracks_top + track_area_height {
                                         let row_index = ((mouse_pos.y - tracks_top)
