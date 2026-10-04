@@ -394,6 +394,8 @@ pub struct AppConfig {
     pub auto_connect_hardware: bool,
     pub pause_on_hardware_disconnect: bool,
     pub click_player_to_toggle: bool,
+    pub subtitle_direction: crate::subtitle::SubtitleDirection,
+    pub subtitle_text_replacements: Vec<crate::subtitle::SubtitleReplacement>,
     pub show_subseconds: bool,
     pub quick_seek_seconds: f64,
     pub frame_step_count: u32,
@@ -468,6 +470,8 @@ impl Default for AppConfig {
             auto_connect_hardware: true,
             pause_on_hardware_disconnect: true,
             click_player_to_toggle: true,
+            subtitle_direction: crate::subtitle::SubtitleDirection::Auto,
+            subtitle_text_replacements: crate::subtitle::default_text_replacements(),
             show_subseconds: true,
             quick_seek_seconds: 10.0,
             frame_step_count: 1,
@@ -1191,6 +1195,24 @@ impl AppConfig {
         }
         if !(1..=120).contains(&self.frame_step_count) {
             return Err("frame_step_count must be between 1 and 120".to_string());
+        }
+        if self.subtitle_text_replacements.len() > 128 {
+            return Err("subtitle_text_replacements contains more than 128 entries".to_string());
+        }
+        let mut subtitle_sources = std::collections::BTreeSet::new();
+        for replacement in &self.subtitle_text_replacements {
+            if replacement.from.chars().count() > 64 || replacement.to.chars().count() > 256 {
+                return Err(
+                    "subtitle_text_replacements contains an invalid source or replacement"
+                        .to_string(),
+                );
+            }
+            if !replacement.from.is_empty() && !subtitle_sources.insert(replacement.from.as_str()) {
+                return Err(format!(
+                    "subtitle_text_replacements contains duplicate source {:?}",
+                    replacement.from
+                ));
+            }
         }
         if !self.osd_timeout_seconds.is_finite()
             || !(1.0..=60.0).contains(&self.osd_timeout_seconds)

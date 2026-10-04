@@ -9420,25 +9420,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             if visibility.clicked() {
                                                 media_control_clicked = true;
                                                 if track_row.active {
-                                                    self.app.sub_visibility = !visible;
-                                                    let _ = self
-                                                        .app
-                                                        .mpv
-                                                        .set_property("sub-visibility", !visible);
+                                                    self.app.set_subtitle_visibility(!visible);
                                                 } else if let TimelineTrackKind::Subtitle(track_id) =
                                                     track_row.kind
                                                 {
                                                     let track_id = track_id.to_string();
                                                     self.app.current_sid = track_id.clone();
-                                                    self.app.sub_visibility = true;
                                                     let _ = self
                                                         .app
                                                         .mpv
                                                         .set_property("sid", track_id);
-                                                    let _ = self
-                                                        .app
-                                                        .mpv
-                                                        .set_property("sub-visibility", true);
+                                                    self.app.set_subtitle_visibility(true);
                                                 }
                                             }
                                         } else if track_row.active
@@ -9544,12 +9536,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             TimelineTrackKind::Subtitle(track_id) => {
                                                 let track_id = track_id.to_string();
                                                 self.app.current_sid = track_id.clone();
-                                                self.app.sub_visibility = true;
                                                 let _ = self.app.mpv.set_property("sid", track_id);
-                                                let _ = self
-                                                    .app
-                                                    .mpv
-                                                    .set_property("sub-visibility", true);
+                                                self.app.set_subtitle_visibility(true);
                                             }
                                             _ => {}
                                         }

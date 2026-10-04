@@ -140,6 +140,11 @@ body {
 .preference-control .ant-select, .preference-control .ant-input, .preference-control .ant-input-number { width: 100%; }
 .preference-control__accent { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .preference-control__accent > .ant-select { min-width: 138px; width: 100%; }
+.preference-control--replacements { align-items: start; }
+.preference-replacements { min-width: 0; display: grid; gap: 8px; }
+.preference-replacement { min-width: 0; display: grid; grid-template-columns: minmax(64px, 1fr) 16px minmax(64px, 1fr) 32px; align-items: center; gap: 7px; }
+.preference-replacement > .anticon { color: var(--muted); text-align: center; }
+.preference-replacements__add { justify-self: start; }
 .accent-option { min-width: 0; width: 100%; display: flex; align-items: center; gap: 8px; }
 .accent-option__label { min-width: 0; flex: 1 1 auto; }
 .accent-option__swatch { width: 12px; height: 12px; flex: 0 0 12px; border: 1px solid color-mix(in srgb, currentColor 38%, transparent); border-radius: 999px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--canvas) 30%, transparent); }

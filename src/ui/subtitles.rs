@@ -58,8 +58,7 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     |ui| {
                         let mut vis = app.sub_visibility;
                         if ui.checkbox(&mut vis, app.tr("Enable Subtitles")).changed() {
-                            app.sub_visibility = vis;
-                            let _ = app.mpv.set_property("sub-visibility", vis);
+                            app.set_subtitle_visibility(vis);
                         }
                     },
                 );
@@ -154,6 +153,7 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             {
                                 app.sub_font_size = font_size;
                                 let _ = app.mpv.set_property("sub-font-size", font_size);
+                                app.sync_subtitle_rendering();
                             }
                         });
                     },

@@ -253,6 +253,9 @@ pub struct PealayerApp {
     pub(crate) sub_delay: f64,
     pub(crate) current_sid: String,
     pub(crate) sub_tracks: Vec<SubtitleTrack>,
+    pub(crate) subtitle_direction: crate::subtitle::SubtitleDirection,
+    pub(crate) subtitle_text_replacements: Vec<crate::subtitle::SubtitleReplacement>,
+    pub(crate) subtitle_text: String,
 
     // Video state
     pub(crate) current_vid: String,
@@ -3088,11 +3091,24 @@ impl PealayerApp {
                             });
                         }
                     }
-                    (6, PropertyData::Flag(v)) => self.sub_visibility = v,
-                    (7, PropertyData::Double(v)) => self.sub_font_size = v,
+                    (6, PropertyData::Flag(v)) => {
+                        if !self.uses_processed_subtitle_overlay() {
+                            self.sub_visibility = v;
+                        }
+                    }
+                    (7, PropertyData::Double(v)) => {
+                        self.sub_font_size = v;
+                        self.sync_subtitle_rendering();
+                    }
                     (8, PropertyData::Double(v)) => self.sub_delay = v,
-                    (9, PropertyData::Str(v)) => self.current_sid = v.to_string(),
-                    (9, PropertyData::OsdStr(v)) => self.current_sid = v.to_string(),
+                    (9, PropertyData::Str(v)) => {
+                        self.current_sid = v.to_string();
+                        self.sync_subtitle_rendering();
+                    }
+                    (9, PropertyData::OsdStr(v)) => {
+                        self.current_sid = v.to_string();
+                        self.sync_subtitle_rendering();
+                    }
                     (10, PropertyData::Double(v)) => self.audio_delay = v,
                     (11, PropertyData::Str(v)) => self.current_aid = v.to_string(),
                     (11, PropertyData::OsdStr(v)) => self.current_aid = v.to_string(),
@@ -3110,6 +3126,14 @@ impl PealayerApp {
                     (17, PropertyData::Double(v)) => self.playback_rate = v,
                     (18, PropertyData::Str(v)) => self.current_vid = v.to_string(),
                     (18, PropertyData::OsdStr(v)) => self.current_vid = v.to_string(),
+                    (19, PropertyData::Str(v)) => {
+                        self.subtitle_text = v.to_string();
+                        self.sync_subtitle_rendering();
+                    }
+                    (19, PropertyData::OsdStr(v)) => {
+                        self.subtitle_text = v.to_string();
+                        self.sync_subtitle_rendering();
+                    }
                     _ => {}
                 },
                 Some(Ok(Event::EndFile(reason))) => {
@@ -3144,10 +3168,13 @@ impl PealayerApp {
                     self.media_metadata_loaded = false;
                     self.cache_duration = None;
                     self.cache_buffering_percent = None;
+                    self.subtitle_text.clear();
+                    self.clear_subtitle_overlay();
                     self.reset_scrub_state();
                     self.refresh_sub_tracks();
                     self.refresh_audio_tracks();
                     self.refresh_video_tracks();
+                    self.sync_subtitle_rendering();
                 }
                 Some(Ok(Event::FileLoaded)) => {
                     self.media_metadata_loaded = true;
@@ -3830,6 +3857,67 @@ impl PealayerApp {
         }
     }
 
+    fn selected_subtitle_is_bitmap(&self) -> bool {
+        self.current_sid != "no"
+            && self
+                .mpv
+                .get_property::<bool>("current-tracks/sub/image")
+                .unwrap_or(false)
+    }
+
+    fn uses_processed_subtitle_overlay(&self) -> bool {
+        if !self.sub_visibility || self.current_sid == "no" || self.selected_subtitle_is_bitmap() {
+            return false;
+        }
+        self.subtitle_direction != crate::subtitle::SubtitleDirection::Auto
+            || crate::subtitle::apply_text_replacements(
+                &self.subtitle_text,
+                &self.subtitle_text_replacements,
+            ) != self.subtitle_text
+    }
+
+    fn clear_subtitle_overlay(&self) {
+        let _ = self
+            .mpv_client
+            .command("osd-overlay", &["7301", "none", "", "0", "720", "10"]);
+    }
+
+    /// Synchronize logical subtitle visibility with either mpv's native
+    /// renderer (bitmap/unmodified subtitles) or Pealayer's processed overlay.
+    pub(crate) fn sync_subtitle_rendering(&mut self) {
+        if !self.uses_processed_subtitle_overlay() {
+            self.clear_subtitle_overlay();
+            let _ = self.mpv.set_property("sub-visibility", self.sub_visibility);
+            return;
+        }
+
+        // Keep decoding active so `sub-text` continues to advance, but suppress
+        // the unprocessed renderer to avoid a doubled caption.
+        let _ = self.mpv.set_property("sub-visibility", false);
+        let replaced = crate::subtitle::apply_text_replacements(
+            &self.subtitle_text,
+            &self.subtitle_text_replacements,
+        );
+        if replaced.is_empty() {
+            self.clear_subtitle_overlay();
+            return;
+        }
+        let event = crate::subtitle::overlay_ass_event(
+            &replaced,
+            self.subtitle_direction,
+            self.sub_font_size,
+        );
+        let _ = self.mpv_client.command(
+            "osd-overlay",
+            &["7301", "ass-events", &event, "1280", "720", "10"],
+        );
+    }
+
+    pub(crate) fn set_subtitle_visibility(&mut self, visible: bool) {
+        self.sub_visibility = visible;
+        self.sync_subtitle_rendering();
+    }
+
     pub(crate) fn refresh_audio_tracks(&mut self) {
         self.audio_tracks.clear();
         if let Ok(count) = self.mpv.get_property::<i64>("track-list/count") {
@@ -4116,6 +4204,8 @@ impl PealayerApp {
         cfg.auto_connect_hardware = self.auto_connect_hardware;
         cfg.pause_on_hardware_disconnect = self.pause_on_hardware_disconnect;
         cfg.click_player_to_toggle = self.click_player_to_toggle;
+        cfg.subtitle_direction = self.subtitle_direction;
+        cfg.subtitle_text_replacements = self.subtitle_text_replacements.clone();
         cfg.show_subseconds = self.show_subseconds;
         cfg.quick_seek_seconds = self.quick_seek_seconds;
         cfg.frame_step_count = self.frame_step_count;
@@ -4252,6 +4342,8 @@ impl PealayerApp {
         self.auto_connect_hardware = config.auto_connect_hardware;
         self.pause_on_hardware_disconnect = config.pause_on_hardware_disconnect;
         self.click_player_to_toggle = config.click_player_to_toggle;
+        self.subtitle_direction = config.subtitle_direction;
+        self.subtitle_text_replacements = config.subtitle_text_replacements.clone();
         self.show_subseconds = config.show_subseconds;
         self.quick_seek_seconds = config.quick_seek_seconds;
         self.frame_step_count = config.frame_step_count;
@@ -4299,6 +4391,7 @@ impl PealayerApp {
 
         let _ = self.mpv.set_property("volume", self.volume);
         let _ = self.mpv.set_property("mute", self.is_muted);
+        self.sync_subtitle_rendering();
         crate::mpv::proxy::apply_runtime(
             self.mpv,
             self.open_url_use_proxy,
@@ -5253,6 +5346,7 @@ impl Default for PealayerApp {
         let _ = mpv_client.observe_property("demuxer-cache-duration", libmpv2::Format::Double, 15);
         let _ = mpv_client.observe_property("cache-buffering-state", libmpv2::Format::Int64, 16);
         let _ = mpv_client.observe_property("vid", libmpv2::Format::String, 18);
+        let _ = mpv_client.observe_property("sub-text", libmpv2::Format::String, 19);
         let (interop_tx, interop_rx) = std::sync::mpsc::channel();
         let (_controller_cmd_tx, controller_cmd_rx) =
             std::sync::mpsc::channel::<crate::platform::interop::ControllerDelivery>();
@@ -5308,6 +5402,9 @@ impl Default for PealayerApp {
             sub_delay: 0.0,
             current_sid: "no".to_string(),
             sub_tracks: Vec::new(),
+            subtitle_direction: crate::subtitle::SubtitleDirection::Auto,
+            subtitle_text_replacements: crate::subtitle::default_text_replacements(),
+            subtitle_text: String::new(),
             current_vid: "no".to_string(),
             video_tracks: Vec::new(),
             show_audio_settings: false,

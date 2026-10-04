@@ -1049,6 +1049,71 @@ fn render_contract_control(
                 });
             }
         }
+        PreferenceControlKind::ReplacementList => {
+            let mut replacements: Vec<crate::subtitle::SubtitleReplacement> =
+                serde_json::from_value(current.clone()).unwrap_or_default();
+            let mut changed = false;
+            let mut remove = None;
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(control_icon).color(ui.visuals().selection.bg_fill),
+                    );
+                    ui.label(egui::RichText::new(tr(control.label)).strong());
+                });
+                ui.add_space(4.0);
+                for (index, item) in replacements.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        let available = ui.available_width();
+                        let field_width = ((available - 54.0) / 2.0).max(72.0);
+                        let from_align = crate::ui::i18n::input_alignment(rtl_ui, &item.from);
+                        let to_align = crate::ui::i18n::input_alignment(rtl_ui, &item.to);
+                        changed |= ui
+                            .add(
+                                egui::TextEdit::singleline(&mut item.from)
+                                    .horizontal_align(from_align)
+                                    .desired_width(field_width)
+                                    .hint_text(tr("Source text")),
+                            )
+                            .changed();
+                        ui.label(crate::ui::icons::ARROW_RIGHT);
+                        changed |= ui
+                            .add(
+                                egui::TextEdit::singleline(&mut item.to)
+                                    .horizontal_align(to_align)
+                                    .desired_width(field_width)
+                                    .hint_text(tr("Replacement")),
+                            )
+                            .changed();
+                        if ui
+                            .small_button(crate::ui::icons::TRASH)
+                            .on_hover_text(tr("Remove replacement"))
+                            .clicked()
+                        {
+                            remove = Some(index);
+                        }
+                    });
+                }
+                if let Some(index) = remove {
+                    replacements.remove(index);
+                    changed = true;
+                }
+                if ui
+                    .button(format!(
+                        "{} {}",
+                        crate::ui::icons::PLUS,
+                        tr("Add replacement")
+                    ))
+                    .clicked()
+                {
+                    replacements.push(crate::subtitle::SubtitleReplacement::default());
+                    changed = true;
+                }
+            });
+            if changed {
+                replacement = serde_json::to_value(replacements).ok();
+            }
+        }
         PreferenceControlKind::Text => {
             let mut text = current.as_str().unwrap_or_default().to_string();
             let text_align = crate::ui::i18n::input_alignment(rtl_ui, &text);
@@ -1420,6 +1485,7 @@ fn preference_control_icon(kind: &PreferenceControlKind) -> &'static str {
         PreferenceControlKind::Accent => crate::ui::icons::PALETTE,
         PreferenceControlKind::Boolean => crate::ui::icons::CHECK_SQUARE,
         PreferenceControlKind::Number => crate::ui::icons::SLIDERS_HORIZONTAL,
+        PreferenceControlKind::ReplacementList => crate::ui::icons::TEXT_ALIGN_LEFT,
         PreferenceControlKind::Select => crate::ui::icons::LIST_CHECKS,
         PreferenceControlKind::Text => crate::ui::icons::PENCIL_SIMPLE,
     }

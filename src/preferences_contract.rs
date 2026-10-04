@@ -10,6 +10,7 @@ pub enum PreferenceControlKind {
     Accent,
     Boolean,
     Number,
+    ReplacementList,
     Select,
     Text,
 }
@@ -182,6 +183,17 @@ impl PreferenceControl {
         control.placeholder = Some(placeholder);
         control
     }
+
+    fn replacement_list(
+        key: &'static str,
+        section: &'static str,
+        group: &'static str,
+        label: &'static str,
+    ) -> Self {
+        let mut control = Self::boolean(key, section, group, label);
+        control.kind = PreferenceControlKind::ReplacementList;
+        control
+    }
 }
 
 pub fn preference_sections() -> Vec<PreferenceSection> {
@@ -301,6 +313,27 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             60.0,
             0.1,
         ),
+        PreferenceControl::select(
+            "subtitle_direction",
+            "playback",
+            "Subtitles",
+            "Subtitle layout",
+            &[
+                ("auto", "Automatic"),
+                ("ltr", "Left to right"),
+                ("rtl", "Right to left"),
+            ],
+        ),
+        {
+            let mut control = PreferenceControl::replacement_list(
+                "subtitle_text_replacements",
+                "playback",
+                "Subtitles",
+                "Global text replacements",
+            );
+            control.description = Some("Applied in order to every text subtitle");
+            control
+        },
         PreferenceControl::boolean(
             "restore_last_media_on_startup",
             "playback",
@@ -598,6 +631,31 @@ mod tests {
                 control.key
             );
         }
+    }
+
+    #[test]
+    fn subtitle_controls_are_shared_and_seed_persian_normalization() {
+        let config = crate::config::AppConfig::default();
+        let controls = preference_controls(&config);
+        let direction = controls
+            .iter()
+            .find(|control| control.key == "subtitle_direction")
+            .expect("subtitle direction control");
+        assert!(matches!(direction.kind, PreferenceControlKind::Select));
+        assert_eq!(direction.section, "playback");
+
+        let replacements = controls
+            .iter()
+            .find(|control| control.key == "subtitle_text_replacements")
+            .expect("subtitle replacement control");
+        assert!(matches!(
+            replacements.kind,
+            PreferenceControlKind::ReplacementList
+        ));
+        assert_eq!(
+            crate::subtitle::apply_text_replacements("جيك", &config.subtitle_text_replacements),
+            "جیک"
+        );
     }
 
     #[test]

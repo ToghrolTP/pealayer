@@ -21,9 +21,12 @@ import {
   EditOutlined,
   ExperimentOutlined,
   PlayCircleOutlined,
+  PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
   SettingOutlined,
+  SwapRightOutlined,
+  DeleteOutlined,
 } from '@ant-design/icons';
 import { tr } from '../i18n';
 
@@ -46,7 +49,7 @@ interface PreferenceControl {
   section: string;
   group: string;
   label: string;
-  kind: 'accent' | 'boolean' | 'number' | 'select' | 'text';
+  kind: 'accent' | 'boolean' | 'number' | 'replacement_list' | 'select' | 'text';
   description?: string;
   options?: PreferenceOption[];
   minimum?: number;
@@ -83,6 +86,7 @@ const controlIcons: Record<PreferenceControl['kind'], React.ReactNode> = {
   accent: <BgColorsOutlined />,
   boolean: <CheckSquareOutlined />,
   number: <ControlOutlined />,
+  replacement_list: <SwapRightOutlined />,
   select: <BarsOutlined />,
   text: <EditOutlined />,
 };
@@ -308,6 +312,59 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
             />
           </div>
         </label>
+      );
+    }
+    if (control.kind === 'replacement_list') {
+      const replacements = Array.isArray(value) ? value as Array<{ from: string; to: string }> : [];
+      const replaceEntry = (index: number, key: 'from' | 'to', next: string) => {
+        const updated = replacements.map((entry, entryIndex) => (
+          entryIndex === index ? { ...entry, [key]: next } : entry
+        ));
+        void update(control, updated);
+      };
+      return (
+        <div className="preference-control preference-control--replacements" key={control.key}>
+          <span>
+            {commonLabel}
+            {control.description && <small>{tr(locale, control.description)}</small>}
+          </span>
+          <div className="preference-replacements">
+            {replacements.map((entry, index) => (
+              <div className="preference-replacement" key={`${index}-${entry.from}-${entry.to}`}>
+                <Input
+                  defaultValue={entry.from}
+                  placeholder={tr(locale, 'Source text')}
+                  aria-label={tr(locale, 'Source text')}
+                  onBlur={(event) => event.currentTarget.value !== entry.from && replaceEntry(index, 'from', event.currentTarget.value)}
+                  onPressEnter={(event) => event.currentTarget.blur()}
+                />
+                <SwapRightOutlined aria-hidden />
+                <Input
+                  defaultValue={entry.to}
+                  placeholder={tr(locale, 'Replacement')}
+                  aria-label={tr(locale, 'Replacement')}
+                  onBlur={(event) => event.currentTarget.value !== entry.to && replaceEntry(index, 'to', event.currentTarget.value)}
+                  onPressEnter={(event) => event.currentTarget.blur()}
+                />
+                <Button
+                  type="text"
+                  danger
+                  icon={<DeleteOutlined />}
+                  aria-label={tr(locale, 'Remove replacement')}
+                  title={tr(locale, 'Remove replacement')}
+                  onClick={() => void update(control, replacements.filter((_, entryIndex) => entryIndex !== index))}
+                />
+              </div>
+            ))}
+            <Button
+              className="preference-replacements__add"
+              icon={<PlusOutlined />}
+              onClick={() => void update(control, [...replacements, { from: '', to: '' }])}
+            >
+              {tr(locale, 'Add replacement')}
+            </Button>
+          </div>
+        </div>
       );
     }
     return (
