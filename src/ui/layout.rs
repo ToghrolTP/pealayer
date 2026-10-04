@@ -7113,8 +7113,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         );
                                     }
 
-                                    if can_seek && response.dragged() {
+                                    if can_seek && response.changed() {
                                         self.app.scrub_to(current_pos);
+                                        ui.ctx().request_repaint();
                                     }
                                     if can_seek && response.drag_stopped() {
                                         self.app.finish_scrub(current_pos);
@@ -10232,6 +10233,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     let relative_x = (pos.x - rect.min.x).max(0.0);
                                                     let target_time = ((relative_x / zoom) as f64).clamp(0.0, total_seconds);
                                                     self.app.scrub_to(target_time);
+                                                    ui.ctx().request_repaint();
                                                 }
                                             }
                                         }

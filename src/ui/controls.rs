@@ -575,8 +575,13 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 ui.visuals().selection.bg_fill.linear_multiply(0.55),
                             );
                         }
-                        if can_seek && response.dragged() {
+                        // `changed` covers both dragging and a single click on
+                        // the seekbar. Restricting this to `dragged` left click
+                        // seeks without a preview request on some egui input
+                        // paths, so the thumb and decoded frame disagreed.
+                        if can_seek && response.changed() {
                             app.scrub_to(current_pos);
+                            ui.ctx().request_repaint();
                         }
                         if can_seek && response.drag_stopped() {
                             app.finish_scrub(current_pos);

@@ -156,6 +156,26 @@ pub struct RttState {
     pub texture_height: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PendingScrubCommit {
+    request_id: u64,
+    target_time: f64,
+    dispatched: bool,
+    playback_restarted: bool,
+}
+
+fn seek_target_reached(actual_time: f64, target_time: f64, media_fps: f64) -> bool {
+    if !actual_time.is_finite() || !target_time.is_finite() {
+        return false;
+    }
+    let frame_tolerance = if media_fps.is_finite() && media_fps > 0.0 {
+        2.0 / media_fps
+    } else {
+        0.1
+    };
+    (actual_time - target_time).abs() <= frame_tolerance.max(0.05)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeyframeDragState {
     pub track_id: uuid::Uuid,
@@ -220,6 +240,7 @@ pub struct PealayerApp {
     pub(crate) seek_controller: crate::mpv::seek::SeekController,
     pub(crate) was_playing_before_scrub: bool,
     pub(crate) is_scrubbing: bool,
+    pub(crate) pending_scrub_commit: Option<PendingScrubCommit>,
     pub(crate) last_mouse_activity: std::time::Instant,
     pub(crate) pin_controls: bool,
 
@@ -838,6 +859,13 @@ impl eframe::App for PealayerApp {
         let ctx = ui.ctx().clone();
 
         self.process_events();
+        if self.is_scrubbing || self.pending_scrub_commit.is_some() {
+            // A paused libmpv surface still needs paint opportunities while a
+            // coalesced preview or exact commit is decoding. This timer exists
+            // only for the active gesture/commit and therefore does not revive
+            // the old permanent idle repaint loop.
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
         self.update_shell_state();
         if let Some(ref mut mc) = self.media_controls {
             mc.update_playback(self.is_paused, self.playback_time, self.duration);
@@ -2939,10 +2967,79 @@ impl PealayerApp {
         self.set_osd(format!("{source}: command applied"));
     }
 
+    fn update_seek_completion_state(&mut self) {
+        for completion in self.seek_controller.take_completed() {
+            if completion.mode == crate::mpv::seek::SeekMode::Commit
+                && self
+                    .pending_scrub_commit
+                    .as_ref()
+                    .is_some_and(|pending| pending.request_id == completion.request_id)
+                && let Some(pending) = self.pending_scrub_commit.as_mut()
+            {
+                pending.dispatched = true;
+            }
+        }
+    }
+
+    fn settle_scrub_commit_if_ready(&mut self) {
+        let Some(pending) = self.pending_scrub_commit else {
+            return;
+        };
+        if !pending.dispatched || !pending.playback_restarted {
+            return;
+        }
+
+        let actual_time = self
+            .mpv
+            .get_property::<f64>("time-pos")
+            .unwrap_or(pending.target_time);
+        if !seek_target_reached(actual_time, pending.target_time, self.media_fps) {
+            // A PlaybackRestart from an older preview seek can arrive after the
+            // final commit was queued. Require the restart for the committed
+            // target instead of allowing that stale event to release playback.
+            if let Some(current) = self.pending_scrub_commit.as_mut() {
+                current.playback_restarted = false;
+            }
+            return;
+        }
+
+        self.playback_time = actual_time;
+        self.seek_pos = None;
+        self.pending_scrub_commit = None;
+        self.engine_handle.playback_time_ms.store(
+            (actual_time * 1_000.0).max(0.0) as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        let _ = self
+            .engine_handle
+            .sender
+            .send(crate::four_d::engine::EngineMessage::Seek(
+                (actual_time * 1_000.0).max(0.0) as u64,
+            ));
+
+        if self.was_playing_before_scrub {
+            let _ = self.mpv.set_property("pause", false);
+            self.is_paused = false;
+            self.engine_handle
+                .is_playing
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.was_playing_before_scrub = false;
+    }
+
+    fn reset_scrub_state(&mut self) {
+        self.seek_pos = None;
+        self.is_scrubbing = false;
+        self.was_playing_before_scrub = false;
+        self.pending_scrub_commit = None;
+        let _ = self.seek_controller.take_completed();
+    }
+
     /// Polls and processes all pending MPV events and updates application state.
     pub fn process_events(&mut self) {
         use libmpv2::events::{Event, PropertyData};
 
+        self.update_seek_completion_state();
         loop {
             match self.mpv_client.wait_event(0.0) {
                 Some(Ok(Event::PropertyChange {
@@ -2951,7 +3048,7 @@ impl PealayerApp {
                     ..
                 })) => match (reply_userdata, change) {
                     (1, PropertyData::Double(v)) => {
-                        if !self.is_scrubbing {
+                        if !self.is_scrubbing && self.pending_scrub_commit.is_none() {
                             self.playback_time = v;
                             self.engine_handle
                                 .playback_time_ms
@@ -3023,7 +3120,7 @@ impl PealayerApp {
                     }
                 }
                 Some(Ok(Event::Seek)) => {
-                    if !self.is_scrubbing {
+                    if !self.is_scrubbing && self.pending_scrub_commit.is_none() {
                         self.seek_pos = None;
                     }
                     let current_pos_ms =
@@ -3032,6 +3129,11 @@ impl PealayerApp {
                         .engine_handle
                         .sender
                         .send(crate::four_d::engine::EngineMessage::Seek(current_pos_ms));
+                }
+                Some(Ok(Event::PlaybackRestart)) => {
+                    if let Some(pending) = self.pending_scrub_commit.as_mut() {
+                        pending.playback_restarted = true;
+                    }
                 }
                 Some(Ok(Event::StartFile)) => {
                     self.show_error = None;
@@ -3042,7 +3144,7 @@ impl PealayerApp {
                     self.media_metadata_loaded = false;
                     self.cache_duration = None;
                     self.cache_buffering_percent = None;
-                    self.seek_pos = None;
+                    self.reset_scrub_state();
                     self.refresh_sub_tracks();
                     self.refresh_audio_tracks();
                     self.refresh_video_tracks();
@@ -3092,6 +3194,11 @@ impl PealayerApp {
                 _ => break,
             }
         }
+        // The backend acknowledgement and PlaybackRestart can arrive in either
+        // order within this frame. Drain once more, then settle only when both
+        // halves of the exact commit have been observed.
+        self.update_seek_completion_state();
+        self.settle_scrub_commit_if_ready();
         if self.last_playback_position_checkpoint.elapsed() >= std::time::Duration::from_secs(5) {
             self.last_playback_position_checkpoint = std::time::Instant::now();
             if self.capture_current_playback_position() {
@@ -3113,12 +3220,12 @@ impl PealayerApp {
         if self.current_video_path.is_none() {
             return;
         }
+        self.reset_scrub_state();
         let _ = self.mpv.command("seek", &["0", "absolute+exact"]);
         let _ = self.mpv.set_property("pause", false);
         self.is_paused = false;
         self.is_eof = false;
         self.playback_time = 0.0;
-        self.seek_pos = None;
         self.engine_handle
             .is_playing
             .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -3598,6 +3705,10 @@ impl PealayerApp {
             return;
         }
         let target = seconds.clamp(0.0, self.duration.max(0.0));
+        // Establish the same pause/preview state used by a drag before queuing
+        // the exact commit. Otherwise a click-to-seek can resume from the old
+        // frame while the background worker has not executed the seek yet.
+        self.scrub_to(target);
         self.finish_scrub(target);
         self.set_osd(format!(
             "{}: {}",
@@ -3642,13 +3753,19 @@ impl PealayerApp {
 
         if !self.is_scrubbing {
             self.is_scrubbing = true;
-            self.was_playing_before_scrub = !self.is_paused
-                && self.current_video_path.is_some()
-                && !self.is_playback_finished();
-            if self.was_playing_before_scrub {
-                let _ = self.mpv.set_property("pause", true);
+            if self.pending_scrub_commit.take().is_none() {
+                self.was_playing_before_scrub = !self.is_paused
+                    && self.current_video_path.is_some()
+                    && !self.is_playback_finished();
+                if self.was_playing_before_scrub {
+                    let _ = self.mpv.set_property("pause", true);
+                    self.is_paused = true;
+                    self.engine_handle
+                        .is_playing
+                        .store(false, std::sync::atomic::Ordering::Relaxed);
+                }
+                self.commit_recorded_samples();
             }
-            self.commit_recorded_samples();
         }
 
         if clamped < self.duration {
@@ -3656,7 +3773,7 @@ impl PealayerApp {
         }
 
         self.seek_pos = Some(clamped);
-        self.seek_controller.request_scrub(clamped);
+        let _ = self.seek_controller.request_scrub(clamped);
     }
 
     /// Ends an active scrub session. Dispatches a final exact commit seek and
@@ -3676,13 +3793,17 @@ impl PealayerApp {
         }
 
         self.seek_pos = Some(clamped);
-        self.seek_controller.request_commit(clamped);
+        let request_id = self.seek_controller.request_commit(clamped);
+        self.pending_scrub_commit = Some(PendingScrubCommit {
+            request_id,
+            target_time: clamped,
+            dispatched: false,
+            playback_restarted: false,
+        });
         self.commit_recorded_samples();
-
-        if self.was_playing_before_scrub {
-            let _ = self.mpv.set_property("pause", false);
-            self.was_playing_before_scrub = false;
-        }
+        // The gesture is over, but keep seek_pos authoritative until mpv emits
+        // PlaybackRestart for this exact committed target. Playback is resumed
+        // by settle_scrub_commit_if_ready, never against the stale old frame.
         self.is_scrubbing = false;
     }
 
@@ -3757,6 +3878,7 @@ impl PealayerApp {
     pub fn load_video_file(&mut self, path: std::path::PathBuf) {
         let path_str = path.to_str().unwrap_or("");
         if !path_str.is_empty() {
+            self.reset_scrub_state();
             self.capture_current_playback_position();
             self.pending_resume_position = self.resume_position_for(path_str);
             let _ = self.mpv.set_property("keep-open", "always");
@@ -3771,7 +3893,6 @@ impl PealayerApp {
             self.media_metadata_loaded = false;
             self.cache_duration = None;
             self.cache_buffering_percent = None;
-            self.seek_pos = None;
             self.add_recent_media(path.clone());
             let title = path
                 .file_name()
@@ -3865,6 +3986,7 @@ impl PealayerApp {
     pub fn load_url(&mut self, url: &str) {
         let trimmed = url.trim();
         if !trimmed.is_empty() {
+            self.reset_scrub_state();
             self.capture_current_playback_position();
             self.pending_resume_position = self.resume_position_for(trimmed);
             let _ = self.mpv.set_property("keep-open", "always");
@@ -3895,7 +4017,6 @@ impl PealayerApp {
             self.media_metadata_loaded = false;
             self.cache_duration = None;
             self.cache_buffering_percent = None;
-            self.seek_pos = None;
             self.add_recent_media(path);
             let safe_target = crate::media::redact_media_target(trimmed);
             if let Some(ref mut mc) = self.media_controls {
@@ -3943,6 +4064,7 @@ impl PealayerApp {
     }
 
     pub fn close_video(&mut self) {
+        self.reset_scrub_state();
         self.capture_current_playback_position();
         let _ = self.mpv.command("stop", &[]);
         self.current_video_path = None;
@@ -3955,7 +4077,6 @@ impl PealayerApp {
         self.cache_buffering_percent = None;
         self.is_eof = false;
         self.is_paused = false;
-        self.seek_pos = None;
         if let Some(ref mut mc) = self.media_controls {
             mc.update_metadata(None);
             mc.update_playback(false, 0.0, 0.0);
@@ -5177,6 +5298,7 @@ impl Default for PealayerApp {
             ),
             was_playing_before_scrub: false,
             is_scrubbing: false,
+            pending_scrub_commit: None,
             last_mouse_activity: std::time::Instant::now(),
             pin_controls: false,
             show_error: None,
@@ -5385,6 +5507,20 @@ fn hardware_connection_was_lost(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_seek_settlement_rejects_stale_positions() {
+        assert!(!seek_target_reached(12.0, 48.0, 24.0));
+        assert!(!seek_target_reached(47.5, 48.0, 24.0));
+        assert!(!seek_target_reached(f64::NAN, 48.0, 24.0));
+    }
+
+    #[test]
+    fn exact_seek_settlement_accepts_the_committed_frame() {
+        assert!(seek_target_reached(48.0, 48.0, 24.0));
+        assert!(seek_target_reached(48.04, 48.0, 24.0));
+        assert!(seek_target_reached(48.08, 48.0, 24.0));
+    }
 
     #[test]
     fn front_panel_keys_route_to_the_board_or_active_host_menu() {

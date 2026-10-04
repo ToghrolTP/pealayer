@@ -50,7 +50,7 @@ fn test_seek_controller_scrub_and_commit() {
     thread::sleep(Duration::from_millis(50));
 
     // Request commit
-    controller.request_commit(15.0);
+    let commit_id = controller.request_commit(15.0);
     thread::sleep(Duration::from_millis(50));
 
     let executed = seeks.lock().unwrap().clone();
@@ -60,6 +60,10 @@ fn test_seek_controller_scrub_and_commit() {
     let last = executed.last().unwrap();
     assert_eq!(last.0, 15.0);
     assert_eq!(last.1, SeekMode::Commit);
+    let completed = controller.take_completed();
+    assert!(completed.iter().any(|seek| {
+        seek.request_id == commit_id && seek.target_time == 15.0 && seek.mode == SeekMode::Commit
+    }));
 }
 
 #[test]
@@ -91,6 +95,10 @@ fn test_seek_controller_coalesces_rapid_scrub_requests() {
     );
     // The final executed seek must be the latest target (10.0)
     assert_eq!(executed.last().unwrap().0, 10.0);
+
+    let completed = controller.take_completed();
+    assert_eq!(completed.last().unwrap().target_time, 10.0);
+    assert!(completed.len() < 10);
 }
 
 #[test]

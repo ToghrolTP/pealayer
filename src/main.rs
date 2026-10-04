@@ -489,6 +489,7 @@ fn main() -> eframe::Result {
                 ),
                 was_playing_before_scrub: false,
                 is_scrubbing: false,
+                pending_scrub_commit: None,
                 last_mouse_activity: std::time::Instant::now(),
                 pin_controls: loaded_config.pin_controls,
                 show_error: None,
