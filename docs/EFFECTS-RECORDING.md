@@ -124,6 +124,14 @@ host RAM, board RAM, or both; this is an execution optimization, not a change
 of ownership. Pealayer's native and Web interfaces use the same typed IPC/RPC
 commands, live status, catalog, and timeline model.
 
+The most recently opened media also keeps a bounded restart-safe cue session in
+Pealayer's native configuration. It contains only stable PCController IDs,
+placement, duration/lane, and cached display metadata—never the sequence steps.
+Consequently a cue remains visible and editable while offline, survives a
+graceful restart, and resumes against the authoritative definition when the
+same media and PCController reconnect. A matching project sidecar intentionally
+takes precedence when one exists.
+
 ## Verified delivery evidence
 
 | Check | Result |

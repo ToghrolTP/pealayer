@@ -450,6 +450,17 @@ pub struct AppConfig {
     /// publish the draft when the coordinator returns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effect_working_draft: Option<crate::app::ControllerEffectDraft>,
+    /// Last media-scoped cue arrangement. This contains only stable
+    /// PCController references and cached presentation metadata, never the
+    /// controller-owned sequence program.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_cue_session: Option<EffectCueSession>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EffectCueSession {
+    pub media_target: String,
+    pub timeline: crate::four_d::models::Timeline,
 }
 
 impl Default for AppConfig {
@@ -538,6 +549,7 @@ impl Default for AppConfig {
             workspace_profiles_revision: 1,
             active_workspace_profile: Some("nle".to_string()),
             effect_working_draft: None,
+            effect_cue_session: None,
         }
     }
 }
@@ -1300,6 +1312,29 @@ impl AppConfig {
         {
             return Err("last_media_target is too long".to_string());
         }
+        if let Some(session) = &self.effect_cue_session {
+            if session.media_target.trim().is_empty() || session.media_target.len() > 8_192 {
+                return Err("effect_cue_session has an invalid media target".to_string());
+            }
+            if session.timeline.instances.len() > 10_000
+                || session.timeline.templates.len() > 10_000
+            {
+                return Err("effect_cue_session contains too many cues".to_string());
+            }
+            if session.timeline.instances.iter().any(|instance| {
+                !session.timeline.templates.iter().any(|template| {
+                    template.id == instance.effect_id
+                        && template.actions.is_empty()
+                        && (template.controller_macro.is_some()
+                            || template.controller_strip_effect.is_some())
+                })
+            }) {
+                return Err(
+                    "effect_cue_session must contain only PCController-owned references"
+                        .to_string(),
+                );
+            }
+        }
         if !(1..=MAX_PLAYBACK_POSITION_HISTORY_LIMIT)
             .contains(&self.playback_position_history_limit)
         {
@@ -1653,6 +1688,24 @@ mod tests {
         cfg.recent_media.push(PathBuf::from("/test/file.mp4"));
         cfg.last_media_target = Some(PathBuf::from("/test/file.mp4"));
         cfg.last_media_paused = true;
+        let effect = crate::four_d::models::Effect::controller_macro(
+            "Relay 8 - one second".to_string(),
+            String::new(),
+            1_000,
+            8,
+            "host".to_string(),
+        );
+        let mut cue_timeline = crate::four_d::models::Timeline::default();
+        cue_timeline
+            .instances
+            .push(crate::four_d::models::EffectInstance::new(
+                effect.id, 10_000,
+            ));
+        cue_timeline.templates.push(effect);
+        cfg.effect_cue_session = Some(EffectCueSession {
+            media_target: "/test/file.mp4".to_string(),
+            timeline: cue_timeline,
+        });
         cfg.workspace_session = WorkspaceProfile {
             name: String::new(),
             icon: String::new(),
@@ -1709,6 +1762,17 @@ mod tests {
             Some(PathBuf::from("/test/file.mp4"))
         );
         assert!(loaded.last_media_paused);
+        let effect_session = loaded.effect_cue_session.as_ref().unwrap();
+        assert_eq!(effect_session.media_target, "/test/file.mp4");
+        assert_eq!(effect_session.timeline.instances[0].start_time_ms, 10_000);
+        assert_eq!(
+            effect_session.timeline.templates[0]
+                .controller_macro
+                .as_ref()
+                .unwrap()
+                .id,
+            8
+        );
         assert!(loaded.native_dialog_windows);
         assert!(!loaded.workspace_session.nle);
         assert_eq!(

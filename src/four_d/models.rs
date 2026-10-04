@@ -272,7 +272,7 @@ impl EffectInstance {
 }
 
 /// The entire sequence of effects programmed for a video.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Timeline {
     /// The specific instances placed on the timeline
     pub instances: Vec<EffectInstance>,
@@ -365,11 +365,124 @@ mod tests {
         assert!(!decoded.track_state("media:subtitle:7").visible);
         assert_eq!(hardware_timeline_track_key("pwm.12"), "hardware:pwm.12");
     }
+
+    #[test]
+    fn controller_cue_session_keeps_only_stable_controller_references() {
+        let controller = Effect::controller_macro(
+            "Relay 8 - one second".to_string(),
+            "sparkle".to_string(),
+            1_000,
+            8,
+            "host".to_string(),
+        );
+        let controller_id = controller.id;
+        let local = Effect::with_target(
+            "Local-only draft".to_string(),
+            String::new(),
+            500,
+            HardwareTarget::Relay(5),
+            vec![AtomicAction {
+                relay_id: 5,
+                state: true,
+                offset_ms: 0,
+            }],
+        );
+        let local_id = local.id;
+        let mut timeline = Timeline::default();
+        timeline.templates.extend([controller, local]);
+        timeline
+            .instances
+            .push(EffectInstance::new(controller_id, 10_000));
+        timeline
+            .instances
+            .push(EffectInstance::new(local_id, 20_000));
+        timeline.set_track_visible("controller-effect:relay", false);
+        timeline.set_track_visible("hardware:relay.5", false);
+        timeline.add_keyframe(10_000);
+
+        let session = timeline.controller_cue_session();
+
+        assert!(session.has_controller_cues());
+        assert_eq!(session.instances.len(), 1);
+        assert_eq!(session.instances[0].start_time_ms, 10_000);
+        assert_eq!(session.templates.len(), 1);
+        assert_eq!(
+            session.templates[0].controller_macro.as_ref().unwrap().id,
+            8
+        );
+        assert!(session.templates[0].actions.is_empty());
+        assert_eq!(
+            session.track_states.keys().cloned().collect::<Vec<_>>(),
+            vec!["controller-effect:relay".to_string()]
+        );
+        assert!(session.keyframes.is_empty());
+    }
 }
 
 impl Timeline {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Return the durable, media-scoped portion required to restore
+    /// PCController-owned cues after a Pealayer restart.
+    ///
+    /// PCController remains the program owner. These retained templates hold
+    /// only stable controller references plus cached presentation metadata;
+    /// controller program steps are never copied into Pealayer's config.
+    pub fn controller_cue_session(&self) -> Self {
+        let controller_template_ids = self
+            .templates
+            .iter()
+            .filter(|template| {
+                template.controller_macro.is_some() || template.controller_strip_effect.is_some()
+            })
+            .map(|template| template.id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let instances = self
+            .instances
+            .iter()
+            .filter(|instance| controller_template_ids.contains(&instance.effect_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let referenced_template_ids = instances
+            .iter()
+            .map(|instance| instance.effect_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let templates = self
+            .templates
+            .iter()
+            .filter(|template| referenced_template_ids.contains(&template.id))
+            .cloned()
+            .map(|mut template| {
+                template.actions.clear();
+                template
+            })
+            .collect();
+        let track_states = self
+            .track_states
+            .iter()
+            .filter(|(key, _)| key.starts_with("controller-effect:"))
+            .map(|(key, value)| (key.clone(), *value))
+            .collect();
+
+        Self {
+            instances,
+            templates,
+            analog_tracks: Vec::new(),
+            keyframes: Vec::new(),
+            track_states,
+        }
+    }
+
+    pub fn has_controller_cues(&self) -> bool {
+        self.instances.iter().any(|instance| {
+            self.templates.iter().any(|template| {
+                template.id == instance.effect_id
+                    && (template.controller_macro.is_some()
+                        || template.controller_strip_effect.is_some())
+            })
+        })
     }
 
     pub fn track_state(&self, key: &str) -> TimelineTrackState {

@@ -4816,6 +4816,15 @@ impl PealayerApp {
             || !self.effect_library_draft.steps.is_empty()
             || !self.effect_library_draft.program_json.trim().is_empty())
         .then(|| self.effect_library_draft.clone());
+        let cue_timeline = self.timeline.controller_cue_session();
+        cfg.effect_cue_session = self
+            .current_video_path
+            .as_ref()
+            .filter(|_| cue_timeline.has_controller_cues())
+            .map(|target| crate::config::EffectCueSession {
+                media_target: crate::media::playback_history_key(&target.to_string_lossy()),
+                timeline: cue_timeline,
+            });
         cfg
     }
 

@@ -459,6 +459,16 @@ fn main() -> eframe::Result {
                 .is_none()
                 && startup_media_target.is_some()
                 && loaded_config.last_media_paused;
+            let startup_effect_cue_timeline = startup_media_target
+                .as_deref()
+                .and_then(|target| {
+                    let target_key = crate::media::playback_history_key(target);
+                    loaded_config.effect_cue_session.as_ref().filter(|session| {
+                        crate::media::playback_history_key(&session.media_target) == target_key
+                    })
+                })
+                .map(|session| session.timeline.clone())
+                .unwrap_or_default();
             let _ = mpv_static.set_property("volume", initial_volume);
             let _ = mpv_static.set_property("mute", loaded_config.is_muted);
             let _ = mpv_static.set_property("speed", loaded_config.playback_speed);
@@ -590,7 +600,7 @@ fn main() -> eframe::Result {
                 show_error: None,
                 show_four_d_editor: loaded_config.workspace_session.nle,
 
-                timeline: crate::four_d::models::Timeline::new(),
+                timeline: startup_effect_cue_timeline,
                 engine_handle,
                 recording_session: crate::four_d::curve_record::RecordingSession::new(),
                 input_capture: crate::four_d::input_capture::InputCaptureState::new(),
@@ -808,6 +818,11 @@ fn main() -> eframe::Result {
 
             if let Some(target) = startup_media_target {
                 app.load_media_target(&target);
+                // A matching sidecar project, when present, deliberately wins
+                // inside load_media_target. Otherwise these stable references
+                // are immediately available for offline editing and become
+                // executable as soon as PCController reconnects.
+                app.sync_timeline_engine();
                 if restore_startup_pause {
                     app.pause();
                 }

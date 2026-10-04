@@ -44,6 +44,9 @@ Pealayer discovers one live effect library from PCController. Recorded seat or
 multi-peripheral sequences and host-rendered addressable-light streams use the
 same stable references and the same play/stop engine. Pealayer deliberately
 does not seed or persist an independent effect catalog.
+It does persist the latest media's cue placements as stable controller
+references, so authored timing survives restart and remains editable offline
+without duplicating PCController's effect steps.
 
 1. Connect Pealayer to a PCController endpoint and open **Effects Library**.
 2. Drag a live card onto the **Controller effects** timeline track. The card
