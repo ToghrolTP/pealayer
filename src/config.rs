@@ -409,6 +409,7 @@ pub struct AppConfig {
     pub fullscreen_video_background: VideoBackground,
     pub motion_control_mode: MotionControlMode,
     pub compact_hardware_controls: bool,
+    pub compact_timeline_tracks: bool,
     pub non_user_control_visibility: NonUserControlVisibility,
     #[serde(alias = "prefix_relay_numbers")]
     pub prefix_relay_identifiers: bool,
@@ -487,6 +488,7 @@ impl Default for AppConfig {
             fullscreen_video_background: VideoBackground::Black,
             motion_control_mode: MotionControlMode::Hold,
             compact_hardware_controls: false,
+            compact_timeline_tracks: true,
             non_user_control_visibility: NonUserControlVisibility::Dimmed,
             prefix_relay_identifiers: true,
             live_pwm_updates: true,

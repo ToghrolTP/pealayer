@@ -452,6 +452,12 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Motion controls",
             "Use one-row compact hardware controls",
         ),
+        PreferenceControl::boolean(
+            "compact_timeline_tracks",
+            "hardware",
+            "Timeline",
+            "Use compact timeline track rows",
+        ),
         PreferenceControl::select(
             "non_user_control_visibility",
             "hardware",
@@ -763,6 +769,20 @@ mod tests {
             assert!(matches!(control.kind, PreferenceControlKind::Boolean));
             assert_eq!(control.section, "hardware");
         }
+    }
+
+    #[test]
+    fn timeline_density_is_a_shared_persistent_preference() {
+        let config = crate::config::AppConfig::default();
+        assert!(config.compact_timeline_tracks);
+        let controls = preference_controls(&config);
+        let control = controls
+            .iter()
+            .find(|control| control.key == "compact_timeline_tracks")
+            .expect("timeline density preference");
+        assert!(matches!(control.kind, PreferenceControlKind::Boolean));
+        assert_eq!(control.section, "hardware");
+        assert_eq!(control.group, "Timeline");
     }
 
     #[test]

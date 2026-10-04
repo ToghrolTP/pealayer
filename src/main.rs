@@ -655,6 +655,7 @@ fn main() -> eframe::Result {
                 motion_control_mode: loaded_config.motion_control_mode,
                 held_motion_action: None,
                 compact_hardware_controls: loaded_config.compact_hardware_controls,
+                compact_timeline_tracks: loaded_config.compact_timeline_tracks,
                 non_user_control_visibility: loaded_config.non_user_control_visibility,
                 prefix_relay_identifiers: loaded_config.prefix_relay_identifiers,
                 live_pwm_updates: loaded_config.live_pwm_updates,

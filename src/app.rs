@@ -393,6 +393,7 @@ pub struct PealayerApp {
     pub(crate) motion_control_mode: crate::config::MotionControlMode,
     pub(crate) held_motion_action: Option<(String, String)>,
     pub(crate) compact_hardware_controls: bool,
+    pub(crate) compact_timeline_tracks: bool,
     pub(crate) non_user_control_visibility: crate::config::NonUserControlVisibility,
     pub(crate) prefix_relay_identifiers: bool,
     pub(crate) live_pwm_updates: bool,
@@ -4423,6 +4424,7 @@ impl PealayerApp {
         cfg.fullscreen_video_background = self.fullscreen_video_background;
         cfg.motion_control_mode = self.motion_control_mode;
         cfg.compact_hardware_controls = self.compact_hardware_controls;
+        cfg.compact_timeline_tracks = self.compact_timeline_tracks;
         cfg.non_user_control_visibility = self.non_user_control_visibility;
         cfg.prefix_relay_identifiers = self.prefix_relay_identifiers;
         cfg.live_pwm_updates = self.live_pwm_updates;
@@ -4569,6 +4571,7 @@ impl PealayerApp {
         self.fullscreen_video_background = config.fullscreen_video_background;
         self.motion_control_mode = config.motion_control_mode;
         self.compact_hardware_controls = config.compact_hardware_controls;
+        self.compact_timeline_tracks = config.compact_timeline_tracks;
         self.non_user_control_visibility = config.non_user_control_visibility;
         self.prefix_relay_identifiers = config.prefix_relay_identifiers;
         self.live_pwm_updates = config.live_pwm_updates;
@@ -5766,6 +5769,7 @@ impl Default for PealayerApp {
             motion_control_mode: crate::config::MotionControlMode::Hold,
             held_motion_action: None,
             compact_hardware_controls: false,
+            compact_timeline_tracks: true,
             non_user_control_visibility: crate::config::NonUserControlVisibility::Dimmed,
             prefix_relay_identifiers: true,
             live_pwm_updates: true,

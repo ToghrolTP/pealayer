@@ -473,6 +473,8 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Toggle on press" => "تغییر حالت با فشردن",
         "Run only while held" => "حرکت فقط هنگام نگه‌داشتن",
         "Use one-row compact hardware controls" => "استفاده از کنترل سخت‌افزار فشردهٔ یک‌ردیفه",
+        "Use compact timeline track rows" => "استفاده از ردیف‌های فشرده در خط زمان",
+        "Compact track rows" => "ردیف‌های فشردهٔ خط زمان",
         "Toggle mode keeps a direction active until another action is chosen. Hold mode sends Stop when the pressed direction is released." => {
             "در حالت تغییر وضعیت، جهت تا انتخاب فرمان بعدی فعال می‌ماند. در حالت نگه‌داشتن، با رهاکردن دکمه فرمان توقف فرستاده می‌شود."
         }

@@ -82,17 +82,40 @@ const EFFECT_CONTROLS_RIGHT_GUTTER: f32 = 8.0;
 const EFFECT_CONTROLS_CARD_MARGIN: i8 = 10;
 const TIMELINE_TRACK_HEADER_WIDTH: f32 = 250.0;
 const TIMELINE_RULER_HEIGHT: f32 = 26.0;
-const TIMELINE_TRACK_ROW_HEIGHT: f32 = 32.0;
-const TIMELINE_ANALOG_ROW_HEIGHT: f32 = 40.0;
+const TIMELINE_COMPACT_TRACK_ROW_HEIGHT: f32 = 32.0;
+const TIMELINE_COMFORTABLE_TRACK_ROW_HEIGHT: f32 = 40.0;
+const TIMELINE_COMPACT_ANALOG_ROW_HEIGHT: f32 = 40.0;
+const TIMELINE_COMFORTABLE_ANALOG_ROW_HEIGHT: f32 = 48.0;
 
-fn timeline_track_row_top(timeline_top: f32, row_index: usize) -> f32 {
-    timeline_top + TIMELINE_RULER_HEIGHT + row_index as f32 * TIMELINE_TRACK_ROW_HEIGHT
+fn timeline_track_row_height(compact: bool) -> f32 {
+    if compact {
+        TIMELINE_COMPACT_TRACK_ROW_HEIGHT
+    } else {
+        TIMELINE_COMFORTABLE_TRACK_ROW_HEIGHT
+    }
 }
 
-fn timeline_content_height(track_rows: usize, analog_rows: usize) -> f32 {
+fn timeline_analog_row_height(compact: bool) -> f32 {
+    if compact {
+        TIMELINE_COMPACT_ANALOG_ROW_HEIGHT
+    } else {
+        TIMELINE_COMFORTABLE_ANALOG_ROW_HEIGHT
+    }
+}
+
+fn timeline_track_row_top(timeline_top: f32, row_index: usize, track_row_height: f32) -> f32 {
+    timeline_top + TIMELINE_RULER_HEIGHT + row_index as f32 * track_row_height
+}
+
+fn timeline_content_height(
+    track_rows: usize,
+    analog_rows: usize,
+    track_row_height: f32,
+    analog_row_height: f32,
+) -> f32 {
     TIMELINE_RULER_HEIGHT
-        + track_rows as f32 * TIMELINE_TRACK_ROW_HEIGHT
-        + analog_rows as f32 * TIMELINE_ANALOG_ROW_HEIGHT
+        + track_rows as f32 * track_row_height
+        + analog_rows as f32 * analog_row_height
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -113,6 +136,94 @@ pub(crate) struct HardwareChannelDrop {
     source_key: String,
     target_key: String,
     before: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct TimelineTrackDrag {
+    key: String,
+    kind: String,
+}
+
+fn timeline_track_drag_id() -> egui::Id {
+    egui::Id::new("timeline-track-order-drag")
+}
+
+fn timeline_track_drag_handle(
+    ui: &mut egui::Ui,
+    control: &crate::four_d::controller::HardwareControl,
+    row_hovered: bool,
+    help: &str,
+) -> egui::Response {
+    let active = ui
+        .data_mut(|data| data.get_temp::<TimelineTrackDrag>(timeline_track_drag_id()))
+        .is_some_and(|drag| drag.key == control.key);
+    let alpha = ui.ctx().animate_bool_with_time(
+        egui::Id::new(("timeline-track-order-handle", control.key.as_str())),
+        row_hovered || active,
+        0.12,
+    );
+    let response = ui
+        .add(
+            egui::Label::new(
+                egui::RichText::new(crate::ui::icons::DOTS_SIX_VERTICAL)
+                    .size(14.0)
+                    .color(ui.visuals().weak_text_color().gamma_multiply(alpha)),
+            )
+            .sense(egui::Sense::drag()),
+        )
+        .on_hover_text(help);
+    if response.drag_started_by(egui::PointerButton::Primary) {
+        ui.data_mut(|data| {
+            data.insert_temp(
+                timeline_track_drag_id(),
+                TimelineTrackDrag {
+                    key: control.key.clone(),
+                    kind: control.kind.clone(),
+                },
+            );
+        });
+    }
+    if response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+    response
+}
+
+fn timeline_track_drop_target(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    control: &crate::four_d::controller::HardwareControl,
+) -> Option<HardwareChannelDrop> {
+    let drag = ui.data_mut(|data| data.get_temp::<TimelineTrackDrag>(timeline_track_drag_id()))?;
+    if drag.key == control.key || drag.kind != control.kind {
+        return None;
+    }
+    let pointer = ui.ctx().pointer_hover_pos()?;
+    if !rect.contains(pointer) {
+        return None;
+    }
+    let before = pointer.y < rect.center().y;
+    let y = if before { rect.top() } else { rect.bottom() };
+    ui.painter().line_segment(
+        [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+        egui::Stroke::new(2.0, ui.visuals().selection.bg_fill),
+    );
+    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    if ui.input(|input| input.pointer.any_released()) {
+        ui.data_mut(|data| data.remove_temp::<TimelineTrackDrag>(timeline_track_drag_id()));
+        return Some(HardwareChannelDrop {
+            source_key: drag.key,
+            target_key: control.key.clone(),
+            before,
+        });
+    }
+    None
+}
+
+fn clear_released_timeline_track_drag(ui: &mut egui::Ui) {
+    if ui.input(|input| input.pointer.any_released()) {
+        ui.data_mut(|data| data.remove_temp::<TimelineTrackDrag>(timeline_track_drag_id()));
+    }
 }
 
 fn hardware_channel_drag_id() -> egui::Id {
@@ -4696,74 +4807,104 @@ mod timeline_row_tests {
     fn timeline_header_rows_and_canvas_lanes_share_one_vertical_geometry() {
         let timeline_top = 73.0;
 
-        assert_eq!(
-            timeline_track_row_top(timeline_top, 0),
-            timeline_top + TIMELINE_RULER_HEIGHT
-        );
-        assert_eq!(
-            timeline_track_row_top(timeline_top, 3),
-            timeline_top + TIMELINE_RULER_HEIGHT + 3.0 * TIMELINE_TRACK_ROW_HEIGHT
-        );
-        assert_eq!(
-            timeline_content_height(3, 2),
-            TIMELINE_RULER_HEIGHT
-                + 3.0 * TIMELINE_TRACK_ROW_HEIGHT
-                + 2.0 * TIMELINE_ANALOG_ROW_HEIGHT
-        );
+        for compact in [true, false] {
+            let track_height = timeline_track_row_height(compact);
+            let analog_height = timeline_analog_row_height(compact);
+            assert_eq!(
+                timeline_track_row_top(timeline_top, 0, track_height),
+                timeline_top + TIMELINE_RULER_HEIGHT
+            );
+            assert_eq!(
+                timeline_track_row_top(timeline_top, 3, track_height),
+                timeline_top + TIMELINE_RULER_HEIGHT + 3.0 * track_height
+            );
+            assert_eq!(
+                timeline_content_height(3, 2, track_height, analog_height),
+                TIMELINE_RULER_HEIGHT + 3.0 * track_height + 2.0 * analog_height
+            );
+        }
     }
 
     #[test]
     fn timeline_fixed_rows_have_no_hidden_gap_against_canvas_lanes() {
-        let context = egui::Context::default();
-        let fixed_rects = std::cell::RefCell::new(Vec::<egui::Rect>::new());
-        let canvas_rect = std::cell::Cell::new(egui::Rect::NOTHING);
-        let output = context.run_ui(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(700.0, 220.0),
-                )),
-                ..Default::default()
-            },
-            |ui| {
-                ui.horizontal_top(|ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width(TIMELINE_TRACK_HEADER_WIDTH);
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        for height in [
-                            TIMELINE_RULER_HEIGHT,
-                            TIMELINE_TRACK_ROW_HEIGHT,
-                            TIMELINE_TRACK_ROW_HEIGHT,
-                        ] {
-                            fixed_rects.borrow_mut().push(
-                                ui.allocate_exact_size(
-                                    egui::vec2(TIMELINE_TRACK_HEADER_WIDTH, height),
-                                    egui::Sense::hover(),
-                                )
-                                .0,
-                            );
-                        }
+        for compact in [true, false] {
+            let track_height = timeline_track_row_height(compact);
+            let analog_height = timeline_analog_row_height(compact);
+            let context = egui::Context::default();
+            let fixed_rects = std::cell::RefCell::new(Vec::<egui::Rect>::new());
+            let canvas_rect = std::cell::Cell::new(egui::Rect::NOTHING);
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(700.0, 220.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.horizontal_top(|ui| {
+                        ui.vertical(|ui| {
+                            ui.set_width(TIMELINE_TRACK_HEADER_WIDTH);
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            for height in [TIMELINE_RULER_HEIGHT, track_height, track_height] {
+                                fixed_rects.borrow_mut().push(
+                                    ui.allocate_exact_size(
+                                        egui::vec2(TIMELINE_TRACK_HEADER_WIDTH, height),
+                                        egui::Sense::hover(),
+                                    )
+                                    .0,
+                                );
+                            }
+                        });
+                        canvas_rect.set(
+                            ui.allocate_exact_size(
+                                egui::vec2(
+                                    360.0,
+                                    timeline_content_height(2, 0, track_height, analog_height),
+                                ),
+                                egui::Sense::hover(),
+                            )
+                            .0,
+                        );
                     });
-                    canvas_rect.set(
-                        ui.allocate_exact_size(
-                            egui::vec2(360.0, timeline_content_height(2, 0)),
-                            egui::Sense::hover(),
-                        )
-                        .0,
-                    );
-                });
-            },
-        );
-        discard_ui_output(output);
+                },
+            );
+            discard_ui_output(output);
 
-        let fixed = fixed_rects.borrow();
-        let canvas = canvas_rect.get();
-        assert_eq!(fixed[0].top(), canvas.top());
-        assert_eq!(fixed[0].bottom(), fixed[1].top());
-        assert_eq!(fixed[1].bottom(), fixed[2].top());
-        assert_eq!(fixed[1].top(), timeline_track_row_top(canvas.top(), 0));
-        assert_eq!(fixed[2].top(), timeline_track_row_top(canvas.top(), 1));
-        assert_eq!(fixed[2].bottom(), canvas.bottom());
+            let fixed = fixed_rects.borrow();
+            let canvas = canvas_rect.get();
+            assert_eq!(fixed[0].top(), canvas.top());
+            assert_eq!(fixed[0].bottom(), fixed[1].top());
+            assert_eq!(fixed[1].bottom(), fixed[2].top());
+            assert_eq!(
+                fixed[1].top(),
+                timeline_track_row_top(canvas.top(), 0, track_height)
+            );
+            assert_eq!(
+                fixed[2].top(),
+                timeline_track_row_top(canvas.top(), 1, track_height)
+            );
+            assert_eq!(fixed[2].bottom(), canvas.bottom());
+        }
+    }
+
+    #[test]
+    fn compact_timeline_density_changes_row_size_without_changing_alignment() {
+        assert!(timeline_track_row_height(true) < timeline_track_row_height(false));
+        assert!(timeline_analog_row_height(true) < timeline_analog_row_height(false));
+        for compact in [true, false] {
+            let track_height = timeline_track_row_height(compact);
+            let analog_height = timeline_analog_row_height(compact);
+            let top = 11.0;
+            assert_eq!(
+                timeline_track_row_top(top, 2, track_height),
+                top + TIMELINE_RULER_HEIGHT + 2.0 * track_height
+            );
+            assert_eq!(
+                timeline_content_height(2, 1, track_height, analog_height),
+                TIMELINE_RULER_HEIGHT + 2.0 * track_height + analog_height
+            );
+        }
     }
 
     fn discard_ui_output(mut output: egui::FullOutput) {
@@ -9153,6 +9294,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         // unlimited GPU render loop when V-Sync was disabled.
                     }
                     PealayerTab::Timeline => {
+                        let timeline_track_height =
+                            timeline_track_row_height(self.app.compact_timeline_tracks);
+                        let timeline_analog_height =
+                            timeline_analog_row_height(self.app.compact_timeline_tracks);
                         let timeline_filter_id =
                             egui::Id::new("timeline_track_filter_text");
                         let mut timeline_track_filter = ui.ctx().data_mut(|data| {
@@ -9389,11 +9534,18 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let rename_key_id = egui::Id::new("timeline_track_rename_key");
                                 let rename_draft_id = egui::Id::new("timeline_track_rename_draft");
                                 let rename_focus_id = egui::Id::new("timeline_track_rename_focus");
+                                let timeline_order_capabilities = self.app.advertised_hardware();
+                                let timeline_order_controls = timeline_order_capabilities
+                                    .as_ref()
+                                    .map(crate::ui::hardware_control::managed_controls)
+                                    .unwrap_or_default();
+                                let mut pending_timeline_order_drop = None;
+                                let reorder_help = self.app.tr("Drag to reorder channel");
                                 for track_row in &timeline_rows {
                                     let (rect, _) = ui.allocate_exact_size(
                                         egui::vec2(
                                             TIMELINE_TRACK_HEADER_WIDTH,
-                                            TIMELINE_TRACK_ROW_HEIGHT,
+                                            timeline_track_height,
                                         ),
                                         egui::Sense::hover(),
                                     );
@@ -9406,6 +9558,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         rect,
                                         timeline_track_row_id(&track_row.key),
                                         egui::Sense::click(),
+                                    );
+                                    let row_hovered = response.hovered();
+                                    let reorder_control = track_row.control_key.as_ref().and_then(
+                                        |control_key| {
+                                            timeline_order_controls
+                                                .iter()
+                                                .find(|control| control.key == *control_key)
+                                                .cloned()
+                                        },
                                     );
                                     let brought_into_view = scroll_requested_timeline_track_into_view(
                                         ui,
@@ -9454,7 +9615,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             ui.visuals().weak_text_color()
                                         };
                                         let (icon_rect, _) = ui.allocate_exact_size(
-                                            egui::vec2(18.0, TIMELINE_TRACK_ROW_HEIGHT),
+                                            egui::vec2(18.0, timeline_track_height),
                                             egui::Sense::hover(),
                                         );
                                         ui.painter().with_clip_rect(icon_rect).text(
@@ -9473,7 +9634,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             ui.allocate_exact_size(
                                                 egui::vec2(
                                                     label_width,
-                                                    TIMELINE_TRACK_ROW_HEIGHT,
+                                                    timeline_track_height,
                                                 ),
                                                 egui::Sense::hover(),
                                             );
@@ -9494,7 +9655,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         .unwrap_or_else(|| track_row.name.clone())
                                                 });
                                                 let edit = ui.add_sized(
-                                                    [label_width, TIMELINE_TRACK_ROW_HEIGHT],
+                                                    [label_width, timeline_track_height],
                                                     egui::TextEdit::singleline(&mut draft),
                                                 );
                                                 let focus = ui.ctx().data_mut(|data| {
@@ -9534,7 +9695,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     ui.add_space(2.0);
                                                     ui.add_sized(
                                                         [label_width, 15.0],
-                                                        egui::Label::new(title).truncate(),
+                                                        egui::Label::new(title)
+                                                            .truncate()
+                                                            .halign(egui::Align::Min),
                                                     );
                                                     ui.add_sized(
                                                         [label_width, 13.0],
@@ -9543,13 +9706,16 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 .size(9.0)
                                                                 .weak(),
                                                         )
-                                                        .truncate(),
+                                                        .truncate()
+                                                        .halign(egui::Align::Min),
                                                     );
                                                 } else {
                                                     ui.add_space(7.0);
                                                     ui.add_sized(
                                                         [label_width, 18.0],
-                                                        egui::Label::new(title).truncate(),
+                                                        egui::Label::new(title)
+                                                            .truncate()
+                                                            .halign(egui::Align::Min),
                                                     );
                                                 }
                                             }
@@ -9562,6 +9728,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             ui.available_size(),
                                             egui::Layout::right_to_left(egui::Align::Center),
                                             |ui| {
+                                        if let Some(control) = reorder_control.as_ref() {
+                                            timeline_track_drag_handle(
+                                                ui,
+                                                control,
+                                                row_hovered,
+                                                &reorder_help,
+                                            );
+                                        }
                                         if let TimelineTrackKind::Subtitle(_) = track_row.kind {
                                             let visible = track_row.active && track_row.enabled;
                                             let visibility = ui
@@ -9677,6 +9851,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 );
                                             }
                                         }
+                                    }
+                                    if let Some(control) = reorder_control.as_ref()
+                                        && let Some(drop) =
+                                            timeline_track_drop_target(ui, rect, control)
+                                    {
+                                        pending_timeline_order_drop = Some(drop);
                                     }
                                     if response.double_clicked() {
                                         if let Some(control_key) = track_row.control_key.as_ref() {
@@ -9832,11 +10012,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     self.app.tr("Unlink from timeline");
                                 let rename_track_label = self.app.tr("Rename");
                                 let manage_track_label = self.app.tr("Manage...");
-                                let analog_menu_capabilities = self.app.advertised_hardware();
-                                let analog_menu_controls = analog_menu_capabilities
-                                    .as_ref()
-                                    .map(crate::ui::hardware_control::managed_controls)
-                                    .unwrap_or_default();
+                                let analog_menu_capabilities = timeline_order_capabilities.clone();
+                                let analog_menu_controls = timeline_order_controls.clone();
                                 let analog_menu_sender = self.app.engine_handle.sender.clone();
                                 let analog_menu_live_updates = self.app.live_pwm_updates;
                                 let analog_menu_estop = self.app.estop_active;
@@ -9858,7 +10035,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     let (rect, _) = ui.allocate_exact_size(
                                         egui::vec2(
                                             TIMELINE_TRACK_HEADER_WIDTH,
-                                            TIMELINE_ANALOG_ROW_HEIGHT,
+                                            timeline_analog_height,
                                         ),
                                         egui::Sense::hover(),
                                     );
@@ -9867,6 +10044,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         timeline_analog_track_row_id(&track_key),
                                         egui::Sense::click(),
                                     );
+                                    let row_hovered = response.hovered();
+                                    let reorder_control = analog_menu_controls
+                                        .iter()
+                                        .find(|control| control.key == control_key)
+                                        .cloned();
                                     let brought_into_view = scroll_requested_timeline_track_into_view(
                                         ui,
                                         &track_key,
@@ -9915,7 +10097,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     child_ui.horizontal(|ui| {
                                         ui.add_space(6.0);
                                         ui.allocate_ui_with_layout(
-                                            egui::vec2(18.0, TIMELINE_ANALOG_ROW_HEIGHT),
+                                            egui::vec2(18.0, timeline_analog_height),
                                             egui::Layout::left_to_right(egui::Align::Center),
                                             |ui| {
                                                 ui.label(
@@ -9963,7 +10145,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     });
                                                 }
                                             } else {
-                                                ui.label(egui::RichText::new(track_name.clone()).size(10.5).strong())
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        egui::RichText::new(track_name.clone())
+                                                            .size(10.5)
+                                                            .strong(),
+                                                    )
+                                                    .truncate()
+                                                    .halign(egui::Align::Min),
+                                                )
                                                     .on_hover_text(format!("{analog_track_label}: {}\n{port_channel_label}: P{}", track_name, track.channel));
                                             }
                                         });
@@ -9971,6 +10161,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             ui.available_size(),
                                             egui::Layout::right_to_left(egui::Align::Center),
                                             |ui| {
+
+                                        if let Some(control) = reorder_control.as_ref() {
+                                            timeline_track_drag_handle(
+                                                ui,
+                                                control,
+                                                row_hovered,
+                                                &reorder_help,
+                                            );
+                                        }
 
                                         let add_btn = ui
                                             .add_enabled(
@@ -10043,6 +10242,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             },
                                         );
                                     });
+                                    if let Some(control) = reorder_control.as_ref()
+                                        && let Some(drop) =
+                                            timeline_track_drop_target(ui, rect, control)
+                                    {
+                                        pending_timeline_order_drop = Some(drop);
+                                    }
                                     if response.double_clicked() {
                                         response.ctx.data_mut(|data| {
                                             data.insert_temp(rename_key_id, control_key.clone());
@@ -10209,6 +10414,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 if analog_tracks_changed {
                                     self.app.commit_timeline_edit();
                                 }
+                                if let (Some(capabilities), Some(drop)) = (
+                                    timeline_order_capabilities.as_ref(),
+                                    pending_timeline_order_drop,
+                                ) {
+                                    persist_channel_drop(self.app, capabilities, drop);
+                                } else {
+                                    clear_released_timeline_track_drag(ui);
+                                }
                             });
 
                             // 2. Right column: Scrollable Timeline Grid
@@ -10219,9 +10432,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let total_width = (total_seconds * zoom as f64) as f32;
                             let num_analog = visible_analog_track_ids.len();
                             let track_area_height =
-                                timeline_rows.len() as f32 * TIMELINE_TRACK_ROW_HEIGHT;
-                            let total_height =
-                                timeline_content_height(timeline_rows.len(), num_analog);
+                                timeline_rows.len() as f32 * timeline_track_height;
+                            let total_height = timeline_content_height(
+                                timeline_rows.len(),
+                                num_analog,
+                                timeline_track_height,
+                                timeline_analog_height,
+                            );
 
                             // The interactive timeline canvas itself is the drop
                             // target. Wrapping it in `dnd_drop_zone` made the outer
@@ -10431,7 +10648,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         // Draw horizontal track separators and backgrounds
                                         for i in 0..=timeline_rows.len() {
                                             let grid_y =
-                                                tracks_top + i as f32 * TIMELINE_TRACK_ROW_HEIGHT;
+                                                tracks_top + i as f32 * timeline_track_height;
 
                                             // Lock row background darkening
                                             if let Some(relay_id) = relay_for_timeline_row(&timeline_rows, i as i32) {
@@ -10440,7 +10657,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         egui::pos2(rect.min.x, grid_y),
                                                         egui::pos2(
                                                             rect.max.x,
-                                                            grid_y + TIMELINE_TRACK_ROW_HEIGHT,
+                                                            grid_y + timeline_track_height,
                                                         ),
                                                     );
                                                     painter.rect_filled(track_rect, 0.0, ui.visuals().faint_bg_color);
@@ -10464,7 +10681,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         {
                                             let grid_y = tracks_top
                                                 + track_area_height
-                                                + (t_idx + 1) as f32 * TIMELINE_ANALOG_ROW_HEIGHT;
+                                                + (t_idx + 1) as f32 * timeline_analog_height;
                                             painter.line_segment(
                                                 [egui::pos2(rect.min.x, grid_y), egui::pos2(rect.max.x, grid_y)],
                                                 ui.visuals().widgets.noninteractive.bg_stroke,
@@ -10477,7 +10694,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                                     let relative_y = mouse_pos.y - tracks_top;
                                                     let track_index = (relative_y
-                                                        / TIMELINE_TRACK_ROW_HEIGHT)
+                                                        / timeline_track_height)
                                                         .floor()
                                                         as i32;
                                                     if let Some(target_r) = relay_for_timeline_row(&timeline_rows, track_index) {
@@ -10490,24 +10707,24 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         if !self.app.track_locked.contains(&target_r) && target_compatible {
                                                             let row_y = tracks_top
                                                                 + track_index as f32
-                                                                    * TIMELINE_TRACK_ROW_HEIGHT;
+                                                                    * timeline_track_height;
                                                             let dest_rect = egui::Rect::from_min_max(
                                                                 egui::pos2(rect.min.x, row_y),
                                                                 egui::pos2(
                                                                     rect.max.x,
-                                                                    row_y + TIMELINE_TRACK_ROW_HEIGHT,
+                                                                    row_y + timeline_track_height,
                                                                 ),
                                                             );
                                                             painter.rect_filled(dest_rect, 0.0, egui::Color32::from_rgba_unmultiplied(46, 204, 113, 25)); // Faint green highlight
                                                         } else if !target_compatible && !self.app.track_locked.contains(&target_r) {
                                                             let row_y = tracks_top
                                                                 + track_index as f32
-                                                                    * TIMELINE_TRACK_ROW_HEIGHT;
+                                                                    * timeline_track_height;
                                                             let dest_rect = egui::Rect::from_min_max(
                                                                 egui::pos2(rect.min.x, row_y),
                                                                 egui::pos2(
                                                                     rect.max.x,
-                                                                    row_y + TIMELINE_TRACK_ROW_HEIGHT,
+                                                                    row_y + timeline_track_height,
                                                                 ),
                                                             );
                                                             painter.rect_filled(dest_rect, 0.0, egui::Color32::from_rgba_unmultiplied(231, 76, 60, 30)); // Faint red warning highlight for incompatible track
@@ -10533,10 +10750,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let row_y = timeline_track_row_top(
                                                     rect.min.y,
                                                     row_index,
+                                                    timeline_track_height,
                                                 );
                                                 let clip_rect = egui::Rect::from_min_max(
                                                     egui::pos2(rect.min.x, row_y + 4.0),
-                                                    egui::pos2(rect.min.x + total_width, row_y + 28.0),
+                                                    egui::pos2(
+                                                        rect.min.x + total_width,
+                                                        row_y + timeline_track_height - 4.0,
+                                                    ),
                                                 );
                                                 painter.rect_filled(clip_rect, 4.0, color);
                                                 painter.rect_stroke(clip_rect, 4.0, egui::Stroke::new(1.0_f32, egui::Color32::WHITE), egui::StrokeKind::Inside);
@@ -10592,6 +10813,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let track_y = timeline_track_row_top(
                                                     rect.min.y,
                                                     track_index,
+                                                    timeline_track_height,
                                                 );
 
                                                 let start_x = rect.min.x + (instance.start_time_ms as f32 * px_per_ms);
@@ -10599,7 +10821,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                                 let clip_rect = egui::Rect::from_min_max(
                                                     egui::pos2(start_x, track_y + 4.0),
-                                                    egui::pos2(end_x.max(start_x + 8.0), track_y + 28.0),
+                                                    egui::pos2(
+                                                        end_x.max(start_x + 8.0),
+                                                        track_y + timeline_track_height - 4.0,
+                                                    ),
                                                 );
 
                                                 let clip_id = egui::Id::new(instance.id);
@@ -10931,9 +11156,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         // Vertical track switching
                                                         let mut target_relay = None;
                                                         if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
-                                                            let relative_y = mouse_pos.y - tracks_top;
-                                                            let track_index = (relative_y
-                                                                / TIMELINE_TRACK_ROW_HEIGHT)
+                                                    let relative_y = mouse_pos.y - tracks_top;
+                                                    let track_index = (relative_y
+                                                                / timeline_track_height)
                                                                 .floor()
                                                                 as i32;
                                                             if let Some(target_r) = relay_for_timeline_row(&timeline_rows, track_index) {
@@ -11170,12 +11395,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         {
                                             let row_y = tracks_top
                                                 + track_area_height
-                                                + t_idx as f32 * TIMELINE_ANALOG_ROW_HEIGHT;
+                                                + t_idx as f32 * timeline_analog_height;
+                                            let curve_bottom = row_y + timeline_analog_height - 4.0;
+                                            let curve_span = timeline_analog_height - 8.0;
                                             let row_rect = egui::Rect::from_min_max(
                                                 egui::pos2(rect.min.x, row_y),
                                                 egui::pos2(
                                                     rect.max.x,
-                                                    row_y + TIMELINE_ANALOG_ROW_HEIGHT,
+                                                    row_y + timeline_analog_height,
                                                 ),
                                             );
 
@@ -11184,7 +11411,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                             // Centerline guide (50% intensity)
                                             painter.line_segment(
-                                                [egui::pos2(rect.min.x, row_y + 20.0), egui::pos2(rect.max.x, row_y + 20.0)],
+                                                [egui::pos2(rect.min.x, row_y + timeline_analog_height * 0.5), egui::pos2(rect.max.x, row_y + timeline_analog_height * 0.5)],
                                                 egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(34, 42, 48)),
                                             );
 
@@ -11195,7 +11422,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             while curr_x <= rect.max.x {
                                                 let t_ms = (((curr_x - rect.min.x) / zoom) * 1000.0).max(0.0) as u64;
                                                 let norm_val = track.evaluate(t_ms);
-                                                let py = (row_y + 36.0) - (norm_val * 32.0);
+                                                let py = curve_bottom - (norm_val * curve_span);
                                                 points.push(egui::pos2(curr_x, py));
                                                 curr_x += step_px;
                                             }
@@ -11209,8 +11436,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             for window in points.windows(2) {
                                                 let p1 = window[0];
                                                 let p2 = window[1];
-                                                let b1 = egui::pos2(p1.x, row_y + 36.0);
-                                                let b2 = egui::pos2(p2.x, row_y + 36.0);
+                                                let b1 = egui::pos2(p1.x, curve_bottom);
+                                                let b2 = egui::pos2(p2.x, curve_bottom);
                                                 painter.add(egui::Shape::convex_polygon(
                                                     vec![b1, p1, p2, b2],
                                                     fill_col,
@@ -11236,7 +11463,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         let mut ghost_points = Vec::with_capacity(live_samples.len());
                                                         for s in live_samples {
                                                             let gx = rect.min.x + (s.0 as f32 * px_per_ms);
-                                                            let gy = (row_y + 36.0) - (s.1 * 32.0);
+                                                            let gy = curve_bottom - (s.1 * curve_span);
                                                             ghost_points.push(egui::pos2(gx, gy));
                                                         }
                                                         painter.add(egui::Shape::line(
@@ -11250,7 +11477,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             // Keyframe markers and interactions
                                             for (k_idx, kf) in track.keyframes.iter().enumerate() {
                                                 let kx = rect.min.x + (kf.time_ms as f32 * px_per_ms);
-                                                let ky = (row_y + 36.0) - (kf.value * 32.0);
+                                                let ky = curve_bottom - (kf.value * curve_span);
                                                 let center = egui::pos2(kx, ky);
                                                 let is_selected = self.app.selected_keyframes.contains(&(track.id, k_idx));
 
@@ -11363,7 +11590,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 if let Some(pos) = response.interact_pointer_pos() {
                                                     if row_rect.contains(pos) {
                                                         let new_t = (((pos.x - rect.min.x) / zoom) * 1000.0).max(0.0) as u64;
-                                                        let new_v = ((row_y + 36.0 - pos.y) / 32.0).clamp(0.0, 1.0);
+                                                        let new_v = ((curve_bottom - pos.y) / curve_span).clamp(0.0, 1.0);
                                                         pending_add_keyframe = Some((track.id, new_t, new_v));
                                                         clicked_any_keyframe = true;
                                                     }
@@ -11529,7 +11756,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 }
 
                                                 let delta_y = pos.y - drag.start_pointer_pos.y;
-                                                let val_delta = -delta_y / 32.0;
+                                                let val_delta =
+                                                    -delta_y / (timeline_analog_height - 8.0);
                                                 let new_v = (drag.original_value + val_delta).clamp(0.0, 1.0);
 
                                                 let time_delta = new_t as i64 - drag.original_time_ms as i64;
@@ -11704,7 +11932,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 if rect.contains(mouse_pos) {
                                                     let relative_y = mouse_pos.y - tracks_top;
                                                     let hovered_track_index = (relative_y
-                                                        / TIMELINE_TRACK_ROW_HEIGHT)
+                                                        / timeline_track_height)
                                                         .floor()
                                                         as i32;
 
@@ -11722,13 +11950,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 let row_y = timeline_track_row_top(
                                                                     rect.min.y,
                                                                     i,
+                                                                    timeline_track_height,
                                                                 );
                                                                 let track_rect = egui::Rect::from_min_max(
                                                                     egui::pos2(rect.min.x, row_y),
                                                                     egui::pos2(
                                                                         rect.max.x,
-                                                                        row_y
-                                                                            + TIMELINE_TRACK_ROW_HEIGHT,
+                                                                        row_y + timeline_track_height,
                                                                     ),
                                                                 );
                                                                 if hovered_track_index == i as i32 {
@@ -11750,13 +11978,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         let row_y = timeline_track_row_top(
                                                             rect.min.y,
                                                             row_index,
+                                                            timeline_track_height,
                                                         );
                                                         let track_rect = egui::Rect::from_min_max(
                                                             egui::pos2(rect.min.x, row_y),
                                                             egui::pos2(
                                                                 rect.max.x,
-                                                                row_y
-                                                                    + TIMELINE_TRACK_ROW_HEIGHT,
+                                                                row_y + timeline_track_height,
                                                             ),
                                                         );
 
@@ -11835,10 +12063,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         })
                                                     {
                                                         ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
-                                                        let row_y = tracks_top + (hovered_track_index as f32 * 32.0);
+                                                        let row_y = tracks_top
+                                                            + hovered_track_index as f32
+                                                                * timeline_track_height;
                                                         let track_rect = egui::Rect::from_min_max(
                                                             egui::pos2(rect.min.x, row_y),
-                                                            egui::pos2(rect.max.x, row_y + 32.0),
+                                                            egui::pos2(
+                                                                rect.max.x,
+                                                                row_y + timeline_track_height,
+                                                            ),
                                                         );
                                                         painter.rect_filled(track_rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 70, 70, 45));
                                                         painter.rect_stroke(track_rect, 0.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(255, 70, 70)), egui::StrokeKind::Inside);
@@ -11885,14 +12118,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 }
                             }
 
-                            let tracks_top = rect.min.y + 26.0;
+                            let tracks_top = rect.min.y + TIMELINE_RULER_HEIGHT;
 
                             // Successful drop logic
                             if let Some(payload) = take_effect_drop_on_rect(ui.ctx(), rect) {
                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                     if rect.contains(mouse_pos) {
                                         let relative_y = mouse_pos.y - tracks_top;
-                                        let visible_row = (relative_y / 32.0).floor() as i32;
+                                        let visible_row =
+                                            (relative_y / timeline_track_height).floor() as i32;
                                         let relative_x = mouse_pos.x - rect.min.x;
                                         let drop_time_secs = (relative_x / zoom) as f64;
 
@@ -11931,12 +12165,16 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             let Some(track_index) = timeline_row_for_relay(&timeline_rows, relay_id) else {
                                                 continue;
                                             };
-                                            let track_y = tracks_top + track_index as f32 * 32.0;
+                                            let track_y = tracks_top
+                                                + track_index as f32 * timeline_track_height;
                                             let start_x = rect.min.x + (instance.start_time_ms as f32 * px_per_ms);
                                             let end_x = start_x + (effect.duration_ms as f32 * px_per_ms);
                                             let clip_rect = egui::Rect::from_min_max(
                                                 egui::pos2(start_x, track_y + 4.0),
-                                                egui::pos2(end_x, track_y + 28.0),
+                                                egui::pos2(
+                                                    end_x,
+                                                    track_y + timeline_track_height - 4.0,
+                                                ),
                                             );
                                             if lasso_rect.intersects(clip_rect) {
                                                 new_instance_selection.insert(instance.id);
@@ -11953,10 +12191,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         .filter(|track| visible_analog_track_ids.contains(&track.id))
                                         .enumerate()
                                     {
-                                        let t_y = tracks_top + track_area_height + (t_idx as f32 * 40.0);
+                                        let t_y = tracks_top
+                                            + track_area_height
+                                            + t_idx as f32 * timeline_analog_height;
+                                        let curve_bottom =
+                                            t_y + timeline_analog_height - 4.0;
+                                        let curve_span = timeline_analog_height - 8.0;
                                         for (k_idx, kf) in track.keyframes.iter().enumerate() {
                                             let k_x = rect.min.x + (kf.time_ms as f32 * px_per_ms);
-                                            let k_y = (t_y + 36.0) - (kf.value * 32.0);
+                                            let k_y = curve_bottom - kf.value * curve_span;
                                             let k_pos = egui::pos2(k_x, k_y);
                                             if lasso_rect.contains(k_pos) {
                                                 new_keyframe_selection.insert((track.id, k_idx));
@@ -12031,6 +12274,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     ui.close();
                                 }
                                 ui.separator();
+                                let mut compact_rows = self.app.compact_timeline_tracks;
+                                if ui
+                                    .checkbox(
+                                        &mut compact_rows,
+                                        self.app.tr("Compact track rows"),
+                                    )
+                                    .changed()
+                                {
+                                    self.app.compact_timeline_tracks = compact_rows;
+                                    self.app.save_config();
+                                }
                                 if ui.button(format!("{} {}", crate::ui::icons::GEAR, self.app.tr("Preferences..."))).clicked() {
                                     self.app.show_preferences_dialog = true;
                                     ui.close();
@@ -12222,7 +12476,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 } else if scroll_up_pressed || scroll_down_pressed {
                                     let direction = if scroll_up_pressed { -1.0 } else { 1.0 };
                                     timeline_scroll_state.offset.y =
-                                        (timeline_scroll_state.offset.y + direction * 32.0).clamp(
+                                        (timeline_scroll_state.offset.y
+                                            + direction * timeline_track_height)
+                                            .clamp(
                                             0.0,
                                             (timeline_content_size.y - timeline_viewport.height())
                                                 .max(0.0),
