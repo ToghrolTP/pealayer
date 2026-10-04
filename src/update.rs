@@ -559,6 +559,8 @@ fn download_update(
             "download SHA-256 mismatch: expected {expected}, received {actual}"
         ));
     }
+    let (path, actual, bytes_done) = materialize_download(operation_id, &artifact_url, path)
+        .map_err(|error| format!("prepare downloaded update: {error}"))?;
     if let Ok(mut inner) = manager.inner.lock() {
         inner.status.state = "verifying".to_string();
         inner.status.sha256 = Some(actual.clone());
@@ -578,6 +580,7 @@ fn resolve_update_source(
             name: String,
             browser_download_url: String,
             size: u64,
+            digest: Option<String>,
         }
         #[derive(Deserialize)]
         struct GithubRelease {
@@ -591,22 +594,20 @@ fn resolve_update_source(
             .map_err(|error| format!("resolve GitHub release: {error}"))?
             .json()
             .map_err(|error| format!("decode GitHub release: {error}"))?;
-        let extension = if cfg!(windows) { ".exe" } else { "" };
         let asset = release
             .assets
             .into_iter()
-            .find(|asset| {
-                let lower = asset.name.to_ascii_lowercase();
-                lower.contains("pealayer")
-                    && (extension.is_empty() || lower.ends_with(extension))
-                    && !lower.ends_with(".sha256")
-            })
+            .find(|asset| release_asset_matches(&asset.name))
             .ok_or_else(|| {
                 "GitHub release has no Pealayer executable for this platform".to_string()
             })?;
         return Ok((
             asset.browser_download_url,
-            None,
+            asset
+                .digest
+                .as_deref()
+                .and_then(|value| value.strip_prefix("sha256:"))
+                .map(str::to_string),
             release.tag_name,
             Some(asset.size),
         ));
@@ -652,6 +653,135 @@ fn resolve_update_source(
     }
     let length = probe.content_length();
     Ok((probe.url().to_string(), None, None, length))
+}
+
+fn release_asset_matches(name: &str) -> bool {
+    let platform = match std::env::consts::OS {
+        "windows" => "windows",
+        "macos" => "macos",
+        "linux" => "linux",
+        value => value,
+    };
+    let platform_arch = format!("{platform}-{}", std::env::consts::ARCH);
+    let lower = name.to_ascii_lowercase();
+    lower.contains("pealayer")
+        && lower.contains(&platform_arch)
+        && (lower.ends_with(".zip") || lower.ends_with(".tar.gz"))
+        && !lower.ends_with(".sha256")
+}
+
+fn materialize_download(
+    operation_id: &str,
+    artifact_url: &str,
+    downloaded: PathBuf,
+) -> Result<(PathBuf, String, u64), String> {
+    let lower = url::Url::parse(artifact_url)
+        .ok()
+        .map(|url| url.path().to_ascii_lowercase())
+        .unwrap_or_else(|| artifact_url.to_ascii_lowercase());
+    let extracted = if lower.ends_with(".zip") {
+        extract_zip_executable(operation_id, &downloaded)
+    } else if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+        extract_tar_gz_executable(operation_id, &downloaded)
+    } else {
+        return Ok((
+            downloaded.clone(),
+            sha256_file(&downloaded)?,
+            fs::metadata(&downloaded)
+                .map_err(|error| error.to_string())?
+                .len(),
+        ));
+    };
+    let _ = fs::remove_file(&downloaded);
+    let extracted = extracted?;
+    let size = fs::metadata(&extracted)
+        .map_err(|error| format!("inspect extracted executable: {error}"))?
+        .len();
+    validate_update_size(size)?;
+    let sha256 = sha256_file(&extracted)?;
+    Ok((extracted, sha256, size))
+}
+
+fn archive_entry_is_executable(path: &Path) -> bool {
+    let expected = if cfg!(windows) {
+        "pealayer.exe"
+    } else {
+        "pealayer"
+    };
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case(expected))
+}
+
+fn extract_zip_executable(operation_id: &str, archive_path: &Path) -> Result<PathBuf, String> {
+    let archive = File::open(archive_path).map_err(|error| format!("open ZIP: {error}"))?;
+    let mut archive =
+        zip::ZipArchive::new(archive).map_err(|error| format!("read ZIP: {error}"))?;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| format!("read ZIP entry: {error}"))?;
+        let Some(path) = entry.enclosed_name() else {
+            continue;
+        };
+        if !entry.is_file() || !archive_entry_is_executable(&path) {
+            continue;
+        }
+        validate_update_size(entry.size())?;
+        let output = update_scratch_path(operation_id, "candidate")?;
+        let mut file = File::create(&output)
+            .map_err(|error| format!("create extracted executable: {error}"))?;
+        std::io::copy(&mut entry, &mut file)
+            .map_err(|error| format!("extract executable from ZIP: {error}"))?;
+        file.sync_all().map_err(|error| error.to_string())?;
+        make_executable(&output)?;
+        return Ok(output);
+    }
+    Err("update ZIP does not contain the Pealayer executable".to_string())
+}
+
+fn extract_tar_gz_executable(operation_id: &str, archive_path: &Path) -> Result<PathBuf, String> {
+    let archive = File::open(archive_path).map_err(|error| format!("open TAR.GZ: {error}"))?;
+    let decoder = flate2::read::GzDecoder::new(archive);
+    let mut archive = tar::Archive::new(decoder);
+    let entries = archive
+        .entries()
+        .map_err(|error| format!("read TAR.GZ: {error}"))?;
+    for entry in entries {
+        let mut entry = entry.map_err(|error| format!("read TAR entry: {error}"))?;
+        let path = entry
+            .path()
+            .map_err(|error| format!("read TAR entry path: {error}"))?;
+        if !entry.header().entry_type().is_file() || !archive_entry_is_executable(&path) {
+            continue;
+        }
+        let size = entry.size();
+        validate_update_size(size)?;
+        let output = update_scratch_path(operation_id, "candidate")?;
+        let mut file = File::create(&output)
+            .map_err(|error| format!("create extracted executable: {error}"))?;
+        std::io::copy(&mut entry, &mut file)
+            .map_err(|error| format!("extract executable from TAR.GZ: {error}"))?;
+        file.sync_all().map_err(|error| error.to_string())?;
+        make_executable(&output)?;
+        return Ok(output);
+    }
+    Err("update TAR.GZ does not contain the Pealayer executable".to_string())
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = fs::metadata(path)
+        .map_err(|error| error.to_string())?
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).map_err(|error| error.to_string())
+}
+
+#[cfg(not(unix))]
+fn make_executable(_path: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 fn github_release_api_url(source: &str) -> Option<String> {
@@ -1439,6 +1569,46 @@ mod tests {
                 .as_deref(),
             Some("https://api.github.com/repos/ToghrolTP/pealayer/releases/tags/v0.2.0")
         );
+    }
+
+    #[test]
+    fn release_asset_selection_requires_this_platform_and_architecture() {
+        let matching = format!(
+            "Pealayer-{}-{}-main-deadbee.{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            if cfg!(target_os = "linux") {
+                "tar.gz"
+            } else {
+                "zip"
+            }
+        );
+        assert!(release_asset_matches(&matching));
+        assert!(!release_asset_matches(
+            "Pealayer-windows-aarch64-main-deadbee.zip"
+        ));
+    }
+
+    #[test]
+    fn zip_release_extracts_only_the_platform_executable() {
+        let operation = format!("update-test-{}", uuid::Uuid::new_v4());
+        let archive_path = std::env::temp_dir().join(format!("{operation}.zip"));
+        let archive = File::create(&archive_path).unwrap();
+        let mut writer = zip::ZipWriter::new(archive);
+        let expected_name = if cfg!(windows) {
+            "bundle/pealayer.exe"
+        } else {
+            "bundle/pealayer"
+        };
+        writer
+            .start_file(expected_name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(b"verified candidate").unwrap();
+        writer.finish().unwrap();
+        let extracted = extract_zip_executable(&operation, &archive_path).unwrap();
+        assert_eq!(fs::read(&extracted).unwrap(), b"verified candidate");
+        let _ = fs::remove_file(extracted);
+        let _ = fs::remove_file(archive_path);
     }
 
     #[test]
