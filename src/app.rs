@@ -3115,6 +3115,7 @@ impl PealayerApp {
             .sender
             .send(crate::four_d::engine::EngineMessage::Seek(0));
         self.set_osd("Replay".to_string());
+        self.save_config();
     }
 
     /// Resumes playback, or restarts if playback finished.
@@ -3131,6 +3132,7 @@ impl PealayerApp {
                 .is_playing
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             self.set_osd("Play".to_string());
+            self.save_config();
         }
     }
 
@@ -3145,6 +3147,7 @@ impl PealayerApp {
             .is_playing
             .store(false, std::sync::atomic::Ordering::Relaxed);
         self.set_osd("Pause".to_string());
+        self.save_config();
     }
 
     pub(crate) fn set_emergency_stop(&mut self, active: bool) {
@@ -3942,6 +3945,7 @@ impl PealayerApp {
             .then(|| self.open_url_proxy_url.trim().to_string());
         cfg.recent_media = self.recent_media.clone();
         cfg.last_media_target = self.last_media_target.clone();
+        cfg.last_media_paused = self.current_video_path.is_some() && self.is_paused;
         cfg.restore_last_media_on_startup = self.restore_last_media_on_startup;
         cfg.remember_playback_position = self.remember_playback_position;
         cfg.playback_position_history_limit = self.playback_position_history_limit;

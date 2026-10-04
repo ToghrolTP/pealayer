@@ -362,6 +362,16 @@ fn main() -> eframe::Result {
                 &loaded_config.recent_media,
                 &loaded_config.playback_positions,
             );
+            // An explicit CLI media target starts normally. Only an automatic
+            // last-session restore inherits the persisted pause state.
+            let restore_startup_pause = cli_options
+                .target
+                .as_deref()
+                .map(str::trim)
+                .filter(|target| !target.is_empty())
+                .is_none()
+                && startup_media_target.is_some()
+                && loaded_config.last_media_paused;
             let _ = mpv_static.set_property("volume", initial_volume);
             let _ = mpv_static.set_property("mute", loaded_config.is_muted);
             crate::platform::windows::sync_windows_jump_list(&loaded_config.recent_media);
@@ -681,6 +691,9 @@ fn main() -> eframe::Result {
 
             if let Some(target) = startup_media_target {
                 app.load_media_target(&target);
+                if restore_startup_pause {
+                    app.pause();
+                }
             }
             for command in cli_options.commands {
                 app.apply_interop_command(&cc.egui_ctx, command, "Command line");

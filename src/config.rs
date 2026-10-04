@@ -376,6 +376,7 @@ pub struct AppConfig {
     pub open_url_proxy_url: Option<String>,
     pub recent_media: Vec<PathBuf>,
     pub last_media_target: Option<PathBuf>,
+    pub last_media_paused: bool,
     pub restore_last_media_on_startup: bool,
     pub remember_playback_position: bool,
     pub playback_position_history_limit: u32,
@@ -449,6 +450,7 @@ impl Default for AppConfig {
             open_url_proxy_url: None,
             recent_media: Vec::new(),
             last_media_target: None,
+            last_media_paused: false,
             restore_last_media_on_startup: true,
             remember_playback_position: true,
             playback_position_history_limit: DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT,
@@ -1446,6 +1448,9 @@ mod tests {
         assert!(!cfg.pin_controls);
         assert!(!cfg.show_remaining_time);
         assert!(cfg.recent_media.is_empty());
+        assert!(cfg.last_media_target.is_none());
+        assert!(!cfg.last_media_paused);
+        assert!(cfg.restore_last_media_on_startup);
         assert!(cfg.remember_playback_position);
         assert_eq!(
             cfg.playback_position_history_limit,
@@ -1565,6 +1570,8 @@ mod tests {
         cfg.open_url_proxy_url = Some("http://127.0.0.1:8080".to_string());
         cfg.native_dialog_windows = true;
         cfg.recent_media.push(PathBuf::from("/test/file.mp4"));
+        cfg.last_media_target = Some(PathBuf::from("/test/file.mp4"));
+        cfg.last_media_paused = true;
         cfg.workspace_session = WorkspaceProfile {
             name: String::new(),
             icon: String::new(),
@@ -1616,6 +1623,11 @@ mod tests {
         );
         assert_eq!(loaded.recent_media.len(), 1);
         assert_eq!(loaded.recent_media[0], PathBuf::from("/test/file.mp4"));
+        assert_eq!(
+            loaded.last_media_target,
+            Some(PathBuf::from("/test/file.mp4"))
+        );
+        assert!(loaded.last_media_paused);
         assert!(loaded.native_dialog_windows);
         assert!(!loaded.workspace_session.nle);
         assert_eq!(
