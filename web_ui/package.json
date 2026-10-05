@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && node scripts/test-timeline-wheel.mjs && vite build && node scripts/finalize-pwa.mjs && node scripts/verify-pwa.mjs",
+    "build": "tsc && node scripts/test-timeline-wheel.mjs && node scripts/test-messaging.mjs && vite build && node scripts/finalize-pwa.mjs && node scripts/verify-pwa.mjs",
     "verify:pwa": "node scripts/verify-pwa.mjs",
     "preview": "vite preview"
   },

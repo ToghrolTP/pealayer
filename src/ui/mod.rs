@@ -22,6 +22,7 @@ pub mod preferences;
 pub mod seek_preview;
 pub mod status_bar;
 pub mod subtitles;
+pub mod toasts;
 pub mod video;
 pub mod workspace_profiles;
 

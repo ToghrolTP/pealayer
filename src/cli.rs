@@ -85,6 +85,8 @@ PLAYER OPTIONS:
   --quit                    Close the running application
   --command <COMMAND>       Queue a unified text or JSON command; repeatable
   --remote <COMMAND>        Send one unified command and exit
+                             Use 'toast TEXT' for synchronized native/web toasts;
+                             JSON supports severity, stable ID and expiry.
 
 UPDATE OPTIONS:
   --deploy-to <HOST:PORT>   Stream this verified executable to a Pealayer peer

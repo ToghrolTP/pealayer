@@ -10,10 +10,12 @@ import {
   SettingOutlined,
 } from '@ant-design/icons';
 import { HeaderBar } from './components/HeaderBar';
+import { SharedToasts } from './components/SharedToasts';
 import type { PlayerState } from './components/RemoteControlTab';
 import { tr } from './i18n';
 import { useWebPlatform } from './webPlatform';
 import './styles.css';
+import './shared-toasts.css';
 import palettes from '../../assets/themes/palettes.json';
 import { accentForeground, mergeAppearance, paletteName as resolvePaletteName, resolvedAccent, resolvedAppearanceTheme } from './appearance';
 
@@ -45,6 +47,11 @@ function readStoredJson<T>(key: string, fallback: T): T {
 }
 
 function persistJson(key: string, value: unknown): void {
+  // Never resurrect transient notifications from offline storage.
+  if (key === STORAGE.state && value && typeof value === 'object') {
+    const { messages: _messages, ...snapshot } = value as PlayerState;
+    value = snapshot;
+  }
   try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* Storage can be disabled or full. */ }
 }
 
@@ -69,7 +76,7 @@ const App: React.FC = () => {
   const [activeTab, setActiveTabState] = useState<SurfaceId>(surfaceFromLocation);
   const [connected, setConnected] = useState<boolean>(false);
   const [connectionMode, setConnectionMode] = useState<'ws' | 'http'>('http');
-  const [state, setState] = useState<PlayerState>(() => readStoredJson<PlayerState>(STORAGE.state, { status: 'initializing' }));
+  const [state, setState] = useState<PlayerState>(() => ({ ...readStoredJson<PlayerState>(STORAGE.state, { status: 'initializing' }), messages: undefined }));
   const [runtime, setRuntime] = useState<RuntimeConfig | null>(() => readStoredJson<RuntimeConfig | null>(STORAGE.runtime, null));
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('dark');
   const [quickSeekSeconds, setQuickSeekSeconds] = useState<number>(10);
@@ -483,6 +490,7 @@ const App: React.FC = () => {
         },
       }}
     >
+      <SharedToasts snapshot={state.messages} connected={connected} dismiss={id => sendCmd('pealayer.toast.dismiss', { id })} />
       <Layout className="app-shell">
         <HeaderBar
           collapsed={collapsed}

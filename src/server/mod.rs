@@ -421,6 +421,9 @@ fn handle_websocket(stream: TcpStream, state: ControlState) {
 
 fn handle_websocket_text(state: &ControlState, text: &str) -> Option<String> {
     if let Ok(command) = serde_json::from_str::<crate::platform::interop::InteropCommand>(text) {
+        if let Err(error) = command.validate() {
+            return Some(crate::platform::interop::format_interop_error(None, -32602, &error));
+        }
         if !crate::platform::interop::get_live_config().web_allow_control {
             return Some(crate::platform::interop::format_interop_error(
                 None,
@@ -720,6 +723,16 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
                 Err(error) => update_error_response(400, "Bad Request", error),
             }
         }
+        ("GET", "/api/messages") => HttpResponse::json(200, "OK", serde_json::to_string(&crate::messaging::snapshot()).unwrap_or_default()),
+        ("POST", "/api/messages") => {
+            match serde_json::from_slice::<crate::messaging::ToastRequest>(&request.body) {
+                Ok(toast) => {
+                    let command = crate::platform::interop::InteropCommand::PublishToast { toast };
+                    player_command_response(&serde_json::to_vec(&command).unwrap_or_default(), state)
+                }
+                Err(error) => HttpResponse::json(400, "Bad Request", serde_json::json!({"error": error.to_string()}).to_string()),
+            }
+        }
         ("GET", "/api/player/status") => {
             match state
                 .latest_status
@@ -772,6 +785,7 @@ fn denied_web_capability(
     let control_route = matches!(
         (method, path),
         ("POST", "/api/osd")
+            | ("POST", "/api/messages")
             | ("DELETE", "/api/osd")
             | ("POST", "/api/player/command")
             | ("POST", "/api/ipc")
@@ -1452,6 +1466,8 @@ mod tests {
             None
         );
         assert_eq!(denied_web_capability("GET", "/", &restricted), None);
+        assert_eq!(denied_web_capability("POST", "/api/messages", &restricted), Some("control"));
+        assert_eq!(denied_web_capability("GET", "/api/messages", &restricted), None);
     }
 
     #[test]

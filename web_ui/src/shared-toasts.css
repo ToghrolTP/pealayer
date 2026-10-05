@@ -1,0 +1,10 @@
+.shared-toasts { position: fixed; inset: 76px 16px auto auto; width: min(360px, calc(100vw - 32px)); z-index: 2100; display: grid; gap: 8px; pointer-events: none; }
+.shared-toast { display: grid; grid-template-columns: 20px minmax(0, 1fr) 28px; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-1); color: var(--text); box-shadow: 0 6px 24px #0003; pointer-events: auto; overflow-wrap: anywhere; }
+.shared-toast strong { display: block; margin-bottom: 4px; }
+.shared-toast p { margin: 0; white-space: pre-wrap; max-height: 140px; overflow-y: auto; }
+.shared-toast-icon { color: var(--blue); }
+.shared-toast-success .shared-toast-icon { color: var(--green); }
+.shared-toast-warning .shared-toast-icon { color: var(--amber); }
+.shared-toast-error .shared-toast-icon { color: var(--red); }
+.shared-toast button { align-self: start; border: 0; border-radius: 6px; background: transparent; color: inherit; padding: 6px; cursor: pointer; }
+.shared-toast button:hover, .shared-toast button:focus-visible { background: var(--surface-2); outline: 1px solid var(--line); }

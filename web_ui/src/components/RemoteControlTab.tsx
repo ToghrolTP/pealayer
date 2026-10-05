@@ -19,6 +19,7 @@ import type { TimelineWheelPreferences } from '../timelineWheel';
 
 export interface PlayerState {
   status?: string;
+  messages?: import('../messaging').ToastSnapshot;
   appearance?: AppearanceState;
   timeline_wheel_preferences?: TimelineWheelPreferences;
   playing?: boolean;

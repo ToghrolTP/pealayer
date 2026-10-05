@@ -177,6 +177,11 @@ pub enum InteropCommand {
     ShowMessage {
         message: String,
     },
+    PublishToast {
+        #[serde(flatten)]
+        toast: crate::messaging::ToastRequest,
+    },
+    DismissToast { id: String },
     ShowOsd {
         message: String,
         #[serde(default)]
@@ -531,6 +536,8 @@ impl InteropCommand {
                 Err("OSD message must not exceed 2048 characters".to_string())
             }
             Self::ShowOsd { options, .. } => options.validate(),
+            Self::PublishToast { toast } => toast.validate(),
+            Self::DismissToast { id } if !crate::messaging::valid_id(id) => Err("invalid toast ID".into()),
             Self::SetWorkspace { profile }
             | Self::DeleteWorkspaceProfile { id: profile }
             | Self::MoveWorkspaceProfile { id: profile, .. }
@@ -565,7 +572,8 @@ impl InteropCommand {
 pub fn command_catalog() -> Value {
     serde_json::json!({
         "contract": "pealayer.control",
-        "transports": ["native", "http", "json-rpc"],
+        "transports": ["native", "http", "json-rpc", "websocket"],
+        "messaging": { "contract": "pealayer.messages.v1", "snapshot": "/api/messages", "subscription": "/ws", "publish": "pealayer.toast.show", "dismiss": "pealayer.toast.dismiss", "state": "pealayer.messages.state", "surfaces": ["egui", "web", "terminal"], "persistent_timeout_ms": 0 },
         "commands": [
             "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
             "chapter_previous", "chapter_next", "set_chapter",
@@ -575,7 +583,7 @@ pub fn command_catalog() -> Value {
             "create_workspace_profile", "update_workspace_profile", "delete_workspace_profile",
             "move_workspace_profile", "update_config",
             "reload_config", "add_effect_cue", "update_effect_cue", "remove_effect_cue", "set_recording",
-            "get_status", "quit", "controller_effect_cue.add", "controller_effect.play",
+            "get_status", "publish_toast", "dismiss_toast", "quit", "controller_effect_cue.add", "controller_effect.play",
             "controller_effect.stop", "controller_effect.save", "controller_effect.delete",
             "controller_effect.group.create",
             "controller_effect.record.start", "controller_effect.record.status",
@@ -690,6 +698,11 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "message" | "show_message" | "show-message" => InteropCommand::ShowMessage {
             message: argument.to_string(),
         },
+        "toast" => InteropCommand::PublishToast { toast: crate::messaging::ToastRequest {
+            id: None, title: String::new(), message: argument.to_string(),
+            severity: crate::messaging::Severity::Info, timeout_ms: 5000,
+        } },
+        "dismiss_toast" => InteropCommand::DismissToast { id: argument.into() },
         "osd" | "show_osd" | "show-osd" => InteropCommand::ShowOsd {
             message: argument.to_string(),
             options: OsdOptions::default(),
@@ -748,6 +761,8 @@ impl AppearanceState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerStatusResponse {
+    #[serde(default)]
+    pub messages: crate::messaging::MessageSnapshot,
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appearance: Option<AppearanceState>,
@@ -979,6 +994,7 @@ impl Default for PlayerStatusResponse {
     fn default() -> Self {
         Self {
             status: String::new(),
+            messages: crate::messaging::MessageSnapshot::default(),
             appearance: None,
             timeline_wheel_preferences: None,
             playing: false,
@@ -1185,6 +1201,10 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 .unwrap_or(0);
             Some(InteropCommand::OpenBoardInformation { tab })
         }
+        "publish_toast" | "toast.show" | "pealayer.toast.show" => Some(InteropCommand::PublishToast {
+            toast: serde_json::from_value(request.params.clone()).map_err(|e| format!("invalid toast: {e}"))?,
+        }),
+        "dismiss_toast" | "toast.dismiss" | "pealayer.toast.dismiss" => Some(InteropCommand::DismissToast { id: string(&["id"])? }),
         "message" | "show_message" | "pealayer.message.show" => Some(InteropCommand::ShowMessage {
             message: request
                 .params
@@ -1449,7 +1469,7 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
             })
         }
         "config.reload" | "pealayer.config.reload" => Some(InteropCommand::ReloadConfig),
-        "get_status" | "player.status" | "pealayer.status" | "pealayer.player.status" => None,
+        "get_status" | "player.status" | "pealayer.status" | "pealayer.player.status" | "pealayer.messages.state" => None,
         method => return Err(format!("unknown Pealayer JSON-RPC method: {method}")),
     };
     if let Some(command) = &command {
@@ -2561,6 +2581,20 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn toast_transports_share_validation_and_contract() {
+        let command = parse_text_command("toast Hardware ready").unwrap();
+        let direct = serde_json::from_str::<InteropCommand>(r#"{"command":"publish_toast","message":"Hardware ready"}"#).unwrap();
+        assert_eq!(command, direct);
+        let request = JsonRpcRequest { jsonrpc: Some("2.0".into()), id: serde_json::json!(1), method: "pealayer.toast.show".into(), params: serde_json::json!({"message":"Hardware ready"}) };
+        assert_eq!(command_from_json_rpc(&request).unwrap(), Some(command));
+        let invalid = JsonRpcRequest { params: serde_json::json!({"message":"","timeout_ms":1}), ..request };
+        assert!(command_from_json_rpc(&invalid).is_err());
+        let dismiss = JsonRpcRequest { method: "pealayer.toast.dismiss".into(), params: serde_json::json!({"id":"work.1"}), ..invalid };
+        assert_eq!(command_from_json_rpc(&dismiss).unwrap(), Some(InteropCommand::DismissToast { id: "work.1".into() }));
+        assert!(command_catalog()["messaging"]["surfaces"].as_array().unwrap().contains(&serde_json::json!("terminal")));
     }
 
     #[test]

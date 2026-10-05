@@ -823,7 +823,9 @@ impl eframe::App for PealayerApp {
         let now = std::time::Instant::now();
         let appearance_changed =
             crate::platform::interop::get_live_appearance().as_ref() != Some(&appearance);
-        let should_broadcast = appearance_changed
+        let messages = crate::messaging::snapshot();
+        let messages_changed = crate::platform::interop::get_live_status().messages != messages;
+        let should_broadcast = appearance_changed || messages_changed
             || match self.last_web_broadcast {
                 Some(last) => now.duration_since(last) >= web_sync_interval,
                 None => true,
@@ -914,6 +916,7 @@ impl eframe::App for PealayerApp {
             let chapters = self.media_chapters();
             let current_chapter_index = self.active_media_chapter().map(|chapter| chapter.index);
             let status_resp = crate::platform::interop::PlayerStatusResponse {
+                messages,
                 appearance: Some(appearance),
                 timeline_wheel_preferences: Some(crate::config::TimelineWheelPreferences {
                     plain: self.timeline_plain_wheel_action,
@@ -1670,6 +1673,7 @@ impl eframe::App for PealayerApp {
                     crate::ui::about::draw(self, ui);
                 }
             });
+        crate::ui::toasts::draw(ui.ctx());
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
@@ -3174,6 +3178,13 @@ impl PealayerApp {
             InteropCommand::HideOsd => {
                 self.clear_osd();
                 return;
+            }
+            InteropCommand::PublishToast { toast } => {
+                if let Err(error) = crate::messaging::publish(toast, source) { self.set_osd(error); }
+                ctx.request_repaint(); return;
+            }
+            InteropCommand::DismissToast { id } => {
+                crate::messaging::dismiss(&id); ctx.request_repaint(); return;
             }
             InteropCommand::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             InteropCommand::SetWorkspace { profile } => {
