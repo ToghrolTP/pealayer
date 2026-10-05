@@ -7,6 +7,7 @@ import {
   CarOutlined,
   CustomerServiceOutlined,
   FireOutlined,
+  FolderOpenOutlined,
   PlayCircleOutlined,
   PoweroffOutlined,
   RadarChartOutlined,
@@ -19,6 +20,7 @@ import {
 
 const presets = [
   ['sparkle', 'Sparkle'],
+  ['folder', 'Folder'],
   ['plug', 'Plug'], ['lightning', 'Lightning'], ['lightbulb', 'Light bulb'],
   ['lamp', 'Lamp'], ['fan', 'Fan'], ['power', 'Power'], ['speaker', 'Speaker'],
   ['radio', 'Radio'], ['seat', 'Seat'], ['car', 'Car'], ['door', 'Door'],
@@ -29,6 +31,7 @@ const presets = [
 
 export const effectGlyph = (icon: string) => {
   switch (icon.trim().toLowerCase()) {
+    case 'folder': return <FolderOpenOutlined />;
     case 'lightning': return <ThunderboltOutlined />;
     case 'lightbulb':
     case 'lamp': return <BulbOutlined />;

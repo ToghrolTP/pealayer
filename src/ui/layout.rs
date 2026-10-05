@@ -2515,61 +2515,38 @@ fn draw_control_icon_picker(
     control: &crate::four_d::controller::HardwareControl,
     size: f32,
 ) {
-    let icon = crate::ui::icons::control(&control.kind, &control.icon);
     let search_hint = app.tr("Search icons...");
     let presets_label = app.tr("Presets");
     let no_matches_label = app.tr("No matching icons");
     let default_label = app.tr("Use channel default");
-    let response = ui
-        .add(
-            egui::Button::new(egui::RichText::new(icon).size(size))
-                .frame(false)
-                .min_size(egui::vec2(size + 6.0, size + 6.0)),
-        )
-        .on_hover_text(app.tr("Choose channel icon"));
-    let popup_id = ui.make_persistent_id(("hardware-card-icon-picker", control.key.as_str()));
-    let search_id = ui.make_persistent_id(("hardware-card-icon-search", control.key.as_str()));
-    egui::Popup::menu(&response)
-        .id(popup_id)
-        .open_memory(
-            response
-                .clicked()
-                .then_some(egui::SetOpenCommand::Bool(true)),
-        )
-        .show(|ui| {
-            ui.set_min_width(220.0);
-            let mut selected = control.icon.clone();
-            let mut search = ui
-                .data_mut(|data| data.get_temp::<String>(search_id))
-                .unwrap_or_default();
-            if crate::ui::icons::searchable_icon_picker_contents(
-                ui,
-                &mut selected,
-                &mut search,
-                search_id,
-                response.clicked(),
-                crate::ui::icons::IconPickerConfig {
-                    presets: crate::ui::icons::CONTROL_ICON_PRESETS,
-                    fallback_glyph: icon,
-                    fallback_name: &default_label,
-                    width: 220.0,
-                    show_selected_name: true,
-                    search_hint: &search_hint,
-                    presets_label: &presets_label,
-                    no_matches_label: &no_matches_label,
-                    clear_label: Some(&default_label),
-                },
-            ) {
-                update_control_presentation(
-                    app,
-                    capabilities,
-                    control,
-                    "presentation-icon",
-                    serde_json::json!({"icon": selected}),
-                );
-            }
-            ui.data_mut(|data| data.insert_temp(search_id, search));
-        });
+    let tooltip = app.tr("Choose channel icon");
+    let mut selected = control.icon.clone();
+    if crate::ui::icons::searchable_icon_button(
+        ui,
+        ("hardware-card-icon-picker", control.key.as_str()),
+        &mut selected,
+        size,
+        &tooltip,
+        crate::ui::icons::IconPickerConfig {
+            presets: crate::ui::icons::CONTROL_ICON_PRESETS,
+            fallback_glyph: crate::ui::icons::control(&control.kind, ""),
+            fallback_name: &default_label,
+            width: 260.0,
+            show_selected_name: true,
+            search_hint: &search_hint,
+            presets_label: &presets_label,
+            no_matches_label: &no_matches_label,
+            clear_label: Some(&default_label),
+        },
+    ) {
+        update_control_presentation(
+            app,
+            capabilities,
+            control,
+            "presentation-icon",
+            serde_json::json!({"icon": selected}),
+        );
+    }
 }
 
 fn reordered_channel_rank(

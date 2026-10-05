@@ -18,6 +18,7 @@ pub use egui_phosphor::regular::{
 
 pub const CONTROL_ICON_PRESETS: &[(&str, &str, &str)] = &[
     ("sparkle", "Sparkle", SPARKLE),
+    ("folder", "Folder", FOLDER_OPEN),
     ("plug", "Plug", PLUG),
     ("lightning", "Lightning", LIGHTNING),
     ("lightbulb", "Light bulb", LIGHTBULB),
@@ -198,7 +199,10 @@ pub fn searchable_icon_picker(
 ) -> bool {
     use eframe::egui;
 
-    let button_id = ui.make_persistent_id(&id_salt);
+    // ComboBox converts the supplied salt to IdSalt before deriving its
+    // widget ID. Match that conversion so search survives successive frames
+    // and focus is requested only when the popup first opens.
+    let button_id = ui.make_persistent_id(egui::IdSalt::new(&id_salt));
     let search_id = button_id.with("search");
     let was_open = egui::ComboBox::is_open(ui.ctx(), button_id);
     let mut search = ui.data_mut(|data| data.get_temp::<String>(search_id).unwrap_or_default());
@@ -223,6 +227,16 @@ pub fn searchable_icon_picker(
     egui::ComboBox::from_id_salt(&id_salt)
         .width(config.width)
         .height(320.0)
+        .truncate()
+        .icon(|ui, rect, visuals, _| {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                CARET_DOWN,
+                egui::FontId::proportional(14.0),
+                visuals.text_color(),
+            );
+        })
         .selected_text(selected_text)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show_ui(ui, |ui| {
@@ -231,6 +245,53 @@ pub fn searchable_icon_picker(
         });
 
     if egui::ComboBox::is_open(ui.ctx(), button_id) {
+        ui.data_mut(|data| data.insert_temp(search_id, search));
+    } else {
+        ui.data_mut(|data| data.remove::<String>(search_id));
+    }
+    *value != previous
+}
+
+/// Compact entry point for channel-card icons. It shares the combobox's
+/// search, selection, default option, and popup lifecycle without adding a
+/// second selector to the card.
+pub fn searchable_icon_button(
+    ui: &mut eframe::egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    value: &mut String,
+    size: f32,
+    tooltip: &str,
+    config: IconPickerConfig<'_>,
+) -> bool {
+    use eframe::egui;
+
+    let picker_id = ui.make_persistent_id(&id_salt);
+    let popup_id = picker_id.with("popup");
+    let search_id = picker_id.with("search");
+    let was_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
+    let glyph = icon_preset(config.presets, value)
+        .map(|(_, _, glyph)| *glyph)
+        .unwrap_or(config.fallback_glyph);
+    let response = ui
+        .push_id(&id_salt, |ui| {
+            ui.add(
+                egui::Button::new(egui::RichText::new(glyph).size(size))
+                    .frame(false)
+                    .min_size(egui::vec2(size + 6.0, size + 6.0)),
+            )
+        })
+        .inner
+        .on_hover_text(tooltip);
+    let mut search = ui.data_mut(|data| data.get_temp::<String>(search_id).unwrap_or_default());
+    let previous = value.clone();
+    egui::Popup::menu(&response)
+        .id(popup_id)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            ui.set_min_width(config.width.max(260.0));
+            searchable_icon_picker_contents(ui, value, &mut search, search_id, !was_open, config);
+        });
+    if egui::Popup::is_id_open(ui.ctx(), popup_id) {
         ui.data_mut(|data| data.insert_temp(search_id, search));
     } else {
         ui.data_mut(|data| data.remove::<String>(search_id));
@@ -393,7 +454,7 @@ mod tests {
 
         assert!(effects.contains("searchable_control_icon_picker"));
         assert!(hardware.contains("searchable_icon_picker"));
-        assert!(layout.contains("searchable_icon_picker_contents"));
+        assert!(layout.contains("searchable_icon_button"));
         assert!(layout.contains("searchable_icon_picker"));
         assert!(workspaces.contains("searchable_workspace_icon_picker"));
         assert!(four_d.contains("searchable_control_icon_picker"));
@@ -401,5 +462,191 @@ mod tests {
         assert!(!hardware.contains("draw_control_icon_choices"));
         assert!(!layout.contains(concat!("effect_group_icon_", "preset")));
         assert!(!four_d.contains("text_edit_singleline(&mut icon)"));
+    }
+
+    fn picker_frame(
+        context: &eframe::egui::Context,
+        value: &mut String,
+        compact: bool,
+        events: Vec<eframe::egui::Event>,
+    ) -> (
+        eframe::egui::FullOutput,
+        eframe::egui::Rect,
+        eframe::egui::Id,
+    ) {
+        use eframe::egui;
+        let mut button_rect = egui::Rect::NOTHING;
+        let mut picker_id = egui::Id::NULL;
+        let mut output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 700.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                button_rect = ui
+                    .horizontal(|ui| {
+                        picker_id = if compact {
+                            ui.make_persistent_id("test-icon-picker")
+                        } else {
+                            ui.make_persistent_id(egui::IdSalt::new("test-icon-picker"))
+                        };
+                        let config = IconPickerConfig {
+                            presets: CONTROL_ICON_PRESETS,
+                            fallback_glyph: PLUG,
+                            fallback_name: "Use channel default",
+                            width: 260.0,
+                            show_selected_name: true,
+                            search_hint: "Search icons...",
+                            presets_label: "Presets",
+                            no_matches_label: "No matching icons",
+                            clear_label: Some("Use channel default"),
+                        };
+                        if compact {
+                            searchable_icon_button(
+                                ui,
+                                "test-icon-picker",
+                                value,
+                                18.0,
+                                "Choose icon",
+                                config,
+                            );
+                        } else {
+                            searchable_icon_picker(ui, "test-icon-picker", value, config);
+                        }
+                        ui.min_rect()
+                    })
+                    .inner;
+            },
+        );
+        output.textures_delta.clear();
+        (output, button_rect, picker_id)
+    }
+
+    fn painted_text_rect(
+        output: &eframe::egui::FullOutput,
+        expected: &str,
+    ) -> Option<eframe::egui::Rect> {
+        fn find(shape: &eframe::egui::epaint::Shape, expected: &str) -> Option<eframe::egui::Rect> {
+            match shape {
+                eframe::egui::epaint::Shape::Text(text) if text.galley.job.text == expected => {
+                    Some(text.galley.rect.translate(text.pos.to_vec2()))
+                }
+                eframe::egui::epaint::Shape::Vec(shapes) => {
+                    shapes.iter().find_map(|shape| find(shape, expected))
+                }
+                _ => None,
+            }
+        }
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| find(&shape.shape, expected))
+    }
+
+    fn click_picker(
+        context: &eframe::egui::Context,
+        value: &mut String,
+        compact: bool,
+        position: eframe::egui::Pos2,
+    ) -> (
+        eframe::egui::FullOutput,
+        eframe::egui::Rect,
+        eframe::egui::Id,
+    ) {
+        use eframe::egui;
+        picker_frame(
+            context,
+            value,
+            compact,
+            vec![
+                egui::Event::PointerMoved(position),
+                egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        picker_frame(
+            context,
+            value,
+            compact,
+            vec![egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        )
+    }
+
+    #[test]
+    fn icon_picker_search_click_filter_select_and_reopen_work_in_both_forms() {
+        use eframe::egui;
+        for compact in [false, true] {
+            let context = egui::Context::default();
+            let mut value = "sparkle".to_string();
+            let (_, button, _) = picker_frame(&context, &mut value, compact, Vec::new());
+            click_picker(&context, &mut value, compact, button.center());
+            let (output, _, picker_id) = picker_frame(&context, &mut value, compact, Vec::new());
+            let popup_id = picker_id.with("popup");
+            assert!(egui::Popup::is_id_open(&context, popup_id));
+            assert!(
+                context.egui_wants_keyboard_input(),
+                "search must receive focus"
+            );
+
+            let search = painted_text_rect(&output, "Search icons...")
+                .expect("search is the first popup section");
+            click_picker(&context, &mut value, compact, search.center());
+            assert!(
+                egui::Popup::is_id_open(&context, popup_id),
+                "clicking the search field must not dismiss the picker"
+            );
+            let (output, _, _) = picker_frame(
+                &context,
+                &mut value,
+                compact,
+                vec![egui::Event::Text("la".to_string())],
+            );
+            assert!(painted_text_rect(&output, &format!("{LAMP}  Lamp")).is_some());
+            picker_frame(&context, &mut value, compact, Vec::new());
+            let (output, _, _) = picker_frame(
+                &context,
+                &mut value,
+                compact,
+                vec![egui::Event::Text("mp".to_string())],
+            );
+            let lamp = painted_text_rect(&output, &format!("{LAMP}  Lamp"))
+                .expect("search must show the matching preset");
+            assert!(painted_text_rect(&output, &format!("{SEAT}  Seat")).is_none());
+            click_picker(&context, &mut value, compact, lamp.center());
+            assert_eq!(value, "lamp");
+            assert!(!egui::Popup::is_id_open(&context, popup_id));
+
+            let (_, button, _) = picker_frame(&context, &mut value, compact, Vec::new());
+            click_picker(&context, &mut value, compact, button.center());
+            let (output, _, _) = picker_frame(&context, &mut value, compact, Vec::new());
+            assert!(painted_text_rect(&output, "Search icons...").is_some());
+            assert!(painted_text_rect(&output, &format!("{SEAT}  Seat")).is_some());
+
+            let (output, _, _) = picker_frame(
+                &context,
+                &mut value,
+                compact,
+                vec![egui::Event::Text("unmatched-search".to_string())],
+            );
+            assert!(painted_text_rect(&output, "No matching icons").is_some());
+            let default = painted_text_rect(&output, &format!("{PLUG}  Use channel default"))
+                .expect("channel default remains available when searching");
+            click_picker(&context, &mut value, compact, default.center());
+            assert!(value.is_empty());
+            assert!(!egui::Popup::is_id_open(&context, popup_id));
+        }
     }
 }

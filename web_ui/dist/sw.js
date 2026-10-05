@@ -1,35 +1,35 @@
-const PRECACHE = 'pealayer-precache-fd187b84c0ff7b55';
-const RUNTIME = 'pealayer-runtime-fd187b84c0ff7b55';
+const PRECACHE = 'pealayer-precache-3fe9f55098390eae';
+const RUNTIME = 'pealayer-runtime-3fe9f55098390eae';
 const PRECACHE_URLS = [
   "/",
   "/assets/ArrowUpOutlined-SD3p3fMs.js",
   "/assets/DesktopOutlined-rdx9E6uG.js",
   "/assets/EditOutlined-CEx4jkL1.js",
-  "/assets/EffectRecorder-Ck43afTl.js",
-  "/assets/EffectsTab-jtDaALII.js",
+  "/assets/EffectRecorder-WM506W56.js",
+  "/assets/EffectsTab-DjMSE6Qh.js",
   "/assets/ExperimentOutlined-DaMNI6pf.js",
-  "/assets/HardwareTab-CXaw7Mlu.js",
-  "/assets/MediaLibraryTab-C9-QBvr2.js",
+  "/assets/HardwareTab-CPaemeRq.js",
+  "/assets/MediaLibraryTab-CM4hBqMO.js",
   "/assets/PlayCircleOutlined-Ciz16_mj.js",
-  "/assets/PlayerInfoTab-71sBC-PY.js",
+  "/assets/PlayerInfoTab-Eoo0-tZJ.js",
   "/assets/PlusOutlined-Txz64LYM.js",
   "/assets/PoweroffOutlined-CL0yxdSn.js",
-  "/assets/PreferencesTab-CYOoLwAT.js",
+  "/assets/PreferencesTab-DsTpth0g.js",
   "/assets/PurePanel-BmkIWIqd.js",
   "/assets/ReloadOutlined-K2CyP5HI.js",
-  "/assets/RemoteControlTab-Cg8zLZsj.js",
+  "/assets/RemoteControlTab-o1w0_tfp.js",
   "/assets/SafetyCertificateOutlined-DlQz7AmJ.js",
   "/assets/SeekThumbnailPreview-n8fnsNiJ.js",
-  "/assets/StudioTab-BOKYvUnw.js",
+  "/assets/StudioTab-CenZXeGT.js",
   "/assets/VideoCameraOutlined-DpYksmjw.js",
   "/assets/WifiOutlined-CcHtcAPB.js",
   "/assets/card-Di76FJMQ.js",
   "/assets/color-picker-BO6oTBFv.js",
-  "/assets/index-DcC9_MpE.js",
+  "/assets/index-BSRtHMz8.js",
   "/assets/index-fRorUOSV.css",
   "/assets/input-number-BPtkIO4q.js",
   "/assets/jsx-runtime-CeFq0KU_.js",
-  "/assets/popconfirm-DxxDFlxP.js",
+  "/assets/popconfirm-aLejgvwi.js",
   "/assets/popover-DWIrCK8G.js",
   "/assets/rolldown-runtime-CbXtAM7H.js",
   "/assets/select-CpJVPwFs.js",
@@ -63,7 +63,7 @@ self.addEventListener('activate', (event) => {
         .filter((key) => key.startsWith('pealayer-') && ![PRECACHE, RUNTIME].includes(key))
         .map((key) => caches.delete(key))))
       .then(() => self.clients.claim())
-      .then(() => notifyClients({ type: 'PEALAYER_SW_READY', version: 'fd187b84c0ff7b55' })),
+      .then(() => notifyClients({ type: 'PEALAYER_SW_READY', version: '3fe9f55098390eae' })),
   );
 });
 
