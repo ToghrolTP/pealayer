@@ -2413,7 +2413,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         format!(
                                             "{} {}",
                                             crate::ui::icons::FLOPPY_DISK,
-                                            app.tr("Publish to PCController")
+                                            app.tr("Publish")
                                         )
                                     } else {
                                         format!(

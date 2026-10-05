@@ -239,6 +239,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Place at playhead" => "قرار دادن در نشانگر پخش",
         "The Controller effects track is not available." => "ترک جلوه‌های کنترل‌کننده در دسترس نیست.",
         "Manage" => "مدیریت",
+        "Publish" => "انتشار",
         "Jump to cue start" => "پرش به آغاز نشانه",
         "Cue start" => "آغاز نشانه",
         "Run now" => "اجرای فوری",
