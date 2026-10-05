@@ -394,6 +394,8 @@ pub struct HardwareEffectRecording {
     pub category: String,
     pub color: String,
     pub steps: usize,
+    #[serde(default)]
+    pub preview: Vec<HardwareMacroStep>,
     pub device_retained: bool,
     pub overwritten: usize,
     pub started_at: String,
@@ -923,6 +925,7 @@ enum ControllerBackend {
 }
 
 pub struct ControllerClient {
+    endpoint: String,
     backend: ControllerBackend,
 }
 
@@ -939,6 +942,7 @@ impl ControllerClient {
             match EmbeddedHost::discover_and_start() {
                 Ok(host) => {
                     return Ok(Self {
+                        endpoint: endpoint.to_string(),
                         backend: ControllerBackend::Embedded(host),
                     });
                 }
@@ -982,6 +986,7 @@ impl ControllerClient {
                 .map_err(|error| format!("clone PCController TCP stream: {error}"))?,
         );
         let mut client = Self {
+            endpoint: endpoint.to_string(),
             backend: ControllerBackend::Tcp {
                 writer,
                 reader,
@@ -1120,6 +1125,19 @@ impl ControllerClient {
             apply_pwm_values(&mut capabilities.telemetry, values);
         }
         Ok(capabilities)
+    }
+
+    /// Reads the comparatively large catalog on a disposable TCP connection.
+    /// PCController can publish asynchronous activity on every IPC stream; a
+    /// busy recording may therefore delay a snapshot without invalidating the
+    /// command transport. Keeping discovery isolated prevents one slow catalog
+    /// read from flipping an otherwise healthy coordinator connection offline.
+    pub fn isolated_hardware_capabilities(&mut self) -> Result<HardwareCapabilities, String> {
+        if matches!(self.backend, ControllerBackend::Embedded(_)) {
+            return self.hardware_capabilities();
+        }
+        let mut catalog_client = Self::connect(&self.endpoint)?;
+        catalog_client.hardware_capabilities()
     }
 }
 
@@ -2127,6 +2145,13 @@ fn parse_hardware_capabilities_with_front_panel(
             .and_then(Value::as_u64)
             .and_then(|value| usize::try_from(value).ok())
             .unwrap_or_default(),
+        preview: recording
+            .and_then(|value| value.get("preview"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|step| serde_json::from_value(step.clone()).ok())
+            .collect(),
         device_retained: recording
             .and_then(|value| value.get("device_retained"))
             .and_then(Value::as_bool)
@@ -2187,8 +2212,11 @@ fn parse_hardware_capabilities_with_front_panel(
         strip_control,
         strip_effects,
         macros,
-        effect_groups: snapshot.get("effect_groups").cloned()
-            .and_then(|value| serde_json::from_value(value).ok()).unwrap_or_default(),
+        effect_groups: snapshot
+            .get("effect_groups")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default(),
         effect_recording,
     }
 }
@@ -2496,10 +2524,13 @@ mod tests {
 
     #[test]
     fn empty_effect_groups_are_consumed_from_the_live_snapshot() {
-        let parsed = parse_hardware_capabilities(&json!({
-            "effects": [],
-            "effect_groups": [{"name": "Cinema lighting", "icon": "lamp"}]
-        }), &json!({}));
+        let parsed = parse_hardware_capabilities(
+            &json!({
+                "effects": [],
+                "effect_groups": [{"name": "Cinema lighting", "icon": "lamp"}]
+            }),
+            &json!({}),
+        );
         assert_eq!(parsed.effect_groups[0].name, "Cinema lighting");
         assert_eq!(parsed.effect_groups[0].icon, "lamp");
         assert!(parsed.macros.is_empty());
@@ -2657,6 +2688,12 @@ mod tests {
                 "category": "Motion",
                 "color": "violet",
                 "steps": 12,
+                "preview": [{
+                    "at_us": 125000,
+                    "kind": "relay-mask",
+                    "value": 2,
+                    "action_ids": ["seat.a.up"]
+                }],
                 "device_retained": false,
                 "overwritten": 0,
                 "started_at": "2026-10-05T12:00:00Z"
@@ -2733,6 +2770,9 @@ mod tests {
         assert_eq!(parsed.effect_recording.id, 8);
         assert_eq!(parsed.effect_recording.name, "Seat take");
         assert_eq!(parsed.effect_recording.steps, 12);
+        assert_eq!(parsed.effect_recording.preview.len(), 1);
+        assert_eq!(parsed.effect_recording.preview[0].at_us, 125_000);
+        assert_eq!(parsed.effect_recording.preview[0].action_ids, ["seat.a.up"]);
     }
 
     #[test]

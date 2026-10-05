@@ -179,6 +179,8 @@ const fa: Record<string, string> = {
   'Live project': 'پروژهٔ زنده',
   'Effects': 'افکت‌ها',
   'Recording': 'در حال ضبط',
+  'Live sequence': 'توالی زنده',
+  'Waiting for the first captured action…': 'در انتظار نخستین فرمان ثبت‌شده…',
   'Arm hardware tracks for recording': 'آماده‌سازی مسیرهای سخت‌افزار برای ضبط',
   'No recordable hardware tracks are available': 'هیچ مسیر سخت‌افزاری برای ضبط وجود ندارد',
   'actions': 'عملیات',

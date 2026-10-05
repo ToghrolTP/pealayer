@@ -980,6 +980,7 @@ impl eframe::App for PealayerApp {
                             category: recording.category.clone(),
                             color: recording.color.clone(),
                             steps: recording.steps,
+                            preview: recording.preview.clone(),
                             device_retained: recording.device_retained,
                             overwritten: recording.overwritten,
                             started_at: recording.started_at.clone(),
@@ -1026,7 +1027,10 @@ impl eframe::App for PealayerApp {
                     })
                     .collect(),
                 controller_effects,
-                controller_effect_groups: hardware.as_ref().map(|hardware| hardware.effect_groups.clone()).unwrap_or_default(),
+                controller_effect_groups: hardware
+                    .as_ref()
+                    .map(|hardware| hardware.effect_groups.clone())
+                    .unwrap_or_default(),
                 cues: self
                     .timeline
                     .instances
@@ -1215,6 +1219,14 @@ impl eframe::App for PealayerApp {
             // UI, title, and local status API truthful during recovery without
             // returning to a permanent repaint loop that burns GPU while idle.
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
+        if self.hardware_effect_authoring.pending_operation.is_some()
+            || self.board_operation.is_some()
+        {
+            // Tracked RPC calls complete off the UI thread. Keep a short
+            // repaint lease while one is pending so its result cannot remain
+            // hidden until another mouse or media event happens.
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         let window_title = contextual_window_title(
             &self.app_name,
@@ -1701,15 +1713,24 @@ fn board_settings_command(
 
 impl PealayerApp {
     fn process_application_shortcuts(&mut self, ctx: &egui::Context) {
-        if !self.keyboard_shortcuts_enabled || self.hardware_binding_capturing { return; }
+        if !self.keyboard_shortcuts_enabled || self.hardware_binding_capturing {
+            return;
+        }
         let text_editing = ctx.egui_wants_keyboard_input();
         let mut actions = Vec::new();
-        ctx.input_mut(|input| input.events.retain(|event| {
-            if let Some(action) = self.application_shortcuts.action_for_event(event, text_editing) {
-                actions.push(action);
-                false // Do not also trigger transport/hardware shortcuts.
-            } else { true }
-        }));
+        ctx.input_mut(|input| {
+            input.events.retain(|event| {
+                if let Some(action) = self
+                    .application_shortcuts
+                    .action_for_event(event, text_editing)
+                {
+                    actions.push(action);
+                    false // Do not also trigger transport/hardware shortcuts.
+                } else {
+                    true
+                }
+            })
+        });
         for action in actions {
             use crate::application_shortcuts::ApplicationAction;
             use crate::platform::interop::InteropCommand;
@@ -2217,6 +2238,16 @@ impl PealayerApp {
         if self.hardware_effect_authoring.pending_operation.is_some() {
             return Err("another hardware effect operation is still running".to_string());
         }
+        if !self
+            .engine_handle
+            .is_connected
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(
+                "PCController is reconnecting. Wait for the hardware status to become ready and try again."
+                    .to_string(),
+            );
+        }
         self.engine_handle.request_controller_call(
             operation,
             "controller.command.execute",
@@ -2555,20 +2586,37 @@ impl PealayerApp {
                 .ok_or_else(|| "The original effect group name is invalid".to_string())?;
             format!("effect group update {original} {name} {icon}")
         };
-        self.request_hardware_effect_command(
-            "effect-group-save",
-            command,
-        )
+        self.request_hardware_effect_command("effect-group-save", command)
     }
 
     pub(crate) fn play_controller_effect(&mut self, reference: &str) -> Result<(), String> {
         if reference.trim().is_empty() {
             return Err("Select a PCController effect first".to_string());
         }
+        if !self.controller_effect_is_advertised(reference) {
+            return Err(
+                "This effect is not published in PCController. Publish it before running it."
+                    .to_string(),
+            );
+        }
         self.request_hardware_effect_command(
             "effect-play",
             format!("effect play {}", reference.trim()),
         )
+    }
+
+    pub(crate) fn controller_effect_is_advertised(&self, reference: &str) -> bool {
+        let reference = reference.trim();
+        let id = reference.strip_prefix("effect:").unwrap_or(reference);
+        self.advertised_hardware().is_some_and(|capabilities| {
+            capabilities
+                .macros
+                .iter()
+                .any(|effect| effect.id.to_string() == id || effect.name.eq_ignore_ascii_case(id))
+                || capabilities.strip_effects.iter().any(|effect| {
+                    effect.id.eq_ignore_ascii_case(id) || effect.name.eq_ignore_ascii_case(id)
+                })
+        })
     }
 
     pub(crate) fn stop_controller_effect(&mut self, reference: &str) -> Result<(), String> {
@@ -2782,7 +2830,7 @@ impl PealayerApp {
                         "macro-save" => {
                             self.hardware_effect_authoring.active = false;
                             self.hardware_effect_authoring.pending_saved_macro_id =
-                                saved_macro_id(&output);
+                                saved_effect_id(&output);
                             self.engine_handle.request_catalog_refresh();
                         }
                         "macro-discard" => {
@@ -2818,8 +2866,15 @@ impl PealayerApp {
                         "board-front-panel-refresh" => {
                             self.board_operation_status = self.tr("Physical front panel refreshed");
                         }
-                        "effect-save" | "effect-delete" | "strip-config" | "strip-fill"
-                        | "strip-frame" | "strip-pixel" | "strip-status" => {
+                        "effect-save" => {
+                            self.effect_library_draft.reference =
+                                format!("effect:{}", self.effect_library_draft.id.trim());
+                            self.effect_library_draft.is_new = false;
+                            self.save_config();
+                            self.engine_handle.request_catalog_refresh();
+                        }
+                        "effect-delete" | "strip-config" | "strip-fill" | "strip-frame"
+                        | "strip-pixel" | "strip-status" => {
                             self.engine_handle.request_catalog_refresh();
                         }
                         _ => {}
@@ -3023,17 +3078,28 @@ impl PealayerApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
             InteropCommand::OpenMediaFolder => {
-                let result = self.current_video_path.as_deref()
+                let result = self
+                    .current_video_path
+                    .as_deref()
                     .ok_or_else(|| "No media is loaded".to_owned())
                     .and_then(crate::application_shortcuts::containing_media_folder)
-                    .and_then(|folder| open::that_detached(folder).map_err(|error| error.to_string()));
-                if let Err(error) = result { self.set_osd(error); return; }
+                    .and_then(|folder| {
+                        open::that_detached(folder).map_err(|error| error.to_string())
+                    });
+                if let Err(error) = result {
+                    self.set_osd(error);
+                    return;
+                }
             }
             InteropCommand::EditConfiguration => {
                 let config = self.runtime_config_snapshot();
                 if let Err(error) = crate::ui::preferences::perform_config_path_action(
-                    crate::ui::preferences::ConfigPathAction::Edit, &config,
-                ) { self.set_osd(error); return; }
+                    crate::ui::preferences::ConfigPathAction::Edit,
+                    &config,
+                ) {
+                    self.set_osd(error);
+                    return;
+                }
             }
             InteropCommand::OpenBoardInformation { tab } => {
                 self.board_info_tab = tab.min(3);
@@ -3220,8 +3286,12 @@ impl PealayerApp {
             }
             InteropCommand::CreateControllerEffectGroup { name, icon } => {
                 if let Err(error) = self.save_controller_effect_group(ControllerEffectGroupDraft {
-                    original_name: String::new(), name, icon,
-                }) { self.set_osd(error); }
+                    original_name: String::new(),
+                    name,
+                    icon,
+                }) {
+                    self.set_osd(error);
+                }
             }
             InteropCommand::SaveControllerEffect { effect } => {
                 let steps = if effect.kind == "sequence" {
@@ -6237,9 +6307,10 @@ fn controller_strip_effect_preset(
     }
 }
 
-fn saved_macro_id(output: &str) -> Option<u64> {
+fn saved_effect_id(output: &str) -> Option<u64> {
     output
-        .strip_prefix("macro ")?
+        .strip_prefix("effect ")
+        .or_else(|| output.strip_prefix("macro "))?
         .split_once('/')?
         .0
         .parse()
@@ -6589,12 +6660,21 @@ mod tests {
         let mut app = PealayerApp::default();
         let ctx = egui::Context::default();
         let frame = |app: &mut PealayerApp, key, modifiers| {
-            let mut output = ctx.run_ui(egui::RawInput {
-                events: vec![egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers }],
-                ..Default::default()
-            }, |_| {
-                app.process_application_shortcuts(&ctx);
-            });
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: Some(key),
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                },
+                |_| {
+                    app.process_application_shortcuts(&ctx);
+                },
+            );
             output.textures_delta.clear();
         };
         frame(&mut app, egui::Key::F11, egui::Modifiers::NONE);
@@ -6605,10 +6685,19 @@ mod tests {
         assert!(app.fullscreen_intent(&ctx));
         app.keyboard_shortcuts_enabled = true;
         let mut modifiers = egui::Modifiers::NONE;
-        if cfg!(target_os = "macos") { modifiers.mac_cmd = true; modifiers.command = true; } else { modifiers.ctrl = true; modifiers.command = true; }
+        if cfg!(target_os = "macos") {
+            modifiers.mac_cmd = true;
+            modifiers.command = true;
+        } else {
+            modifiers.ctrl = true;
+            modifiers.command = true;
+        }
         frame(&mut app, egui::Key::Comma, modifiers);
         assert!(app.show_preferences_dialog);
-        assert!(!ctx.input(|input| input.key_pressed(egui::Key::Comma)), "preferences accelerator must not also frame-step backward");
+        assert!(
+            !ctx.input(|input| input.key_pressed(egui::Key::Comma)),
+            "preferences accelerator must not also frame-step backward"
+        );
     }
 
     #[test]
@@ -6748,10 +6837,16 @@ mod tests {
     #[test]
     fn extracts_saved_controller_macro_id_for_catalog_reconciliation() {
         assert_eq!(
-            super::saved_macro_id("macro 6/seat-motion saved with 7 mcu-timed steps"),
+            super::saved_effect_id(
+                "effect 6/seat-motion saved with 7 steps and auto execution policy"
+            ),
             Some(6)
         );
-        assert_eq!(super::saved_macro_id("recording is empty"), None);
+        assert_eq!(
+            super::saved_effect_id("macro 7/legacy saved with 2 mcu-timed steps"),
+            Some(7)
+        );
+        assert_eq!(super::saved_effect_id("recording is empty"), None);
     }
 
     #[test]
