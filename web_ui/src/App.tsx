@@ -551,7 +551,7 @@ const App: React.FC = () => {
                 apiBaseUrl={apiBaseUrl}
                 seekbarHoverThumbnails={Boolean(appConfig?.nle_seekbar_hover_thumbnails)}
                 surface="timeline"
-                timelineWheelPreferences={{
+                timelineWheelPreferences={state.timeline_wheel_preferences ?? {
                   plain: appConfig?.timeline_plain_wheel_action ?? 'zoom',
                   ctrl: appConfig?.timeline_ctrl_wheel_action ?? 'vertical_scroll',
                   shift: appConfig?.timeline_shift_wheel_action ?? 'horizontal_scroll',
@@ -588,6 +588,7 @@ const App: React.FC = () => {
                 apiBaseUrl={apiBaseUrl}
                 locale={runtime?.locale || 'en'}
                 appearance={appearance}
+                timelineWheelPreferences={state.timeline_wheel_preferences}
                 onConfigChange={(values) => {
                   setAppConfig(values);
                   persistJson(STORAGE.config, values);

@@ -35,6 +35,7 @@ import {
 import { tr } from '../i18n';
 import { mergeAppearance } from '../appearance';
 import { NumericValueControl } from './NumericValueControl';
+import type { TimelineWheelPreferences } from '../timelineWheel';
 
 type JsonObject = Record<string, any>;
 
@@ -82,6 +83,7 @@ interface PreferencesTabProps {
   apiBaseUrl: string;
   locale: 'en' | 'fa';
   appearance?: import('../appearance').AppearanceState;
+  timelineWheelPreferences?: TimelineWheelPreferences;
   onConfigChange?: (values: JsonObject) => void;
 }
 
@@ -137,7 +139,7 @@ function patchForPath(values: JsonObject, path: string): JsonObject {
   return { [root]: values[root] };
 }
 
-export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, locale, appearance, onConfigChange }) => {
+export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, locale, appearance, timelineWheelPreferences, onConfigChange }) => {
   const [contract, setContract] = useState<PreferencesContract | null>(null);
   const [section, setSection] = useState('appearance');
   const [loading, setLoading] = useState(true);
@@ -172,6 +174,18 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
       ? { ...current, values: mergeAppearance(current.values, appearance) }
       : current);
   }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color]);
+
+  useEffect(() => {
+    if (!timelineWheelPreferences) return;
+    setContract((current) => current ? { ...current, values: {
+      ...current.values,
+      timeline_plain_wheel_action: timelineWheelPreferences.plain,
+      timeline_ctrl_wheel_action: timelineWheelPreferences.ctrl,
+      timeline_shift_wheel_action: timelineWheelPreferences.shift,
+      timeline_alt_wheel_action: timelineWheelPreferences.alt,
+    } } : current);
+  }, [timelineWheelPreferences?.plain, timelineWheelPreferences?.ctrl,
+    timelineWheelPreferences?.shift, timelineWheelPreferences?.alt]);
 
   const controls = useMemo(
     () => contract?.controls.filter((control) => control.section === section) ?? [],

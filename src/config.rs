@@ -16,6 +16,14 @@ pub enum TimelineWheelBehavior {
     None,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelineWheelPreferences {
+    pub plain: TimelineWheelBehavior,
+    pub ctrl: TimelineWheelBehavior,
+    pub shift: TimelineWheelBehavior,
+    pub alt: TimelineWheelBehavior,
+}
+
 /// Per-field adjustment sizes shared by native controls and configuration clients.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct NumericInputSteps {

@@ -15,10 +15,12 @@ import { tr, UiLocale } from '../i18n';
 import { mediaBasename } from '../mediaLabel';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
 import type { AppearanceState } from '../appearance';
+import type { TimelineWheelPreferences } from '../timelineWheel';
 
 export interface PlayerState {
   status?: string;
   appearance?: AppearanceState;
+  timeline_wheel_preferences?: TimelineWheelPreferences;
   playing?: boolean;
   volume?: number;
   playback_time?: number;

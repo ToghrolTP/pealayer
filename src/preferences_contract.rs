@@ -1334,6 +1334,21 @@ mod tests {
         let serialized = serde_json::to_string(&changed).unwrap();
         let reloaded: crate::config::AppConfig = serde_json::from_str(&serialized).unwrap();
         assert_eq!(reloaded, changed);
+        let status = crate::platform::interop::PlayerStatusResponse {
+            timeline_wheel_preferences: Some(crate::config::TimelineWheelPreferences {
+                plain: changed.timeline_plain_wheel_action,
+                ctrl: changed.timeline_ctrl_wheel_action,
+                shift: changed.timeline_shift_wheel_action,
+                alt: changed.timeline_alt_wheel_action,
+            }),
+            ..Default::default()
+        };
+        let wire = serde_json::to_value(&status).unwrap();
+        assert_eq!(wire["timeline_wheel_preferences"], serde_json::json!({
+            "plain": "vertical_scroll", "ctrl": "zoom", "shift": "none", "alt": "horizontal_scroll"
+        }));
+        assert_eq!(serde_json::from_value::<crate::platform::interop::PlayerStatusResponse>(wire)
+            .unwrap().timeline_wheel_preferences, status.timeline_wheel_preferences);
         assert!(crate::config::AppConfig::validate_patch_shape(&serde_json::json!({
             "timeline_ctrl_wheel_action": "zoom", "timeline_alt_wheel_action": "horizontal_scroll"
         })).is_ok());

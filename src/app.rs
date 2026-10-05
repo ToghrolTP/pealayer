@@ -887,6 +887,12 @@ impl eframe::App for PealayerApp {
             let current_chapter_index = self.active_media_chapter().map(|chapter| chapter.index);
             let status_resp = crate::platform::interop::PlayerStatusResponse {
                 appearance: Some(appearance),
+                timeline_wheel_preferences: Some(crate::config::TimelineWheelPreferences {
+                    plain: self.timeline_plain_wheel_action,
+                    ctrl: self.timeline_ctrl_wheel_action,
+                    shift: self.timeline_shift_wheel_action,
+                    alt: self.timeline_alt_wheel_action,
+                }),
                 status: if !controller_connected {
                     "connecting"
                 } else if !hardware_connected {

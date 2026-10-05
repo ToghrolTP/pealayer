@@ -751,6 +751,8 @@ pub struct PlayerStatusResponse {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appearance: Option<AppearanceState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline_wheel_preferences: Option<crate::config::TimelineWheelPreferences>,
     pub playing: bool,
     pub volume: f64,
     #[serde(default)]
@@ -978,6 +980,7 @@ impl Default for PlayerStatusResponse {
         Self {
             status: String::new(),
             appearance: None,
+            timeline_wheel_preferences: None,
             playing: false,
             volume: 0.0,
             muted: false,
