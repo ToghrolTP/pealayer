@@ -300,6 +300,7 @@ pub struct PealayerApp {
     pub(crate) show_sub_settings: bool,
     pub(crate) sub_visibility: bool,
     pub(crate) sub_font_size: f64,
+    pub(crate) numeric_input_steps: std::collections::BTreeMap<String, crate::config::NumericInputSteps>,
     pub(crate) sub_delay: f64,
     pub(crate) sub_position_percent: f64,
     pub(crate) current_sid: String,
@@ -4959,6 +4960,7 @@ impl PealayerApp {
         cfg.playback_speed = self.configured_playback_speed;
         cfg.temporary_fast_forward_speed = self.temporary_fast_forward_speed;
         cfg.subtitle_font_size = self.sub_font_size;
+        cfg.numeric_input_steps = self.numeric_input_steps.clone();
         cfg.subtitle_delay_seconds = self.sub_delay;
         cfg.subtitle_position_percent = self.sub_position_percent;
         cfg.subtitle_direction = self.subtitle_direction;
@@ -5149,6 +5151,7 @@ impl PealayerApp {
             self.playback_rate = self.configured_playback_speed;
         }
         self.sub_font_size = config.subtitle_font_size;
+        self.numeric_input_steps = config.numeric_input_steps.clone();
         self.sub_delay = config.subtitle_delay_seconds;
         self.sub_position_percent = config.subtitle_position_percent;
         self.audio_delay = config.audio_delay_seconds;
@@ -6346,6 +6349,7 @@ impl Default for PealayerApp {
             show_sub_settings: false,
             sub_visibility: true,
             sub_font_size: 55.0,
+            numeric_input_steps: Default::default(),
             sub_delay: 0.0,
             sub_position_percent: 100.0,
             current_sid: "no".to_string(),

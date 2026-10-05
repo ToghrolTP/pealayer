@@ -624,6 +624,7 @@ fn main() -> eframe::Result {
                 show_sub_settings: loaded_config.workspace_session.dialogs.subtitles,
                 sub_visibility: true,
                 sub_font_size: loaded_config.subtitle_font_size,
+                numeric_input_steps: loaded_config.numeric_input_steps.clone(),
                 sub_delay: loaded_config.subtitle_delay_seconds,
                 sub_position_percent: loaded_config.subtitle_position_percent,
                 current_sid: "no".to_string(),

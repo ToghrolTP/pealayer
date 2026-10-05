@@ -6,6 +6,45 @@ use std::sync::mpsc::{Receiver, channel};
 pub const DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 50;
 pub const MAX_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 500;
 
+/// Per-field adjustment sizes shared by native controls and configuration clients.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct NumericInputSteps {
+    pub normal: f64,
+    pub fine: f64,
+    pub coarse: f64,
+}
+
+impl NumericInputSteps {
+    pub fn for_step(step: f64) -> Self {
+        Self { normal: step, fine: step / 10.0, coarse: step * 10.0 }
+    }
+
+    pub fn is_valid(self) -> bool {
+        [self.normal, self.fine, self.coarse].into_iter()
+            .all(|step| step.is_finite() && (1e-9..=1e12).contains(&step))
+    }
+}
+
+#[cfg(test)]
+mod numeric_input_tests {
+    use super::*;
+
+    #[test]
+    fn numeric_input_steps_roundtrip_and_validate_through_config_contract() {
+        let mut config = AppConfig::default();
+        config.numeric_input_steps.insert("subtitle_delay_seconds".into(), NumericInputSteps { normal: 0.25, fine: 0.005, coarse: 2.0 });
+        assert!(config.validate().is_ok());
+        let reloaded: AppConfig = serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
+        assert_eq!(reloaded.numeric_input_steps, config.numeric_input_steps);
+        assert!(AppConfig::validate_patch_shape(&serde_json::json!({"numeric_input_steps": config.numeric_input_steps})).is_ok());
+        assert!(serde_json::from_str::<AppConfig>("{}").unwrap().numeric_input_steps.is_empty());
+        for invalid in [0.0, -1.0, f64::INFINITY, f64::NAN, 1e13] {
+            config.numeric_input_steps.get_mut("subtitle_delay_seconds").unwrap().fine = invalid;
+            assert!(config.validate().is_err());
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaybackPositionEntry {
     /// Original playable local path or remote URL. Matching uses a normalized
@@ -419,6 +458,7 @@ pub struct AppConfig {
     pub playback_speed: f64,
     pub temporary_fast_forward_speed: f64,
     pub subtitle_font_size: f64,
+    pub numeric_input_steps: BTreeMap<String, NumericInputSteps>,
     pub subtitle_delay_seconds: f64,
     pub subtitle_position_percent: f64,
     pub subtitle_direction: crate::subtitle::SubtitleDirection,
@@ -578,6 +618,7 @@ impl Default for AppConfig {
             playback_speed: 1.0,
             temporary_fast_forward_speed: 2.0,
             subtitle_font_size: 55.0,
+            numeric_input_steps: BTreeMap::new(),
             subtitle_delay_seconds: 0.0,
             subtitle_position_percent: 100.0,
             subtitle_direction: crate::subtitle::SubtitleDirection::Auto,
@@ -1383,6 +1424,10 @@ impl AppConfig {
             || !(1.0..=16.0).contains(&self.temporary_fast_forward_speed)
         {
             return Err("temporary_fast_forward_speed must be between 1 and 16".to_string());
+        }
+        if self.numeric_input_steps.len() > 256 || self.numeric_input_steps.iter().any(|(key, steps)|
+            key.is_empty() || key.len() > 128 || !steps.is_valid()) {
+            return Err("numeric_input_steps must contain valid, positive finite adjustment sizes".to_string());
         }
         if !self.subtitle_font_size.is_finite()
             || !(10.0..=100.0).contains(&self.subtitle_font_size)

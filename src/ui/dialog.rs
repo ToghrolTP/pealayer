@@ -422,6 +422,105 @@ mod tests {
         assert_eq!(actual, egui::Color32::from_rgb(red, green, blue));
         assert_eq!(actual.a(), 255);
     }
+
+    #[test]
+    fn numeric_input_modifiers_and_bounds_are_truthful() {
+        let steps = crate::config::NumericInputSteps::for_step(0.1);
+        assert_eq!(numeric_adjustment(steps, egui::Modifiers::NONE), 0.1);
+        assert_eq!(numeric_adjustment(steps, egui::Modifiers::CTRL), 0.01);
+        assert_eq!(numeric_adjustment(steps, egui::Modifiers::SHIFT), 1.0);
+        assert_eq!(numeric_adjustment(steps, egui::Modifiers { ctrl: true, shift: true, ..Default::default() }), 0.01);
+        let mut value = 99.0;
+        assert!(adjust_numeric(&mut value, 10.0, 0.0, 100.0));
+        assert_eq!(value, 100.0);
+        assert!(!adjust_numeric(&mut value, 10.0, 0.0, 100.0));
+    }
+
+    #[test]
+    fn numeric_input_paste_rejects_nonfinite_and_accepts_units_and_negatives() {
+        assert_eq!(parse_numeric_paste(" -2.75 s ", " s", &(-600.0..=600.0)), Some(-2.75));
+        assert_eq!(parse_numeric_paste("120%", "%", &(0.0..=100.0)), Some(100.0));
+        for input in ["", "oops", "NaN", "inf", "-inf", "1,5", "12px"] {
+            assert_eq!(parse_numeric_paste(input, " s", &(-600.0..=600.0)), None, "{input}");
+        }
+    }
+
+    #[test]
+    fn numeric_input_paste_routes_only_to_requested_field_and_consumes_event() {
+        let ctx = egui::Context::default();
+        let mut first = 4.0;
+        let mut second = 6.0;
+        let mut output = ctx.run_ui(egui::RawInput { events: vec![egui::Event::Paste("12.5 s".into())], ..Default::default() }, |ui| {
+            let id = ui.make_persistent_id(("numeric-paste", "second"));
+            ui.ctx().data_mut(|data| data.insert_temp(id, true));
+            assert!(!receive_numeric_paste(ui, "first", &mut first, &(0.0..=100.0), " s"));
+            assert!(receive_numeric_paste(ui, "second", &mut second, &(0.0..=100.0), " s"));
+            assert!(!ui.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::Paste(_)))));
+            assert!(!ui.ctx().data(|data| data.get_temp::<bool>(id).unwrap_or(false)));
+        });
+        output.textures_delta.clear();
+        assert_eq!(first, 4.0);
+        assert_eq!(second, 12.5);
+    }
+
+    #[test]
+    fn numeric_input_adjacent_buttons_use_actual_modifier_clicks() {
+        for (modifiers, expected) in [(egui::Modifiers::NONE, 11.0), (egui::Modifiers::CTRL, 10.1), (egui::Modifiers::SHIFT, 20.0)] {
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|style| { style.animation_time = 0.0; style.spacing.item_spacing.x = 8.0; });
+            let mut value = 10.0;
+            let mut steps = Default::default();
+            let mut render = |mut events: Vec<egui::Event>| {
+                events.insert(0, egui::Event::ModifiersChanged(modifiers));
+                let mut output = ctx.run_ui(egui::RawInput { events,
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 300.0))), ..Default::default()
+                }, |ui| {
+                    numeric_stepper(ui, "click-test", &mut value, 0.0..=100.0, 1.0, 0.0, 0, "", &mut steps, crate::config::AppLanguage::English);
+                });
+                output.textures_delta.clear();
+            };
+            render(Vec::new());
+            // Derived from the actual shared control's allocated geometry.
+            let point = egui::pos2(28.0 + 8.0 + 86.0 + 8.0 + 14.0, 13.0);
+            render(vec![egui::Event::PointerMoved(point), egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed: true, modifiers }]);
+            render(vec![egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed: false, modifiers }]);
+            assert!((value - expected).abs() < 1e-8, "modifier {modifiers:?}: got {value}, expected {expected}");
+        }
+    }
+
+    #[test]
+    fn numeric_input_context_menu_opens_and_resets_through_pointer_events() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.0);
+        let mut value = 12.0;
+        let mut steps = Default::default();
+        let mut render = |events| {
+            let mut field_rect = egui::Rect::NOTHING;
+            let mut output = ctx.run_ui(egui::RawInput { events,
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 400.0))), ..Default::default()
+            }, |ui| {
+                let response = ui.add_sized([120.0, 26.0], egui::DragValue::new(&mut value));
+                field_rect = response.rect;
+                numeric_context_menu(ui, &response, "menu-test", &mut value, 0.0..=100.0, 1.0, 55.0, "", &mut steps, crate::config::AppLanguage::English, 1e-9);
+            });
+            output.textures_delta.clear();
+            (field_rect, output)
+        };
+        let (rect, _) = render(Vec::new());
+        let press = |point, button, pressed| egui::Event::PointerButton { pos: point, button, pressed, modifiers: egui::Modifiers::NONE };
+        render(vec![egui::Event::PointerMoved(rect.center()), press(rect.center(), egui::PointerButton::Secondary, true)]);
+        render(vec![press(rect.center(), egui::PointerButton::Secondary, false)]);
+        let (_, output) = render(Vec::new());
+        let text_point = |label: &str| output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text().ends_with(label) => Some(text.pos + text.galley.size() / 2.0),
+            _ => None,
+        }).unwrap_or_else(|| panic!("missing numeric menu action: {label}"));
+        for label in ["Reset", "Copy", "Paste", "Adjustment steps"] { text_point(label); }
+        let reset = text_point("Reset");
+        render(vec![egui::Event::PointerMoved(reset), press(reset, egui::PointerButton::Primary, true)]);
+        render(vec![press(reset, egui::PointerButton::Primary, false)]);
+        assert_eq!(value, 55.0);
+    }
 }
 
 /// A visually consistent, width-bounded section used inside modal dialogs.
@@ -507,48 +606,169 @@ pub fn setting_row(
 /// not drift in sizing, keyboard input, bounds, or icon treatment.
 pub fn numeric_stepper(
     ui: &mut egui::Ui,
+    key: &str,
     value: &mut f64,
     range: std::ops::RangeInclusive<f64>,
     step: f64,
+    reset: f64,
     decimals: usize,
     suffix: &str,
+    steps: &mut std::collections::BTreeMap<String, crate::config::NumericInputSteps>,
+    language: crate::config::AppLanguage,
 ) -> bool {
     let min = *range.start();
     let max = *range.end();
     let mut changed = false;
-    ui.horizontal(|ui| {
+    let adjustment = steps.get(key).copied().filter(|s| s.is_valid())
+        .unwrap_or_else(|| crate::config::NumericInputSteps::for_step(step));
+    let effective_step = numeric_adjustment(adjustment, ui.input(|i| i.modifiers));
+    ui.push_id(key, |ui| { ui.horizontal(|ui| {
+        changed |= receive_numeric_paste(ui, key, value, &range, suffix);
         let decrement = ui
             .add_sized(
                 [28.0, 26.0],
                 egui::Button::new(crate::ui::icons::MINUS).corner_radius(6.0),
             )
-            .on_hover_text(format!("Decrease by {step}"));
+            .on_hover_text(format!("Decrease by {effective_step} (Ctrl: fine; Shift: coarse)"));
         if decrement.clicked() {
-            *value = (*value - step).clamp(min, max);
-            changed = true;
+            changed |= adjust_numeric(value, -effective_step, min, max);
         }
 
         let response = ui.add_sized(
             [86.0, 26.0],
             egui::DragValue::new(value)
-                .speed(step)
-                .range(range)
-                .fixed_decimals(decimals)
+                .speed(effective_step)
+                .range(range.clone())
+                .min_decimals(decimals)
+                .max_decimals(decimals.max(9))
                 .suffix(suffix),
         );
         changed |= response.changed();
+        changed |= numeric_context_menu(ui, &response, key, value, range, step, reset, suffix, steps, language, 1e-9);
 
         let increment = ui
             .add_sized(
                 [28.0, 26.0],
                 egui::Button::new(crate::ui::icons::PLUS).corner_radius(6.0),
             )
-            .on_hover_text(format!("Increase by {step}"));
+            .on_hover_text(format!("Increase by {effective_step} (Ctrl: fine; Shift: coarse)"));
         if increment.clicked() {
-            *value = (*value + step).clamp(min, max);
-            changed = true;
+            changed |= adjust_numeric(value, effective_step, min, max);
         }
+    }); });
+    changed
+}
+
+/// Ctrl wins over Shift when both are held. Command provides the same fine
+/// adjustment on macOS; integer-valued callers clamp their steps to one.
+pub fn numeric_adjustment(steps: crate::config::NumericInputSteps, modifiers: egui::Modifiers) -> f64 {
+    if modifiers.ctrl || modifiers.command { steps.fine }
+    else if modifiers.shift { steps.coarse }
+    else { steps.normal }
+}
+
+fn adjust_numeric(value: &mut f64, delta: f64, min: f64, max: f64) -> bool {
+    let next = (*value + delta).clamp(min, max);
+    let changed = next != *value;
+    *value = next;
+    changed
+}
+
+fn parse_numeric_paste(text: &str, suffix: &str, range: &std::ops::RangeInclusive<f64>) -> Option<f64> {
+    let text = text.trim();
+    let text = if suffix.trim().is_empty() { text }
+        else { text.strip_suffix(suffix.trim()).unwrap_or(text).trim() };
+    text.parse::<f64>().ok().filter(|v| v.is_finite())
+        .map(|v| v.clamp(*range.start(), *range.end()))
+}
+
+/// Consume only the requested field's OS-delivered paste event. No clipboard
+/// polling or synthetic focus IDs (which previously broke Windows AccessKit).
+pub fn receive_numeric_paste(ui: &mut egui::Ui, key: &str, value: &mut f64,
+    range: &std::ops::RangeInclusive<f64>, suffix: &str) -> bool {
+    let id = ui.make_persistent_id(("numeric-paste", key));
+    if !ui.ctx().data(|data| data.get_temp::<bool>(id).unwrap_or(false)) { return false; }
+    let pasted = ui.input_mut(|input| {
+        let index = input.events.iter().position(|event| matches!(event, egui::Event::Paste(_)))?;
+        match input.events.remove(index) { egui::Event::Paste(text) => Some(text), _ => None }
     });
+    if let Some(text) = pasted {
+        ui.ctx().data_mut(|data| data.remove::<bool>(id));
+        if let Some(next) = parse_numeric_paste(&text, suffix, range) {
+            let changed = *value != next;
+            *value = next;
+            return changed;
+        }
+    } else if ui.input(|input| input.pointer.any_pressed() || input.key_pressed(egui::Key::Escape)) {
+        ui.ctx().data_mut(|data| data.remove::<bool>(id));
+    }
+    false
+}
+
+/// Shared value menu for steppers and slider inputs. A true model default is
+/// supplied by the caller; step edits use the same persisted config contract.
+pub fn numeric_context_menu(ui: &mut egui::Ui, response: &egui::Response, key: &str,
+    value: &mut f64, range: std::ops::RangeInclusive<f64>, default_step: f64, reset: f64,
+    suffix: &str, steps: &mut std::collections::BTreeMap<String, crate::config::NumericInputSteps>,
+    language: crate::config::AppLanguage, minimum_step: f64) -> bool {
+    use crate::ui::icons;
+    let tr = |text| crate::ui::i18n::tr(language, text);
+    let mut changed = false;
+    let paste_id = ui.make_persistent_id(("numeric-paste", key));
+    let mut adjustment = steps.get(key).copied().filter(|s| s.is_valid())
+        .unwrap_or_else(|| crate::config::NumericInputSteps::for_step(default_step));
+    adjustment.normal = adjustment.normal.max(minimum_step);
+    adjustment.fine = adjustment.fine.max(minimum_step);
+    adjustment.coarse = adjustment.coarse.max(minimum_step);
+    let previous = adjustment;
+    response.context_menu(|ui| {
+        if ui.button(format!("{} {}", icons::ARROW_COUNTER_CLOCKWISE, tr("Reset"))).clicked() {
+            let next = reset.clamp(*range.start(), *range.end());
+            changed |= *value != next;
+            *value = next;
+            ui.close();
+        }
+        if ui.button(format!("{} {}", icons::COPY, tr("Copy"))).clicked() {
+            ui.ctx().copy_text(format!("{value}"));
+            ui.close();
+        }
+        if ui.button(format!("{} {}", icons::CLIPBOARD, tr("Paste"))).clicked() {
+            // Clear the old edit focus so the requested paste cannot also land
+            // in an unrelated text field or append to the numeric editor.
+            ui.ctx().memory_mut(|memory| { if let Some(id) = memory.focused() { memory.surrender_focus(id); } });
+            ui.ctx().data_mut(|data| data.insert_temp(paste_id, true));
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            ui.close();
+        }
+        ui.separator();
+        let step = numeric_adjustment(adjustment, ui.input(|input| input.modifiers));
+        for (icon, label, delta) in [(icons::PLUS, "Increase", step), (icons::MINUS, "Decrease", -step)] {
+            let next = (*value + delta).clamp(*range.start(), *range.end());
+            if ui.add_enabled(next != *value, egui::Button::new(format!("{icon} {} ({step}{suffix})", tr(label)))).clicked() {
+                changed |= adjust_numeric(value, delta, *range.start(), *range.end());
+                ui.close();
+            }
+        }
+        ui.menu_button(format!("{} {}", icons::SLIDERS_HORIZONTAL, tr("Adjustment steps")), |ui| {
+            egui::Grid::new(("numeric-steps", key)).num_columns(2).show(ui, |ui| {
+                for (label, value) in [("Normal", &mut adjustment.normal), ("Fine (Ctrl)", &mut adjustment.fine), ("Coarse (Shift)", &mut adjustment.coarse)] {
+                    ui.label(tr(label));
+                    ui.add(egui::DragValue::new(value).range(minimum_step..=1e12).speed(default_step / 10.0).max_decimals(9).suffix(suffix));
+                    ui.end_row();
+                }
+            });
+            if ui.button(format!("{} {}", icons::ARROW_COUNTER_CLOCKWISE, tr("Reset steps"))).clicked() {
+                adjustment = crate::config::NumericInputSteps::for_step(default_step);
+                adjustment.normal = adjustment.normal.max(minimum_step);
+                adjustment.fine = adjustment.fine.max(minimum_step);
+                adjustment.coarse = adjustment.coarse.max(minimum_step);
+            }
+        });
+    });
+    if adjustment != previous && adjustment.is_valid() {
+        steps.insert(key.to_string(), adjustment);
+        changed = true;
+    }
     changed
 }
 

@@ -1085,24 +1085,38 @@ fn render_contract_control(
         }
         PreferenceControlKind::Number => {
             let mut number = current.as_f64().unwrap_or_default();
-            let mut slider = egui::Slider::new(
-                &mut number,
-                control.minimum.unwrap_or(0.0)..=control.maximum.unwrap_or(100.0),
-            );
-            if let Some(step) = control.step {
-                slider = slider.step_by(step);
-            }
-            if control.logarithmic {
-                slider = slider.logarithmic(true);
-            }
-            let (_, response) =
+            let range = control.minimum.unwrap_or(0.0)..=control.maximum.unwrap_or(100.0);
+            let defaults = serde_json::to_value(AppConfig::default()).unwrap_or_default();
+            let reset = value_at_path(&defaults, control.key).and_then(serde_json::Value::as_f64).unwrap_or(*range.start());
+            let mut steps: std::collections::BTreeMap<String, crate::config::NumericInputSteps> =
+                serde_json::from_value(values["numeric_input_steps"].clone()).unwrap_or_default();
+            let previous_steps = steps.clone();
+            let language = crate::config::resolve_language(serde_json::from_value(values["language"].clone()).unwrap_or_default());
+            let (_, changed) =
                 preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
+                    let mut changed = crate::ui::dialog::receive_numeric_paste(ui, control.key, &mut number, &range, "");
+                    // Preserve fine adjustments/pasted values between frames;
+                    // Always clamping also re-quantizes to the drag step on paint.
+                    let mut slider = egui::Slider::new(&mut number, range.clone())
+                        .clamping(egui::SliderClamping::Edits);
+                    if let Some(step) = control.step { slider = slider.step_by(step); }
+                    if control.logarithmic { slider = slider.logarithmic(true); }
                     let control_width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
-                    ui.add_sized([control_width, PREFERENCE_ROW_HEIGHT], slider)
+                    let response = ui.add_sized([control_width, PREFERENCE_ROW_HEIGHT], slider);
+                    changed |= response.changed();
+                    changed |= crate::ui::dialog::numeric_context_menu(ui, &response, control.key, &mut number,
+                        range.clone(), control.step.unwrap_or(1.0), reset, "", &mut steps, language,
+                        if current.is_u64() || current.is_i64() { 1.0 } else { 1e-9 });
+                    changed
                 });
-            if response.changed() {
-                replacement = Some(if current.is_u64() || current.is_i64() {
+            if steps != previous_steps {
+                companion_changed |= set_value_at_path(values, "numeric_input_steps", serde_json::json!(steps)).is_ok();
+            }
+            if changed {
+                replacement = Some(if current.is_u64() {
                     serde_json::json!(number.round() as u64)
+                } else if current.is_i64() {
+                    serde_json::json!(number.round() as i64)
                 } else {
                     serde_json::json!(number)
                 });

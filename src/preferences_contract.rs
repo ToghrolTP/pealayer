@@ -46,6 +46,8 @@ pub struct PreferenceControl {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step: Option<f64>,
     #[serde(default, skip_serializing_if = "is_false")]
+    pub integer: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
     pub logarithmic: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub inverted: bool,
@@ -68,6 +70,7 @@ pub struct PreferencesContract {
     pub sections: Vec<PreferenceSection>,
     pub controls: Vec<PreferenceControl>,
     pub values: serde_json::Value,
+    pub defaults: serde_json::Value,
 }
 
 impl PreferenceControl {
@@ -88,6 +91,7 @@ impl PreferenceControl {
             minimum: None,
             maximum: None,
             step: None,
+            integer: false,
             logarithmic: false,
             inverted: false,
             placeholder: None,
@@ -966,11 +970,19 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
 }
 
 pub fn preferences_contract(config: &crate::config::AppConfig) -> PreferencesContract {
+    let values = serde_json::to_value(config).unwrap_or_else(|_| serde_json::json!({}));
+    let mut controls = preference_controls(config);
+    for control in &mut controls {
+        if matches!(control.kind, PreferenceControlKind::Number) {
+            control.integer = value_at_path(&values, control.key).is_some_and(|v| v.is_i64() || v.is_u64());
+        }
+    }
     PreferencesContract {
         format: "pealayer-preferences",
         sections: preference_sections(),
-        controls: preference_controls(config),
-        values: serde_json::to_value(config).unwrap_or_else(|_| serde_json::json!({})),
+        controls,
+        values,
+        defaults: serde_json::to_value(crate::config::AppConfig::default()).unwrap_or_default(),
     }
 }
 

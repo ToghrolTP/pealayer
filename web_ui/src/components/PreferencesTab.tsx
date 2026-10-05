@@ -5,9 +5,7 @@ import {
   Card,
   ColorPicker,
   Input,
-  InputNumber,
   Select,
-  Slider,
   Spin,
   Switch,
   Typography,
@@ -36,6 +34,7 @@ import {
 } from '@ant-design/icons';
 import { tr } from '../i18n';
 import { mergeAppearance } from '../appearance';
+import { NumericValueControl } from './NumericValueControl';
 
 type JsonObject = Record<string, any>;
 
@@ -64,6 +63,7 @@ interface PreferenceControl {
   minimum?: number;
   maximum?: number;
   step?: number;
+  integer?: boolean;
   logarithmic?: boolean;
   inverted?: boolean;
   placeholder?: string;
@@ -75,6 +75,7 @@ interface PreferencesContract {
   sections: PreferenceSection[];
   controls: PreferenceControl[];
   values: JsonObject;
+  defaults: JsonObject;
 }
 
 interface PreferencesTabProps {
@@ -360,22 +361,11 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
       return (
         <label className="preference-control preference-control--number" key={control.key}>
           {commonLabel}
-          <div className="preference-control__number">
-            <Slider
-              min={control.minimum}
-              max={control.maximum}
-              step={control.step}
-              value={Number(value)}
-              onChangeComplete={(next) => void update(control, next)}
-            />
-            <InputNumber
-              min={control.minimum}
-              max={control.maximum}
-              step={control.step}
-              value={Number(value)}
-              onChange={(next) => next !== null && void update(control, next)}
-            />
-          </div>
+          <NumericValueControl value={Number(value)} minimum={control.minimum ?? 0} maximum={control.maximum ?? 100}
+            defaultStep={control.step ?? 1} defaultValue={Number(valueAtPath(contract?.defaults ?? {}, control.key) ?? control.minimum ?? 0)}
+            integer={control.integer} label={tr(locale, control.label)} tr={(label) => tr(locale, label)}
+            steps={contract?.values.numeric_input_steps?.[control.key]} onChange={(next) => void update(control, next)}
+            onStepsChange={(steps) => void updatePath('numeric_input_steps', { ...contract?.values.numeric_input_steps, [control.key]: steps })} />
         </label>
       );
     }

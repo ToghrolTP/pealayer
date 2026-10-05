@@ -184,16 +184,18 @@ fn draw_subtitle_appearance(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 Some(&app.tr("Scale subtitle text without changing the video")),
                 |ui| {
                     let mut size = app.sub_font_size;
+                    let mut changed = dialog::receive_numeric_paste(ui, "subtitle_font_size", &mut size, &(10.0..=100.0), " px");
                     let response = ui.add_sized(
                         [185.0, 24.0],
                         egui::Slider::new(&mut size, 10.0..=100.0).suffix(" px"),
                     );
-                    if response.changed() {
+                    changed |= dialog::numeric_context_menu(ui, &response, "subtitle_font_size", &mut size, 10.0..=100.0, 1.0, 55.0, " px", &mut app.numeric_input_steps, app.language, 1e-9);
+                    if response.changed() || changed {
                         app.sub_font_size = size;
                         let _ = app.mpv.set_property("sub-font-size", size);
                         app.sync_subtitle_rendering();
                     }
-                    if response.drag_stopped() || (response.changed() && !response.dragged()) {
+                    if changed || response.drag_stopped() || (response.changed() && !response.dragged()) {
                         app.save_config();
                     }
                 },
@@ -209,11 +211,15 @@ fn draw_subtitle_appearance(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     let mut position = app.sub_position_percent;
                     if dialog::numeric_stepper(
                         ui,
+                        "subtitle_position_percent",
                         &mut position,
                         MIN_SUB_POSITION..=MAX_SUB_POSITION,
                         1.0,
+                        100.0,
                         0,
                         "%",
+                        &mut app.numeric_input_steps,
+                        app.language,
                     ) {
                         app.sub_position_percent = position;
                         let _ = app.mpv.set_property("sub-pos", position);
@@ -241,11 +247,15 @@ fn draw_subtitle_timing(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     let mut delay = app.sub_delay;
                     if dialog::numeric_stepper(
                         ui,
+                        "subtitle_delay_seconds",
                         &mut delay,
                         MIN_SUB_DELAY..=MAX_SUB_DELAY,
                         0.1,
+                        0.0,
                         1,
                         " s",
+                        &mut app.numeric_input_steps,
+                        app.language,
                     ) {
                         app.sub_delay = clamp_sub_delay(delay);
                         let _ = app.mpv.set_property("sub-delay", app.sub_delay);

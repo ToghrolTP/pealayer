@@ -136,15 +136,17 @@ fn draw_audio_output(app: &mut PealayerApp, ui: &mut egui::Ui) {
             Some(&app.tr("Adjust playback volume from 0% to 130%")),
             |ui| {
                 let mut volume = app.volume;
+                let mut changed = dialog::receive_numeric_paste(ui, "volume", &mut volume, &(0.0..=130.0), "%");
                 let response = ui.add_sized(
                     [190.0, 24.0],
                     egui::Slider::new(&mut volume, 0.0..=130.0).suffix("%"),
                 );
-                if response.changed() {
+                changed |= dialog::numeric_context_menu(ui, &response, "volume", &mut volume, 0.0..=130.0, 1.0, crate::config::AppConfig::default().volume, "%", &mut app.numeric_input_steps, app.language, 1e-9);
+                if response.changed() || changed {
                     app.volume = volume;
                     let _ = app.mpv.set_property("volume", volume);
                 }
-                if response.drag_stopped() || (response.changed() && !response.dragged()) {
+                if changed || response.drag_stopped() || (response.changed() && !response.dragged()) {
                     app.save_config();
                 }
             },
@@ -167,11 +169,15 @@ fn draw_audio_timing(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     let mut delay = app.audio_delay;
                     if dialog::numeric_stepper(
                         ui,
+                        "audio_delay_seconds",
                         &mut delay,
                         MIN_AUDIO_DELAY..=MAX_AUDIO_DELAY,
                         0.1,
+                        0.0,
                         1,
                         " s",
+                        &mut app.numeric_input_steps,
+                        app.language,
                     ) {
                         app.audio_delay = clamp_audio_delay(delay);
                         let _ = app.mpv.set_property("audio-delay", app.audio_delay);
