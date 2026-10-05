@@ -152,6 +152,7 @@ body {
 .preference-control__accent { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .preference-control__accent > .ant-select { min-width: 138px; width: 100%; }
 .preference-control--replacements { align-items: start; }
+.preference-control--replacements > span { padding-top: 6px; }
 .preference-replacements { min-width: 0; display: grid; gap: 8px; }
 .preference-replacement { min-width: 0; display: grid; grid-template-columns: minmax(64px, 1fr) 16px minmax(64px, 1fr) 32px; align-items: center; gap: 7px; }
 .preference-replacement > .anticon { color: var(--muted); text-align: center; }

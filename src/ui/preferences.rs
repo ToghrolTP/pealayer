@@ -894,6 +894,7 @@ fn render_contract_control(
         .unwrap_or_default();
     let mut replacement = None;
     let mut companion_changed = false;
+    let mut description_rendered = false;
     let control_icon = preference_control_icon(&control.kind);
     match control.kind {
         PreferenceControlKind::Accent => {
@@ -1056,62 +1057,75 @@ fn render_contract_control(
                 serde_json::from_value(current.clone()).unwrap_or_default();
             let mut changed = false;
             let mut remove = None;
-            ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(control_icon).color(ui.visuals().selection.bg_fill),
-                    );
-                    ui.label(egui::RichText::new(tr(control.label)).strong());
-                });
-                ui.add_space(4.0);
-                for (index, item) in replacements.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
-                        let available = ui.available_width();
-                        let field_width = ((available - 54.0) / 2.0).max(72.0);
-                        let from_align = crate::ui::i18n::input_alignment(rtl_ui, &item.from);
-                        let to_align = crate::ui::i18n::input_alignment(rtl_ui, &item.to);
-                        changed |= ui
-                            .add(
-                                egui::TextEdit::singleline(&mut item.from)
-                                    .horizontal_align(from_align)
-                                    .desired_width(field_width)
-                                    .hint_text(tr("Source text")),
-                            )
-                            .changed();
-                        ui.label(crate::ui::icons::ARROW_RIGHT);
-                        changed |= ui
-                            .add(
-                                egui::TextEdit::singleline(&mut item.to)
-                                    .horizontal_align(to_align)
-                                    .desired_width(field_width)
-                                    .hint_text(tr("Replacement")),
-                            )
-                            .changed();
-                        if ui
-                            .small_button(crate::ui::icons::TRASH)
-                            .on_hover_text(tr("Remove replacement"))
-                            .clicked()
-                        {
-                            remove = Some(index);
-                        }
-                    });
-                }
-                if let Some(index) = remove {
-                    replacements.remove(index);
-                    changed = true;
-                }
-                if ui
-                    .button(format!(
-                        "{} {}",
-                        crate::ui::icons::PLUS,
-                        tr("Add replacement")
-                    ))
-                    .clicked()
-                {
-                    replacements.push(crate::subtitle::SubtitleReplacement::default());
-                    changed = true;
-                }
-            });
+            preference_multiline_row(
+                ui,
+                control_icon,
+                &tr(control.label),
+                control.description.map(tr),
+                label_width,
+                |ui| {
+                    for (index, item) in replacements.iter_mut().enumerate() {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), PREFERENCE_ROW_HEIGHT),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.spacing_mut().item_spacing.x = PREFERENCE_COLUMN_GAP;
+                                let available = ui.available_width();
+                                let field_width = ((available - 54.0) / 2.0).max(72.0);
+                                let from_align =
+                                    crate::ui::i18n::input_alignment(rtl_ui, &item.from);
+                                let to_align = crate::ui::i18n::input_alignment(rtl_ui, &item.to);
+                                changed |= ui
+                                    .add_sized(
+                                        [field_width, PREFERENCE_ROW_HEIGHT],
+                                        egui::TextEdit::singleline(&mut item.from)
+                                            .horizontal_align(from_align)
+                                            .hint_text(tr("Source text")),
+                                    )
+                                    .changed();
+                                ui.label(crate::ui::icons::ARROW_RIGHT);
+                                changed |= ui
+                                    .add_sized(
+                                        [field_width, PREFERENCE_ROW_HEIGHT],
+                                        egui::TextEdit::singleline(&mut item.to)
+                                            .horizontal_align(to_align)
+                                            .hint_text(tr("Replacement")),
+                                    )
+                                    .changed();
+                                if ui
+                                    .add_sized(
+                                        [26.0, PREFERENCE_ROW_HEIGHT],
+                                        egui::Button::new(crate::ui::icons::TRASH).frame(false),
+                                    )
+                                    .on_hover_text(tr("Remove replacement"))
+                                    .clicked()
+                                {
+                                    remove = Some(index);
+                                }
+                            },
+                        );
+                    }
+                    if let Some(index) = remove {
+                        replacements.remove(index);
+                        changed = true;
+                    }
+                    if ui
+                        .add_sized(
+                            [ui.available_width().min(180.0), PREFERENCE_ROW_HEIGHT],
+                            egui::Button::new(format!(
+                                "{}  {}",
+                                crate::ui::icons::PLUS,
+                                tr("Add replacement")
+                            )),
+                        )
+                        .clicked()
+                    {
+                        replacements.push(crate::subtitle::SubtitleReplacement::default());
+                        changed = true;
+                    }
+                },
+            );
+            description_rendered = true;
             if changed {
                 replacement = serde_json::to_value(replacements).ok();
             }
@@ -1137,7 +1151,7 @@ fn render_contract_control(
             });
         }
     }
-    if let Some(description) = control.description {
+    if !description_rendered && let Some(description) = control.description {
         ui.label(egui::RichText::new(tr(description)).small().weak());
     }
     replacement
@@ -1432,6 +1446,59 @@ fn preference_row<R>(
     .inner
 }
 
+fn preference_multiline_row<R>(
+    ui: &mut egui::Ui,
+    icon: &str,
+    label: &str,
+    description: Option<String>,
+    desired_label_width: f32,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let width = ui.available_width();
+    let draw_label = |ui: &mut egui::Ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(icon)
+                    .size(14.0)
+                    .color(ui.visuals().selection.bg_fill),
+            );
+            ui.add(egui::Label::new(egui::RichText::new(label).size(13.0)).wrap());
+        });
+        if let Some(description) = description.as_deref() {
+            ui.horizontal_wrapped(|ui| {
+                ui.add_space(27.0);
+                ui.label(egui::RichText::new(description).small().weak());
+            });
+        }
+    };
+
+    let Some(label_width) = inline_preference_label_width(width, desired_label_width) else {
+        return ui
+            .vertical(|ui| {
+                draw_label(ui);
+                ui.add_space(2.0);
+                ui.set_width(width.min(PREFERENCE_CONTROL_MAX_WIDTH));
+                body(ui)
+            })
+            .inner;
+    };
+
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = PREFERENCE_COLUMN_GAP;
+        ui.vertical(|ui| {
+            ui.set_width(label_width);
+            draw_label(ui);
+        });
+        ui.vertical(|ui| {
+            ui.set_width(ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH));
+            body(ui)
+        })
+        .inner
+    })
+    .inner
+}
+
 fn preference_checkbox_row(ui: &mut egui::Ui, label: &str, checked: &mut bool) -> egui::Response {
     ui.allocate_ui_with_layout(
         egui::vec2(ui.available_width(), PREFERENCE_ROW_HEIGHT),
@@ -1684,6 +1751,21 @@ mod tests {
         assert!(boolean_branch.contains("preference_checkbox_row"));
         assert!(!boolean_branch.contains("preference_row("));
         assert!(!boolean_branch.contains("CHECK_SQUARE"));
+    }
+
+    #[test]
+    fn subtitle_replacements_use_the_shared_preference_alignment_grid() {
+        let source = include_str!("preferences.rs");
+        let replacement_branch = source
+            .split_once("PreferenceControlKind::ReplacementList => {")
+            .expect("replacement preference branch")
+            .1
+            .split_once("PreferenceControlKind::Text => {")
+            .expect("text preference branch")
+            .0;
+        assert!(replacement_branch.contains("preference_multiline_row("));
+        assert!(replacement_branch.contains("PREFERENCE_ROW_HEIGHT"));
+        assert!(replacement_branch.contains("description_rendered = true"));
     }
 
     #[test]

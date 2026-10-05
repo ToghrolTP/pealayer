@@ -1,34 +1,34 @@
-const PRECACHE = 'pealayer-precache-aae0ac83ffb0acd3';
-const RUNTIME = 'pealayer-runtime-aae0ac83ffb0acd3';
+const PRECACHE = 'pealayer-precache-9ac12a4f610f419a';
+const RUNTIME = 'pealayer-runtime-9ac12a4f610f419a';
 const PRECACHE_URLS = [
   "/",
   "/assets/ArrowUpOutlined-DJxotlWD.js",
   "/assets/DesktopOutlined-Bwt1MAKv.js",
   "/assets/EditOutlined-B44UXSHl.js",
-  "/assets/EffectRecorder-D_WiKGmi.js",
-  "/assets/EffectsTab-DIyEHBj3.js",
+  "/assets/EffectRecorder-DeMk5B02.js",
+  "/assets/EffectsTab-CA1EoYsD.js",
   "/assets/ExperimentOutlined-Co_vjfwS.js",
-  "/assets/HardwareTab-CcfG209m.js",
-  "/assets/MediaLibraryTab-DJyxi-Rc.js",
+  "/assets/HardwareTab-InInRg6H.js",
+  "/assets/MediaLibraryTab-KqQf0n6v.js",
   "/assets/PlayCircleOutlined-olgrtN9V.js",
-  "/assets/PlayerInfoTab-ihm3oSQe.js",
+  "/assets/PlayerInfoTab-BKE3WSAV.js",
   "/assets/PlusOutlined-DxSd7o5K.js",
   "/assets/PoweroffOutlined-D3dDDA8k.js",
-  "/assets/PreferencesTab-WQPwjwwI.js",
+  "/assets/PreferencesTab-DS5PvPbr.js",
   "/assets/PurePanel-6A2B1xI5.js",
   "/assets/ReloadOutlined-C0uaAqNg.js",
-  "/assets/RemoteControlTab-DJuz25b8.js",
+  "/assets/RemoteControlTab-BZpZ8roL.js",
   "/assets/SaveOutlined-DsxFnZRs.js",
-  "/assets/StudioTab-Cg0n7DlD.js",
+  "/assets/StudioTab-BRd3vDV6.js",
   "/assets/VideoCameraOutlined-B5_BYbPh.js",
   "/assets/card-DwPzKmps.js",
   "/assets/color-picker-BCOUnaZY.js",
-  "/assets/index-D7ZmPguO.css",
-  "/assets/index-zwoJjbvA.js",
+  "/assets/index-CRuMgLnb.js",
+  "/assets/index-CdyoV5Uj.css",
   "/assets/input-number-Bbxp168P.js",
   "/assets/jsx-runtime-B-31jcj5.js",
   "/assets/mediaLabel-UKWxP5V9.js",
-  "/assets/popconfirm-C8AgQe5Z.js",
+  "/assets/popconfirm-DjMQROpF.js",
   "/assets/popover-CUop7NR1.js",
   "/assets/rolldown-runtime-CbXtAM7H.js",
   "/assets/select-Dn496RGN.js",
@@ -62,7 +62,7 @@ self.addEventListener('activate', (event) => {
         .filter((key) => key.startsWith('pealayer-') && ![PRECACHE, RUNTIME].includes(key))
         .map((key) => caches.delete(key))))
       .then(() => self.clients.claim())
-      .then(() => notifyClients({ type: 'PEALAYER_SW_READY', version: 'aae0ac83ffb0acd3' })),
+      .then(() => notifyClients({ type: 'PEALAYER_SW_READY', version: '9ac12a4f610f419a' })),
   );
 });
 
