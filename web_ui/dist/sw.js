@@ -1,32 +1,32 @@
-const PRECACHE = 'pealayer-precache-8a64c16a43058f0c';
-const RUNTIME = 'pealayer-runtime-8a64c16a43058f0c';
+const PRECACHE = 'pealayer-precache-323a1f4b9b6cc1c9';
+const RUNTIME = 'pealayer-runtime-323a1f4b9b6cc1c9';
 const PRECACHE_URLS = [
   "/",
   "/assets/DeleteOutlined-C579ebWx.js",
   "/assets/DesktopOutlined-7WgZ6K7i.js",
   "/assets/EditOutlined-CJP0Hha4.js",
-  "/assets/EffectRecorder-ERBiG_Ln.js",
-  "/assets/EffectsTab-rJa7BDtB.js",
+  "/assets/EffectRecorder-DdwhYqdk.js",
+  "/assets/EffectsTab-BzDKaBl1.js",
   "/assets/ExperimentOutlined-jJd3yYQX.js",
   "/assets/GroupSelect-CDKScIjn.js",
-  "/assets/HardwareTab-Th2OP6SN.js",
-  "/assets/MediaLibraryTab-DuyajWjd.js",
-  "/assets/PlayerInfoTab-S_0LL7ZD.js",
+  "/assets/HardwareTab-Z_acD8R2.js",
+  "/assets/MediaLibraryTab-CmYQVL-t.js",
+  "/assets/PlayerInfoTab-CU2-FdX1.js",
   "/assets/PlusOutlined-3y78twXu.js",
-  "/assets/PreferencesTab-BCmhPPRV.js",
-  "/assets/RemoteControlTab-CBgg-hT6.js",
+  "/assets/PreferencesTab-CLvAgpNL.js",
+  "/assets/RemoteControlTab-DOboZJCM.js",
   "/assets/SafetyCertificateOutlined-DIbLm714.js",
   "/assets/SeekThumbnailPreview-_sbtjBe2.js",
-  "/assets/StudioTab-Ch5ZTR0d.js",
+  "/assets/StudioTab-BopSxIXM.js",
   "/assets/VideoCameraOutlined-C8TbqC0K.js",
   "/assets/WifiOutlined-Ck5PNDt5.js",
   "/assets/card-BkKeIGit.js",
   "/assets/color-picker-2Su7GEtw.js",
-  "/assets/index-B2kZb3zX.css",
-  "/assets/index-CVP2qC2l.js",
+  "/assets/index-Ch4DWiMT.css",
+  "/assets/index-DwooSVC7.js",
   "/assets/input-number-5dMDN0zK.js",
   "/assets/jsx-runtime-UWGBd04a.js",
-  "/assets/popconfirm-Dc-cDuWe.js",
+  "/assets/popconfirm-NPA319cs.js",
   "/assets/popover-YJfIngdA.js",
   "/assets/rolldown-runtime-CbXtAM7H.js",
   "/assets/select-GiSZKaNU.js",
@@ -60,7 +60,7 @@ self.addEventListener('activate', (event) => {
         .filter((key) => key.startsWith('pealayer-') && ![PRECACHE, RUNTIME].includes(key))
         .map((key) => caches.delete(key))))
       .then(() => self.clients.claim())
-      .then(() => notifyClients({ type: 'PEALAYER_SW_READY', version: '8a64c16a43058f0c' })),
+      .then(() => notifyClients({ type: 'PEALAYER_SW_READY', version: '323a1f4b9b6cc1c9' })),
   );
 });
 

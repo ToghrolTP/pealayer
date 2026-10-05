@@ -120,7 +120,10 @@ try {
     console.log(`Ready for browser verification. Send input or POST http://127.0.0.1:${server.address().port}/__finish to restore playback/settings.`);
     await new Promise(resolve => {
       const timeout = setTimeout(done, 15 * 60 * 1000);
-      function done() { clearTimeout(timeout); process.stdin.off('data',done); resolve(); }
+      function done() {
+        clearTimeout(timeout); process.stdin.off('data',done);
+        process.stdin.pause(); process.stdin.unref?.(); resolve();
+      }
       finishHold = done; process.stdin.once('data',done);
     });
   }
