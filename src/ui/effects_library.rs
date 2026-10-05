@@ -1640,6 +1640,68 @@ fn draw_sequence_step_editor(
     draft.duration_ms = sequence_duration_ms(&draft.steps);
 }
 
+#[derive(serde::Deserialize)]
+struct RecordingColor {
+    id: String,
+    label: String,
+    hex: String,
+}
+
+fn recording_colors() -> &'static [RecordingColor] {
+    static COLORS: std::sync::OnceLock<Vec<RecordingColor>> = std::sync::OnceLock::new();
+    COLORS.get_or_init(|| {
+        serde_json::from_str(include_str!("../../assets/themes/recording-colors.json"))
+            .expect("recording color palette must be valid")
+    })
+}
+
+fn recording_color(value: &str) -> egui::Color32 {
+    let id = if value == "purple" { "violet" } else { value };
+    let hex = recording_colors()
+        .iter()
+        .find(|color| color.id == id)
+        .unwrap_or(&recording_colors()[0])
+        .hex.as_str();
+    let rgb = crate::config::parse_rgb_hex(hex).expect("recording color must be RGB");
+    egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+}
+
+fn paint_recording_swatch(ui: &egui::Ui, rect: egui::Rect, value: &str) {
+    let center = egui::pos2(rect.left() + 12.0, rect.center().y);
+    ui.painter().circle_filled(center, 5.0, recording_color(value));
+    // White must remain distinguishable on light popup surfaces too.
+    ui.painter().circle_stroke(center, 5.0, egui::Stroke::new(1.0, egui::Color32::GRAY));
+}
+
+fn recording_color_picker(ui: &mut egui::Ui, value: &mut String) -> egui::Response {
+    let selected = recording_colors().iter().find(|color| color.id == *value)
+        .unwrap_or(&recording_colors()[0]);
+    let response = egui::ComboBox::from_id_salt("effect_recording_color")
+        .selected_text(format!("     {}", selected.label))
+        .show_ui(ui, |ui| {
+            for color in recording_colors() {
+                let row = ui.selectable_value(value, color.id.clone(), format!("     {}", color.label));
+                paint_recording_swatch(ui, row.rect, &color.id);
+            }
+        }).response;
+    paint_recording_swatch(ui, response.rect, value);
+    response
+}
+
+fn paint_recording_icon(ui: &egui::Ui, rect: egui::Rect, value: &str) {
+    if recording_color(value) == egui::Color32::WHITE && !ui.visuals().dark_mode {
+        ui.painter().text(
+            rect.center() + egui::vec2(1.0, 1.0), egui::Align2::CENTER_CENTER,
+            crate::ui::icons::RECORD, egui::FontId::proportional(18.0),
+            ui.visuals().weak_text_color(),
+        );
+    }
+    ui.painter().text(
+        rect.center(), egui::Align2::CENTER_CENTER, crate::ui::icons::RECORD,
+        egui::FontId::proportional(18.0), recording_color(value),
+    );
+}
+
 pub(crate) fn draw_effect_recording_panel(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let hardware = app.advertised_hardware();
     let groups = hardware.as_ref().map(|hardware| hardware.effect_groups.clone()).unwrap_or_default();
@@ -1660,13 +1722,11 @@ pub(crate) fn draw_effect_recording_panel(app: &mut PealayerApp, ui: &mut egui::
     egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
+            let mut record_icon_rect = egui::Rect::NOTHING;
             ui.horizontal(|ui| {
-                let color = if active {
-                    ui.visuals().error_fg_color
-                } else {
-                    ui.visuals().widgets.active.bg_fill
-                };
-                ui.label(egui::RichText::new(crate::ui::icons::RECORD).color(color).size(18.0));
+                record_icon_rect = ui.allocate_exact_size(
+                    egui::vec2(18.0, 24.0), egui::Sense::hover(),
+                ).0;
                 ui.vertical(|ui| {
                     let title = if active && !recording.name.trim().is_empty() {
                         recording.name.as_str()
@@ -1744,17 +1804,7 @@ pub(crate) fn draw_effect_recording_panel(app: &mut PealayerApp, ui: &mut egui::
                             });
                         ui.end_row();
                         ui.label("Color");
-                        egui::ComboBox::from_id_salt("effect_recording_color")
-                            .selected_text(&app.hardware_effect_authoring.color)
-                            .show_ui(ui, |ui| {
-                                for color in ["violet", "green", "blue", "red", "white"] {
-                                    ui.selectable_value(
-                                        &mut app.hardware_effect_authoring.color,
-                                        color.to_string(),
-                                        color,
-                                    );
-                                }
-                            });
+                        recording_color_picker(ui, &mut app.hardware_effect_authoring.color);
                         ui.end_row();
                     });
             });
@@ -1820,6 +1870,14 @@ pub(crate) fn draw_effect_recording_panel(app: &mut PealayerApp, ui: &mut egui::
                     )
                     .clicked();
             });
+            // Paint after the selector has processed input, so the header uses
+            // the new choice in this frame instead of a cached/theme color.
+            let color = if recording.active && !recording.color.is_empty() {
+                &recording.color
+            } else {
+                &app.hardware_effect_authoring.color
+            };
+            paint_recording_icon(ui, record_icon_rect, color);
         });
 
     let result = if start {
@@ -2363,6 +2421,107 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recording_color_swatches_match_the_shared_palette_in_both_themes() {
+        for dark in [false, true] {
+            let context = egui::Context::default();
+            context.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+            for color in recording_colors() {
+                let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                    let rect = ui.allocate_exact_size(egui::vec2(120.0, 24.0), egui::Sense::hover()).0;
+                    paint_recording_swatch(ui, rect, &color.id);
+                });
+                output.textures_delta.clear();
+                assert!(output.shapes.iter().any(|shape| matches!(
+                    &shape.shape, egui::epaint::Shape::Circle(circle)
+                        if circle.fill == recording_color(&color.id) && circle.radius == 5.0
+                )));
+                assert!(output.shapes.iter().any(|shape| matches!(
+                    &shape.shape, egui::epaint::Shape::Circle(circle)
+                        if circle.stroke.width == 1.0 && circle.stroke.color == egui::Color32::GRAY
+                )), "{} swatch lacks a light-theme outline", color.id);
+            }
+        }
+        assert_eq!(recording_color("purple"), recording_color("violet"));
+    }
+
+    #[test]
+    fn recording_color_popup_selection_updates_header_in_the_same_frame() {
+        fn flatten<'a>(shape: &'a egui::epaint::Shape, result: &mut Vec<&'a egui::epaint::Shape>) {
+            if let egui::epaint::Shape::Vec(shapes) = shape {
+                for shape in shapes { flatten(shape, result); }
+            } else {
+                result.push(shape);
+            }
+        }
+        let context = egui::Context::default();
+        let mut color = "violet".to_string();
+        // Popup fade opacity is irrelevant to checking the palette itself.
+        context.all_styles_mut(|style| style.animation_time = 0.0);
+        let render = |events, color: &mut String| {
+            let mut picker = egui::Rect::NOTHING;
+            let mut output = context.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 360.0))),
+                events, ..Default::default()
+            }, |ui| {
+                let icon = ui.allocate_exact_size(egui::vec2(18.0, 24.0), egui::Sense::hover()).0;
+                picker = recording_color_picker(ui, color).rect;
+                paint_recording_icon(ui, icon, color);
+            });
+            output.textures_delta.clear();
+            (output, picker)
+        };
+        let click = |pos, pressed| egui::Event::PointerButton {
+            pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE,
+        };
+        render(Vec::new(), &mut color);
+        let (_, picker) = render(Vec::new(), &mut color);
+        render(vec![egui::Event::PointerMoved(picker.center()), click(picker.center(), true)], &mut color);
+        render(vec![click(picker.center(), false)], &mut color);
+        let (output, _) = render(Vec::new(), &mut color);
+        let mut shapes = Vec::new();
+        for shape in &output.shapes { flatten(&shape.shape, &mut shapes); }
+        for option in recording_colors() {
+            assert!(shapes.iter().any(|shape| matches!(
+                shape, egui::epaint::Shape::Circle(circle) if circle.fill == recording_color(&option.id)
+            )), "popup is missing {} swatch; visible labels: {:?}", option.id,
+                shapes.iter().filter_map(|shape| match shape {
+                    egui::epaint::Shape::Text(text) => Some(&text.galley.job.text), _ => None,
+                }).collect::<Vec<_>>());
+        }
+        let blue = shapes.iter().find_map(|shape| match shape {
+            egui::epaint::Shape::Text(text) if text.galley.job.text.trim() == "Blue" =>
+                Some(text.pos + text.galley.rect.center().to_vec2()),
+            _ => None,
+        }).expect("Blue option is absent");
+        render(vec![egui::Event::PointerMoved(blue), click(blue, true)], &mut color);
+        let (output, _) = render(vec![click(blue, false)], &mut color);
+        assert_eq!(color, "blue");
+        assert!(output.shapes.iter().any(|shape| matches!(
+            &shape.shape, egui::epaint::Shape::Text(text)
+                if text.galley.job.text == crate::ui::icons::RECORD
+                    && text.galley.job.sections.iter().all(|section| section.format.color == recording_color("blue"))
+        )), "header retained its old color after selection");
+    }
+
+    #[test]
+    fn recording_panel_header_uses_the_draft_color_not_the_theme_accent() {
+        let context = egui::Context::default();
+        let mut app = PealayerApp::default();
+        for color in ["green", "blue", "white"] {
+            app.hardware_effect_authoring.color = color.to_string();
+            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                draw_effect_recording_panel(&mut app, ui);
+            });
+            output.textures_delta.clear();
+            assert!(output.shapes.iter().any(|shape| matches!(
+                &shape.shape, egui::epaint::Shape::Text(text)
+                    if text.galley.job.text == crate::ui::icons::RECORD
+                        && text.galley.job.sections.iter().all(|section| section.format.color == recording_color(color))
+            )));
+        }
+    }
 
     #[test]
     fn effect_properties_use_one_searchable_icon_control() {

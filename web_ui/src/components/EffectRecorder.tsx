@@ -5,6 +5,7 @@ import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
 import { GroupSelect } from './GroupSelect';
 import { EffectGroupDialog } from './EffectGroupDialog';
+import recordingColors from '../../../assets/themes/recording-colors.json';
 
 interface EffectRecorderProps {
   state: PlayerState;
@@ -30,13 +31,16 @@ export const EffectRecorder: React.FC<EffectRecorderProps> = ({ state, sendCmd, 
   const [color, setColor] = useState('violet');
   const [mode, setMode] = useState('automatic');
   const canRecord = state.controller_connected && state.hardware_connected;
+  const selectedColor = recording.active && recording.color ? recording.color : color;
+  const colorHex = (recordingColors.find((option) => option.id === (selectedColor === 'purple' ? 'violet' : selectedColor)) ?? recordingColors[0]).hex;
+  const recordDot = <span className="record-dot" style={{ backgroundColor: colorHex }} />;
 
   return <section className={`effect-recorder-shell ${compact ? 'is-compact' : ''}`}>
     <div className="effects-toolbar effects-recorder-toolbar">
       <Button
         danger={recording.active}
         disabled={!canRecord && !recording.active}
-        icon={recording.pending ? <LoadingOutlined spin /> : <span className="record-dot" />}
+        icon={recording.pending ? <LoadingOutlined spin /> : recordDot}
         onClick={() => setOpen((value) => !value)}
       >
         {recording.active ? `${tr(locale, 'Recording')} · ${recording.steps}` : tr(locale, 'Record effect')}
@@ -50,7 +54,7 @@ export const EffectRecorder: React.FC<EffectRecorderProps> = ({ state, sendCmd, 
           <strong>{recording.active ? recording.name : tr(locale, 'New recorded effect')}</strong>
           <span>{recording.active ? `${recording.steps} ${tr(locale, 'captured actions')}` : tr(locale, 'Capture board, RF, front-panel, Pealayer, Web and API actions together')}</span>
         </div>
-        {recording.active && <span className="recording-pulse" aria-label={tr(locale, 'Recording')} />}
+        {recording.active && <span className="recording-pulse" style={{ backgroundColor: colorHex, boxShadow: `0 0 0 5px ${colorHex}29` }} aria-label={tr(locale, 'Recording')} />}
       </div>
 
       {!recording.active && <div className="effect-recorder__grid">
@@ -61,7 +65,10 @@ export const EffectRecorder: React.FC<EffectRecorderProps> = ({ state, sendCmd, 
           { value: 'device-clock', label: tr(locale, 'Device clock') },
           { value: 'board-retained', label: tr(locale, 'Board-retained relay take') },
         ]} /></label>
-        <label><span>{tr(locale, 'Color')}</span><Select value={color} onChange={setColor} options={['violet', 'green', 'blue', 'red', 'white'].map((value) => ({ value, label: value }))} /></label>
+        <label><span>{tr(locale, 'Color')}</span><Select value={color} onChange={setColor} options={recordingColors.map((option) => ({
+          value: option.id,
+          label: <span className="recording-color-option"><span className="recording-color-swatch" style={{ backgroundColor: option.hex }} />{tr(locale, option.label)}</span>,
+        }))} /></label>
       </div>}
 
       {recording.active && <Space wrap size={[6, 6]}>
@@ -76,7 +83,7 @@ export const EffectRecorder: React.FC<EffectRecorderProps> = ({ state, sendCmd, 
           type="primary"
           danger
           disabled={!canRecord || !name.trim() || recording.pending}
-          icon={<span className="record-dot" />}
+          icon={recordDot}
           onClick={() => sendCmd('controller_effect.record.start', { name: name.trim(), category: category.trim() || 'Recorded', color, mode })}
         >{tr(locale, 'Start recording')}</Button> : <>
           <Button type="primary" icon={<SaveOutlined />} disabled={recording.pending || recording.steps === 0} onClick={() => sendCmd('controller_effect.record.save')}>
