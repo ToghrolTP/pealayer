@@ -230,6 +230,18 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     });
 
                     let has_video = app.current_video_path.is_some();
+                    if ui.add_enabled(has_video, egui::Button::new(format!("{} {}", crate::ui::icons::INFO, app.tr("Media information")))
+                        .shortcut_text(&app.application_shortcuts.media_information)).clicked() {
+                        app.apply_interop_command(&ctx, crate::platform::interop::InteropCommand::OpenMediaInformation, "menu");
+                        ui.close();
+                    }
+                    let has_local_folder = app.current_video_path.as_deref()
+                        .is_some_and(|path| crate::application_shortcuts::containing_media_folder(path).is_ok());
+                    if ui.add_enabled(has_local_folder, egui::Button::new(format!("{} {}", crate::ui::icons::FOLDER_OPEN, app.tr("Open containing folder")))
+                        .shortcut_text(&app.application_shortcuts.media_folder)).clicked() {
+                        app.apply_interop_command(&ctx, crate::platform::interop::InteropCommand::OpenMediaFolder, "menu");
+                        ui.close();
+                    }
                     if ui
                         .add_enabled(has_video, egui::Button::new(app.tr("Close Video")))
                         .clicked()
@@ -301,10 +313,16 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                 top_menu_button(ui, app.tr("Edit"), |ui| {
                     if ui
-                        .button(format!("{} {}", crate::ui::icons::GEAR, app.tr("Preferences...")))
+                        .add(egui::Button::new(format!("{} {}", crate::ui::icons::GEAR, app.tr("Preferences...")))
+                            .shortcut_text(&app.application_shortcuts.preferences))
                         .clicked()
                     {
-                        app.show_preferences_dialog = true;
+                        app.apply_interop_command(&ctx, crate::platform::interop::InteropCommand::OpenPreferences, "menu");
+                        ui.close();
+                    }
+                    if ui.add(egui::Button::new(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, app.tr("Edit configuration file")))
+                        .shortcut_text(&app.application_shortcuts.edit_config)).clicked() {
+                        app.apply_interop_command(&ctx, crate::platform::interop::InteropCommand::EditConfiguration, "menu");
                         ui.close();
                     }
                     ui.separator();

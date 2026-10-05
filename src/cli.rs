@@ -77,6 +77,9 @@ PLAYER OPTIONS:
   --minimize | --maximize   Change the window state
   --restore                 Restore and focus the window
   --preferences             Open Preferences
+  --media-info              Show the Media Inspector
+  --media-folder            Open the local media's containing folder
+  --edit-config             Open the configuration file in its external editor
   --message <TEXT>          Show a message in the OSD and status bar
   --hide-osd                Hide the currently displayed OSD message
   --quit                    Close the running application
@@ -188,6 +191,9 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
             "--maximize" => commands.push(InteropCommand::Maximize),
             "--restore" => commands.push(InteropCommand::Restore),
             "--preferences" => commands.push(InteropCommand::OpenPreferences),
+            "--media-info" => commands.push(InteropCommand::OpenMediaInformation),
+            "--media-folder" => commands.push(InteropCommand::OpenMediaFolder),
+            "--edit-config" => commands.push(InteropCommand::EditConfiguration),
             "--message" => {
                 let message = args_iter.next().ok_or("Option '--message' requires text")?;
                 let command = InteropCommand::ShowMessage { message };
@@ -396,6 +402,22 @@ fn send_control_request(payload: &str, timeout: Duration) -> Result<String, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn application_shortcut_actions_have_cli_and_ipc_parity() {
+        let args = vec!["pealayer".to_owned(), "--media-info".to_owned(), "--media-folder".to_owned(), "--edit-config".to_owned()];
+        let CliAction::RunGui(parsed) = parse_cli_args(args).unwrap() else { panic!("GUI command request expected") };
+        assert_eq!(parsed.commands, vec![InteropCommand::OpenMediaInformation, InteropCommand::OpenMediaFolder, InteropCommand::EditConfiguration]);
+        for (name, expected) in [
+            ("media_information", InteropCommand::OpenMediaInformation),
+            ("media_folder", InteropCommand::OpenMediaFolder),
+            ("edit_config", InteropCommand::EditConfiguration),
+        ] {
+            assert_eq!(crate::platform::interop::parse_text_command(name).unwrap(), expected);
+            let request = serde_json::json!({"jsonrpc":"2.0", "id":1, "method":name, "params":{}});
+            assert_eq!(crate::platform::interop::parse_interop_request(&request.to_string()).unwrap().1, expected);
+        }
+    }
 
     #[test]
     fn test_parse_cli_arguments() {

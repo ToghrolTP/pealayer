@@ -416,6 +416,7 @@ pub struct PealayerApp {
     pub(crate) hardware_control_down_color_draft: String,
     pub(crate) hardware_control_pwm_percent: f64,
     pub(crate) keyboard_shortcuts_enabled: bool,
+    pub(crate) application_shortcuts: crate::application_shortcuts::ApplicationShortcuts,
     pub(crate) global_hardware_hotkeys_enabled: bool,
     pub(crate) hardware_key_bindings: Vec<crate::config::HardwareKeyBinding>,
     pub(crate) hardware_binding_dialog_channel: Option<String>,
@@ -1243,6 +1244,7 @@ impl eframe::App for PealayerApp {
         }
 
         // Handle Keyboard Shortcuts
+        self.process_application_shortcuts(&ctx);
         let timeline_keyboard_active =
             ctx.memory(|memory| memory.has_focus(crate::ui::layout::timeline_keyboard_focus_id()));
         let transport_shortcuts_enabled = self.keyboard_shortcuts_enabled
@@ -1581,6 +1583,18 @@ impl eframe::App for PealayerApp {
                                     ui.add(egui::Label::new(crate::ui::i18n::tr(language, action)).wrap());
                                     ui.end_row();
                                 }
+                                for (icon, shortcut, action) in [
+                                    (crate::ui::icons::ARROWS_OUT, self.application_shortcuts.fullscreen.as_str(), "Toggle Fullscreen mode"),
+                                    (crate::ui::icons::INFO, self.application_shortcuts.media_information.as_str(), "Media information"),
+                                    (crate::ui::icons::FOLDER_OPEN, self.application_shortcuts.media_folder.as_str(), "Open containing folder"),
+                                    (crate::ui::icons::GEAR, self.application_shortcuts.preferences.as_str(), "Preferences..."),
+                                    (crate::ui::icons::PENCIL_SIMPLE, self.application_shortcuts.edit_config.as_str(), "Edit configuration file"),
+                                ] {
+                                    ui.label(icon);
+                                    ui.label(if shortcut.is_empty() { "—" } else { shortcut });
+                                    ui.label(crate::ui::i18n::tr(language, action));
+                                    ui.end_row();
+                                }
                             });
                       });
                     });
@@ -1685,6 +1699,30 @@ fn board_settings_command(
 }
 
 impl PealayerApp {
+    fn process_application_shortcuts(&mut self, ctx: &egui::Context) {
+        if !self.keyboard_shortcuts_enabled || self.hardware_binding_capturing { return; }
+        let text_editing = ctx.egui_wants_keyboard_input();
+        let mut actions = Vec::new();
+        ctx.input_mut(|input| input.events.retain(|event| {
+            if let Some(action) = self.application_shortcuts.action_for_event(event, text_editing) {
+                actions.push(action);
+                false // Do not also trigger transport/hardware shortcuts.
+            } else { true }
+        }));
+        for action in actions {
+            use crate::application_shortcuts::ApplicationAction;
+            use crate::platform::interop::InteropCommand;
+            let command = match action {
+                ApplicationAction::Fullscreen => InteropCommand::ToggleFullscreen,
+                ApplicationAction::MediaInformation => InteropCommand::OpenMediaInformation,
+                ApplicationAction::Preferences => InteropCommand::OpenPreferences,
+                ApplicationAction::EditConfig => InteropCommand::EditConfiguration,
+                ApplicationAction::MediaFolder => InteropCommand::OpenMediaFolder,
+            };
+            self.apply_interop_command(ctx, command, "keyboard");
+        }
+    }
+
     pub(crate) fn open_hardware_bindings_for_channel(&mut self, channel_key: &str) {
         self.hardware_binding_dialog_channel = Some(channel_key.to_string());
         self.hardware_binding_draft = None;
@@ -2974,6 +3012,23 @@ impl PealayerApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
+            InteropCommand::OpenMediaInformation => {
+                self.open_or_focus_tab(crate::ui::layout::PealayerTab::MediaInspector);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            InteropCommand::OpenMediaFolder => {
+                let result = self.current_video_path.as_deref()
+                    .ok_or_else(|| "No media is loaded".to_owned())
+                    .and_then(crate::application_shortcuts::containing_media_folder)
+                    .and_then(|folder| open::that_detached(folder).map_err(|error| error.to_string()));
+                if let Err(error) = result { self.set_osd(error); return; }
+            }
+            InteropCommand::EditConfiguration => {
+                let config = self.runtime_config_snapshot();
+                if let Err(error) = crate::ui::preferences::perform_config_path_action(
+                    crate::ui::preferences::ConfigPathAction::Edit, &config,
+                ) { self.set_osd(error); return; }
+            }
             InteropCommand::OpenBoardInformation { tab } => {
                 self.board_info_tab = tab.min(3);
                 self.show_board_info_dialog = true;
@@ -3394,7 +3449,9 @@ impl PealayerApp {
             },
             InteropCommand::GetStatus => {}
         }
-        self.set_osd(format!("{source}: command applied"));
+        if !matches!(source, "keyboard" | "menu") {
+            self.set_osd(format!("{source}: command applied"));
+        }
     }
 
     fn update_seek_completion_state(&mut self) {
@@ -4928,6 +4985,7 @@ impl PealayerApp {
         cfg.live_pwm_updates = self.live_pwm_updates;
         cfg.hardware_actions_on_press = self.hardware_actions_on_press;
         cfg.keyboard_shortcuts_enabled = self.keyboard_shortcuts_enabled;
+        cfg.application_shortcuts = self.application_shortcuts.clone();
         cfg.global_hardware_hotkeys_enabled = self.global_hardware_hotkeys_enabled;
         cfg.hardware_key_bindings = self.hardware_key_bindings.clone();
         cfg.show_estop_control = self.show_estop_control;
@@ -5132,6 +5190,7 @@ impl PealayerApp {
             self.release_active_hardware_bindings();
         }
         self.keyboard_shortcuts_enabled = config.keyboard_shortcuts_enabled;
+        self.application_shortcuts = config.application_shortcuts.clone();
         self.global_hardware_hotkeys_enabled = config.global_hardware_hotkeys_enabled;
         self.hardware_key_bindings = config.hardware_key_bindings.clone();
         self.show_estop_control = config.show_estop_control;
@@ -6385,6 +6444,7 @@ impl Default for PealayerApp {
             hardware_control_down_color_draft: String::new(),
             hardware_control_pwm_percent: 0.0,
             keyboard_shortcuts_enabled: true,
+            application_shortcuts: crate::application_shortcuts::ApplicationShortcuts::default(),
             global_hardware_hotkeys_enabled: true,
             hardware_key_bindings: Vec::new(),
             hardware_binding_dialog_channel: None,
@@ -6512,6 +6572,33 @@ fn hardware_connection_was_lost(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn application_shortcuts_dispatch_fullscreen_and_preferences_without_retriggering_transport() {
+        let mut app = PealayerApp::default();
+        let ctx = egui::Context::default();
+        let frame = |app: &mut PealayerApp, key, modifiers| {
+            let mut output = ctx.run_ui(egui::RawInput {
+                events: vec![egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers }],
+                ..Default::default()
+            }, |_| {
+                app.process_application_shortcuts(&ctx);
+            });
+            output.textures_delta.clear();
+        };
+        frame(&mut app, egui::Key::F11, egui::Modifiers::NONE);
+        assert!(app.fullscreen_intent(&ctx));
+        assert!(!ctx.input(|input| input.key_pressed(egui::Key::F11)));
+        app.keyboard_shortcuts_enabled = false;
+        frame(&mut app, egui::Key::F11, egui::Modifiers::NONE);
+        assert!(app.fullscreen_intent(&ctx));
+        app.keyboard_shortcuts_enabled = true;
+        let mut modifiers = egui::Modifiers::NONE;
+        if cfg!(target_os = "macos") { modifiers.mac_cmd = true; modifiers.command = true; } else { modifiers.ctrl = true; modifiers.command = true; }
+        frame(&mut app, egui::Key::Comma, modifiers);
+        assert!(app.show_preferences_dialog);
+        assert!(!ctx.input(|input| input.key_pressed(egui::Key::Comma)), "preferences accelerator must not also frame-step backward");
+    }
 
     #[test]
     fn shared_media_track_identity_covers_video_audio_and_subtitles() {

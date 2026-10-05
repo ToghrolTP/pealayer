@@ -168,6 +168,9 @@ pub enum InteropCommand {
     Maximize,
     Restore,
     OpenPreferences,
+    OpenMediaInformation,
+    OpenMediaFolder,
+    EditConfiguration,
     OpenBoardInformation {
         tab: usize,
     },
@@ -555,7 +558,7 @@ pub fn command_catalog() -> Value {
             "chapter_previous", "chapter_next", "set_chapter",
             "seek", "seek_to", "seek_abs", "set_volume", "set_mute", "toggle_mute",
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
-            "maximize", "restore", "open_preferences", "open_board_information", "show_message", "show_osd", "hide_osd", "set_workspace",
+            "maximize", "restore", "open_preferences", "open_media_information", "open_media_folder", "edit_configuration", "open_board_information", "show_message", "show_osd", "hide_osd", "set_workspace",
             "create_workspace_profile", "update_workspace_profile", "delete_workspace_profile",
             "move_workspace_profile", "update_config",
             "reload_config", "add_effect_cue", "update_effect_cue", "remove_effect_cue", "set_recording",
@@ -667,6 +670,9 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "maximize" => InteropCommand::Maximize,
         "restore" => InteropCommand::Restore,
         "preferences" | "open_preferences" | "open-preferences" => InteropCommand::OpenPreferences,
+        "media_information" | "open_media_information" => InteropCommand::OpenMediaInformation,
+        "media_folder" | "open_media_folder" => InteropCommand::OpenMediaFolder,
+        "edit_configuration" | "edit_config" => InteropCommand::EditConfiguration,
         "message" | "show_message" | "show-message" => InteropCommand::ShowMessage {
             message: argument.to_string(),
         },
@@ -1124,6 +1130,9 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "preferences" | "open_preferences" | "pealayer.window.preferences" => {
             Some(InteropCommand::OpenPreferences)
         }
+        "media_information" | "open_media_information" | "pealayer.media.information" => Some(InteropCommand::OpenMediaInformation),
+        "media_folder" | "open_media_folder" | "pealayer.media.folder" => Some(InteropCommand::OpenMediaFolder),
+        "edit_configuration" | "edit_config" | "pealayer.config.edit" => Some(InteropCommand::EditConfiguration),
         "board_information" | "board.info.open" | "pealayer.board.info.open" => {
             let tab = request
                 .params

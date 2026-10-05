@@ -114,6 +114,10 @@ hardware-free verification.
 * **Remote Media Library & Thumbnail Caching**: Browse server directories, inspect media durations, and view dynamically cached video thumbnails over HTTP.
 
 ### 🖥 Operating System Integration & IPC
+Application accelerators are editable in **Preferences → Input → Application shortcuts** and persisted in the shared configuration (also exposed by Web UI preferences). Defaults: **F11** toggles fullscreen, **Shift+F10** reveals/focuses the Media Inspector, **Ctrl+Shift+F10** opens the local media's containing folder, **Ctrl+,** opens Preferences, and **Ctrl+Shift+,** opens the configuration file through its OS-registered external handler. On macOS the last two use **Cmd** instead of **Ctrl**. Empty bindings disable an accelerator; invalid/duplicate chords are rejected. These are focused-application shortcuts, not background/global hardware hotkeys. Remote streams have no local containing folder.
+
+Equivalent shared commands: `pealayer --media-info`, `pealayer --media-folder`, `pealayer --edit-config`, and `pealayer --preferences`. The command catalog advertises `open_media_information`, `open_media_folder`, and `edit_configuration` for IPC/HTTP/JSON-RPC consumers.
+
 * **Unix Domain Socket IPC**: Direct headless automation on Linux via `/tmp/pealayer.sock` or `$XDG_RUNTIME_DIR/pealayer.sock`.
 * **Windows Named-Pipe IPC**: Second-process launches and local commands use a per-application, per-session named pipe before trying the loopback HTTP fallback. Single-instance mode is enabled by default and can be changed in **Preferences → Advanced → Application instance**.
 * **Pealayer Automation Endpoint**: Pealayer's newline-compatible command transport is available at `POST http://127.0.0.1:8080/api/ipc`, while JSON-RPC 2.0 remains at `/api/rpc`. These are distinct from the PCController coordinator endpoint on `:8787`; `:8787` remains the controller fallback.

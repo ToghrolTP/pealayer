@@ -1237,12 +1237,12 @@ fn color_swatch(ui: &mut egui::Ui, [red, green, blue]: [u8; 3]) {
 }
 
 #[derive(Clone, Copy)]
-enum ConfigPathAction {
+pub(crate) enum ConfigPathAction {
     Edit,
     OpenContainingFolder,
 }
 
-fn perform_config_path_action(
+pub(crate) fn perform_config_path_action(
     action: ConfigPathAction,
     config: &AppConfig,
 ) -> Result<&'static str, String> {

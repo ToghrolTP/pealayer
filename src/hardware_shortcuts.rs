@@ -186,7 +186,7 @@ pub fn event_matches_chord(event: &egui::Event, chord: &KeyChord) -> Option<bool
     (key_matches && (!*pressed || modifiers_match)).then_some(*pressed)
 }
 
-fn egui_key_code(key: egui::Key) -> Option<&'static str> {
+pub(crate) fn egui_key_code(key: egui::Key) -> Option<&'static str> {
     use egui::Key;
     Some(match key {
         Key::A => "KeyA",

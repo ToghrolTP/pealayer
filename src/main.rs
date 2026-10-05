@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 pub mod app;
+pub mod application_shortcuts;
 pub mod cli;
 pub mod config;
 pub mod diagnostics;

@@ -459,6 +459,7 @@ pub struct AppConfig {
     /// Master policy for built-in transport shortcuts and local hardware
     /// bindings while the Pealayer window has keyboard focus.
     pub keyboard_shortcuts_enabled: bool,
+    pub application_shortcuts: crate::application_shortcuts::ApplicationShortcuts,
     /// Allows bindings explicitly marked global to be registered with the OS
     /// and invoked while another application has focus.
     pub global_hardware_hotkeys_enabled: bool,
@@ -614,6 +615,7 @@ impl Default for AppConfig {
             live_pwm_updates: true,
             hardware_actions_on_press: true,
             keyboard_shortcuts_enabled: true,
+            application_shortcuts: crate::application_shortcuts::ApplicationShortcuts::default(),
             global_hardware_hotkeys_enabled: true,
             hardware_key_bindings: Vec::new(),
             show_estop_control: true,
@@ -1564,6 +1566,7 @@ impl AppConfig {
                 return Err(format!("workspace profile icon is invalid: {id}"));
             }
         }
+        self.application_shortcuts.validate()?;
         if self.hardware_key_bindings.len() > 512 {
             return Err("hardware_key_bindings contains more than 512 bindings".to_string());
         }
