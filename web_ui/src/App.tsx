@@ -175,14 +175,15 @@ const App: React.FC = () => {
 
   const accentColor = resolvedAccent(runtime, appConfig);
   const accentTextColor = accentForeground(accentColor);
+  const paletteName = appConfig?.color_palette === 'native' ? 'native' : 'studio';
+  const palette = palettes[paletteName][resolvedTheme];
 
   useLayoutEffect(() => {
-    const name = appConfig?.color_palette === 'native' ? 'native' : 'studio';
-    document.documentElement.dataset.palette = name;
-    for (const [role, value] of Object.entries(palettes[name][resolvedTheme])) {
+    document.documentElement.dataset.palette = paletteName;
+    for (const [role, value] of Object.entries(palette)) {
       document.documentElement.style.setProperty(`--${role}`, value);
     }
-  }, [appConfig?.color_palette, resolvedTheme]);
+  }, [paletteName, palette]);
 
   useEffect(() => {
     document.documentElement.style.setProperty('--accent', accentColor);
@@ -463,25 +464,27 @@ const App: React.FC = () => {
         token: {
           colorPrimary: accentColor,
           colorTextLightSolid: accentTextColor,
-          colorInfo: '#68a7ff',
-          colorSuccess: '#38d27a',
-          colorWarning: '#f3b954',
-          colorError: '#ff5c68',
-          colorBgContainer: 'var(--surface-1)',
-          colorBgElevated: 'var(--surface-1)',
-          colorBgBase: 'var(--canvas)',
-          colorBorder: 'var(--line)',
-          colorText: 'var(--text)',
-          colorTextSecondary: 'var(--muted)',
+          // Ant Design derives additional colors from these tokens. Supply
+          // actual RGB values, not CSS var() strings its color math cannot parse.
+          colorInfo: palette.blue,
+          colorSuccess: palette.green,
+          colorWarning: palette.amber,
+          colorError: palette.red,
+          colorBgContainer: palette['surface-1'],
+          colorBgElevated: palette['surface-1'],
+          colorBgBase: palette.canvas,
+          colorBorder: palette.line,
+          colorText: palette.text,
+          colorTextSecondary: palette.muted,
           borderRadius: 9,
           fontFamily: `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif`,
         },
         components: {
           Modal: {
-            contentBg: 'var(--surface-1)',
+            contentBg: palette['surface-1'],
             headerBg: 'transparent',
             footerBg: 'transparent',
-            titleColor: 'var(--text)',
+            titleColor: palette.text,
           },
         },
       }}
