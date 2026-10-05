@@ -71,6 +71,14 @@ pub struct UpdateManifest {
     pub sha256: String,
     pub size: u64,
     pub artifact_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub libmpv_runtime: Option<LibmpvRuntimeIdentity>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LibmpvRuntimeIdentity {
+    pub file_name: String,
+    pub sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +91,8 @@ pub struct BeginUploadRequest {
     pub platform: Option<String>,
     #[serde(default)]
     pub arch: Option<String>,
+    #[serde(default)]
+    pub libmpv_runtime: Option<LibmpvRuntimeIdentity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -193,6 +203,10 @@ impl UpdateManager {
                 std::env::consts::ARCH
             ));
         }
+        validate_libmpv_compatibility(
+            request.libmpv_runtime.as_ref(),
+            adjacent_libmpv_runtime_identity()?.as_ref(),
+        )?;
 
         let mut inner = self
             .inner
@@ -641,6 +655,10 @@ fn resolve_update_source(
                 std::env::consts::ARCH
             ));
         }
+        validate_libmpv_compatibility(
+            manifest.libmpv_runtime.as_ref(),
+            adjacent_libmpv_runtime_identity()?.as_ref(),
+        )?;
         let artifact = base
             .join(&manifest.artifact_url)
             .map_err(|error| format!("resolve manifest artifact URL: {error}"))?;
@@ -823,6 +841,7 @@ pub fn current_manifest() -> Result<UpdateManifest, String> {
         sha256: sha256_file(&executable)?,
         size: metadata.len(),
         artifact_url: "/api/update/artifact".to_string(),
+        libmpv_runtime: adjacent_libmpv_runtime_identity()?,
     })
 }
 
@@ -850,6 +869,7 @@ pub fn push_current_to_peer(target: &str) -> Result<UpdateStatus, String> {
         version: Some(manifest.version.clone()),
         platform: Some(manifest.platform.clone()),
         arch: Some(manifest.arch.clone()),
+        libmpv_runtime: manifest.libmpv_runtime.clone(),
     };
     let mut status: UpdateStatus = client
         .post(format!("{target}/api/update/begin"))
@@ -1547,6 +1567,45 @@ fn short_sha(value: &str) -> &str {
     value.get(..12).unwrap_or(value)
 }
 
+fn adjacent_libmpv_runtime_identity() -> Result<Option<LibmpvRuntimeIdentity>, String> {
+    if !cfg!(windows) {
+        return Ok(None);
+    }
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let directory = executable
+        .parent()
+        .ok_or_else(|| "current executable has no parent directory".to_string())?;
+    for file_name in ["libmpv-2.dll", "mpv-2.dll"] {
+        let path = directory.join(file_name);
+        if path.is_file() {
+            return Ok(Some(LibmpvRuntimeIdentity {
+                file_name: file_name.to_string(),
+                sha256: sha256_file(&path)?,
+            }));
+        }
+    }
+    Ok(None)
+}
+
+fn validate_libmpv_compatibility(
+    incoming: Option<&LibmpvRuntimeIdentity>,
+    installed: Option<&LibmpvRuntimeIdentity>,
+) -> Result<(), String> {
+    let (Some(incoming), Some(installed)) = (incoming, installed) else {
+        return Ok(());
+    };
+    if incoming.sha256.eq_ignore_ascii_case(&installed.sha256) {
+        return Ok(());
+    }
+    Err(format!(
+        "update libmpv runtime {} ({}) does not match this host's {} ({}); use a build produced for this host profile",
+        incoming.file_name,
+        short_sha(&incoming.sha256),
+        installed.file_name,
+        short_sha(&installed.sha256)
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1614,6 +1673,21 @@ mod tests {
     #[test]
     fn current_executable_matches_host_platform() {
         inspect_executable(&std::env::current_exe().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn peer_updates_reject_a_different_libmpv_runtime_profile() {
+        let incoming = LibmpvRuntimeIdentity {
+            file_name: "libmpv-2.dll".to_string(),
+            sha256: "a".repeat(64),
+        };
+        let installed = LibmpvRuntimeIdentity {
+            file_name: "libmpv-2.dll".to_string(),
+            sha256: "b".repeat(64),
+        };
+        let error = validate_libmpv_compatibility(Some(&incoming), Some(&installed)).unwrap_err();
+        assert!(error.contains("use a build produced for this host profile"));
+        assert!(validate_libmpv_compatibility(Some(&installed), Some(&installed)).is_ok());
     }
 
     #[test]

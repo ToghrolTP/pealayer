@@ -2,6 +2,7 @@
 param(
     [switch]$DebugBuild,
     [switch]$BuildOnly,
+    [string]$LibmpvDirectory,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ApplicationArguments
 )
@@ -14,6 +15,7 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 }
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'libmpv-windows.ps1')
 Set-Location -LiteralPath $repositoryRoot
 $cargoTargetDirectory = if ($env:CARGO_TARGET_DIR) {
     if ([System.IO.Path]::IsPathRooted($env:CARGO_TARGET_DIR)) {
@@ -43,58 +45,17 @@ if ($rustBin) {
     $env:Path = $rustBin + ';' + $env:Path
 }
 
-$libmpvSourceDirectory = if ($env:LIBMPV_DIR) {
-    $env:LIBMPV_DIR
-} else {
-    Join-Path $env:ProgramFiles 'MPV'
-}
-$libmpvDirectory = $libmpvSourceDirectory
-
 $rustHost = (& rustc -vV | Select-String '^host:' | ForEach-Object { $_.Line.Substring(5).Trim() })
 if (-not $rustHost) { throw 'Could not determine the native Rust host triple.' }
-$importLibraryNames = if ($rustHost -like '*-msvc') {
-    @('mpv.lib')
-} else {
-    @('libmpv.dll.a', 'libmpv.a')
-}
-$libmpvImportLibrary = $importLibraryNames |
-    ForEach-Object { Join-Path $libmpvSourceDirectory $_ } |
-    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-    Select-Object -First 1
-if (-not $libmpvImportLibrary -and $rustHost -like '*-msvc') {
-    $gnuImportLibrary = Join-Path $libmpvSourceDirectory 'libmpv.dll.a'
-    if (Test-Path -LiteralPath $gnuImportLibrary -PathType Leaf) {
-        $libmpvDirectory = Join-Path $cargoTargetDirectory 'mpv-msvc-import'
-        New-Item -ItemType Directory -Force -Path $libmpvDirectory | Out-Null
-        $libmpvImportLibrary = Join-Path $libmpvDirectory 'mpv.lib'
-        Copy-Item -LiteralPath $gnuImportLibrary -Destination $libmpvImportLibrary -Force
-    }
-}
-if (-not $libmpvImportLibrary) {
-    throw "Required libmpv import library for $rustHost is missing. Expected one of: $($importLibraryNames -join ', ') in $libmpvSourceDirectory"
-}
-$libmpvRuntime = @('libmpv-2.dll', 'mpv-2.dll') |
-    ForEach-Object { Join-Path $libmpvSourceDirectory $_ } |
-    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-    Select-Object -First 1
-if (-not $libmpvRuntime) {
-    throw "Required libmpv runtime is missing. Expected libmpv-2.dll or mpv-2.dll in $libmpvDirectory"
-}
-foreach ($requiredPath in @($libmpvImportLibrary, $libmpvRuntime)) {
-    if (-not (Test-Path -LiteralPath $requiredPath)) {
-        throw "Required libmpv file is missing: $requiredPath"
-    }
-}
+$libmpv = Resolve-PealayerLibmpv -RepositoryRoot $repositoryRoot -RustHost $rustHost -ExplicitDirectory $LibmpvDirectory
+$libmpvSourceDirectory = $libmpv.SourceDirectory
+$libmpvDirectory = $libmpv.LinkDirectory
+$libmpvImportLibrary = $libmpv.ImportLibrary
+$libmpvRuntime = $libmpv.RuntimeLibrary
+Save-PealayerWindowsHostProfile -RepositoryRoot $repositoryRoot -Resolution $libmpv -PersistUserEnvironment | Out-Null
+Set-PealayerLibmpvBuildEnvironment -Resolution $libmpv
 
 $cargo = Get-Command cargo -ErrorAction Stop
-$env:Path = $libmpvDirectory + ';' + $env:Path
-$linkFlag = "-Lnative=$libmpvDirectory"
-if ($env:CARGO_ENCODED_RUSTFLAGS) {
-    $env:CARGO_ENCODED_RUSTFLAGS += [char]0x1f + $linkFlag
-} else {
-    $env:CARGO_ENCODED_RUSTFLAGS = $linkFlag
-}
-
 $cargoArguments = @('build', '--locked')
 $profileDirectory = 'debug'
 if (-not $DebugBuild) {

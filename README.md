@@ -435,20 +435,19 @@ brew install mpv pkg-config
 
 ### 2. Windows Setup (Native & Cross-Compilation)
 
-Because Pealayer links against `libmpv`, you must supply a matching import library (`libmpv.dll.a` for the GNU toolchain or `mpv.lib` for MSVC) and `libmpv-2.dll`:
+Because Pealayer links against `libmpv`, every Windows host must have a complete, matching development package: an import library (`libmpv.dll.a` for the GNU toolchain or `mpv.lib` for MSVC) plus `libmpv-2.dll`. Do not assume that a package built on one workstation is suitable for another workstation whose libmpv DLL differs.
 
 1. Download the 64-bit `mpv-dev` package (from [shinchiro/mpv-winbuild-cmake releases](https://sourceforge.net/projects/mpv-player-windows/files/libmpv/) or [zhongfly/mpv-winbuild releases](https://github.com/zhongfly/mpv-winbuild/releases)).
-2. **Native Build**:
+2. **Configure each native Windows host once**:
    ```powershell
-   # Point cargo linker to the extracted mpv-dev folder
-   $env:RUSTFLAGS="-L native=C:\path\to\mpv-dev"
-
-   # Compile and launch
-   cargo run --release
+   # Auto-detect %ProgramFiles%\MPV, or pass the exact extracted directory.
+   .\scripts\configure-windows-host.ps1
+   .\scripts\configure-windows-host.ps1 -LibmpvDirectory 'D:\dependencies\mpv-dev'
    ```
-3. Place `libmpv-2.dll` directly next to `pealayer.exe` (or add it to your system `%PATH%`).
+   The command validates and fingerprints both files, persists the source directory as the user's `LIBMPV_DIR`, adds the runtime directory to the user's `PATH`, writes `%LOCALAPPDATA%\Programs\Pealayer\config\windows-build-host.json`, and creates an ignored repository-local `.cargo/config.toml`. Consequently a fresh shell or agent can run focused `cargo test` commands without rediscovering `mpv.lib` or manually setting linker flags.
+3. Use `build.cmd` or `scripts\run-windows.ps1`; both use the same resolver, refresh the host profile, and place that host's `libmpv-2.dll` next to the produced executable.
 
-For a machine-wide installation at `%ProgramFiles%\MPV`, set `LIBMPV_DIR` to that directory (or rely on the script's default) and use the checked-in launcher:
+For a machine-wide installation at `%ProgramFiles%\MPV`, the resolver uses that directory by default. An explicit `-LibmpvDirectory` always wins, followed by the process environment, saved host profile, user environment, machine environment, and finally the Program Files default:
 
 ```powershell
 # Build the locked release profile, copy libmpv beside the executable, and start Pealayer.
@@ -459,9 +458,12 @@ For a machine-wide installation at `%ProgramFiles%\MPV`, set `LIBMPV_DIR` to tha
 
 # Use the debug profile when iterating locally.
 .\scripts\run-windows.ps1 -DebugBuild
+
+# Inspect the durable machine-readable profile.
+Get-Content "$env:LOCALAPPDATA\Programs\Pealayer\config\windows-build-host.json"
 ```
 
-For the canonical tested Windows package, run `build.cmd`. The one Windows checkout lives at `%LOCALAPPDATA%\Programs\Pealayer\source\Pealayer` and the script mirrors PCController's stable layout by publishing the real files `%LOCALAPPDATA%\Programs\Pealayer\bin\pealayer.exe`, `libmpv-2.dll`, and `host-manifest.json` (no hashed package directory and no `bin` junction). Outside that canonical layout it falls back to a repository-local `bin` for contributor builds. Tests and Win32 resources are verified before UPX 5.2 packages the executable with `--best --lzma`; `upx -t` and a packed libmpv smoke test must then pass. Use `build.cmd -NoUpx` only when an unpacked diagnostic binary is intentionally required, or `build.cmd -SkipTests` for a measured incremental package rebuild.
+For the canonical tested Windows package, run `build.cmd`. The one Windows checkout lives at `%LOCALAPPDATA%\Programs\Pealayer\source\Pealayer` and the script mirrors PCController's stable layout by publishing the real files `%LOCALAPPDATA%\Programs\Pealayer\bin\pealayer.exe`, `libmpv-2.dll`, and `host-manifest.json` (no hashed package directory and no `bin` junction). Outside that canonical layout it falls back to a repository-local `bin` for contributor builds. The manifest records the computer name plus exact import-library and runtime-DLL paths, sizes, versions, and SHA-256 hashes, so DAVID-PC and CAFE-PC are represented as separate verified host builds rather than one ambiguous Windows artifact. Peer updates advertise the adjacent runtime hash and reject an executable packaged for a different libmpv profile. Tests and Win32 resources are verified before UPX 5.2 packages the executable with `--best --lzma`; `upx -t` and a packed libmpv smoke test must then pass. Use `build.cmd -NoUpx` only when an unpacked diagnostic binary is intentionally required, or `build.cmd -SkipTests` for a measured incremental package rebuild.
 
 The lower-level launcher accepts additional application arguments after its switches and keeps Cargo output under this repository's `target` directory. It uses `CARGO_ENCODED_RUSTFLAGS` so installation paths containing spaces are passed to `rustc` correctly.
 

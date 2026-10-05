@@ -3,7 +3,8 @@ param(
     [switch]$NoUpx,
     [switch]$SkipTests,
     [switch]$Run,
-    [string]$Branding
+    [string]$Branding,
+    [string]$LibmpvDirectory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,6 +24,7 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 }
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'libmpv-windows.ps1')
 if ($Branding) {
     $resolvedBranding = (Resolve-Path -LiteralPath $Branding -ErrorAction Stop).Path
     $brandDocument = Get-Content -Raw -LiteralPath $resolvedBranding | ConvertFrom-Json
@@ -67,40 +69,15 @@ $outputDirectory = if ((Split-Path -Leaf $sourceDirectory) -ieq 'source') {
 } else {
     Join-Path $repositoryRoot 'bin'
 }
-$libmpvSourceDirectory = if ($env:LIBMPV_DIR) { $env:LIBMPV_DIR } else { Join-Path $env:ProgramFiles 'MPV' }
-$libmpvDirectory = $libmpvSourceDirectory
 $rustHost = (& rustc -vV | Select-String '^host:' | ForEach-Object { $_.Line.Substring(5).Trim() })
 if (-not $rustHost) { throw 'Could not determine the native Rust host triple.' }
-$importLibraryNames = if ($rustHost -like '*-msvc') { @('mpv.lib') } else { @('libmpv.dll.a', 'libmpv.a') }
-$libmpvImportLibrary = $importLibraryNames |
-    ForEach-Object { Join-Path $libmpvSourceDirectory $_ } |
-    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-    Select-Object -First 1
-if (-not $libmpvImportLibrary -and $rustHost -like '*-msvc') {
-    $gnuImportLibrary = Join-Path $libmpvSourceDirectory 'libmpv.dll.a'
-    if (Test-Path -LiteralPath $gnuImportLibrary -PathType Leaf) {
-        $libmpvDirectory = Join-Path $cargoTargetDirectory 'mpv-msvc-import'
-        New-Item -ItemType Directory -Force -Path $libmpvDirectory | Out-Null
-        $libmpvImportLibrary = Join-Path $libmpvDirectory 'mpv.lib'
-        Copy-Item -LiteralPath $gnuImportLibrary -Destination $libmpvImportLibrary -Force
-    }
-}
-if (-not $libmpvImportLibrary) {
-    throw "Required libmpv import library for $rustHost is missing. Expected one of: $($importLibraryNames -join ', ') in $libmpvSourceDirectory"
-}
-$libmpvRuntime = @('libmpv-2.dll', 'mpv-2.dll') |
-    ForEach-Object { Join-Path $libmpvSourceDirectory $_ } |
-    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-    Select-Object -First 1
-if (-not $libmpvRuntime) {
-    throw "Required libmpv runtime is missing. Expected libmpv-2.dll or mpv-2.dll in $libmpvDirectory"
-}
-if ($libmpvDirectory -ne $libmpvSourceDirectory) {
-    $stagedRuntime = Join-Path $libmpvDirectory 'libmpv-2.dll'
-    Copy-Item -LiteralPath $libmpvRuntime -Destination $stagedRuntime -Force
-    $libmpvRuntime = $stagedRuntime
-}
-$env:Path = $libmpvDirectory + ';' + $env:Path
+$libmpv = Resolve-PealayerLibmpv -RepositoryRoot $repositoryRoot -RustHost $rustHost -ExplicitDirectory $LibmpvDirectory
+$libmpvSourceDirectory = $libmpv.SourceDirectory
+$libmpvDirectory = $libmpv.LinkDirectory
+$libmpvImportLibrary = $libmpv.ImportLibrary
+$libmpvRuntime = $libmpv.RuntimeLibrary
+$hostProfile = Save-PealayerWindowsHostProfile -RepositoryRoot $repositoryRoot -Resolution $libmpv -PersistUserEnvironment
+Set-PealayerLibmpvBuildEnvironment -Resolution $libmpv
 $upxCommand = Get-Command upx.exe -ErrorAction SilentlyContinue
 $upxPath = if ($upxCommand) { $upxCommand.Source } else { $null }
 if (-not $upxPath) {
@@ -111,14 +88,6 @@ if (-not $upxPath) {
 }
 
 if (-not $SkipTests) {
-    $env:LIBMPV_DIR = $libmpvDirectory
-    $separator = [char]0x1f
-    $linkFlag = "-Lnative=$libmpvDirectory"
-    if ($env:CARGO_ENCODED_RUSTFLAGS) {
-        $env:CARGO_ENCODED_RUSTFLAGS += $separator + $linkFlag
-    } else {
-        $env:CARGO_ENCODED_RUSTFLAGS = $linkFlag
-    }
     & cargo test --locked --jobs 1
     if ($LASTEXITCODE -ne 0) { throw "cargo test failed with exit code $LASTEXITCODE" }
 }
@@ -138,7 +107,7 @@ if (Test-Path -LiteralPath $webUiPackage -PathType Leaf) {
     }
 }
 
-& (Join-Path $PSScriptRoot 'run-windows.ps1') -BuildOnly
+& (Join-Path $PSScriptRoot 'run-windows.ps1') -BuildOnly -LibmpvDirectory $libmpvSourceDirectory
 
 New-Item -ItemType Directory -Force -Path $stagingDirectory,$outputDirectory | Out-Null
 $effectiveExecutableName = if ($env:APP_EXECUTABLE_NAME) {
@@ -229,6 +198,16 @@ $manifest = [ordered]@{
     git_dirty = [bool](& git -C $repositoryRoot status --porcelain)
     built_at_utc = [DateTime]::UtcNow.ToString('o')
     target = (& rustc -vV | Select-String '^host:' | ForEach-Object { $_.Line.Substring(5).Trim() })
+    build_host = [ordered]@{
+        computer_name = $env:COMPUTERNAME
+        profile = $hostProfile.ProfilePath
+        libmpv_source_directory = $libmpvSourceDirectory
+        libmpv_link_directory = $libmpvDirectory
+        resolution_source = $libmpv.ResolutionSource
+        import_library = Get-PealayerFileIdentity -Path $libmpvImportLibrary
+        import_source = Get-PealayerFileIdentity -Path $libmpv.ImportSource
+        runtime = Get-PealayerFileIdentity -Path $libmpvRuntime
+    }
     identity = [ordered]@{
         format = 'application-brand'
         application_name = $resource.ProductName
