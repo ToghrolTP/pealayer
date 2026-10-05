@@ -237,6 +237,9 @@ fn main() -> eframe::Result {
     crate::platform::windows::configure_live_video_during_window_move(
         launch_config.live_video_during_window_move,
     );
+    crate::platform::windows::configure_compositor_paced_window_move(
+        launch_config.compositor_paced_window_move,
+    );
     let initial_window_title = app_name.clone();
     let icon_data = crate::config::resolved_app_icon(&launch_config)
         .and_then(|path| std::fs::read(path).ok())
@@ -305,6 +308,7 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let loaded_config = launch_config.clone();
+            crate::platform::windows::start_window_move_frame_pump(cc.egui_ctx.clone());
             crate::ui::i18n::configure_ui_fonts(
                 &cc.egui_ctx,
                 language == crate::config::AppLanguage::Persian,
@@ -398,12 +402,14 @@ fn main() -> eframe::Result {
 
             let egui_ctx = cc.egui_ctx.clone();
             render_context.set_update_callback(move || {
-                // WM_PAINT continues to be dispatched by winit inside the
-                // Windows move/resize modal loop. Let the decoder frame stream
-                // drive that paint at the media's natural cadence so playback
-                // remains live. The old frozen-frame behavior remains an
-                // explicit compatibility preference for problematic drivers.
-                if crate::platform::windows::native_window_video_rendering_allowed() {
+                // Outside a native move, the decoder remains the most efficient
+                // repaint clock. During WM_ENTERSIZEMOVE, the dedicated DWM
+                // pump presents the newest decoded frame at compositor cadence;
+                // allowing this media-rate callback to inject extra paints
+                // would recreate the uneven 24/25/30 Hz pointer lag.
+                if crate::platform::windows::native_window_video_rendering_allowed()
+                    && !crate::platform::windows::native_window_compositor_pacing_active()
+                {
                     egui_ctx.request_repaint();
                 }
             });
@@ -835,6 +841,7 @@ fn main() -> eframe::Result {
                 windows_dwm_theming: loaded_config.windows_dwm_theming,
                 opengl_vsync: loaded_config.opengl_vsync,
                 live_video_during_window_move: loaded_config.live_video_during_window_move,
+                compositor_paced_window_move: loaded_config.compositor_paced_window_move,
                 native_dialog_windows: loaded_config.native_dialog_windows,
                 native_preferences: None,
                 status_bar: loaded_config.status_bar,

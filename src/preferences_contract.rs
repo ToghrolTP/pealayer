@@ -858,6 +858,18 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             );
             control
         },
+        {
+            let mut control = PreferenceControl::boolean(
+                "compositor_paced_window_move",
+                "advanced",
+                "Windows graphics and composition",
+                "Use compositor-paced window movement",
+            );
+            control.description = Some(
+                "Synchronize live move/resize repaints to DWM only while the window is being dragged, independent of the media frame rate.",
+            );
+            control
+        },
         PreferenceControl::boolean(
             "native_dialog_windows",
             "advanced",
@@ -1184,6 +1196,7 @@ mod tests {
     fn live_video_during_native_window_movement_is_enabled_and_configurable() {
         let config = crate::config::AppConfig::default();
         assert!(config.live_video_during_window_move);
+        assert!(config.compositor_paced_window_move);
         let controls = preference_controls(&config);
         let control = controls
             .iter()
@@ -1197,6 +1210,12 @@ mod tests {
                 .description
                 .is_some_and(|description| description.contains("compatibility fallback"))
         );
+        let pacing = controls
+            .iter()
+            .find(|control| control.key == "compositor_paced_window_move")
+            .expect("compositor-paced movement preference");
+        assert!(matches!(pacing.kind, PreferenceControlKind::Boolean));
+        assert_eq!(pacing.group, "Windows graphics and composition");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use std::sync::{
-    Mutex,
+    Mutex, OnceLock,
     atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering},
 };
 
@@ -139,6 +139,9 @@ static WINDOW_MICA_BACKDROP: AtomicBool = AtomicBool::new(false);
 static WINDOW_MOVE_RESIZE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static WINDOW_MOVE_RESIZE_ENDED: AtomicBool = AtomicBool::new(false);
 static WINDOW_LIVE_VIDEO_DURING_MOVE: AtomicBool = AtomicBool::new(true);
+static WINDOW_COMPOSITOR_PACED_MOVE: AtomicBool = AtomicBool::new(true);
+static WINDOW_MOVE_FRAME_PUMP_STARTED: AtomicBool = AtomicBool::new(false);
+static WINDOW_MOVE_FRAME_PUMP_THREAD: OnceLock<std::thread::Thread> = OnceLock::new();
 static SIMPLE_VIDEO_ASPECT_ENABLED: AtomicBool = AtomicBool::new(false);
 static SIMPLE_VIDEO_ASPECT_BITS: AtomicU64 = AtomicU64::new(0);
 static SIMPLE_VIDEO_CHROME_WIDTH: AtomicI32 = AtomicI32::new(0);
@@ -935,6 +938,7 @@ fn observe_native_window_message(message: u32) {
     // an old snapped coordinate during the next drag.
     reset_window_magnetic_drag();
     WINDOW_MOVE_RESIZE_ACTIVE.store(active, Ordering::Release);
+    wake_window_move_frame_pump();
     if !active {
         // Playback callbacks are intentionally suppressed during the modal
         // move loop. Arrange one final paint so a paused frame and any queued
@@ -949,6 +953,12 @@ pub fn native_window_operation_active() -> bool {
 
 pub fn configure_live_video_during_window_move(enabled: bool) {
     WINDOW_LIVE_VIDEO_DURING_MOVE.store(enabled, Ordering::Release);
+    wake_window_move_frame_pump();
+}
+
+pub fn configure_compositor_paced_window_move(enabled: bool) {
+    WINDOW_COMPOSITOR_PACED_MOVE.store(enabled, Ordering::Release);
+    wake_window_move_frame_pump();
 }
 
 fn video_rendering_allowed_during_window_operation(active: bool, enabled: bool) -> bool {
@@ -966,6 +976,74 @@ pub fn native_window_video_rendering_allowed() -> bool {
         WINDOW_LIVE_VIDEO_DURING_MOVE.load(Ordering::Acquire),
     )
 }
+
+pub fn native_window_compositor_pacing_active() -> bool {
+    compositor_move_frame_pump_active(
+        WINDOW_MOVE_RESIZE_ACTIVE.load(Ordering::Acquire),
+        WINDOW_LIVE_VIDEO_DURING_MOVE.load(Ordering::Acquire),
+        WINDOW_COMPOSITOR_PACED_MOVE.load(Ordering::Acquire),
+    )
+}
+
+fn compositor_move_frame_pump_active(active: bool, live_video: bool, paced: bool) -> bool {
+    active && live_video && paced
+}
+
+fn wake_window_move_frame_pump() {
+    if let Some(thread) = WINDOW_MOVE_FRAME_PUMP_THREAD.get() {
+        thread.unpark();
+    }
+}
+
+/// Request native window redraws at the DWM composition cadence while Windows
+/// owns the modal title-bar move/resize loop. Media-frame callbacks are often
+/// 24/25/30 Hz and arrive at uneven points relative to a 60+ Hz desktop; using
+/// them as the only clock makes the complete window alternately catch and lag
+/// behind the pointer. DwmFlush supplies a monitor/compositor-paced wakeup on a
+/// dedicated thread, leaving the GUI thread available to process WM_MOVING.
+#[cfg(target_os = "windows")]
+pub fn start_window_move_frame_pump(egui_ctx: eframe::egui::Context) {
+    if WINDOW_MOVE_FRAME_PUMP_STARTED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    let spawn_result = std::thread::Builder::new()
+        .name("pealayer-dwm-frame-pump".to_string())
+        .spawn(move || {
+            let current = std::thread::current();
+            let _ = WINDOW_MOVE_FRAME_PUMP_THREAD.set(current.clone());
+            loop {
+                while compositor_move_frame_pump_active(
+                    WINDOW_MOVE_RESIZE_ACTIVE.load(Ordering::Acquire),
+                    WINDOW_LIVE_VIDEO_DURING_MOVE.load(Ordering::Acquire),
+                    WINDOW_COMPOSITOR_PACED_MOVE.load(Ordering::Acquire),
+                ) {
+                    let wait_started = std::time::Instant::now();
+                    let synchronized = unsafe { windows::Win32::Graphics::Dwm::DwmFlush() }.is_ok();
+                    egui_ctx.request_repaint();
+                    if !synchronized || wait_started.elapsed() < std::time::Duration::from_millis(2)
+                    {
+                        // DWM composition is normally mandatory on supported
+                        // Windows releases. Preserve a bounded 120 Hz fallback
+                        // for remote/compatibility environments, and prevent a
+                        // driver that returns immediately from causing a CPU
+                        // spin while the user holds the title bar.
+                        std::thread::park_timeout(std::time::Duration::from_millis(8));
+                    }
+                }
+                std::thread::park();
+            }
+        });
+    if let Err(error) = spawn_result {
+        log::warn!("failed to start DWM window-move frame pump: {error}");
+        WINDOW_MOVE_FRAME_PUMP_STARTED.store(false, Ordering::Release);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn start_window_move_frame_pump(_egui_ctx: eframe::egui::Context) {}
 
 pub fn take_native_window_operation_ended() -> bool {
     WINDOW_MOVE_RESIZE_ENDED.swap(false, Ordering::AcqRel)
@@ -2251,6 +2329,10 @@ mod tests {
         assert!(!video_rendering_allowed_during_window_operation(
             true, false
         ));
+        assert!(compositor_move_frame_pump_active(true, true, true));
+        assert!(!compositor_move_frame_pump_active(false, true, true));
+        assert!(!compositor_move_frame_pump_active(true, false, true));
+        assert!(!compositor_move_frame_pump_active(true, true, false));
     }
 
     fn rect(left: i32, top: i32, right: i32, bottom: i32) -> SizingRect {

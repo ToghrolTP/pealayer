@@ -472,6 +472,7 @@ pub struct PealayerApp {
     pub(crate) windows_dwm_theming: bool,
     pub(crate) opengl_vsync: bool,
     pub(crate) live_video_during_window_move: bool,
+    pub(crate) compositor_paced_window_move: bool,
     pub(crate) native_dialog_windows: bool,
     pub(crate) native_preferences: Option<crate::ui::preferences::NativePreferencesController>,
     pub(crate) status_bar: crate::config::StatusBarConfig,
@@ -4895,6 +4896,7 @@ impl PealayerApp {
         cfg.windows_dwm_theming = self.windows_dwm_theming;
         cfg.opengl_vsync = self.opengl_vsync;
         cfg.live_video_during_window_move = self.live_video_during_window_move;
+        cfg.compositor_paced_window_move = self.compositor_paced_window_move;
         cfg.native_dialog_windows = self.native_dialog_windows;
         cfg.auto_reload_config = self.auto_reload_config;
         cfg.status_bar = self.status_bar;
@@ -5094,6 +5096,7 @@ impl PealayerApp {
         self.windows_dwm_theming = config.windows_dwm_theming;
         self.opengl_vsync = config.opengl_vsync;
         self.live_video_during_window_move = config.live_video_during_window_move;
+        self.compositor_paced_window_move = config.compositor_paced_window_move;
         self.native_dialog_windows = config.native_dialog_windows;
         self.auto_reload_config = config.auto_reload_config;
         self.status_bar = config.status_bar;
@@ -5112,6 +5115,9 @@ impl PealayerApp {
         );
         crate::platform::windows::configure_live_video_during_window_move(
             self.live_video_during_window_move,
+        );
+        crate::platform::windows::configure_compositor_paced_window_move(
+            self.compositor_paced_window_move,
         );
         if let Some(layout_json) = config.workspace_dock_layout.as_deref()
             && let Ok(mut dock_state) = serde_json::from_str::<
@@ -6351,6 +6357,7 @@ impl Default for PealayerApp {
             windows_dwm_theming: true,
             opengl_vsync: false,
             live_video_during_window_move: true,
+            compositor_paced_window_move: true,
             native_dialog_windows: true,
             native_preferences: None,
             status_bar: crate::config::StatusBarConfig::default(),

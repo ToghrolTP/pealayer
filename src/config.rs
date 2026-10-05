@@ -483,6 +483,10 @@ pub struct AppConfig {
     /// move/resize loop. Disable this only as a compatibility fallback for a
     /// graphics driver that cannot present smoothly during native movement.
     pub live_video_during_window_move: bool,
+    /// Pace live move/resize repaint requests to the Windows desktop
+    /// compositor instead of the media frame rate. This is ignored on other
+    /// platforms and while live video movement is disabled.
+    pub compositor_paced_window_move: bool,
     pub native_dialog_windows: bool,
     pub auto_reload_config: bool,
     pub status_bar: StatusBarConfig,
@@ -618,6 +622,9 @@ impl Default for AppConfig {
             // is active. Keep the decoder frame callback driving those paints;
             // only redundant property wakeups are suppressed during the drag.
             live_video_during_window_move: true,
+            // A dedicated DWM-paced wakeup keeps 24/25/30 Hz media from
+            // fighting Windows' monitor-rate title-bar movement loop.
+            compositor_paced_window_move: true,
             // Preferences is an owned native tool window on Windows. Keep the
             // embedded implementation as a runtime fallback when process or
             // window creation is unavailable.
