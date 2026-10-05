@@ -43,7 +43,7 @@ try {
   await waitFor(s => !s.toasts.some(t => t.id === id));
   socket.send(JSON.stringify({ command: 'publish_toast', message: '', timeout_ms: 1 }));
   await new Promise(resolve => setTimeout(resolve, 200));
-  assert(received.some(frame => frame.error?.code === -32602));
+  assert(received.some(frame => frame.status === 'error' && frame.message?.includes('toast requires')));
   response = await fetch(`${origin}/api/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: '', timeout_ms: 1 }) });
   assert.equal(response.status, 400);
   native({ command: 'publish_toast', id, message: 'Expiry verification', timeout_ms: 500 });
