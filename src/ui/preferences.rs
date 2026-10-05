@@ -12,6 +12,13 @@ const PREFERENCE_ROW_GAP: f32 = 3.0;
 const PREFERENCE_COLUMN_GAP: f32 = 6.0;
 const PREFERENCE_CONTROL_MAX_WIDTH: f32 = 420.0;
 const PREFERENCE_CONTROL_MIN_WIDTH: f32 = 180.0;
+const REPLACEMENT_ARROW_WIDTH: f32 = 14.0;
+const REPLACEMENT_DELETE_WIDTH: f32 = 26.0;
+const REPLACEMENT_FIELD_MIN_WIDTH: f32 = 72.0;
+const REPLACEMENT_ROW_MIN_WIDTH: f32 = REPLACEMENT_ARROW_WIDTH
+    + REPLACEMENT_DELETE_WIDTH
+    + PREFERENCE_COLUMN_GAP * 3.0
+    + REPLACEMENT_FIELD_MIN_WIDTH * 2.0;
 
 pub(crate) struct NativePreferencesController {
     child: std::process::Child,
@@ -1071,7 +1078,11 @@ fn render_contract_control(
                             |ui| {
                                 ui.spacing_mut().item_spacing.x = PREFERENCE_COLUMN_GAP;
                                 let available = ui.available_width();
-                                let field_width = ((available - 54.0) / 2.0).max(72.0);
+                                let fixed_width = REPLACEMENT_ARROW_WIDTH
+                                    + REPLACEMENT_DELETE_WIDTH
+                                    + PREFERENCE_COLUMN_GAP * 3.0;
+                                let field_width = ((available - fixed_width) / 2.0)
+                                    .max(REPLACEMENT_FIELD_MIN_WIDTH);
                                 let from_align =
                                     crate::ui::i18n::input_alignment(rtl_ui, &item.from);
                                 let to_align = crate::ui::i18n::input_alignment(rtl_ui, &item.to);
@@ -1094,7 +1105,7 @@ fn render_contract_control(
                                     .changed();
                                 if ui
                                     .add_sized(
-                                        [26.0, PREFERENCE_ROW_HEIGHT],
+                                        [REPLACEMENT_DELETE_WIDTH, PREFERENCE_ROW_HEIGHT],
                                         egui::Button::new(crate::ui::icons::TRASH).frame(false),
                                     )
                                     .on_hover_text(tr("Remove replacement"))
@@ -1473,7 +1484,11 @@ fn preference_multiline_row<R>(
         }
     };
 
-    let Some(label_width) = inline_preference_label_width(width, desired_label_width) else {
+    let Some(label_width) =
+        inline_preference_label_width(width, desired_label_width).filter(|label_width| {
+            width - label_width - PREFERENCE_COLUMN_GAP >= REPLACEMENT_ROW_MIN_WIDTH
+        })
+    else {
         return ui
             .vertical(|ui| {
                 draw_label(ui);
@@ -1484,6 +1499,9 @@ fn preference_multiline_row<R>(
             .inner;
     };
 
+    let control_width = (width - label_width - PREFERENCE_COLUMN_GAP)
+        .max(PREFERENCE_CONTROL_MIN_WIDTH)
+        .min(PREFERENCE_CONTROL_MAX_WIDTH);
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = PREFERENCE_COLUMN_GAP;
         ui.vertical(|ui| {
@@ -1491,7 +1509,7 @@ fn preference_multiline_row<R>(
             draw_label(ui);
         });
         ui.vertical(|ui| {
-            ui.set_width(ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH));
+            ui.set_width(control_width);
             body(ui)
         })
         .inner
@@ -1766,6 +1784,16 @@ mod tests {
         assert!(replacement_branch.contains("preference_multiline_row("));
         assert!(replacement_branch.contains("PREFERENCE_ROW_HEIGHT"));
         assert!(replacement_branch.contains("description_rendered = true"));
+        let multiline_layout = source
+            .split_once("fn preference_multiline_row")
+            .expect("multiline preference layout helper")
+            .1
+            .split_once("fn preference_checkbox_row")
+            .expect("checkbox preference layout helper")
+            .0;
+        assert!(multiline_layout.contains("REPLACEMENT_ROW_MIN_WIDTH"));
+        assert!(multiline_layout.contains("width - label_width - PREFERENCE_COLUMN_GAP"));
+        assert!(multiline_layout.contains("ui.set_width(control_width)"));
     }
 
     #[test]
