@@ -5053,6 +5053,12 @@ impl PealayerApp {
         if let Err(error) = crate::mpv::proxy::apply_runtime(&self.mpv, playback.use_proxy, &self.open_url_proxy_url) { self.set_osd(error.to_string()); return; }
         let _ = self.mpv.set_property("options/user-agent", crate::remote_location::USER_AGENT);
         self.load_url(&playback.target);
+        // loadfile inherits MPV's pause flag. A browser Play/Next command must
+        // start the selected file even when the previous file was paused or
+        // kept open at EOF. Startup restoration applies its saved pause later.
+        let _ = self.mpv.set_property("pause", false);
+        self.is_paused = false;
+        self.engine_handle.is_playing.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn media_timeline_state(&self) -> crate::media::MediaTimelineState {
