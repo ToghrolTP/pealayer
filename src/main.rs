@@ -3,6 +3,7 @@
 pub mod app;
 pub mod cli;
 pub mod config;
+pub mod diagnostics;
 pub mod duration;
 pub mod four_d;
 pub mod hardware_shortcuts;
@@ -46,6 +47,7 @@ fn subtitle_font_directory() -> Option<std::path::PathBuf> {
 }
 
 fn main() -> eframe::Result {
+    crate::diagnostics::install_panic_reporter();
     let startup_args: Vec<String> = std::env::args().collect();
     if let Some(journal_path) = crate::update::helper_invocation(&startup_args) {
         if let Err(error) = crate::update::run_update_helper(journal_path) {
