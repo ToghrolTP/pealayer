@@ -390,7 +390,14 @@ fn main() -> eframe::Result {
 
             let egui_ctx = cc.egui_ctx.clone();
             render_context.set_update_callback(move || {
-                egui_ctx.request_repaint();
+                // Windows uses a modal non-client loop while moving/resizing a
+                // window. Flooding that loop with a decoder repaint for every
+                // video frame makes the window trail and jitter under the
+                // pointer. DWM can move the last composed frame smoothly; the
+                // app explicitly schedules a fresh paint on WM_EXITSIZEMOVE.
+                if !crate::platform::windows::native_window_operation_active() {
+                    egui_ctx.request_repaint();
+                }
             });
 
             let mut mpv_client = mpv_static.create_client(None).unwrap();
@@ -462,7 +469,9 @@ fn main() -> eframe::Result {
 
             let egui_ctx2 = cc.egui_ctx.clone();
             mpv_client.set_wakeup_callback(move || {
-                egui_ctx2.request_repaint();
+                if !crate::platform::windows::native_window_operation_active() {
+                    egui_ctx2.request_repaint();
+                }
             });
 
             let initial_volume = cli_options.volume.unwrap_or(loaded_config.volume);

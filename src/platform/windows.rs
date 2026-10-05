@@ -133,6 +133,8 @@ static WINDOW_HWND: AtomicIsize = AtomicIsize::new(0);
 static WINDOW_DARK_THEME: AtomicBool = AtomicBool::new(true);
 static WINDOW_DWM_THEMING: AtomicBool = AtomicBool::new(true);
 static WINDOW_MICA_BACKDROP: AtomicBool = AtomicBool::new(false);
+static WINDOW_MOVE_RESIZE_ACTIVE: AtomicBool = AtomicBool::new(false);
+static WINDOW_MOVE_RESIZE_ENDED: AtomicBool = AtomicBool::new(false);
 static ORIGINAL_WINDOW_PROC: AtomicIsize = AtomicIsize::new(0);
 static SHELL_COMMAND: AtomicU32 = AtomicU32::new(0);
 static SHELL_PAUSED: AtomicBool = AtomicBool::new(true);
@@ -301,6 +303,42 @@ pub fn register_window_hwnd(hwnd: isize) {
 
 pub fn get_registered_hwnd() -> isize {
     WINDOW_HWND.load(Ordering::SeqCst)
+}
+
+// WM_ENTERSIZEMOVE and WM_EXITSIZEMOVE are emitted by Windows around the
+// modal loop used for a native title-bar drag or border resize. Egui does not
+// receive a pointer-down event for the non-client title bar, so its drag state
+// alone cannot distinguish this operation from ordinary playback.
+const WM_ENTERSIZEMOVE_VALUE: u32 = 0x0231;
+const WM_EXITSIZEMOVE_VALUE: u32 = 0x0232;
+
+fn native_window_operation_transition(message: u32) -> Option<bool> {
+    match message {
+        WM_ENTERSIZEMOVE_VALUE => Some(true),
+        WM_EXITSIZEMOVE_VALUE => Some(false),
+        _ => None,
+    }
+}
+
+fn observe_native_window_message(message: u32) {
+    let Some(active) = native_window_operation_transition(message) else {
+        return;
+    };
+    WINDOW_MOVE_RESIZE_ACTIVE.store(active, Ordering::Release);
+    if !active {
+        // Playback callbacks are intentionally suppressed during the modal
+        // move loop. Arrange one final paint so a paused frame and any queued
+        // libmpv property events become visible immediately after release.
+        WINDOW_MOVE_RESIZE_ENDED.store(true, Ordering::Release);
+    }
+}
+
+pub fn native_window_operation_active() -> bool {
+    WINDOW_MOVE_RESIZE_ACTIVE.load(Ordering::Acquire)
+}
+
+pub fn take_native_window_operation_ended() -> bool {
+    WINDOW_MOVE_RESIZE_ENDED.swap(false, Ordering::AcqRel)
 }
 
 /// Hide the implementation viewport used by Web-only mode without stopping
@@ -881,6 +919,8 @@ unsafe extern "system" fn shell_window_proc(
     use windows::Win32::UI::WindowsAndMessaging::{
         CallWindowProcW, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_RBUTTONUP, WNDPROC,
     };
+
+    observe_native_window_message(message);
 
     if message == WM_TRAYICON {
         let mouse_message = lparam.0 as u32;
@@ -1536,6 +1576,26 @@ mod tests {
         assert_eq!(tray_menu_label(TRAY_CMD_MUTE, false), "Mute");
         assert_eq!(tray_menu_label(TRAY_CMD_OPEN, false), "Open Media...");
         assert_eq!(tray_menu_label(TRAY_CMD_EXIT, false), "Exit");
+    }
+
+    #[test]
+    fn native_move_resize_messages_gate_rendering_until_the_operation_ends() {
+        WINDOW_MOVE_RESIZE_ACTIVE.store(false, Ordering::Release);
+        WINDOW_MOVE_RESIZE_ENDED.store(false, Ordering::Release);
+
+        assert_eq!(
+            native_window_operation_transition(WM_ENTERSIZEMOVE_VALUE),
+            Some(true)
+        );
+        observe_native_window_message(WM_ENTERSIZEMOVE_VALUE);
+        assert!(native_window_operation_active());
+        assert!(!take_native_window_operation_ended());
+
+        observe_native_window_message(WM_EXITSIZEMOVE_VALUE);
+        assert!(!native_window_operation_active());
+        assert!(take_native_window_operation_ended());
+        assert!(!take_native_window_operation_ended());
+        assert_eq!(native_window_operation_transition(0x000F), None);
     }
 
     #[test]

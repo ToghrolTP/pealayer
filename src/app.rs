@@ -689,15 +689,23 @@ impl eframe::App for PealayerApp {
 
         // Track active window/panel drag operations safely without lock nesting
         let is_pointer_down = ui.input(|i| i.pointer.any_down());
+        let native_window_operating = crate::platform::windows::native_window_operation_active();
+        if crate::platform::windows::take_native_window_operation_ended() {
+            // The libmpv callbacks are quiet during Windows' modal move loop.
+            // Paint once on release to consume queued state and present the
+            // newest frame without waiting for another decoder wakeup.
+            ui.ctx().request_repaint();
+        }
         // Only throttle the MPV render pass for a real window/timeline drag.
         // `egui_is_using_pointer()` is also true while seeking or holding the
         // video surface, where suppressing paint freezes the very preview the
         // gesture is meant to control.
-        self.is_window_operating = should_throttle_video_render(
-            is_pointer_down,
-            self.is_window_operating,
-            self.active_drag.is_some(),
-        );
+        self.is_window_operating = native_window_operating
+            || should_throttle_video_render(
+                is_pointer_down,
+                self.is_window_operating,
+                self.active_drag.is_some(),
+            );
 
         // Process drag and dropped files
         let dropped_file_paths = ui.input(|i| {

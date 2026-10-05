@@ -628,7 +628,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let callback = egui::PaintCallback {
         rect,
         callback: Arc::new(eframe::egui_glow::CallbackFn::new(move |_info, painter| {
-            if is_operating {
+            // Check the native flag at paint time as well as the egui-sampled
+            // flag. WM_ENTERSIZEMOVE can arrive after the frame was assembled
+            // but before this callback runs.
+            if is_operating || crate::platform::windows::native_window_operation_active() {
                 return;
             }
             let gl = painter.gl();
