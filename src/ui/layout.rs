@@ -1726,6 +1726,79 @@ fn timeline_keyframe_marker_center(ruler_rect: egui::Rect, marker_x: f32) -> egu
     egui::pos2(marker_x, ruler_rect.min.y + 6.0)
 }
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+enum TimelineKeyframeTarget {
+    Marker(uuid::Uuid),
+    Analog(uuid::Uuid, usize),
+}
+
+impl TimelineKeyframeTarget {
+    fn menu_id(self) -> egui::Id {
+        egui::Id::new(("timeline-keyframe-menu", self))
+    }
+}
+
+fn nearest_timeline_keyframe(
+    pointer: Option<egui::Pos2>,
+    candidates: &[(TimelineKeyframeTarget, egui::Pos2)],
+) -> Option<TimelineKeyframeTarget> {
+    let pointer = pointer?;
+    candidates.iter()
+        .map(|(target, center)| (*target, pointer.distance_sq(*center)))
+        .filter(|(_, distance)| *distance <= 16.0 * 16.0)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(target, _)| target)
+}
+
+fn keyframe_context_menu(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    target: TimelineKeyframeTarget,
+    targeted: bool,
+    body: impl FnOnce(&mut egui::Ui),
+) -> bool {
+    // The canvas/ruler also cover this area. Use the nearest marker's explicit
+    // hit-test, not whichever overlapping Response claimed the right click.
+    let open = targeted && ui.rect_contains_pointer(response.rect)
+        && ui.input(|input| input.pointer.button_released(egui::PointerButton::Secondary));
+    egui::Popup::menu(response)
+        .id(target.menu_id())
+        .at_pointer_fixed()
+        .open_memory(open.then_some(egui::SetOpenCommand::Bool(true)))
+        .show(body)
+        .is_some()
+}
+
+fn clear_unfocused_timeline_keyframes(
+    app: &mut PealayerApp,
+    ui: &egui::Ui,
+    keyframe_hit: bool,
+    popup_was_open: bool,
+) {
+    if app.selected_timeline_keyframe.is_none() && app.selected_keyframes.is_empty() {
+        return;
+    }
+    if popup_was_open || egui::Popup::is_any_open(ui.ctx()) || app.active_keyframe_drag.is_some() {
+        return;
+    }
+    let (click_away, escape) = ui.input(|input| (
+        input.pointer.button_pressed(egui::PointerButton::Primary)
+            && !keyframe_hit && !input.modifiers.ctrl && !input.modifiers.command,
+        input.key_pressed(egui::Key::Escape),
+    ));
+    let focus = ui.ctx().memory(|memory| memory.focused());
+    let escape = escape && (focus.is_none() || focus == Some(timeline_keyboard_focus_id()));
+    if click_away || escape {
+        app.selected_timeline_keyframe = None;
+        app.selected_keyframes.clear();
+        ui.ctx().request_repaint();
+        if escape {
+            app.selected_instance_ids.clear();
+            ui.ctx().memory_mut(|memory| memory.surrender_focus(timeline_keyboard_focus_id()));
+        }
+    }
+}
+
 fn media_timeline_track_label(
     app: &PealayerApp,
     kind: &'static str,
@@ -6137,6 +6210,103 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn keyframe_near_hit_chooses_one_closest_marker() {
+        let first = TimelineKeyframeTarget::Marker(uuid::Uuid::new_v4());
+        let second = TimelineKeyframeTarget::Analog(uuid::Uuid::new_v4(), 0);
+        let candidates = [(first, egui::pos2(60.0, 25.0)), (second, egui::pos2(72.0, 25.0))];
+        assert_eq!(nearest_timeline_keyframe(Some(egui::pos2(62.0, 30.0)), &candidates), Some(first));
+        assert_eq!(nearest_timeline_keyframe(Some(egui::pos2(76.0, 30.0)), &candidates), Some(second));
+        assert_eq!(nearest_timeline_keyframe(Some(egui::pos2(100.0, 30.0)), &candidates), None);
+        assert_eq!(nearest_timeline_keyframe(None, &candidates), None);
+        assert_ne!(first.menu_id(), second.menu_id());
+    }
+
+    #[test]
+    fn keyframe_context_menu_wins_over_canvas_and_ruler_near_the_diamond() {
+        for target in [TimelineKeyframeTarget::Marker(uuid::Uuid::new_v4()),
+            TimelineKeyframeTarget::Analog(uuid::Uuid::new_v4(), 0)]
+        {
+            let context = egui::Context::default();
+            context.all_styles_mut(|style| style.animation_time = 0.0);
+            let center = egui::pos2(100.0, 40.0);
+            let render = |events| {
+                let output = context.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 300.0))),
+                    events, ..Default::default()
+                }, |ui| {
+                    let canvas_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 200.0));
+                    let canvas = ui.interact(canvas_rect, timeline_keyboard_focus_id(), egui::Sense::click_and_drag());
+                    let ruler = ui.interact(canvas_rect, egui::Id::new("test-ruler"), egui::Sense::click());
+                    let hit = nearest_timeline_keyframe(ui.ctx().pointer_latest_pos(), &[(target, center)]);
+                    let owned = hit.is_some() || egui::Popup::is_id_open(ui.ctx(), target.menu_id());
+                    if !owned { ruler.context_menu(|ui| { ui.label("Wrong ruler menu"); }); }
+                    let marker = ui.interact(egui::Rect::from_center_size(center, egui::vec2(32.0, 32.0)),
+                        egui::Id::new(("test-keyframe", target)), egui::Sense::click());
+                    keyframe_context_menu(ui, &marker, target, hit == Some(target), |ui| {
+                        ui.label("Dedicated keyframe menu");
+                        ui.button("Delete keyframe").on_hover_text("Only this keyframe");
+                    });
+                    if !owned { canvas.context_menu(|ui| { ui.label("Wrong canvas menu"); }); }
+                });
+                discard_ui_output(output);
+            };
+            render(Vec::new());
+            render(Vec::new());
+            // Outside the painted 5px diamond, inside the forgiving near hit.
+            let point = center + egui::vec2(12.0, 5.0);
+            render(vec![egui::Event::PointerMoved(point), egui::Event::PointerButton {
+                pos: point, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::NONE,
+            }]);
+            render(vec![egui::Event::PointerButton {
+                pos: point, button: egui::PointerButton::Secondary, pressed: false, modifiers: egui::Modifiers::NONE,
+            }]);
+            assert!(egui::Popup::is_id_open(&context, target.menu_id()), "near right click opened the wrong menu");
+            render(vec![egui::Event::PointerMoved(egui::pos2(210.0, 85.0))]);
+            assert!(egui::Popup::is_id_open(&context, target.menu_id()), "menu lost its keyframe when pointer left marker");
+        }
+    }
+
+    #[test]
+    fn keyframe_highlight_clears_on_click_away_or_escape_but_not_menu_interaction() {
+        let context = egui::Context::default();
+        let mut app = PealayerApp::default();
+        let (id, _) = app.insert_timeline_keyframe(1_000);
+        let track = uuid::Uuid::new_v4();
+        app.selected_keyframes.insert((track, 0));
+        let render = |events, hit, popup, app: &mut PealayerApp| {
+            let output = context.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                // Register the real focus widget before requesting focus, preserving
+                // the Windows accessibility crash fix for empty timelines.
+                ui.interact(ui.max_rect(), timeline_keyboard_focus_id(), egui::Sense::click());
+                ui.ctx().memory_mut(|memory| memory.request_focus(timeline_keyboard_focus_id()));
+                clear_unfocused_timeline_keyframes(app, ui, hit, popup);
+            });
+            discard_ui_output(output);
+        };
+        let press = |pressed| egui::Event::PointerButton {
+            pos: egui::pos2(150.0, 80.0), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE,
+        };
+        render(vec![press(true)], true, false, &mut app);
+        assert_eq!(app.selected_timeline_keyframe, Some(id));
+        render(vec![press(false)], true, false, &mut app);
+        render(vec![press(true)], false, true, &mut app);
+        assert_eq!(app.selected_timeline_keyframe, Some(id), "popup interaction cleared its target");
+        render(vec![press(false)], false, true, &mut app);
+        render(vec![press(true)], false, false, &mut app);
+        assert!(app.selected_timeline_keyframe.is_none());
+        assert!(app.selected_keyframes.is_empty());
+        render(vec![press(false)], false, false, &mut app);
+        app.selected_timeline_keyframe = Some(id);
+        app.selected_keyframes.insert((track, 0));
+        render(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None,
+            pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }], false, false, &mut app);
+        assert!(app.selected_timeline_keyframe.is_none());
+        assert!(app.selected_keyframes.is_empty());
+        assert!(!context.memory(|memory| memory.has_focus(timeline_keyboard_focus_id())));
+        assert_eq!(app.timeline.keyframes.len(), 1, "blur must not delete keyframes");
+    }
+
+    #[test]
     fn narrow_hardware_sidebars_use_single_column_cards_and_actions() {
         assert_eq!(control_grid_columns(420.0), 1);
         assert_eq!(action_grid_columns(210.0, 2), 1);
@@ -8316,6 +8486,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
         let smooth_label = self.app.tr("Smooth (Hermite)");
         let step_label = self.app.tr("Step");
         let delete_keyframe_label = self.app.tr("Delete Keyframe");
+        let deselect_keyframe_label = self.app.tr("Deselect keyframe");
+        let keyframe_label = self.app.tr("Keyframe");
         let interpolation_label = self.app.tr("Interpolation");
         let time_label = self.app.tr("Time");
         let value_label = self.app.tr("Value");
@@ -11667,6 +11839,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             // response fail `contains_pointer`: the inner
                             // click-and-drag canvas correctly owned the pointer and
                             // occluded its parent, so releases were never accepted.
+                            let popup_was_open = egui::Popup::is_any_open(ui.ctx());
+                            let mut keyframe_hit = false;
+                            let mut keyframe_context_owned = false;
                             let timeline_scroll = egui::ScrollArea::both()
                                 .id_salt("timeline_scroll")
                                 .vertical_scroll_offset(timeline_header_offset_y)
@@ -11697,6 +11872,29 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         let pointer_pos = ui.ctx().pointer_latest_pos();
 
+                                        let mut keyframe_candidates: Vec<_> = self.app.timeline.keyframes.iter()
+                                            .map(|marker| (TimelineKeyframeTarget::Marker(marker.id),
+                                                timeline_keyframe_marker_center(ruler_rect, rect.min.x + marker.time_ms as f32 * px_per_ms)))
+                                            .collect();
+                                        for (index, track) in self.app.timeline.analog_tracks.iter()
+                                            .filter(|track| visible_analog_track_ids.contains(&track.id)).enumerate()
+                                        {
+                                            let bottom = tracks_top + track_area_height
+                                                + (index + 1) as f32 * timeline_analog_height - 4.0;
+                                            keyframe_candidates.extend(track.keyframes.iter().enumerate().map(|(index, keyframe)| (
+                                                TimelineKeyframeTarget::Analog(track.id, index),
+                                                egui::pos2(rect.min.x + keyframe.time_ms as f32 * px_per_ms,
+                                                    bottom - keyframe.value * (timeline_analog_height - 8.0)),
+                                            )));
+                                        }
+                                        keyframe_candidates.retain(|(_, center)| center.x >= rect.left() && center.x <= rect.right());
+                                        let nearest_keyframe = nearest_timeline_keyframe(
+                                            pointer_pos.filter(|pos| ui.clip_rect().contains(*pos)), &keyframe_candidates,
+                                        );
+                                        keyframe_hit = nearest_keyframe.is_some();
+                                        keyframe_context_owned = keyframe_hit || keyframe_candidates.iter()
+                                            .any(|(target, _)| egui::Popup::is_id_open(ui.ctx(), target.menu_id()));
+
                                         if let Some(pos) = pointer_pos {
                                             if rect.contains(pos)
                                                 && let Some(action) = timeline_wheel_action(
@@ -11723,7 +11921,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let ruler_response = ui.interact(ruler_rect, egui::Id::new("timeline_ruler"), egui::Sense::click_and_drag())
                                             .on_hover_text(&timeline_ruler_help);
 
-                                        ruler_response.context_menu(|ui| {
+                                        if !keyframe_context_owned { ruler_response.context_menu(|ui| {
                                             ui.label(egui::RichText::new(self.app.tr("Timeline keyframe")).strong());
                                             let playhead_ms = (self.app.playback_time * 1_000.0)
                                                 .round()
@@ -11765,9 +11963,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     ui.close();
                                                 }
                                             }
-                                        });
+                                        }); }
 
-                                        let mut clicked_any_keyframe = false;
+                                        let mut clicked_any_keyframe = keyframe_context_owned && ui.input(|input|
+                                            input.pointer.any_down() || input.pointer.any_released());
                                         for marker in self.app.timeline.keyframes.clone() {
                                             let marker_x = rect.min.x + marker.time_ms as f32 * px_per_ms;
                                             if marker_x < rect.min.x || marker_x > rect.max.x {
@@ -11783,7 +11982,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             );
                                             let marker_rect = egui::Rect::from_center_size(
                                                 marker_center,
-                                                egui::vec2(32.0, 22.0),
+                                                egui::vec2(32.0, 32.0),
                                             );
                                             let marker_response = ui
                                                 .interact(marker_rect, egui::Id::new(("timeline-keyframe", marker.id)), egui::Sense::click())
@@ -11792,13 +11991,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     self.app.tr("Exact timeline keyframe"),
                                                     crate::duration::format_time_value_ms(marker.time_ms)
                                                 ));
-                                            if marker_response.clicked() {
+                                            let target = TimelineKeyframeTarget::Marker(marker.id);
+                                            let targeted = nearest_keyframe == Some(target);
+                                            if marker_response.clicked() || (targeted && ui.rect_contains_pointer(marker_rect)
+                                                && ui.input(|input| input.pointer.button_pressed(egui::PointerButton::Primary)
+                                                    || input.pointer.button_released(egui::PointerButton::Secondary))) {
                                                 clicked_any_keyframe = true;
                                                 self.app.selected_timeline_keyframe = Some(marker.id);
                                                 self.app.selected_instance_ids.clear();
                                                 self.app.selected_keyframes.clear();
                                             }
-                                            marker_response.context_menu(|ui| {
+                                            keyframe_context_menu(ui, &marker_response, target, targeted, |ui| {
                                                 ui.label(egui::RichText::new(self.app.tr("Exact timeline keyframe")).strong());
                                                 let mut exact_time = marker.time_ms;
                                                 ui.horizontal(|ui| {
@@ -11846,6 +12049,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         self.app.commit_timeline_edit();
                                                     }
                                                     self.app.selected_timeline_keyframe = None;
+                                                    ui.close();
+                                                }
+                                                ui.separator();
+                                                if ui.button(format!("{} {}", crate::ui::icons::X, deselect_keyframe_label)).clicked() {
+                                                    self.app.selected_timeline_keyframe = None;
+                                                    ui.ctx().request_repaint();
                                                     ui.close();
                                                 }
                                             });
@@ -12808,9 +13017,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let center = egui::pos2(kx, ky);
                                                 let is_selected = self.app.selected_keyframes.contains(&(track.id, k_idx));
 
-                                                // 16px Euclidean distance hitbox detection
-                                                let hover_dist = 16.0;
-                                                let is_hovered = pointer_pos.map_or(false, |pos| pos.distance(center) <= hover_dist);
+                                                // One nearest target owns the shared 16px hit area.
+                                                let target = TimelineKeyframeTarget::Analog(track.id, k_idx);
+                                                let is_hovered = nearest_keyframe == Some(target);
 
                                                 if is_hovered
                                                     && !track.locked
@@ -12878,7 +13087,18 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 }
 
                                                 // Right-Click Context Menu
-                                                kf_response.context_menu(|ui| {
+                                                if is_hovered && ui.input(|input| input.pointer.button_released(egui::PointerButton::Secondary)) {
+                                                    if !self.app.selected_keyframes.contains(&(track.id, k_idx)) {
+                                                        self.app.selected_keyframes.clear();
+                                                        self.app.selected_keyframes.insert((track.id, k_idx));
+                                                    }
+                                                    self.app.selected_timeline_keyframe = None;
+                                                }
+                                                keyframe_context_menu(ui, &kf_response, target, is_hovered, |ui| {
+                                                    ui.strong(format!("{} {}", crate::ui::icons::DIAMOND, keyframe_label));
+                                                    ui.label(format!("{time_label}: {} · {value_label}: {:.1}%",
+                                                        format_timecode(kf.time_ms as f64 / 1000.0), kf.value * 100.0));
+                                                    ui.separator();
                                                     crate::ui::icons::submenu(ui, interpolation_label.clone(), |ui| {
                                                         if ui.button(&linear_label).clicked() {
                                                             kf_interp_change = Some((track.id, k_idx, crate::four_d::curve::Interpolation::Linear));
@@ -12894,8 +13114,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         }
                                                     });
                                                     ui.separator();
-                                                    if ui.button(&delete_keyframe_label).clicked() {
+                                                    if ui.add_enabled(!track.locked, egui::Button::new(format!("{} {}", crate::ui::icons::TRASH, delete_keyframe_label))).clicked() {
                                                         kf_to_remove = Some((track.id, k_idx));
+                                                        ui.close();
+                                                    }
+                                                    ui.separator();
+                                                    if ui.button(format!("{} {}", crate::ui::icons::X, deselect_keyframe_label)).clicked() {
+                                                        self.app.selected_keyframes.clear();
+                                                        ui.ctx().request_repaint();
                                                         ui.close();
                                                     }
                                                 });
@@ -12907,7 +13133,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 // Primary click: Selection & Active Drag Lock initialization on mouse press/down
                                                 if is_hovered
                                                     && !track.locked
-                                                    && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary) || i.pointer.primary_down())
+                                                    && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
                                                     && self.app.active_keyframe_drag.is_none()
                                                 {
                                                     if let Some(pos) = pointer_pos {
@@ -13827,7 +14053,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 }
                             }
 
-                            response.context_menu(|ui| {
+                            if !keyframe_context_owned { response.context_menu(|ui| {
                                 ui.label(egui::RichText::new(self.app.tr("Timeline")).strong());
                                 ui.separator();
                                 if ui
@@ -13930,6 +14156,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     ui.close();
                                 }
                             });
+
+                            }
+                            clear_unfocused_timeline_keyframes(self.app, ui, keyframe_hit, popup_was_open);
 
                             if ui.ctx().memory(|memory| {
                                 memory.has_focus(timeline_keyboard_focus_id())
