@@ -1761,6 +1761,18 @@ mod tests {
     }
 
     #[test]
+    fn system_theme_is_default_and_persists_as_a_preference_not_a_resolved_scheme() {
+        let config: AppConfig = serde_json::from_str("{}").expect("missing fields use defaults");
+        assert_eq!(config.theme, AppTheme::System);
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["theme"], "system");
+        assert_eq!(
+            serde_json::from_value::<AppConfig>(json).unwrap().theme,
+            AppTheme::System
+        );
+    }
+
+    #[test]
     fn playback_speeds_reject_non_finite_and_out_of_range_values() {
         let mut config = AppConfig::default();
         config.playback_speed = 0.0;

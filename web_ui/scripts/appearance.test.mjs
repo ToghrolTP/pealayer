@@ -30,3 +30,15 @@ test('System theme and accent follow the host, with offline fallbacks', () => {
   assert.equal(resolvedAccent({ accentColor: '#0078d4' }, { accent_color: 'system' }, appearance), '#9e5cf4');
   assert.equal(resolvedAccent(null, { accent_color: 'custom', custom_accent_color: '#123456' }, appearance), '#123456');
 });
+
+test('live native theme events switch connected clients without changing the System preference', () => {
+  const config = { theme: 'system', color_palette: 'native', accent_color: 'system' };
+  for (const scheme of ['light', 'dark', 'light']) {
+    const event = { ...config, resolved_theme: scheme, resolved_accent: '#6362c7' };
+    const synced = mergeAppearance(config, event);
+    assert.equal(synced.theme, 'system');
+    assert.equal(resolvedAppearanceTheme(synced.theme, scheme !== 'light', event), scheme);
+    assert.equal(resolvedAppearanceTheme('light', false, event), 'light');
+    assert.equal(resolvedAppearanceTheme('dark', true, event), 'dark');
+  }
+});

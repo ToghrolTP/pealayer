@@ -281,21 +281,14 @@ impl StandalonePreferencesApp {
             crate::ui::platform_accent_rgb(&self.draft.config),
             self.draft.config.color_palette,
         );
-        if self.applied_appearance == Some(appearance) {
-            return;
+        if self.applied_appearance != Some(appearance) {
+            crate::ui::configure_native_appearance(ctx, &self.draft.config);
+            crate::platform::windows::configure_window_composition(appearance.1, appearance.2);
+            self.applied_appearance = Some(appearance);
         }
-        ctx.set_theme(match appearance.0 {
-            AppTheme::System => egui::ThemePreference::System,
-            AppTheme::Light => egui::ThemePreference::Light,
-            AppTheme::Dark => egui::ThemePreference::Dark,
-        });
-        crate::ui::configure_native_visuals(ctx, &self.draft.config);
-        crate::platform::windows::configure_window_composition(appearance.1, appearance.2);
-        crate::platform::windows::set_window_appearance(
-            ctx.global_style().visuals.dark_mode,
-            appearance.4,
-        );
-        self.applied_appearance = Some(appearance);
+        // Native OS changes do not dirty the draft or alter the cached
+        // preference tuple. Still refresh this independently hosted titlebar.
+        crate::ui::sync_native_window_appearance(ctx, appearance.4);
     }
 
     fn watch_external_config(&mut self, ctx: &egui::Context) {
@@ -462,7 +455,7 @@ pub(crate) fn run_native_preferences(owner_hwnd: isize) -> eframe::Result {
                 &creation.egui_ctx,
                 language == AppLanguage::Persian,
             );
-            crate::ui::configure_native_visuals(&creation.egui_ctx, &config);
+            crate::ui::configure_native_appearance(&creation.egui_ctx, &config);
             Ok(Box::new(StandalonePreferencesApp {
                 draft: PreferencesDraft::from_live_config(),
                 owner_hwnd,
@@ -1926,6 +1919,40 @@ mod tests {
         let restored = draft.take_preview_update().expect("discard preview");
         assert_eq!(restored, original);
         assert!(!draft.is_dirty());
+    }
+
+    #[test]
+    fn open_preferences_follows_system_events_without_creating_unsaved_changes() {
+        let config = AppConfig::default();
+        let mut helper = StandalonePreferencesApp {
+            draft: PreferencesDraft::new(config.clone(), 0),
+            owner_hwnd: 0,
+            native_window_initialized: false,
+            applied_appearance: None,
+            config_watcher: None,
+            config_reload_due: None,
+        };
+        let ctx = egui::Context::default();
+        helper.apply_appearance(&ctx);
+        let cached_settings = helper.applied_appearance;
+        for theme in [egui::Theme::Light, egui::Theme::Dark, egui::Theme::Light] {
+            ctx.run_ui(
+                egui::RawInput {
+                    system_theme: Some(theme),
+                    ..Default::default()
+                },
+                |ui| {
+                    let ctx = ui.ctx();
+                    helper.apply_appearance(ctx);
+                    assert_eq!(ctx.theme(), theme);
+                    assert_eq!(helper.applied_appearance, cached_settings);
+                    assert!(!helper.draft.is_dirty());
+                    assert!(helper.draft.take_preview_update().is_none());
+                    assert_eq!(helper.draft.config, config);
+                },
+            )
+            .drop_without_applying_deltas();
+        }
     }
 
     #[test]

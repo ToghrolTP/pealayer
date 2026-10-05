@@ -313,25 +313,8 @@ fn main() -> eframe::Result {
                 &cc.egui_ctx,
                 language == crate::config::AppLanguage::Persian,
             );
-            let theme_preference = match crate::config::resolved_theme(&loaded_config) {
-                crate::config::AppTheme::System => egui::ThemePreference::System,
-                crate::config::AppTheme::Light => egui::ThemePreference::Light,
-                crate::config::AppTheme::Dark => egui::ThemePreference::Dark,
-            };
-            cc.egui_ctx.set_theme(theme_preference);
-            crate::ui::configure_native_visuals(&cc.egui_ctx, &loaded_config);
-            crate::platform::windows::set_window_appearance(
-                cc.egui_ctx.global_style().visuals.dark_mode,
-                loaded_config.color_palette,
-            );
-
-            let mut style = (*cc.egui_ctx.global_style()).clone();
-            for font_id in style.text_styles.values_mut() {
-                if font_id.size > 12.0 {
-                    font_id.size = 12.0;
-                }
-            }
-            cc.egui_ctx.set_global_style(style);
+            crate::ui::configure_native_appearance(&cc.egui_ctx, &loaded_config);
+            crate::ui::configure_main_window_style(&cc.egui_ctx);
 
             let get_proc = cc
                 .get_proc_address

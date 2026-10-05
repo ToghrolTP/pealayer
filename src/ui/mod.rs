@@ -82,6 +82,43 @@ fn dark_accent_fill(
     )
 }
 
+/// Keep System as a preference, not a snapshot of the current OS scheme.
+/// eframe/winit supplies native ThemeChanged events to egui's system_theme;
+/// selecting an explicit theme here would stop following those events.
+pub fn configure_native_appearance(ctx: &eframe::egui::Context, config: &crate::config::AppConfig) {
+    ctx.set_theme(match crate::config::resolved_theme(config) {
+        crate::config::AppTheme::System => eframe::egui::ThemePreference::System,
+        crate::config::AppTheme::Light => eframe::egui::ThemePreference::Light,
+        crate::config::AppTheme::Dark => eframe::egui::ThemePreference::Dark,
+    });
+    configure_native_visuals(ctx, config);
+    sync_native_window_appearance(ctx, config.color_palette);
+}
+
+/// Call after native theme events as well as preference changes. The platform
+/// setter caches applied values, so unchanged frames do not issue DWM calls.
+pub fn sync_native_window_appearance(
+    ctx: &eframe::egui::Context,
+    palette: crate::config::ColorPalette,
+) {
+    crate::platform::windows::set_window_appearance(
+        ctx.theme() == eframe::egui::Theme::Dark,
+        palette,
+    );
+}
+
+/// Apply theme-independent desktop defaults to both styles, so a live OS
+/// switch cannot reset font sizes or re-enable selection of static captions.
+pub fn configure_main_window_style(ctx: &eframe::egui::Context) {
+    ctx.all_styles_mut(|style| {
+        for font_id in style.text_styles.values_mut() {
+            if font_id.size > 12.0 {
+                font_id.size = 12.0;
+            }
+        }
+    });
+}
+
 /// Install a restrained native desktop palette for both themes. The active
 /// theme can change later without reconstructing widget styling, and both the
 /// main window and independently hosted dialogs use this same function.
@@ -151,9 +188,7 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
     palette::apply(&mut light, config.color_palette);
     ctx.set_visuals_of(Theme::Dark, dark);
     ctx.set_visuals_of(Theme::Light, light);
-    let mut style = (*ctx.global_style()).clone();
-    configure_interaction_style(&mut style);
-    ctx.set_global_style(style);
+    ctx.all_styles_mut(configure_interaction_style);
 }
 
 #[cfg(test)]
@@ -170,6 +205,112 @@ mod tests {
 
         assert!(!style.interaction.selectable_labels);
         assert!(!style.interaction.multi_widget_text_select);
+    }
+
+    #[test]
+    fn system_theme_events_switch_live_without_losing_palette_or_desktop_defaults() {
+        use crate::config::{AppConfig, AppTheme, ColorPalette};
+        use eframe::egui::{Context, RawInput, Theme, ThemePreference};
+
+        for palette in [ColorPalette::Native, ColorPalette::Studio] {
+            let config = AppConfig {
+                color_palette: palette,
+                ..Default::default()
+            };
+            let ctx = Context::default();
+            super::configure_native_appearance(&ctx, &config);
+            super::configure_main_window_style(&ctx);
+            for theme in [Theme::Light, Theme::Dark, Theme::Light] {
+                // This is the RawInput produced by egui-winit on ThemeChanged.
+                ctx.run_ui(
+                    RawInput {
+                        system_theme: Some(theme),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let ctx = ui.ctx();
+                        assert_eq!(ctx.theme(), theme);
+                        assert_eq!(
+                            ctx.options(|options| options.theme_preference),
+                            ThemePreference::System
+                        );
+                        let style = ctx.global_style();
+                        assert_eq!(
+                            style.visuals.panel_fill,
+                            super::palette::color(palette, theme == Theme::Dark, "surface-0")
+                        );
+                        assert!(!style.interaction.selectable_labels);
+                        assert!(!style.interaction.multi_widget_text_select);
+                        assert!(style.text_styles.values().all(|font| font.size <= 12.0));
+                        let state = crate::platform::interop::AppearanceState::new(
+                            &config,
+                            theme == Theme::Dark,
+                        );
+                        assert_eq!(state.theme, AppTheme::System);
+                        assert_eq!(
+                            state.resolved_theme,
+                            if theme == Theme::Dark {
+                                AppTheme::Dark
+                            } else {
+                                AppTheme::Light
+                            }
+                        );
+                    },
+                )
+                .drop_without_applying_deltas();
+            }
+            assert_eq!(config.theme, AppTheme::System);
+        }
+    }
+
+    #[test]
+    fn system_theme_events_respect_explicit_overrides_and_resume_when_system_is_selected() {
+        use crate::config::{AppConfig, AppTheme};
+        use eframe::egui::{Context, RawInput, Theme};
+
+        let ctx = Context::default();
+        for (preference, native, expected) in [
+            (AppTheme::Light, Theme::Dark, Theme::Light),
+            (AppTheme::Dark, Theme::Light, Theme::Dark),
+            (AppTheme::System, Theme::Light, Theme::Light),
+            (AppTheme::System, Theme::Dark, Theme::Dark),
+        ] {
+            super::configure_native_appearance(
+                &ctx,
+                &AppConfig {
+                    theme: preference,
+                    ..Default::default()
+                },
+            );
+            ctx.run_ui(
+                RawInput {
+                    system_theme: Some(native),
+                    ..Default::default()
+                },
+                |ui| {
+                    let ctx = ui.ctx();
+                    assert_eq!(ctx.theme(), expected);
+                },
+            )
+            .drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
+    fn system_theme_uses_framework_fallback_if_os_does_not_supply_a_scheme() {
+        use eframe::egui::{Context, RawInput, ThemePreference};
+        let ctx = Context::default();
+        super::configure_native_appearance(&ctx, &crate::config::AppConfig::default());
+        ctx.run_ui(RawInput::default(), |ui| {
+            let ctx = ui.ctx();
+            assert_eq!(ctx.system_theme(), None);
+            assert_eq!(
+                ctx.options(|options| options.theme_preference),
+                ThemePreference::System
+            );
+            assert_eq!(ctx.theme(), ctx.options(|options| options.fallback_theme));
+        })
+        .drop_without_applying_deltas();
     }
 
     #[test]

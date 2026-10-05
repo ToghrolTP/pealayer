@@ -784,7 +784,7 @@ impl eframe::App for PealayerApp {
         let web_config = crate::platform::interop::get_live_config();
         let appearance = crate::platform::interop::AppearanceState::new(
             &web_config,
-            ui.style().visuals.dark_mode,
+            ui.ctx().theme() == egui::Theme::Dark,
         );
         let web_sync_interval =
             std::time::Duration::from_millis(u64::from(web_config.web_sync_interval_ms));
@@ -1225,10 +1225,7 @@ impl eframe::App for PealayerApp {
                 .send_viewport_cmd(egui::ViewportCommand::Title(window_title.clone()));
             self.last_window_title = window_title;
         }
-        crate::platform::windows::set_window_appearance(
-            ui.style().visuals.dark_mode,
-            self.color_palette,
-        );
+        crate::ui::sync_native_window_appearance(ui.ctx(), self.color_palette);
 
         if !is_fullscreen {
             crate::ui::menu::draw(self, ui);
@@ -5210,16 +5207,7 @@ impl PealayerApp {
             ctx,
             self.language == crate::config::AppLanguage::Persian,
         );
-        ctx.set_theme(match self.theme_preference {
-            crate::config::AppTheme::System => egui::ThemePreference::System,
-            crate::config::AppTheme::Light => egui::ThemePreference::Light,
-            crate::config::AppTheme::Dark => egui::ThemePreference::Dark,
-        });
-        crate::ui::configure_native_visuals(ctx, &config);
-        crate::platform::windows::set_window_appearance(
-            ctx.global_style().visuals.dark_mode,
-            self.color_palette,
-        );
+        crate::ui::configure_native_appearance(ctx, &config);
 
         if endpoint_changed || connection_policy_changed {
             let _ = self.engine_handle.sender.send(
@@ -5411,10 +5399,7 @@ impl PealayerApp {
             crate::config::AppTheme::Light => egui::ThemePreference::Light,
             crate::config::AppTheme::Dark => egui::ThemePreference::Dark,
         });
-        crate::platform::windows::set_window_appearance(
-            ctx.global_style().visuals.dark_mode,
-            self.color_palette,
-        );
+        crate::ui::sync_native_window_appearance(ctx, self.color_palette);
         self.save_config();
     }
 
