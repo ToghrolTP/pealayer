@@ -489,6 +489,70 @@ mod tests {
     }
 
     #[test]
+    fn numeric_slider_wheel_adjusts_once_and_does_not_scroll_the_dialog() {
+        for (modifiers, increment) in [(egui::Modifiers::NONE, 1.0), (egui::Modifiers::CTRL, 0.1), (egui::Modifiers::SHIFT, 10.0)] {
+            for unit in [egui::MouseWheelUnit::Point, egui::MouseWheelUnit::Line, egui::MouseWheelUnit::Page] {
+                let ctx = egui::Context::default();
+                let mut value = 50.0;
+                let mut offset = 0.0;
+                let mut slider_rect = egui::Rect::NOTHING;
+                let mut render = |events, value: &mut f64| {
+                    let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 260.0))), events, ..Default::default() }, |ui| {
+                        let result = egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
+                            let response = ui.add_sized([190.0, 24.0], egui::Slider::new(value, 0.0..=130.0).suffix("%"));
+                            slider_rect = response.rect;
+                            numeric_slider_wheel(ui, &response, value, 0.0..=130.0, crate::config::NumericInputSteps::for_step(1.0));
+                            ui.add_space(600.0);
+                        });
+                        offset = result.state.offset.y;
+                    });
+                    output.textures_delta.clear();
+                    slider_rect
+                };
+                render(vec![], &mut value);
+                let point = render(vec![], &mut value).left_center() + egui::vec2(20.0, 0.0);
+                let wheel = |delta| egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, delta), modifiers, phase: egui::TouchPhase::Move };
+                render(vec![egui::Event::PointerMoved(point), wheel(1.0)], &mut value);
+                assert!((value - (50.0 + increment)).abs() < 1e-8, "wrong increment: {modifiers:?}/{unit:?}");
+                for _ in 0..12 { render(vec![], &mut value); }
+                assert!((value - (50.0 + increment)).abs() < 1e-8, "smoothed tail applied the value repeatedly");
+                render(vec![wheel(-1.0)], &mut value);
+                assert!((value - 50.0).abs() < 1e-8);
+                drop(render);
+                assert_eq!(offset, 0.0, "wheel adjustment scrolled the dialog");
+            }
+        }
+    }
+
+    #[test]
+    fn numeric_slider_wheel_obeys_hover_disabled_and_bounds() {
+        let ctx = egui::Context::default();
+        let mut value = 130.0;
+        let mut response_rect = egui::Rect::NOTHING;
+        let mut render = |events, enabled, value: &mut f64| {
+            let mut changed = false;
+            let mut output = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                let response = ui.add_enabled(enabled, egui::Slider::new(value, 0.0..=130.0));
+                response_rect = response.rect;
+                changed = numeric_slider_wheel(ui, &response, value, 0.0..=130.0, crate::config::NumericInputSteps::for_step(1.0));
+            });
+            output.textures_delta.clear();
+            (response_rect, changed)
+        };
+        let point = render(vec![], true, &mut value).0.left_center() + egui::vec2(20.0, 0.0);
+        let wheel = |delta| egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, delta), modifiers: egui::Modifiers::NONE, phase: egui::TouchPhase::Move };
+        assert!(!render(vec![egui::Event::PointerMoved(point), wheel(10.0)], true, &mut value).1);
+        assert_eq!(value, 130.0);
+        render(vec![egui::Event::PointerMoved(point + egui::vec2(0.0, 100.0)), wheel(-10.0)], true, &mut value);
+        assert_eq!(value, 130.0, "wheel outside slider changed value");
+        render(vec![egui::Event::PointerMoved(point), wheel(-10.0)], false, &mut value);
+        assert_eq!(value, 130.0, "disabled slider changed value");
+        value = 0.0;
+        render(vec![wheel(-10.0)], true, &mut value);
+        assert_eq!(value, 0.0);
+    }
+
+    #[test]
     fn numeric_input_context_menu_opens_and_resets_through_pointer_events() {
         let ctx = egui::Context::default();
         ctx.all_styles_mut(|style| style.animation_time = 0.0);
@@ -672,6 +736,39 @@ fn adjust_numeric(value: &mut f64, delta: f64, min: f64, max: f64) -> bool {
     let changed = next != *value;
     *value = next;
     changed
+}
+
+/// Hovered sliders own their wheel gesture, including egui's smoothed tail,
+/// so adjusting a value cannot also scroll the containing settings dialog.
+/// Raw events are used once; replaying smooth deltas would multiply changes.
+pub fn numeric_slider_wheel(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    value: &mut f64,
+    range: std::ops::RangeInclusive<f64>,
+    steps: crate::config::NumericInputSteps,
+) -> bool {
+    if !response.enabled() || !response.hovered() || egui::Popup::is_any_open(ui.ctx()) {
+        return false;
+    }
+    let delta = ui.ctx().input_mut(|input| {
+        let mut adjustment = 0.0;
+        let mut owns_wheel = false;
+        for event in &input.events {
+            if let egui::Event::MouseWheel { delta, modifiers, .. } = event {
+                let axis = if delta.y.abs() >= delta.x.abs() { delta.y } else { delta.x };
+                if axis.is_finite() && axis != 0.0 {
+                    owns_wheel = true;
+                    adjustment += f64::from(axis.signum()) * numeric_adjustment(steps, *modifiers);
+                }
+            }
+        }
+        if owns_wheel || input.smooth_scroll_delta != egui::Vec2::ZERO {
+            input.smooth_scroll_delta = egui::Vec2::ZERO;
+        }
+        adjustment
+    });
+    delta != 0.0 && adjust_numeric(value, delta, *range.start(), *range.end())
 }
 
 fn parse_numeric_paste(text: &str, suffix: &str, range: &std::ops::RangeInclusive<f64>) -> Option<f64> {

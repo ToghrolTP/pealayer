@@ -141,6 +141,9 @@ fn draw_audio_output(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     [190.0, 24.0],
                     egui::Slider::new(&mut volume, 0.0..=130.0).suffix("%"),
                 );
+                let wheel_steps = app.numeric_input_steps.get("volume").copied()
+                    .unwrap_or_else(|| crate::config::NumericInputSteps::for_step(1.0));
+                changed |= dialog::numeric_slider_wheel(ui, &response, &mut volume, 0.0..=130.0, wheel_steps);
                 changed |= dialog::numeric_context_menu(ui, &response, "volume", &mut volume, 0.0..=130.0, 1.0, crate::config::AppConfig::default().volume, "%", &mut app.numeric_input_steps, app.language, 1e-9);
                 if response.changed() || changed {
                     app.volume = volume;
