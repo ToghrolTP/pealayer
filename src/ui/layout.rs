@@ -3965,6 +3965,21 @@ fn draw_rf_code_tool(app: &PealayerApp, ui: &mut egui::Ui) {
     });
 }
 
+/// Stop can disappear between mouse-down and mouse-up. Explicit child IDs
+/// prevent its captured gesture being inherited by the next caption/button.
+/// `push_id` alone is insufficient: egui's auto widget IDs still depend on the
+/// child's position unless its UI has an explicit ID independent of that slot.
+fn hardware_header_widget<R>(
+    ui: &mut egui::Ui,
+    channel_key: &str,
+    role: &str,
+    render: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let id = ui.make_persistent_id(("hardware-header-widget", channel_key, role));
+    ui.scope_builder(egui::UiBuilder::new().id(id), render)
+        .inner
+}
+
 fn draw_compact_control_card(
     app: &mut PealayerApp,
     ui: &mut egui::Ui,
@@ -4131,13 +4146,9 @@ fn draw_compact_control_card(
                     } else {
                         8.0
                     };
-                    let response = left_aligned_click_label(
-                        ui,
-                        &title,
-                        (ui.available_width() - reserved).max(48.0),
-                        24.0,
-                        13.0,
-                    );
+                    let response = hardware_header_widget(ui, &control.key, "caption", |ui| {
+                        left_aligned_click_label(ui, &title, (ui.available_width() - reserved).max(48.0), 24.0, 13.0)
+                    });
                     if response.clicked() {
                         ui.data_mut(|data| {
                             data.insert_temp(draft_id, control.name.clone());
@@ -4148,7 +4159,7 @@ fn draw_compact_control_card(
                     response.on_hover_text(format!("{} — {}", title, app.tr("Rename")));
                     if is_motion {
                         if let Some(stop) = contextual_stop_action(capabilities, control) {
-                            let response = ui
+                            let response = hardware_header_widget(ui, &control.key, "stop", |ui| ui
                                 .add_enabled(
                                     !app.estop_active && !control.locked,
                                     egui::Button::new(crate::ui::icons::action(&stop.verb))
@@ -4157,14 +4168,14 @@ fn draw_compact_control_card(
                                 .on_hover_text(crate::ui::i18n::visual_text(
                                     app.language,
                                     &stop.name,
-                                ));
+                                )));
                             if hardware_control_activated(app, ui, &response) {
                                 crate::ui::hardware_control::invoke_action(app, control, stop);
                             }
                         }
-                        if ui
+                        if hardware_header_widget(ui, &control.key, "rename", |ui| ui
                             .button(crate::ui::icons::PENCIL_SIMPLE)
-                            .on_hover_text(app.tr("Rename"))
+                            .on_hover_text(app.tr("Rename")))
                             .clicked()
                         {
                             ui.data_mut(|data| {
@@ -4451,10 +4462,11 @@ fn draw_control_card(
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    if ui
-                                        .button(crate::ui::icons::PENCIL_SIMPLE)
-                                        .on_hover_text(app.tr("Rename"))
-                                        .clicked()
+                                    if hardware_header_widget(ui, &control.key, "rename", |ui| {
+                                        ui.button(crate::ui::icons::PENCIL_SIMPLE)
+                                            .on_hover_text(app.tr("Rename"))
+                                    })
+                                    .clicked()
                                     {
                                         ui.data_mut(|data| {
                                             data.insert_temp(draft_id, control.name.clone());
@@ -4465,30 +4477,39 @@ fn draw_control_card(
                                     if let Some(stop) =
                                         contextual_stop_action(capabilities, control)
                                     {
-                                        let response = ui
-                                            .add_enabled(
-                                                !app.estop_active && !control.locked,
-                                                egui::Button::new(crate::ui::icons::action(
-                                                    &stop.verb,
-                                                )),
-                                            )
-                                            .on_hover_text(crate::ui::i18n::visual_text(
-                                                app.language,
-                                                &stop.name,
-                                            ));
+                                        let response = hardware_header_widget(
+                                            ui,
+                                            &control.key,
+                                            "stop",
+                                            |ui| {
+                                                ui.add_enabled(
+                                                    !app.estop_active && !control.locked,
+                                                    egui::Button::new(crate::ui::icons::action(
+                                                        &stop.verb,
+                                                    )),
+                                                )
+                                                .on_hover_text(crate::ui::i18n::visual_text(
+                                                    app.language,
+                                                    &stop.name,
+                                                ))
+                                            },
+                                        );
                                         if hardware_control_activated(app, ui, &response) {
                                             crate::ui::hardware_control::invoke_action(
                                                 app, control, stop,
                                             );
                                         }
                                     }
-                                    let title = left_aligned_click_label(
-                                        ui,
-                                        &title_text,
-                                        ui.available_width().max(52.0),
-                                        24.0,
-                                        13.0,
-                                    );
+                                    let title =
+                                        hardware_header_widget(ui, &control.key, "caption", |ui| {
+                                            left_aligned_click_label(
+                                                ui,
+                                                &title_text,
+                                                ui.available_width().max(52.0),
+                                                24.0,
+                                                13.0,
+                                            )
+                                        });
                                     if title.clicked() {
                                         ui.data_mut(|data| {
                                             data.insert_temp(draft_id, control.name.clone());
@@ -6322,6 +6343,149 @@ mod timeline_row_tests {
             motion_direction_color(&control, MotionDirectionState::Down),
             egui::Color32::from_rgb(0, 136, 255)
         );
+    }
+
+    #[test]
+    fn motion_stop_removal_does_not_activate_caption_or_rename_button() {
+        for compact in [false, true] {
+            let context = egui::Context::default();
+            let show_stop = std::cell::Cell::new(true);
+            let stop_rect = std::cell::Cell::new(egui::Rect::NOTHING);
+            let caption_rect = std::cell::Cell::new(egui::Rect::NOTHING);
+            let rename_rect = std::cell::Cell::new(egui::Rect::NOTHING);
+            let stop_count = std::cell::Cell::new(0);
+            let rename_count = std::cell::Cell::new(0);
+            let render = |events| {
+                discard_ui_output(context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(380.0, 100.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.set_width(280.0);
+                        let caption = |ui: &mut egui::Ui, width| {
+                            let response = hardware_header_widget(ui, "seat.a", "caption", |ui| {
+                                left_aligned_click_label(ui, "Seat A", width, 24.0, 13.0)
+                            });
+                            caption_rect.set(response.rect);
+                            if response.clicked() {
+                                rename_count.set(rename_count.get() + 1);
+                            }
+                        };
+                        let rename = |ui: &mut egui::Ui| {
+                            let response = hardware_header_widget(ui, "seat.a", "rename", |ui| {
+                                ui.button("Edit")
+                            });
+                            rename_rect.set(response.rect);
+                            if response.clicked() {
+                                rename_count.set(rename_count.get() + 1);
+                            }
+                        };
+                        let stop = |ui: &mut egui::Ui| {
+                            if show_stop.get() {
+                                let response = hardware_header_widget(ui, "seat.a", "stop", |ui| {
+                                    ui.button("Stop")
+                                });
+                                stop_rect.set(response.rect);
+                                if hardware_control_activation(
+                                    true,
+                                    response.is_pointer_button_down_on(),
+                                    ui.input(|input| {
+                                        input.pointer.button_pressed(egui::PointerButton::Primary)
+                                    }),
+                                    response.clicked(),
+                                ) {
+                                    stop_count.set(stop_count.get() + 1);
+                                }
+                            }
+                        };
+                        ui.horizontal(|ui| {
+                            if compact {
+                                caption(ui, 120.0);
+                                stop(ui);
+                                rename(ui);
+                            } else {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        rename(ui);
+                                        stop(ui);
+                                        caption(ui, ui.available_width());
+                                    },
+                                );
+                            }
+                        });
+                    },
+                ));
+            };
+            render(Vec::new());
+            render(Vec::new());
+            let point = stop_rect.get().center();
+            render(vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+            assert_eq!(stop_count.get(), 1, "Stop must dispatch on press");
+            // Board acknowledgment removes Stop before the mouse is released.
+            show_stop.set(false);
+            render(vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+            assert_eq!(
+                rename_count.get(),
+                0,
+                "compact={compact}: Stop release must not rename"
+            );
+            assert_eq!(stop_count.get(), 1);
+            render(Vec::new());
+            let point = caption_rect.get().center();
+            render(vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+            render(vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+            assert_eq!(rename_count.get(), 1, "Caption rename must still work");
+            render(Vec::new());
+            let point = rename_rect.get().center();
+            render(vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+            render(vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+            assert_eq!(rename_count.get(), 2, "Rename button must still work");
+        }
     }
 
     #[test]
