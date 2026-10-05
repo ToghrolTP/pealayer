@@ -24,9 +24,10 @@ async function until(read, predicate, timeout = 35000) {
   throw Error('Timed out waiting for the expected app state');
 }
 async function browse(target, transport = 'rpc') {
+  const before = await api('/api/remote/state');
   if (transport === 'rpc') await rpc('pealayer.remote.browse', { target, use_proxy: false });
   else await command({ command: 'browse_remote', target, use_proxy: false });
-  const state = await until(() => api('/api/remote/state'), s => s.target === target && !s.loading);
+  const state = await until(() => api('/api/remote/state'), s => s.request_id > before.request_id && s.target === target && !s.loading);
   assert.equal(state.use_proxy, false); return state;
 }
 async function thumbnail(url) {

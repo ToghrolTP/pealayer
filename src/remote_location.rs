@@ -46,6 +46,7 @@ pub enum SortBy {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct BrowserState {
+    pub request_id: u64,
     pub previous_file: Option<String>,
     pub next_file: Option<String>,
     pub revision: u64,
@@ -644,6 +645,7 @@ fn request_inner(
         .map_err(|_| "Remote browser unavailable".to_string())?;
     browser.generation += 1;
     let generation = browser.generation;
+    browser.state.request_id = generation;
     browser.state.visible = !background;
     browser.state.target = target.trim().into();
     browser.state.use_proxy = use_proxy;
