@@ -1966,7 +1966,7 @@ fn control_indicator_state(
     ControlIndicatorState::Unknown
 }
 
-fn is_non_user_control(
+pub(crate) fn is_non_user_control(
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
 ) -> bool {

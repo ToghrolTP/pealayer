@@ -789,6 +789,199 @@ fn draw_motion_mode_selector(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 }
 
+const MANAGER_ROW_HEIGHT: f32 = 32.0;
+const MANAGER_ROW_MARGIN: i8 = 10;
+const MANAGER_ROW_VERTICAL_MARGIN: i8 = 1;
+const MANAGER_NAME_HEIGHT: f32 = 27.0;
+const MANAGER_NAME_FONT_SIZE: f32 = 13.0;
+const MANAGER_NAME_ACTION_WIDTH: f32 = 28.0;
+const MANAGER_NAME_GAP: f32 = 4.0;
+
+fn manager_channel_is_dimmed(
+    capabilities: &HardwareCapabilities,
+    control: &HardwareControl,
+    raw_visibility: crate::config::NonUserControlVisibility,
+    track_state: Option<crate::four_d::models::TimelineTrackState>,
+) -> bool {
+    control.hidden
+        || (raw_visibility != crate::config::NonUserControlVisibility::Shown
+            && crate::ui::layout::is_non_user_control(capabilities, control))
+        || track_state.is_some_and(|state| !state.linked || !state.visible)
+}
+
+/// Keep the selection frame and every child within the same fixed outer width.
+/// The row hit target is registered first, so explicit child actions win clicks.
+fn manager_channel_row<R>(
+    ui: &mut egui::Ui,
+    key: &str,
+    layer_id: egui::LayerId,
+    selected: bool,
+    opacity: f32,
+    render: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<(R, egui::Response)> {
+    let width = ui.available_width();
+    let content_width = (width - 2.0 * f32::from(MANAGER_ROW_MARGIN) - 2.0).max(1.0);
+    let content_height = MANAGER_ROW_HEIGHT - 2.0 * f32::from(MANAGER_ROW_VERTICAL_MARGIN) - 2.0;
+    let rect = egui::Rect::from_min_size(
+        ui.next_widget_position(),
+        egui::vec2(width, MANAGER_ROW_HEIGHT),
+    );
+    let id = ui.make_persistent_id(("manager-channel-row", key));
+    ui.scope_builder(egui::UiBuilder::new().id(id).layer_id(layer_id), |ui| {
+        ui.multiply_opacity(opacity);
+        let background = ui.interact(rect, ui.id().with("manage"), egui::Sense::click());
+        let content = egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(
+                MANAGER_ROW_MARGIN,
+                MANAGER_ROW_VERTICAL_MARGIN,
+            ))
+            .corner_radius(6.0)
+            .fill(if selected {
+                ui.visuals().selection.bg_fill.gamma_multiply(0.22)
+            } else {
+                egui::Color32::TRANSPARENT
+            })
+            .stroke(egui::Stroke::new(
+                1.0,
+                if selected {
+                    ui.visuals().selection.bg_fill.gamma_multiply(0.82)
+                } else {
+                    egui::Color32::TRANSPARENT
+                },
+            ))
+            .show(ui, |ui| {
+                ui.set_width(content_width);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(content_width, content_height),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    render,
+                )
+                .inner
+            })
+            .inner;
+        (content, background)
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManagerNameAction {
+    Manage,
+    Rename,
+    Confirm,
+    Cancel,
+}
+
+/// Both modes own the same name-and-actions slot; Confirm and Cancel reduce
+/// the edit's width rather than shifting the channel's remaining controls.
+fn manager_channel_name(
+    ui: &mut egui::Ui,
+    key: &str,
+    name: &str,
+    draft: &mut String,
+    editing: bool,
+    request_focus: bool,
+    width: f32,
+    input_id: egui::Id,
+    manage_help: &str,
+    rename_help: &str,
+    confirm_help: &str,
+    cancel_help: &str,
+) -> Option<ManagerNameAction> {
+    let id = ui.make_persistent_id(("manager-channel-name-slot", key));
+    ui.scope_builder(egui::UiBuilder::new().id(id), |ui| {
+        ui.spacing_mut().item_spacing.x = MANAGER_NAME_GAP;
+        ui.spacing_mut().interact_size.y = MANAGER_NAME_HEIGHT;
+        ui.spacing_mut().button_padding = egui::vec2(4.0, 2.0);
+        ui.allocate_ui_with_layout(
+            egui::vec2(width, MANAGER_NAME_HEIGHT),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                let button = |ui: &mut egui::Ui, role: &str, icon: &str, tooltip: &str| {
+                    let id = ui.make_persistent_id(role);
+                    ui.scope_builder(egui::UiBuilder::new().id(id), |ui| {
+                        ui.add_sized(
+                            [MANAGER_NAME_ACTION_WIDTH, MANAGER_NAME_HEIGHT],
+                            egui::Button::new(
+                                egui::RichText::new(icon).size(MANAGER_NAME_FONT_SIZE),
+                            ),
+                        )
+                        .on_hover_text(tooltip)
+                    })
+                    .inner
+                };
+                if editing {
+                    let input_width =
+                        (width - 2.0 * (MANAGER_NAME_ACTION_WIDTH + MANAGER_NAME_GAP)).max(1.0);
+                    let edit = ui.add_sized(
+                        [input_width, MANAGER_NAME_HEIGHT],
+                        egui::TextEdit::singleline(draft)
+                            .id(input_id)
+                            .font(egui::FontId::proportional(MANAGER_NAME_FONT_SIZE))
+                            .margin(egui::Margin::symmetric(4, 0))
+                            .vertical_align(egui::Align::Center),
+                    );
+                    if request_focus {
+                        edit.request_focus();
+                    }
+                    let confirm = button(ui, "confirm", crate::ui::icons::CHECK, confirm_help);
+                    let cancel = button(ui, "cancel", crate::ui::icons::X, cancel_help);
+                    if cancel.clicked()
+                        || (edit.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)))
+                    {
+                        Some(ManagerNameAction::Cancel)
+                    } else if confirm.clicked()
+                        || ((edit.has_focus() || edit.lost_focus())
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                    {
+                        Some(ManagerNameAction::Confirm)
+                    } else {
+                        None
+                    }
+                } else {
+                    let caption_width =
+                        (width - MANAGER_NAME_ACTION_WIDTH - MANAGER_NAME_GAP).max(1.0);
+                    let caption_id = ui.make_persistent_id("caption");
+                    let caption = ui
+                        .scope_builder(egui::UiBuilder::new().id(caption_id), |ui| {
+                            let (rect, response) = ui.allocate_exact_size(
+                                egui::vec2(caption_width, MANAGER_NAME_HEIGHT),
+                                egui::Sense::click(),
+                            );
+                            let galley = ui.painter().layout_no_wrap(
+                                name.to_string(),
+                                egui::FontId::proportional(MANAGER_NAME_FONT_SIZE),
+                                ui.visuals().strong_text_color(),
+                            );
+                            ui.painter()
+                                .with_clip_rect(rect.intersect(ui.clip_rect()))
+                                .galley(
+                                    egui::pos2(
+                                        rect.left() + 4.0,
+                                        rect.center().y - galley.size().y / 2.0,
+                                    ),
+                                    galley,
+                                    ui.visuals().strong_text_color(),
+                                );
+                            response
+                        })
+                        .inner
+                        .on_hover_text(manage_help);
+                    let rename = button(ui, "rename", crate::ui::icons::PENCIL_SIMPLE, rename_help);
+                    if rename.clicked() {
+                        Some(ManagerNameAction::Rename)
+                    } else if caption.clicked() {
+                        Some(ManagerNameAction::Manage)
+                    } else {
+                        None
+                    }
+                }
+            },
+        )
+        .inner
+    })
+    .inner
+}
+
 fn draw_channel_manager_page(
     app: &mut PealayerApp,
     ui: &mut egui::Ui,
@@ -1038,7 +1231,7 @@ fn draw_channel_manager_page(
                     0.0
                 };
                 let editing = ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
-                let row_height = 32.0;
+                let row_height = MANAGER_ROW_HEIGHT;
                 let row_width = ui.available_width();
                 let predicted_rect = egui::Rect::from_min_size(
                     ui.next_widget_position(),
@@ -1049,15 +1242,6 @@ fn draw_channel_manager_page(
                     .pointer_hover_pos()
                     .is_some_and(|pointer| predicted_rect.contains(pointer));
                 let row_selected = selected.contains(&control.key);
-                if row_selected {
-                    ui.painter().rect(
-                        predicted_rect.shrink(1.0),
-                        6.0,
-                        ui.visuals().selection.bg_fill.gamma_multiply(0.22),
-                        egui::Stroke::new(1.0, ui.visuals().selection.bg_fill.gamma_multiply(0.82)),
-                        egui::StrokeKind::Inside,
-                    );
-                }
                 let order_focused = ui.memory(|memory| memory.has_focus(order_edit_id));
                 let order_alpha = ui.ctx().animate_bool(
                     egui::Id::new(("manager-order-visible", &control.key)),
@@ -1080,382 +1264,377 @@ fn draw_channel_manager_page(
                 } else {
                     parent_layer_id
                 };
-                let row = ui.scope_builder(egui::UiBuilder::new().layer_id(layer_id), |ui| {
-                    if dragging {
-                        ui.set_opacity(0.58);
-                    }
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(row_width, row_height),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            let mut checked = selected.contains(&control.key);
-                            if ui
-                                .checkbox(&mut checked, "")
-                                .on_hover_text(app.tr("Select for bulk actions"))
-                                .changed()
-                            {
-                                if checked {
-                                    selected.insert(control.key.clone());
-                                } else {
-                                    selected.remove(&control.key);
-                                }
-                            }
-                            let indicator_color = if channel_is_active(&capabilities, control) {
-                                if matches!(control.kind.as_str(), "seat" | "motion") {
-                                    crate::ui::layout::motion_direction_color(
-                                        control,
-                                        crate::ui::layout::motion_control_direction(
-                                            &capabilities,
-                                            control,
-                                        ),
-                                    )
-                                } else {
-                                    egui::Color32::from_rgb(52, 211, 153)
-                                }
+                let dimmed = manager_channel_is_dimmed(
+                    &capabilities,
+                    control,
+                    app.non_user_control_visibility,
+                    app.timeline.track_states.get(&timeline_track_key).copied(),
+                );
+                let row = manager_channel_row(
+                    ui,
+                    &control.key,
+                    layer_id,
+                    row_selected,
+                    if dimmed || dragging { 0.58 } else { 1.0 },
+                    |ui| {
+                        let mut checked = selected.contains(&control.key);
+                        if ui
+                            .checkbox(&mut checked, "")
+                            .on_hover_text(app.tr("Select for bulk actions"))
+                            .changed()
+                        {
+                            if checked {
+                                selected.insert(control.key.clone());
                             } else {
-                                ui.visuals().widgets.noninteractive.bg_stroke.color
-                            };
-                            let (indicator_rect, _) = ui
-                                .allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-                            ui.painter().circle_filled(
-                                indicator_rect.center(),
-                                4.5,
-                                indicator_color,
-                            );
-                            crate::ui::layout::hardware_channel_drag_handle(app, ui, control);
-                            ui.label(crate::ui::icons::control(&control.kind, &control.icon));
-                            ui.add_sized(
-                                [38.0, 25.0],
-                                egui::Label::new(
-                                    egui::RichText::new(channel_identity(&capabilities, control))
-                                        .monospace()
-                                        .weak(),
-                                ),
-                            )
-                            .on_hover_text(app.tr("Board channel"));
-
-                            if editing {
-                                let mut draft = ui.data_mut(|data| {
-                                    data.get_temp::<String>(draft_id)
-                                        .unwrap_or_else(|| control.name.clone())
-                                });
-                                let edit = ui.add_sized(
-                                    [
-                                        (ui.available_width() - 348.0 - binding_width).max(130.0),
-                                        27.0,
-                                    ],
-                                    egui::TextEdit::singleline(&mut draft).id(text_edit_id),
-                                );
-                                if ui.data_mut(|data| {
-                                    data.remove_temp::<bool>(focus_pending_id).unwrap_or(false)
-                                }) {
-                                    edit.request_focus();
-                                }
-                                if edit.changed() {
-                                    ui.data_mut(|data| data.insert_temp(draft_id, draft.clone()));
-                                }
-                                if ui.button(crate::ui::icons::CHECK).clicked()
-                                    || (edit.lost_focus()
-                                        && ui.input(|input| input.key_pressed(egui::Key::Enter)))
-                                {
-                                    crate::ui::layout::update_control_name(
-                                        app,
+                                selected.remove(&control.key);
+                            }
+                        }
+                        let indicator_color = if channel_is_active(&capabilities, control) {
+                            if matches!(control.kind.as_str(), "seat" | "motion") {
+                                crate::ui::layout::motion_direction_color(
+                                    control,
+                                    crate::ui::layout::motion_control_direction(
                                         &capabilities,
                                         control,
-                                        draft,
-                                    );
-                                    ui.data_mut(|data| data.insert_temp(edit_id, false));
-                                }
-                                if ui.button(crate::ui::icons::X).clicked() {
-                                    ui.data_mut(|data| data.insert_temp(edit_id, false));
-                                }
+                                    ),
+                                )
                             } else {
-                                let name =
-                                    crate::ui::i18n::visual_text(app.language, &control.name);
-                                let response = crate::ui::layout::left_aligned_click_label(
-                                    ui,
-                                    &name,
-                                    (ui.available_width() - 348.0 - binding_width).max(130.0),
-                                    27.0,
-                                    13.0,
-                                );
-                                if response.clicked()
-                                    || ui
-                                        .button(crate::ui::icons::PENCIL_SIMPLE)
-                                        .on_hover_text(app.tr("Rename"))
-                                        .clicked()
-                                {
-                                    ui.data_mut(|data| {
-                                        data.insert_temp(draft_id, control.name.clone());
-                                        data.insert_temp(edit_id, true);
-                                        data.insert_temp(focus_pending_id, true);
-                                    });
-                                }
+                                egui::Color32::from_rgb(52, 211, 153)
                             }
+                        } else {
+                            ui.visuals().widgets.noninteractive.bg_stroke.color
+                        };
+                        let (indicator_rect, _) =
+                            ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                        ui.painter()
+                            .circle_filled(indicator_rect.center(), 4.5, indicator_color);
+                        crate::ui::layout::hardware_channel_drag_handle(app, ui, control);
+                        ui.label(crate::ui::icons::control(&control.kind, &control.icon));
+                        ui.add_sized(
+                            [38.0, 25.0],
+                            egui::Label::new(
+                                egui::RichText::new(channel_identity(&capabilities, control))
+                                    .monospace()
+                                    .weak(),
+                            ),
+                        )
+                        .on_hover_text(app.tr("Board channel"));
 
-                            if let Some((shortcut, details)) = binding_summary.as_ref()
-                                && ui
-                                    .add_sized(
-                                        [124.0, 25.0],
-                                        egui::Button::new(format!(
-                                            "{} {}",
-                                            crate::ui::icons::KEYBOARD,
-                                            shortcut
-                                        )),
-                                    )
-                                    .on_hover_text(details)
-                                    .clicked()
-                            {
-                                app.open_hardware_bindings_for_channel(&control.key);
-                            }
-
-                            draw_manager_live_action(app, ui, &capabilities, control);
-                            let peers = controls
-                                .iter()
-                                .filter(|candidate| candidate.kind == control.kind)
-                                .collect::<Vec<_>>();
-                            let position = peers
-                                .iter()
-                                .position(|candidate| candidate.key == control.key)
-                                .unwrap_or_default();
-                            ui.scope(|ui| {
-                                ui.set_opacity(order_alpha);
-                                ui.spacing_mut().item_spacing.x = 3.0;
-                                let mut order_draft = ui.data_mut(|data| {
-                                    data.get_temp::<String>(order_draft_id)
-                                        .unwrap_or_else(|| (control.order + 1).to_string())
-                                });
-                                let order_valid =
-                                    parse_display_order(&order_draft, peers.len()).is_some();
-                                let order_edit = ui
-                                    .scope(|ui| {
-                                        if !order_valid {
-                                            ui.visuals_mut().widgets.active.bg_stroke =
-                                                egui::Stroke::new(1.0, ui.visuals().error_fg_color);
-                                        }
-                                        ui.add_sized(
-                                            [42.0, 25.0],
-                                            egui::TextEdit::singleline(&mut order_draft)
-                                                .id(order_edit_id)
-                                                .horizontal_align(egui::Align::Center)
-                                                .vertical_align(egui::Align::Center)
-                                                .font(egui::TextStyle::Monospace)
-                                                .char_limit(3),
-                                        )
-                                    })
-                                    .inner
-                                    .on_hover_text(format!(
-                                        "{} · 1–{}",
-                                        app.tr("Order"),
-                                        peers.len()
-                                    ));
-                                if order_edit.changed() {
-                                    ui.data_mut(|data| {
-                                        data.insert_temp(order_draft_id, order_draft.clone())
-                                    });
-                                }
-                                let commit_order = order_edit.lost_focus()
-                                    || (order_edit.has_focus()
-                                        && ui.input(|input| input.key_pressed(egui::Key::Enter)));
-                                if commit_order {
-                                    if let Some(value) =
-                                        parse_display_order(&order_draft, peers.len())
-                                    {
-                                        crate::ui::layout::set_control_order(
-                                            app,
-                                            &capabilities,
-                                            &control.key,
-                                            value,
-                                        );
-                                        ui.data_mut(|data| {
-                                            data.remove_temp::<String>(order_draft_id);
-                                        });
-                                    } else {
-                                        app.set_osd(format!(
-                                            "{} 1–{}",
-                                            app.tr("Order must be between"),
-                                            peers.len()
-                                        ));
-                                        order_edit.request_focus();
-                                    }
-                                }
-                                if ui
-                                    .add_enabled(
-                                        position > 0,
-                                        egui::Button::new(crate::ui::icons::ARROW_UP)
-                                            .min_size(egui::vec2(27.0, 25.0)),
-                                    )
-                                    .on_hover_text(app.tr("Move up"))
-                                    .clicked()
-                                {
-                                    crate::ui::layout::move_control_by(
-                                        app,
-                                        &capabilities,
-                                        &control.key,
-                                        -1,
-                                    );
-                                }
-                                if ui
-                                    .add_enabled(
-                                        position + 1 < peers.len(),
-                                        egui::Button::new(crate::ui::icons::ARROW_DOWN)
-                                            .min_size(egui::vec2(27.0, 25.0)),
-                                    )
-                                    .on_hover_text(app.tr("Move down"))
-                                    .clicked()
-                                {
-                                    crate::ui::layout::move_control_by(
-                                        app,
-                                        &capabilities,
-                                        &control.key,
-                                        1,
-                                    );
-                                }
+                        let mut draft = ui.data_mut(|data| {
+                            data.get_temp::<String>(draft_id)
+                                .unwrap_or_else(|| control.name.clone())
+                        });
+                        let request_focus = editing
+                            && ui.data_mut(|data| {
+                                data.remove_temp::<bool>(focus_pending_id).unwrap_or(false)
                             });
-                            egui::containers::menu::MenuButton::from_button(
-                                egui::Button::new(crate::ui::icons::DOTS_THREE)
-                                    .min_size(egui::vec2(30.0, 25.0)),
-                            )
-                            .ui(ui, |ui| {
-                                if ui
-                                    .button(format!(
-                                        "{} {}",
-                                        crate::ui::icons::SLIDERS_HORIZONTAL,
-                                        app.tr("Manage...")
-                                    ))
-                                    .clicked()
-                                {
-                                    open_detail(app, &capabilities, control);
-                                    ui.close();
-                                }
-                                if ui
-                                    .button(format!(
+                        // Reserve the maximum live-action width (including
+                        // contextual motion Stop), order controls and menu.
+                        let name_width = (ui.available_width() - 368.0 - binding_width).max(130.0);
+                        let name = crate::ui::i18n::visual_text(app.language, &control.name);
+                        let name_action = manager_channel_name(
+                            ui,
+                            &control.key,
+                            &name,
+                            &mut draft,
+                            editing,
+                            request_focus,
+                            name_width,
+                            text_edit_id,
+                            &app.tr("Manage..."),
+                            &app.tr("Rename"),
+                            &app.tr("Confirm rename"),
+                            &app.tr("Cancel"),
+                        );
+                        if editing {
+                            ui.data_mut(|data| data.insert_temp(draft_id, draft.clone()));
+                        }
+                        match name_action {
+                            Some(ManagerNameAction::Manage) => {
+                                open_detail(app, &capabilities, control)
+                            }
+                            Some(ManagerNameAction::Confirm) => {
+                                crate::ui::layout::update_control_name(
+                                    app,
+                                    &capabilities,
+                                    control,
+                                    draft,
+                                );
+                                ui.data_mut(|data| data.insert_temp(edit_id, false));
+                            }
+                            Some(ManagerNameAction::Cancel) => {
+                                ui.data_mut(|data| data.insert_temp(edit_id, false));
+                            }
+                            Some(ManagerNameAction::Rename) => {
+                                ui.data_mut(|data| {
+                                    data.insert_temp(draft_id, control.name.clone());
+                                    data.insert_temp(edit_id, true);
+                                    data.insert_temp(focus_pending_id, true);
+                                });
+                            }
+                            None => {}
+                        }
+
+                        if let Some((shortcut, details)) = binding_summary.as_ref()
+                            && ui
+                                .add_sized(
+                                    [124.0, 25.0],
+                                    egui::Button::new(format!(
                                         "{} {}",
                                         crate::ui::icons::KEYBOARD,
-                                        app.tr("Keyboard bindings...")
-                                    ))
-                                    .clicked()
-                                {
-                                    app.open_hardware_bindings_for_channel(&control.key);
-                                    ui.close();
-                                }
-                                if ui
-                                    .button(format!(
-                                        "{} {}",
-                                        crate::ui::icons::PUSH_PIN,
-                                        app.tr("Pin to top")
-                                    ))
-                                    .clicked()
+                                        shortcut
+                                    )),
+                                )
+                                .on_hover_text(details)
+                                .clicked()
+                        {
+                            app.open_hardware_bindings_for_channel(&control.key);
+                        }
+
+                        draw_manager_live_action(app, ui, &capabilities, control);
+                        let peers = controls
+                            .iter()
+                            .filter(|candidate| candidate.kind == control.kind)
+                            .collect::<Vec<_>>();
+                        let position = peers
+                            .iter()
+                            .position(|candidate| candidate.key == control.key)
+                            .unwrap_or_default();
+                        ui.scope(|ui| {
+                            ui.multiply_opacity(order_alpha);
+                            ui.spacing_mut().item_spacing.x = 3.0;
+                            let mut order_draft = ui.data_mut(|data| {
+                                data.get_temp::<String>(order_draft_id)
+                                    .unwrap_or_else(|| (control.order + 1).to_string())
+                            });
+                            let order_valid =
+                                parse_display_order(&order_draft, peers.len()).is_some();
+                            let order_edit = ui
+                                .scope(|ui| {
+                                    if !order_valid {
+                                        ui.visuals_mut().widgets.active.bg_stroke =
+                                            egui::Stroke::new(1.0, ui.visuals().error_fg_color);
+                                    }
+                                    ui.add_sized(
+                                        [42.0, 25.0],
+                                        egui::TextEdit::singleline(&mut order_draft)
+                                            .id(order_edit_id)
+                                            .horizontal_align(egui::Align::Center)
+                                            .vertical_align(egui::Align::Center)
+                                            .font(egui::TextStyle::Monospace)
+                                            .char_limit(3),
+                                    )
+                                })
+                                .inner
+                                .on_hover_text(format!("{} · 1–{}", app.tr("Order"), peers.len()));
+                            if order_edit.changed() {
+                                ui.data_mut(|data| {
+                                    data.insert_temp(order_draft_id, order_draft.clone())
+                                });
+                            }
+                            let commit_order = order_edit.lost_focus()
+                                || (order_edit.has_focus()
+                                    && ui.input(|input| input.key_pressed(egui::Key::Enter)));
+                            if commit_order {
+                                if let Some(value) = parse_display_order(&order_draft, peers.len())
                                 {
                                     crate::ui::layout::set_control_order(
                                         app,
                                         &capabilities,
                                         &control.key,
-                                        0,
+                                        value,
                                     );
-                                    ui.close();
+                                    ui.data_mut(|data| {
+                                        data.remove_temp::<String>(order_draft_id);
+                                    });
+                                } else {
+                                    app.set_osd(format!(
+                                        "{} 1–{}",
+                                        app.tr("Order must be between"),
+                                        peers.len()
+                                    ));
+                                    order_edit.request_focus();
                                 }
-                                let track_state = app.timeline.track_state(&timeline_track_key);
-                                if ui
-                                    .button(format!(
+                            }
+                            if ui
+                                .add_enabled(
+                                    position > 0,
+                                    egui::Button::new(crate::ui::icons::ARROW_UP)
+                                        .min_size(egui::vec2(27.0, 25.0)),
+                                )
+                                .on_hover_text(app.tr("Move up"))
+                                .clicked()
+                            {
+                                crate::ui::layout::move_control_by(
+                                    app,
+                                    &capabilities,
+                                    &control.key,
+                                    -1,
+                                );
+                            }
+                            if ui
+                                .add_enabled(
+                                    position + 1 < peers.len(),
+                                    egui::Button::new(crate::ui::icons::ARROW_DOWN)
+                                        .min_size(egui::vec2(27.0, 25.0)),
+                                )
+                                .on_hover_text(app.tr("Move down"))
+                                .clicked()
+                            {
+                                crate::ui::layout::move_control_by(
+                                    app,
+                                    &capabilities,
+                                    &control.key,
+                                    1,
+                                );
+                            }
+                        });
+                        egui::containers::menu::MenuButton::from_button(
+                            egui::Button::new(crate::ui::icons::DOTS_THREE)
+                                .min_size(egui::vec2(30.0, 25.0)),
+                        )
+                        .ui(ui, |ui| {
+                            if ui
+                                .button(format!(
+                                    "{} {}",
+                                    crate::ui::icons::SLIDERS_HORIZONTAL,
+                                    app.tr("Manage...")
+                                ))
+                                .clicked()
+                            {
+                                open_detail(app, &capabilities, control);
+                                ui.close();
+                            }
+                            if ui
+                                .button(format!(
+                                    "{} {}",
+                                    crate::ui::icons::KEYBOARD,
+                                    app.tr("Keyboard bindings...")
+                                ))
+                                .clicked()
+                            {
+                                app.open_hardware_bindings_for_channel(&control.key);
+                                ui.close();
+                            }
+                            if ui
+                                .button(format!(
+                                    "{} {}",
+                                    crate::ui::icons::PUSH_PIN,
+                                    app.tr("Pin to top")
+                                ))
+                                .clicked()
+                            {
+                                crate::ui::layout::set_control_order(
+                                    app,
+                                    &capabilities,
+                                    &control.key,
+                                    0,
+                                );
+                                ui.close();
+                            }
+                            let track_state = app.timeline.track_state(&timeline_track_key);
+                            if ui
+                                .button(format!(
+                                    "{} {}",
+                                    crate::ui::icons::LINK,
+                                    if track_state.linked {
+                                        app.tr("Unlink from timeline")
+                                    } else {
+                                        app.tr("Link to timeline")
+                                    }
+                                ))
+                                .clicked()
+                            {
+                                app.set_timeline_track_linked(
+                                    &timeline_track_key,
+                                    !track_state.linked,
+                                );
+                                ui.close();
+                            }
+                            if ui
+                                .add_enabled(
+                                    track_state.linked,
+                                    egui::Button::new(format!(
                                         "{} {}",
-                                        crate::ui::icons::LINK,
-                                        if track_state.linked {
-                                            app.tr("Unlink from timeline")
-                                        } else {
-                                            app.tr("Link to timeline")
-                                        }
-                                    ))
-                                    .clicked()
-                                {
-                                    app.set_timeline_track_linked(
-                                        &timeline_track_key,
-                                        !track_state.linked,
-                                    );
-                                    ui.close();
-                                }
-                                if ui
-                                    .add_enabled(
-                                        track_state.linked,
-                                        egui::Button::new(format!(
-                                            "{} {}",
-                                            if track_state.visible {
-                                                crate::ui::icons::EYE_SLASH
-                                            } else {
-                                                crate::ui::icons::EYE
-                                            },
-                                            if track_state.visible {
-                                                app.tr("Hide timeline track")
-                                            } else {
-                                                app.tr("Show timeline track")
-                                            }
-                                        )),
-                                    )
-                                    .clicked()
-                                {
-                                    app.set_timeline_track_visible(
-                                        &timeline_track_key,
-                                        !track_state.visible,
-                                    );
-                                    ui.close();
-                                }
-                                ui.separator();
-                                if ui
-                                    .button(format!(
-                                        "{} {}",
-                                        if control.hidden {
-                                            crate::ui::icons::EYE
-                                        } else {
+                                        if track_state.visible {
                                             crate::ui::icons::EYE_SLASH
+                                        } else {
+                                            crate::ui::icons::EYE
                                         },
-                                        if control.hidden {
-                                            app.tr("Show in Hardware Monitor")
+                                        if track_state.visible {
+                                            app.tr("Hide timeline track")
                                         } else {
-                                            app.tr("Hide from Hardware Monitor")
+                                            app.tr("Show timeline track")
                                         }
-                                    ))
-                                    .clicked()
-                                {
-                                    crate::ui::layout::update_control_presentation_flags(
-                                        app,
-                                        &capabilities,
-                                        control,
-                                        Some(!control.hidden),
-                                        None,
-                                    );
-                                    ui.close();
-                                }
-                                if ui
-                                    .button(format!(
-                                        "{} {}",
-                                        if control.locked {
-                                            crate::ui::icons::LOCK
-                                        } else {
-                                            crate::ui::icons::POWER
-                                        },
-                                        if control.locked {
-                                            app.tr("Unlock channel")
-                                        } else {
-                                            app.tr("Lock channel")
-                                        }
-                                    ))
-                                    .clicked()
-                                {
-                                    crate::ui::layout::update_control_presentation_flags(
-                                        app,
-                                        &capabilities,
-                                        control,
-                                        None,
-                                        Some(!control.locked),
-                                    );
-                                    ui.close();
-                                }
-                            })
-                            .0
-                            .on_hover_text(app.tr("Channel actions"));
-                        },
-                    )
-                });
+                                    )),
+                                )
+                                .clicked()
+                            {
+                                app.set_timeline_track_visible(
+                                    &timeline_track_key,
+                                    !track_state.visible,
+                                );
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui
+                                .button(format!(
+                                    "{} {}",
+                                    if control.hidden {
+                                        crate::ui::icons::EYE
+                                    } else {
+                                        crate::ui::icons::EYE_SLASH
+                                    },
+                                    if control.hidden {
+                                        app.tr("Show in Hardware Monitor")
+                                    } else {
+                                        app.tr("Hide from Hardware Monitor")
+                                    }
+                                ))
+                                .clicked()
+                            {
+                                crate::ui::layout::update_control_presentation_flags(
+                                    app,
+                                    &capabilities,
+                                    control,
+                                    Some(!control.hidden),
+                                    None,
+                                );
+                                ui.close();
+                            }
+                            if ui
+                                .button(format!(
+                                    "{} {}",
+                                    if control.locked {
+                                        crate::ui::icons::LOCK
+                                    } else {
+                                        crate::ui::icons::POWER
+                                    },
+                                    if control.locked {
+                                        app.tr("Unlock channel")
+                                    } else {
+                                        app.tr("Lock channel")
+                                    }
+                                ))
+                                .clicked()
+                            {
+                                crate::ui::layout::update_control_presentation_flags(
+                                    app,
+                                    &capabilities,
+                                    control,
+                                    None,
+                                    Some(!control.locked),
+                                );
+                                ui.close();
+                            }
+                        })
+                        .0
+                        .on_hover_text(app.tr("Channel actions"));
+                    },
+                );
+                if row.inner.1.clicked() && !editing && !dragging {
+                    open_detail(app, &capabilities, control);
+                }
                 let row_rect = row.response.rect;
                 // If this frame started the drag, the row was still painted
                 // on the parent layer. Transform an empty private layer for
@@ -2982,6 +3161,322 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manager_rows_inset_selection_children_and_preserve_opacity() {
+        for dark in [false, true] {
+            for width in [600.0, 980.0] {
+                let context = egui::Context::default();
+                context.set_visuals(if dark {
+                    egui::Visuals::dark()
+                } else {
+                    egui::Visuals::light()
+                });
+                let mut rectangles = None;
+                let mut output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1100.0, 200.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.set_width(width);
+                        let layer_id = ui.layer_id();
+                        let row = manager_channel_row(ui, "relay.5", layer_id, true, 0.58, |ui| {
+                            let mut selected = true;
+                            let checkbox = ui.checkbox(&mut selected, "").rect;
+                            let remaining = ui.available_width();
+                            ui.allocate_exact_size(
+                                egui::vec2(remaining - 36.0, 27.0),
+                                egui::Sense::hover(),
+                            );
+                            let opacity = ui.opacity();
+                            let (last, order_opacity) = ui
+                                .scope(|ui| {
+                                    ui.multiply_opacity(0.5);
+                                    (
+                                        ui.add_sized([28.0, 27.0], egui::Button::new("...")).rect,
+                                        ui.opacity(),
+                                    )
+                                })
+                                .inner;
+                            (checkbox, last, opacity, order_opacity)
+                        });
+                        rectangles = Some((row.response.rect, row.inner.0));
+                    },
+                );
+                output.textures_delta.clear();
+                let (row, (checkbox, last, opacity, order_opacity)) = rectangles.unwrap();
+                assert!(
+                    (row.width() - width).abs() < 0.1,
+                    "row must not expand past its parent: {row:?}"
+                );
+                assert!(
+                    checkbox.left() - row.left() >= 10.0,
+                    "checkbox needs an inset: {checkbox:?} in {row:?}"
+                );
+                assert!(
+                    row.right() - last.right() >= 10.0,
+                    "last action needs a right inset: {last:?} in {row:?}"
+                );
+                assert!((opacity - 0.58).abs() < 0.001);
+                assert!(
+                    (order_opacity - 0.29).abs() < 0.001,
+                    "hover fade must preserve row dimming"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn manager_rename_keeps_caption_font_position_and_action_slot_width() {
+        let mut layouts = Vec::new();
+        for editing in [false, true] {
+            let context = egui::Context::default();
+            let mut following = egui::Rect::NOTHING;
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 120.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.horizontal(|ui| {
+                        let mut draft = "Cinema output".to_string();
+                        manager_channel_name(
+                            ui,
+                            "relay.5",
+                            "Cinema output",
+                            &mut draft,
+                            editing,
+                            false,
+                            240.0,
+                            egui::Id::new("rename-test"),
+                            "Manage",
+                            "Rename",
+                            "Confirm",
+                            "Cancel",
+                        );
+                        following = ui.button("Next action").rect;
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            let text = output
+                .shapes
+                .iter()
+                .find_map(|shape| {
+                    if let egui::epaint::Shape::Text(text) = &shape.shape
+                        && text.galley.job.text == "Cinema output"
+                    {
+                        Some((text.pos, text.galley.job.sections[0].format.font_id.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .expect("caption text must be rendered in both modes");
+            layouts.push((following, text));
+        }
+        assert_eq!(
+            layouts[0].0, layouts[1].0,
+            "Confirm/Cancel must fit inside the original name slot"
+        );
+        assert!(
+            (layouts[0].1.0.x - layouts[1].1.0.x).abs() < 0.1,
+            "text must not shift horizontally"
+        );
+        assert!(
+            (layouts[0].1.0.y - layouts[1].1.0.y).abs() < 0.1,
+            "text must not shift vertically"
+        );
+        assert_eq!(
+            layouts[0].1.1, layouts[1].1.1,
+            "display and edit must use the same font"
+        );
+    }
+
+    #[test]
+    fn manager_channel_dimming_tracks_monitor_raw_and_timeline_visibility() {
+        use crate::config::NonUserControlVisibility as Visibility;
+        use crate::four_d::models::TimelineTrackState;
+        let capabilities = HardwareCapabilities::default();
+        let mut control = HardwareControl {
+            key: "relay.5".to_string(),
+            kind: "relay".to_string(),
+            ..Default::default()
+        };
+        assert!(!manager_channel_is_dimmed(
+            &capabilities,
+            &control,
+            Visibility::Dimmed,
+            None
+        ));
+        control.hidden = true;
+        assert!(manager_channel_is_dimmed(
+            &capabilities,
+            &control,
+            Visibility::Shown,
+            None
+        ));
+        control.hidden = false;
+        for state in [
+            TimelineTrackState {
+                linked: true,
+                visible: false,
+            },
+            TimelineTrackState {
+                linked: false,
+                visible: true,
+            },
+        ] {
+            assert!(manager_channel_is_dimmed(
+                &capabilities,
+                &control,
+                Visibility::Shown,
+                Some(state)
+            ));
+        }
+        control.key = "relay.1".to_string();
+        assert!(manager_channel_is_dimmed(
+            &capabilities,
+            &control,
+            Visibility::Dimmed,
+            None
+        ));
+        assert!(manager_channel_is_dimmed(
+            &capabilities,
+            &control,
+            Visibility::Hidden,
+            None
+        ));
+        assert!(!manager_channel_is_dimmed(
+            &capabilities,
+            &control,
+            Visibility::Shown,
+            None
+        ));
+    }
+
+    #[test]
+    fn manager_row_click_manages_without_stealing_checkbox_or_rename_actions() {
+        let context = egui::Context::default();
+        let mut selected = false;
+        let mut editing = false;
+        let mut draft = "Cinema output".to_string();
+        let mut checkbox_rect = egui::Rect::NOTHING;
+        let mut name_rect = egui::Rect::NOTHING;
+        let mut row_rect = egui::Rect::NOTHING;
+        let mut actions = Vec::new();
+        let mut render = |events| {
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 180.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.set_width(520.0);
+                    let layer = ui.layer_id();
+                    let row = manager_channel_row(ui, "relay.5", layer, selected, 1.0, |ui| {
+                        checkbox_rect = ui.checkbox(&mut selected, "").rect;
+                        let start = ui.next_widget_position();
+                        name_rect = egui::Rect::from_min_size(
+                            start,
+                            egui::vec2(240.0, MANAGER_NAME_HEIGHT),
+                        );
+                        if let Some(action) = manager_channel_name(
+                            ui,
+                            "relay.5",
+                            "Cinema output",
+                            &mut draft,
+                            editing,
+                            false,
+                            240.0,
+                            egui::Id::new("pointer-rename-test"),
+                            "Manage",
+                            "Rename",
+                            "Confirm",
+                            "Cancel",
+                        ) {
+                            actions.push(action);
+                            editing = action == ManagerNameAction::Rename;
+                        }
+                    });
+                    row_rect = row.response.rect;
+                    if row.inner.1.clicked() && !editing {
+                        actions.push(ManagerNameAction::Manage);
+                    }
+                },
+            );
+            output.textures_delta.clear();
+            (
+                checkbox_rect,
+                name_rect,
+                row_rect,
+                selected,
+                actions.clone(),
+            )
+        };
+        let click_events = |point, pressed| {
+            vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        render(Vec::new());
+        let (checkbox, name, row, _, _) = render(Vec::new());
+        let point = checkbox.center();
+        render(click_events(point, true));
+        let (_, _, _, checked, actions) = render(click_events(point, false));
+        assert!(checked);
+        assert!(actions.is_empty(), "bulk selection must not open Manage");
+        let point = egui::pos2(name.left() + 35.0, row.center().y);
+        render(click_events(point, true));
+        let (_, _, _, _, actions) = render(click_events(point, false));
+        assert_eq!(actions, vec![ManagerNameAction::Manage]);
+        let point = egui::pos2(row.right() - 20.0, row.center().y);
+        render(click_events(point, true));
+        let (_, _, _, _, actions) = render(click_events(point, false));
+        assert_eq!(
+            actions,
+            vec![ManagerNameAction::Manage; 2],
+            "empty row space opens Manage"
+        );
+        let point = egui::pos2(
+            name.right() - MANAGER_NAME_ACTION_WIDTH / 2.0,
+            row.center().y,
+        );
+        render(click_events(point, true));
+        let (_, _, _, _, actions) = render(click_events(point, false));
+        assert_eq!(
+            actions,
+            vec![
+                ManagerNameAction::Manage,
+                ManagerNameAction::Manage,
+                ManagerNameAction::Rename
+            ]
+        );
+        render(Vec::new());
+        let point = egui::pos2(
+            name.right() - MANAGER_NAME_ACTION_WIDTH * 1.5 - MANAGER_NAME_GAP,
+            row.center().y,
+        );
+        render(click_events(point, true));
+        let (_, _, _, _, actions) = render(click_events(point, false));
+        assert_eq!(actions.last(), Some(&ManagerNameAction::Confirm));
+    }
 
     #[test]
     fn channel_bulk_selection_handles_all_none_invert_and_stale_keys() {
