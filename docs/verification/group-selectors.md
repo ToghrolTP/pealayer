@@ -43,3 +43,23 @@ The existing `category` storage key remains intact to preserve saved memberships
 user-facing labels consistently say **Group**.
 
 Automated renderer/input checks are not physical-board or desktop screenshot proof.
+
+## Live verification, 2026-10-05
+
+- Canonical local Pealayer build `3d9851c` is running; PCController was updated
+  through its own verified upload/restart operation, not a forced process kill.
+- Right-clicking unused Web Effects Library space opened **New effect / New group**.
+- Created the real empty **Motion** group using that dialog. PCController's
+  persisted configuration and live snapshot contain it; Pealayer subsequently
+  displayed it with zero effects. Existing four effects were unchanged.
+- Manage → Group offered Cinema, Lighting, Motion and **New...**, with no arbitrary
+  assignment option. New... opened the creation dialog without replacing the
+  current effect draft. Both edit dialogs were closed without saving an effect.
+- Windows native capture failed twice with `CreateForMonitor` error `0x8007041D`;
+  native visual/pointer acceptance is not claimed. Native renderer interaction
+  checks passed. CAFE-PC HTTP health probe timed out, so no remote deployment is
+  claimed for this pass.
+
+![Live Group selector](screenshots/effect-group-selector.jpg)
+
+![Empty-space menu and persisted empty Motion group](screenshots/effect-group-empty-space-menu.jpg)
