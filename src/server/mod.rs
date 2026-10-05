@@ -258,6 +258,7 @@ fn spawn_control_server_on_addresses_with_channel(
     state_tx: Sender<String>,
     state_rx: Receiver<String>,
 ) -> Sender<String> {
+    crate::update::manager().register_gui_context(egui_ctx.clone());
     let latest_status = Arc::new(Mutex::new(None));
     let websocket_clients: Arc<Mutex<Vec<Sender<String>>>> = Arc::new(Mutex::new(Vec::new()));
 

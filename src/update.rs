@@ -145,6 +145,7 @@ struct UpdateInner {
 #[derive(Clone, Default)]
 pub struct UpdateManager {
     inner: Arc<Mutex<UpdateInner>>,
+    gui_context: Arc<Mutex<Option<eframe::egui::Context>>>,
 }
 
 static GLOBAL_MANAGER: OnceLock<UpdateManager> = OnceLock::new();
@@ -154,6 +155,44 @@ pub fn manager() -> UpdateManager {
 }
 
 impl UpdateManager {
+    pub fn register_gui_context(&self, context: eframe::egui::Context) {
+        if let Ok(mut current) = self.gui_context.lock() {
+            *current = Some(context);
+        }
+    }
+
+    fn wake_gui(&self) {
+        let context = self
+            .gui_context
+            .lock()
+            .ok()
+            .and_then(|current| current.clone());
+        if let Some(context) = context {
+            context.request_repaint();
+        }
+    }
+
+    fn dispatch_quit(
+        &self,
+        command_tx: &std::sync::mpsc::Sender<crate::platform::interop::InteropCommand>,
+    ) {
+        if command_tx
+            .send(crate::platform::interop::InteropCommand::Quit)
+            .is_ok()
+        {
+            // An idle/paused eframe window may have no more frames scheduled.
+            // Wake AFTER enqueueing Quit, not before the 350 ms response delay.
+            self.wake_gui();
+        } else {
+            let status = self.status();
+            self.fail(
+                status.operation_id,
+                status.source,
+                "application dispatcher is unavailable",
+            );
+        }
+    }
+
     pub fn status(&self) -> UpdateStatus {
         self.inner
             .lock()
@@ -170,6 +209,7 @@ impl UpdateManager {
         if let Ok(mut inner) = self.inner.lock() {
             inner.status = status;
         }
+        self.wake_gui();
     }
 
     fn fail(&self, operation_id: Option<String>, source: Option<String>, error: impl ToString) {
@@ -217,10 +257,7 @@ impl UpdateManager {
         }
         let operation_id = format!("update-{}", uuid::Uuid::new_v4());
         let path = update_scratch_path(&operation_id, "download")?;
-        let file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&path)
+        let file = create_update_file(&path, true)
             .map_err(|error| format!("create staged update: {error}"))?;
         let status = UpdateStatus {
             operation_id: Some(operation_id.clone()),
@@ -244,6 +281,8 @@ impl UpdateManager {
             version: request.version,
         });
         inner.status = status.clone();
+        drop(inner);
+        self.wake_gui();
         Ok(status)
     }
 
@@ -292,7 +331,10 @@ impl UpdateManager {
             format_bytes(next),
             format_bytes(expected_size)
         );
-        Ok(inner.status.clone())
+        let status = inner.status.clone();
+        drop(inner);
+        self.wake_gui();
+        Ok(status)
     }
 
     pub fn finish_upload(
@@ -317,6 +359,7 @@ impl UpdateManager {
             inner.status.message = "Verifying staged update".to_string();
             upload
         };
+        self.wake_gui();
         let source = Some("peer-upload".to_string());
         match finalize_upload_file(upload) {
             Ok((path, expected_sha256, version, size)) => self.stage_and_restart(
@@ -348,19 +391,32 @@ impl UpdateManager {
             inner.upload = Some(upload);
             return Err("update operation id does not match the active upload".to_string());
         }
-        let _ = fs::remove_file(upload.path);
+        let ActiveUpload {
+            path,
+            file,
+            received,
+            expected_size,
+            expected_sha256,
+            version,
+            ..
+        } = upload;
+        drop(file);
+        fs::remove_file(path).map_err(|error| format!("remove aborted update: {error}"))?;
         inner.status = UpdateStatus {
             operation_id: Some(operation_id.to_string()),
             state: "aborted".to_string(),
             source: Some("peer-upload".to_string()),
-            bytes_done: upload.received,
-            bytes_total: Some(upload.expected_size),
-            sha256: Some(upload.expected_sha256),
-            version: upload.version,
+            bytes_done: received,
+            bytes_total: Some(expected_size),
+            sha256: Some(expected_sha256),
+            version,
             message: "Peer update upload aborted and staging file removed".to_string(),
             error: None,
         };
-        Ok(inner.status.clone())
+        let status = inner.status.clone();
+        drop(inner);
+        self.wake_gui();
+        Ok(status)
     }
 
     pub fn fetch_and_apply(
@@ -401,6 +457,7 @@ impl UpdateManager {
             };
         }
         let manager = self.clone();
+        self.wake_gui();
         let returned = self.status();
         std::thread::spawn(move || {
             match download_update(&manager, &operation_id, &source, expected.as_deref()) {
@@ -465,9 +522,10 @@ impl UpdateManager {
             error: None,
         };
         self.replace_status(status.clone());
+        let manager = self.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(350));
-            let _ = command_tx.send(crate::platform::interop::InteropCommand::Quit);
+            manager.dispatch_quit(&command_tx);
         });
         Ok(status)
     }
@@ -525,7 +583,8 @@ fn download_update(
         validate_update_size(size)?;
     }
     let path = update_scratch_path(operation_id, "download")?;
-    let mut file = File::create(&path).map_err(|error| format!("create update file: {error}"))?;
+    let mut file =
+        create_update_file(&path, true).map_err(|error| format!("create update file: {error}"))?;
     let mut hash = Sha256::new();
     let mut bytes_done = 0_u64;
     let mut buffer = vec![0_u8; 128 * 1024];
@@ -553,6 +612,7 @@ fn download_update(
                 None => format!("Downloaded {}", format_bytes(bytes_done)),
             };
         }
+        manager.wake_gui();
     }
     file.flush().map_err(|error| error.to_string())?;
     file.sync_all().map_err(|error| error.to_string())?;
@@ -581,6 +641,7 @@ fn download_update(
         inner.status.version = version.clone();
         inner.status.message = "Verifying downloaded executable".to_string();
     }
+    manager.wake_gui();
     Ok((path, actual, version, bytes_done))
 }
 
@@ -747,7 +808,7 @@ fn extract_zip_executable(operation_id: &str, archive_path: &Path) -> Result<Pat
         }
         validate_update_size(entry.size())?;
         let output = update_scratch_path(operation_id, "candidate")?;
-        let mut file = File::create(&output)
+        let mut file = create_update_file(&output, true)
             .map_err(|error| format!("create extracted executable: {error}"))?;
         std::io::copy(&mut entry, &mut file)
             .map_err(|error| format!("extract executable from ZIP: {error}"))?;
@@ -776,7 +837,7 @@ fn extract_tar_gz_executable(operation_id: &str, archive_path: &Path) -> Result<
         let size = entry.size();
         validate_update_size(size)?;
         let output = update_scratch_path(operation_id, "candidate")?;
-        let mut file = File::create(&output)
+        let mut file = create_update_file(&output, true)
             .map_err(|error| format!("create extracted executable: {error}"))?;
         std::io::copy(&mut entry, &mut file)
             .map_err(|error| format!("extract executable from TAR.GZ: {error}"))?;
@@ -1118,8 +1179,15 @@ fn prepare_self_update(
     for stale in [&helper_path, &journal_path, &backup_path, &health_path] {
         let _ = fs::remove_file(stale);
     }
-    fs::copy(&current_path, &helper_path)
+    let mut original =
+        File::open(&current_path).map_err(|error| format!("read update helper: {error}"))?;
+    let mut helper = create_update_file(&helper_path, true)
+        .map_err(|error| format!("create update helper: {error}"))?;
+    std::io::copy(&mut original, &mut helper)
         .map_err(|error| format!("stage update helper: {error}"))?;
+    helper.sync_all().map_err(|error| error.to_string())?;
+    drop(helper);
+    make_executable(&helper_path)?;
     let journal = UpdateJournal {
         format: "pealayer-self-update".to_string(),
         operation_id: operation_id.to_string(),
@@ -1172,13 +1240,7 @@ pub fn run_update_helper(journal_path: &str) -> Result<(), String> {
     wait_for_parent_exit(journal.parent_pid, Duration::from_secs(120))?;
     verify_file_sha256(&journal.current_path, &journal.current_sha256)?;
     verify_file_sha256(&journal.staged_path, &journal.replacement_sha256)?;
-    let _ = fs::remove_file(&journal.backup_path);
-    fs::rename(&journal.current_path, &journal.backup_path)
-        .map_err(|error| format!("preserve previous executable: {error}"))?;
-    if let Err(error) = fs::rename(&journal.staged_path, &journal.current_path) {
-        let _ = fs::rename(&journal.backup_path, &journal.current_path);
-        return Err(format!("activate staged executable: {error}"));
-    }
+    activate_update_files(&journal)?;
     if let Err(error) = verify_file_sha256(&journal.current_path, &journal.replacement_sha256) {
         rollback_update(&journal)?;
         return Err(error);
@@ -1201,6 +1263,26 @@ pub fn run_update_helper(journal_path: &str) -> Result<(), String> {
             ))
         }
     }
+}
+
+fn activate_update_files(journal: &UpdateJournal) -> Result<(), String> {
+    let _ = fs::remove_file(&journal.backup_path);
+    fs::rename(&journal.current_path, &journal.backup_path)
+        .map_err(|error| format!("preserve previous executable: {error}"))?;
+    if let Err(error) = set_update_file_hidden(&journal.backup_path, true) {
+        rollback_update(&journal)?;
+        return Err(error);
+    }
+    if let Err(error) = fs::rename(&journal.staged_path, &journal.current_path) {
+        rollback_update(&journal)?;
+        return Err(format!("activate staged executable: {error}"));
+    }
+    // Rename preserves Windows attributes: staging is hidden, installed apps are not.
+    if let Err(error) = set_update_file_hidden(&journal.current_path, false) {
+        rollback_update(&journal)?;
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn launch_candidate(journal: &UpdateJournal, rollback: bool) -> Result<Child, String> {
@@ -1256,6 +1338,7 @@ fn rollback_update(journal: &UpdateJournal) -> Result<(), String> {
     let _ = fs::remove_file(&journal.current_path);
     fs::rename(&journal.backup_path, &journal.current_path)
         .map_err(|error| format!("restore previous executable: {error}"))?;
+    set_update_file_hidden(&journal.current_path, false)?;
     verify_file_sha256(&journal.current_path, &journal.current_sha256)
 }
 
@@ -1270,7 +1353,14 @@ pub fn schedule_startup_health_acknowledgement() {
     let helper = std::env::var(HELPER_PATH_ENV).ok();
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(900));
-        let _ = fs::write(&path, token);
+        let acknowledgement = create_update_file(Path::new(&path), true).and_then(|mut file| {
+            file.write_all(token.as_bytes())?;
+            file.sync_all()
+        });
+        if let Err(error) = acknowledgement {
+            eprintln!("write update health acknowledgement: {error}");
+            return;
+        }
         if let Some(helper) = helper {
             std::thread::sleep(Duration::from_secs(3));
             let _ = fs::remove_file(helper);
@@ -1531,13 +1621,72 @@ fn validate_pe_machine(header: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// All updater-owned scratch files are hidden at creation, not just dot-prefixed.
+/// Existing file attributes are changed only when activating/restoring an app.
+fn create_update_file(path: &Path, exclusive: bool) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true);
+    if exclusive {
+        options.create_new(true);
+    } else {
+        options.create(true).truncate(true);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
+        options.attributes(FILE_ATTRIBUTE_HIDDEN.0);
+    }
+    let file = options.open(path)?;
+    // Creation flags do not change an already existing journal temporary file.
+    set_update_file_hidden(path, true).map_err(std::io::Error::other)?;
+    Ok(file)
+}
+
+#[cfg(windows)]
+fn set_update_file_hidden(path: &Path, hidden: bool) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES,
+        GetFileAttributesW, SetFileAttributesW,
+    };
+    use windows::core::PCWSTR;
+    let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: the path buffer is null-terminated and lives throughout both calls.
+    let current = unsafe { GetFileAttributesW(PCWSTR(name.as_ptr())) };
+    if current == u32::MAX {
+        return Err(format!(
+            "read update file attributes: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let mut attributes = current & !FILE_ATTRIBUTE_NORMAL.0;
+    if hidden {
+        attributes |= FILE_ATTRIBUTE_HIDDEN.0;
+    } else {
+        attributes &= !FILE_ATTRIBUTE_HIDDEN.0;
+    }
+    if attributes == 0 {
+        attributes = FILE_ATTRIBUTE_NORMAL.0;
+    }
+    unsafe { SetFileAttributesW(PCWSTR(name.as_ptr()), FILE_FLAGS_AND_ATTRIBUTES(attributes)) }
+        .map_err(|error| format!("set update file visibility: {error}"))
+}
+
+#[cfg(not(windows))]
+fn set_update_file_hidden(_path: &Path, _hidden: bool) -> Result<(), String> {
+    // Unix scratch paths already use leading dots. No installed filename changes.
+    Ok(())
+}
+
 fn write_json_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let temporary = path.with_extension("tmp");
     let content = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
-    let mut file = File::create(&temporary).map_err(|error| error.to_string())?;
+    let mut file = create_update_file(&temporary, false).map_err(|error| error.to_string())?;
     file.write_all(&content)
         .map_err(|error| error.to_string())?;
     file.sync_all().map_err(|error| error.to_string())?;
+    drop(file);
     fs::rename(&temporary, path).map_err(|error| error.to_string())
 }
 
@@ -1609,6 +1758,119 @@ fn validate_libmpv_compatibility(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn update_files_are_hidden_until_activation_or_rollback() {
+        use std::os::windows::fs::MetadataExt;
+        use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_HIDDEN};
+        let directory = std::env::temp_dir().join(format!(
+            "pealayer-update-visibility-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let current_path = directory.join("pealayer.exe");
+        let staged_path = directory.join(".update.download");
+        fs::write(&current_path, b"original").unwrap();
+        let mut staged = create_update_file(&staged_path, true).unwrap();
+        staged.write_all(b"replacement").unwrap();
+        drop(staged);
+        let attributes = |path: &Path| fs::metadata(path).unwrap().file_attributes();
+        assert_ne!(attributes(&staged_path) & FILE_ATTRIBUTE_HIDDEN.0, 0);
+        let other_attributes = attributes(&staged_path) & !FILE_ATTRIBUTE_HIDDEN.0;
+        let journal = UpdateJournal {
+            format: "pealayer-self-update".into(),
+            operation_id: "visibility-test".into(),
+            parent_pid: std::process::id(),
+            current_path: current_path.clone(),
+            staged_path,
+            backup_path: directory.join(".update.old"),
+            helper_path: directory.join(".update.helper.exe"),
+            journal_path: directory.join(".update.journal.json"),
+            health_path: directory.join(".update.healthy"),
+            health_token: "test".into(),
+            current_sha256: sha256_file(&current_path).unwrap(),
+            replacement_sha256: format!("{:x}", Sha256::digest(b"replacement")),
+            arguments: vec![],
+            working_directory: directory.clone(),
+        };
+        write_json_atomic(&journal.journal_path, &journal).unwrap();
+        assert_ne!(
+            attributes(&journal.journal_path) & FILE_ATTRIBUTE_HIDDEN.0,
+            0
+        );
+        assert!(!journal.journal_path.with_extension("tmp").exists());
+        activate_update_files(&journal).unwrap();
+        assert_eq!(attributes(&current_path) & FILE_ATTRIBUTE_HIDDEN.0, 0);
+        assert_eq!(
+            attributes(&current_path) & !FILE_ATTRIBUTE_HIDDEN.0,
+            other_attributes
+        );
+        assert_ne!(
+            attributes(&journal.backup_path) & FILE_ATTRIBUTE_HIDDEN.0,
+            0
+        );
+        assert_ne!(
+            attributes(&journal.backup_path) & FILE_ATTRIBUTE_ARCHIVE.0,
+            0
+        );
+        assert_eq!(fs::read(&current_path).unwrap(), b"replacement");
+        rollback_update(&journal).unwrap();
+        assert_eq!(attributes(&current_path) & FILE_ATTRIBUTE_HIDDEN.0, 0);
+        assert_eq!(fs::read(&current_path).unwrap(), b"original");
+        // Windows allows deleting Hidden files without making them visible first.
+        fs::remove_file(&journal.journal_path).unwrap();
+        fs::remove_file(&current_path).unwrap();
+        fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn idle_gui_is_woken_for_status_changes_and_queued_quit() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let manager = UpdateManager::default();
+        let context = eframe::egui::Context::default();
+        let wakeups = Arc::new(AtomicUsize::new(0));
+        let observed = wakeups.clone();
+        context.set_request_repaint_callback(move |_| {
+            observed.fetch_add(1, Ordering::Relaxed);
+        });
+        manager.register_gui_context(context.clone());
+        manager.replace_status(UpdateStatus {
+            state: "receiving".into(),
+            ..Default::default()
+        });
+        assert!(wakeups.load(Ordering::Relaxed) > 0);
+        // eframe consumes the staging repaint long before the delayed Quit.
+        // Requests within the same pending frame are legitimately coalesced.
+        for _ in 0..4 {
+            let mut output = context.run_ui(Default::default(), |_| {});
+            output.textures_delta.clear();
+        }
+        let previous = wakeups.load(Ordering::Relaxed);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        manager.dispatch_quit(&sender);
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(crate::platform::interop::InteropCommand::Quit)
+        ));
+        assert!(
+            wakeups.load(Ordering::Relaxed) > previous,
+            "Quit must schedule its own redraw after enqueue"
+        );
+    }
+
+    #[test]
+    fn missing_dispatcher_reports_failure_instead_of_staying_restarting() {
+        let manager = UpdateManager::default();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        drop(receiver);
+        manager.dispatch_quit(&sender);
+        assert_eq!(manager.status().state, "failed");
+        assert_eq!(
+            manager.status().error.as_deref(),
+            Some("application dispatcher is unavailable")
+        );
+    }
 
     #[test]
     fn byte_format_is_human_readable() {

@@ -11230,7 +11230,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 .vertical_scroll_offset(timeline_header_offset_y)
                                 .show(ui, |ui| {
                                         let size = egui::vec2(total_width, total_height);
-                                        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+                                        let (_, rect) = ui.allocate_space(size);
+                                        // Keyboard focus must target the real canvas widget. A
+                                        // synthetic memory-only ID is absent from AccessKit and
+                                        // crashes Windows on any mouse button when it receives focus.
+                                        let response = ui.interact(
+                                            rect,
+                                            timeline_keyboard_focus_id(),
+                                            egui::Sense::click_and_drag(),
+                                        );
 
                                         let painter = ui.painter();
 

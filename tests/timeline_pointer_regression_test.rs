@@ -8,8 +8,18 @@ use pealayer::ui::layout::{PealayerTab, PealayerTabViewer};
 
 #[test]
 fn native_timeline_mouse_buttons_do_not_crash() {
+    replay_timeline_pointer_buttons(true);
+}
+
+#[test]
+fn empty_timeline_all_mouse_buttons_do_not_crash() {
+    // Station-1 report: no media, no cue/keyframe, any mouse button in empty tracks.
+    replay_timeline_pointer_buttons(false);
+}
+
+fn replay_timeline_pointer_buttons(with_content: bool) {
     let mut app = PealayerApp::default();
-    app.duration = 60.0;
+    app.duration = if with_content { 60.0 } else { 0.0 };
     app.update_hardware_capabilities(Some(HardwareCapabilities {
         board_connected: true,
         board_name: "Pointer fixture".into(),
@@ -38,25 +48,29 @@ fn native_timeline_mouse_buttons_do_not_crash() {
         .collect(),
         ..Default::default()
     }));
-    let mut track = AnalogTrack::new("Pointer regression fixture", 0);
-    track.add_keyframe(Keyframe::new(1000, 0.5, Interpolation::Linear));
-    app.timeline.analog_tracks.push(track);
-    let effect = Effect::new(
-        "Pointer cue".into(),
-        String::new(),
-        1000,
-        vec![AtomicAction {
-            relay_id: 5,
-            state: true,
-            offset_ms: 0,
-        }],
-    );
-    app.timeline
-        .instances
-        .push(EffectInstance::new(effect.id, 1000));
-    app.timeline.templates.push(effect);
-    app.timeline.keyframes.push(TimelineKeyframe::new(1000));
+    if with_content {
+        let mut track = AnalogTrack::new("Pointer regression fixture", 0);
+        track.add_keyframe(Keyframe::new(1000, 0.5, Interpolation::Linear));
+        app.timeline.analog_tracks.push(track);
+        let effect = Effect::new(
+            "Pointer cue".into(),
+            String::new(),
+            1000,
+            vec![AtomicAction {
+                relay_id: 5,
+                state: true,
+                offset_ms: 0,
+            }],
+        );
+        app.timeline
+            .instances
+            .push(EffectInstance::new(effect.id, 1000));
+        app.timeline.templates.push(effect);
+        app.timeline.keyframes.push(TimelineKeyframe::new(1000));
+    }
     let context = egui::Context::default();
+    // Match Windows' activated accessibility adapter, not just egui paint/input.
+    context.enable_accesskit();
     let mut time = 0.0;
     let mut frame = |events| {
         time += 0.02;
@@ -74,6 +88,13 @@ fn native_timeline_mouse_buttons_do_not_crash() {
                 PealayerTabViewer { app: &mut app }.ui(ui, &mut PealayerTab::Timeline);
             },
         );
+        if let Some(update) = &output.platform_output.accesskit_update {
+            assert!(
+                update.nodes.iter().any(|(id, _)| *id == update.focus),
+                "focused accessibility node {:?} must be present in the frame's node list",
+                update.focus,
+            );
+        }
         output.textures_delta.clear();
     };
     frame(vec![]);
