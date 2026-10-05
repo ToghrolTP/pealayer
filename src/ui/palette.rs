@@ -76,29 +76,39 @@ mod tests {
             color_palette: crate::config::ColorPalette::Native,
             ..Default::default()
         };
-        let appearance = crate::platform::interop::AppearanceState::from(&config);
+        let appearance = crate::platform::interop::AppearanceState::new(&config, true);
         let json = serde_json::to_value(&appearance).unwrap();
         assert_eq!(json["color_palette"], "native");
         assert_eq!(json["theme"], "system");
+        assert_eq!(json["resolved_theme"], "dark");
+        let green = crate::config::AppConfig {
+            accent_color: crate::config::AccentColor::PealayerGreen,
+            ..config.clone()
+        };
+        let preview = crate::platform::interop::AppearanceState::new(&green, false);
+        assert_eq!(preview.resolved_accent, "#38d27a");
+        assert_eq!(preview.resolved_theme, crate::config::AppTheme::Light);
+        assert_ne!(appearance, preview);
     }
 
     #[test]
     fn palette_is_persisted_and_advertised_by_the_shared_preferences_contract() {
         use crate::config::{AppConfig, ColorPalette};
         let old: AppConfig = serde_json::from_str("{}").unwrap();
-        assert_eq!(old.color_palette, ColorPalette::Studio);
+        assert_eq!(old.color_palette, ColorPalette::Native);
         let changed = old
-            .apply_patch(&serde_json::json!({"color_palette": "native"}))
+            .apply_patch(&serde_json::json!({"color_palette": "studio"}))
             .unwrap();
         let restored: AppConfig =
             serde_json::from_str(&serde_json::to_string(&changed).unwrap()).unwrap();
-        assert_eq!(restored.color_palette, ColorPalette::Native);
+        assert_eq!(restored.color_palette, ColorPalette::Studio);
         let controls = crate::preferences_contract::preference_controls(&restored);
         let control = controls
             .iter()
             .find(|control| control.key == "color_palette")
             .unwrap();
         assert_eq!(control.options.len(), 2);
+        assert_eq!(control.options[0].value, "native");
     }
 
     #[test]

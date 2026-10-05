@@ -27,9 +27,10 @@ pub enum AppTheme {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ColorPalette {
-    /// The existing Web UI palette, shared with the desktop renderer.
-    #[default]
+    /// The blue-gray Studio palette, shared by the Web and desktop renderers.
     Studio,
+    /// The original neutral desktop palette remains the default.
+    #[default]
     Native,
 }
 
@@ -564,7 +565,7 @@ impl Default for AppConfig {
             app_publisher: None,
             app_copyright: None,
             theme: AppTheme::System,
-            color_palette: ColorPalette::Studio,
+            color_palette: ColorPalette::Native,
             accent_color: AccentColor::System,
             custom_accent_color: None,
             language: AppLanguage::System,
@@ -1048,6 +1049,14 @@ pub fn resolved_web_bind_addresses(config: &AppConfig) -> Result<Vec<std::net::I
 }
 
 impl AppConfig {
+    /// Reconcile shared appearance without discarding unrelated editor state.
+    pub(crate) fn copy_appearance_from(&mut self, source: &Self) {
+        self.theme = source.theme;
+        self.color_palette = source.color_palette;
+        self.accent_color = source.accent_color;
+        self.custom_accent_color = source.custom_accent_color.clone();
+    }
+
     pub(crate) fn normalize_playback_positions(&mut self) {
         self.playback_position_history_limit = self
             .playback_position_history_limit

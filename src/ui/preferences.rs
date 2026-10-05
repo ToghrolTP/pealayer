@@ -84,6 +84,7 @@ impl PreferencesDraft {
 
     fn replace_from_disk(&mut self, config: AppConfig, status: String) {
         self.saved_config = config.clone();
+        self.previewed_config = config.clone();
         self.config = config;
         self.set_transient_status(status);
     }
@@ -95,9 +96,23 @@ impl PreferencesDraft {
         conflict_status: String,
     ) {
         if self.is_dirty() {
+            // Appearance is shared live, even while unrelated preferences are
+            // being edited. Keep that draft, but do not leave its theme controls
+            // displaying values which no longer match the host and Web UI.
+            self.sync_external_appearance(&config);
             self.status = conflict_status;
         } else {
             self.replace_from_disk(config, status);
+        }
+    }
+
+    pub(crate) fn sync_external_appearance(&mut self, config: &AppConfig) {
+        for target in [
+            &mut self.config,
+            &mut self.saved_config,
+            &mut self.previewed_config,
+        ] {
+            target.copy_appearance_from(config);
         }
     }
 
@@ -276,7 +291,10 @@ impl StandalonePreferencesApp {
         });
         crate::ui::configure_native_visuals(ctx, &self.draft.config);
         crate::platform::windows::configure_window_composition(appearance.1, appearance.2);
-        crate::platform::windows::set_window_theme(ctx.global_style().visuals.dark_mode);
+        crate::platform::windows::set_window_appearance(
+            ctx.global_style().visuals.dark_mode,
+            appearance.4,
+        );
         self.applied_appearance = Some(appearance);
     }
 
@@ -1908,6 +1926,30 @@ mod tests {
         let restored = draft.take_preview_update().expect("discard preview");
         assert_eq!(restored, original);
         assert!(!draft.is_dirty());
+    }
+
+    #[test]
+    fn shared_appearance_updates_an_open_dirty_draft_without_losing_other_edits() {
+        let original = AppConfig::default();
+        let mut draft = PreferencesDraft::new(original.clone(), 0);
+        draft.config.pin_controls = !original.pin_controls;
+        let remote = AppConfig {
+            theme: AppTheme::Dark,
+            color_palette: crate::config::ColorPalette::Studio,
+            accent_color: crate::config::AccentColor::PealayerGreen,
+            ..original.clone()
+        };
+        draft.apply_external_config(
+            remote.clone(),
+            "Updated".into(),
+            "Other draft edits retained".into(),
+        );
+        assert_eq!(draft.config.pin_controls, !original.pin_controls);
+        assert_eq!(draft.config.color_palette, remote.color_palette);
+        assert_eq!(draft.config.accent_color, remote.accent_color);
+        assert!(draft.is_dirty());
+        draft.restore_saved();
+        assert_eq!(draft.config, remote);
     }
 
     #[test]

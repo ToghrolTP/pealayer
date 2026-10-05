@@ -14,15 +14,11 @@ import {
 import { tr, UiLocale } from '../i18n';
 import { mediaBasename } from '../mediaLabel';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
+import type { AppearanceState } from '../appearance';
 
 export interface PlayerState {
   status?: string;
-  appearance?: {
-    theme: 'system' | 'light' | 'dark';
-    color_palette: 'studio' | 'native';
-    accent_color: string;
-    custom_accent_color?: string | null;
-  };
+  appearance?: AppearanceState;
   playing?: boolean;
   volume?: number;
   playback_time?: number;

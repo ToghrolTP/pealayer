@@ -320,8 +320,9 @@ fn main() -> eframe::Result {
             };
             cc.egui_ctx.set_theme(theme_preference);
             crate::ui::configure_native_visuals(&cc.egui_ctx, &loaded_config);
-            crate::platform::windows::set_window_theme(
+            crate::platform::windows::set_window_appearance(
                 cc.egui_ctx.global_style().visuals.dark_mode,
+                loaded_config.color_palette,
             );
 
             let mut style = (*cc.egui_ctx.global_style()).clone();

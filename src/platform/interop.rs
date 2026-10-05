@@ -697,21 +697,31 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
     Ok(command)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppearanceState {
     pub theme: crate::config::AppTheme,
     pub color_palette: crate::config::ColorPalette,
     pub accent_color: crate::config::AccentColor,
     pub custom_accent_color: Option<String>,
+    /// Resolved by the host, not the browser's potentially different OS theme.
+    pub resolved_theme: crate::config::AppTheme,
+    pub resolved_accent: String,
 }
 
-impl From<&crate::config::AppConfig> for AppearanceState {
-    fn from(config: &crate::config::AppConfig) -> Self {
+impl AppearanceState {
+    pub fn new(config: &crate::config::AppConfig, dark: bool) -> Self {
+        let [red, green, blue] = crate::ui::platform_accent_rgb(config);
         Self {
             theme: crate::config::resolved_theme(config),
             color_palette: config.color_palette,
             accent_color: config.accent_color,
             custom_accent_color: config.custom_accent_color.clone(),
+            resolved_theme: if dark {
+                crate::config::AppTheme::Dark
+            } else {
+                crate::config::AppTheme::Light
+            },
+            resolved_accent: format!("#{red:02x}{green:02x}{blue:02x}"),
         }
     }
 }
@@ -1416,6 +1426,15 @@ pub fn set_live_status(status: PlayerStatusResponse) {
     if let Ok(mut lock) = LIVE_STATUS.write() {
         *lock = Some(status);
     }
+}
+
+/// Avoid cloning the timeline and hardware snapshot on every video frame just
+/// to decide whether appearance needs an immediate broadcast.
+pub fn get_live_appearance() -> Option<AppearanceState> {
+    LIVE_STATUS
+        .read()
+        .ok()
+        .and_then(|status| status.as_ref().and_then(|status| status.appearance.clone()))
 }
 
 pub fn get_live_status() -> PlayerStatusResponse {

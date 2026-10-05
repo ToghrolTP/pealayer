@@ -245,6 +245,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Color palette" => "پالت رنگ",
         "Studio" => "استودیو",
         "Neutral" => "خنثی",
+        "Neutral (default)" => "خنثی (پیش‌فرض)",
         "Create effect" => "ایجاد جلوه",
         "Edit effect" => "ویرایش جلوه",
         "My effects" => "جلوه‌های من",

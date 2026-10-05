@@ -782,13 +782,20 @@ impl eframe::App for PealayerApp {
         // Keep the read-only status snapshot current at the configured cadence;
         // WebSocket delivery itself can be disabled independently.
         let web_config = crate::platform::interop::get_live_config();
+        let appearance = crate::platform::interop::AppearanceState::new(
+            &web_config,
+            ui.style().visuals.dark_mode,
+        );
         let web_sync_interval =
             std::time::Duration::from_millis(u64::from(web_config.web_sync_interval_ms));
         let now = std::time::Instant::now();
-        let should_broadcast = match self.last_web_broadcast {
-            Some(last) => now.duration_since(last) >= web_sync_interval,
-            None => true,
-        };
+        let appearance_changed =
+            crate::platform::interop::get_live_appearance().as_ref() != Some(&appearance);
+        let should_broadcast = appearance_changed
+            || match self.last_web_broadcast {
+                Some(last) => now.duration_since(last) >= web_sync_interval,
+                None => true,
+            };
 
         if should_broadcast {
             self.last_web_broadcast = Some(now);
@@ -875,7 +882,7 @@ impl eframe::App for PealayerApp {
             let chapters = self.media_chapters();
             let current_chapter_index = self.active_media_chapter().map(|chapter| chapter.index);
             let status_resp = crate::platform::interop::PlayerStatusResponse {
-                appearance: Some(crate::platform::interop::AppearanceState::from(&web_config)),
+                appearance: Some(appearance),
                 status: if !controller_connected {
                     "connecting"
                 } else if !hardware_connected {
@@ -1218,7 +1225,10 @@ impl eframe::App for PealayerApp {
                 .send_viewport_cmd(egui::ViewportCommand::Title(window_title.clone()));
             self.last_window_title = window_title;
         }
-        crate::platform::windows::set_window_theme(ui.style().visuals.dark_mode);
+        crate::platform::windows::set_window_appearance(
+            ui.style().visuals.dark_mode,
+            self.color_palette,
+        );
 
         if !is_fullscreen {
             crate::ui::menu::draw(self, ui);
@@ -4849,7 +4859,10 @@ impl PealayerApp {
     pub(crate) fn runtime_config_snapshot(&self) -> crate::config::AppConfig {
         // Preserve deployment-owned branding while saving mutable player
         // preferences through one typed configuration contract.
-        let mut cfg = crate::config::AppConfig::load();
+        // Start with the live contract, including unsaved appearance previews.
+        // Reloading disk here silently reverted the accent during autosaves or
+        // an unrelated API patch, even while the native UI still used it.
+        let mut cfg = crate::platform::interop::get_live_config();
         cfg.volume = self.volume;
         cfg.is_muted = self.is_muted;
         cfg.pin_controls = self.pin_controls;
@@ -5203,7 +5216,10 @@ impl PealayerApp {
             crate::config::AppTheme::Dark => egui::ThemePreference::Dark,
         });
         crate::ui::configure_native_visuals(ctx, &config);
-        crate::platform::windows::set_window_theme(ctx.global_style().visuals.dark_mode);
+        crate::platform::windows::set_window_appearance(
+            ctx.global_style().visuals.dark_mode,
+            self.color_palette,
+        );
 
         if endpoint_changed || connection_policy_changed {
             let _ = self.engine_handle.sender.send(
@@ -5333,7 +5349,25 @@ impl PealayerApp {
     ) -> Result<(), String> {
         let updated = self.runtime_config_snapshot().apply_patch(values)?;
         updated.save()?;
-        self.apply_runtime_config(ctx, updated)?;
+        self.apply_runtime_config(ctx, updated.clone())?;
+        if [
+            "theme",
+            "color_palette",
+            "accent_color",
+            "custom_accent_color",
+        ]
+        .iter()
+        .any(|key| values.get(key).is_some())
+        {
+            if let Some(draft) = self.preferences_draft.as_mut() {
+                draft.sync_external_appearance(&updated);
+            }
+            // Discarding an older native draft must not undo a newer committed
+            // appearance change from another client.
+            if let Some(original) = self.preference_preview_original.as_mut() {
+                original.copy_appearance_from(&updated);
+            }
+        }
         self.config_fingerprint =
             crate::config::AppConfig::fingerprint(&crate::config::AppConfig::get_config_path())
                 .ok();
@@ -5377,7 +5411,10 @@ impl PealayerApp {
             crate::config::AppTheme::Light => egui::ThemePreference::Light,
             crate::config::AppTheme::Dark => egui::ThemePreference::Dark,
         });
-        crate::platform::windows::set_window_theme(ctx.global_style().visuals.dark_mode);
+        crate::platform::windows::set_window_appearance(
+            ctx.global_style().visuals.dark_mode,
+            self.color_palette,
+        );
         self.save_config();
     }
 
@@ -6215,7 +6252,7 @@ impl Default for PealayerApp {
             language: crate::config::resolve_language(crate::config::AppLanguage::System),
             direction_preference: crate::config::AppDirection::Auto,
             theme_preference: crate::config::AppTheme::System,
-            color_palette: crate::config::ColorPalette::Studio,
+            color_palette: crate::config::ColorPalette::Native,
             rtl: crate::config::resolve_rtl(
                 crate::config::AppDirection::Auto,
                 crate::config::resolve_language(crate::config::AppLanguage::System),

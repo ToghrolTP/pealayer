@@ -15,6 +15,7 @@ import { tr } from './i18n';
 import { useWebPlatform } from './webPlatform';
 import './styles.css';
 import palettes from '../../assets/themes/palettes.json';
+import { accentForeground, mergeAppearance, paletteName as resolvePaletteName, resolvedAccent, resolvedAppearanceTheme } from './appearance';
 
 const { Sider, Content } = Layout;
 const RemoteControlTab = React.lazy(() => import('./components/RemoteControlTab').then((module) => ({ default: module.RemoteControlTab })));
@@ -63,25 +64,6 @@ export interface RuntimeConfig {
   accentColor: string;
 }
 
-function resolvedAccent(runtime: RuntimeConfig | null, config: Record<string, any> | null): string {
-  switch (config?.accent_color) {
-    case 'pealayer_green': return '#38d27a';
-    case 'windows_blue': return '#0078d4';
-    case 'macos_blue': return '#0a84ff';
-    case 'custom': return /^#[0-9a-f]{6}$/i.test(config?.custom_accent_color ?? '')
-      ? config.custom_accent_color
-      : (runtime?.accentColor ?? '#0078d4');
-    default: return runtime?.accentColor ?? '#0078d4';
-  }
-}
-
-function accentForeground(accent: string): string {
-  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(accent);
-  if (!match) return '#ffffff';
-  const [red, green, blue] = match.slice(1).map((value) => Number.parseInt(value, 16));
-  return (red * 299 + green * 587 + blue * 114) > 150_000 ? '#141414' : '#ffffff';
-}
-
 const App: React.FC = () => {
   const [collapsed, setCollapsed] = useState<boolean>(() => window.localStorage.getItem('pealayer.sidebarCollapsed') === 'true');
   const [activeTab, setActiveTabState] = useState<SurfaceId>(surfaceFromLocation);
@@ -101,6 +83,7 @@ const App: React.FC = () => {
   const wsRef = useRef<WebSocket | null>(null);
   const siderRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const appearance = state.appearance;
 
   useEffect(() => {
     window.localStorage.setItem('pealayer.sidebarCollapsed', String(collapsed));
@@ -162,18 +145,15 @@ const App: React.FC = () => {
     const media = window.matchMedia('(prefers-color-scheme: light)');
     const applyTheme = () => {
       const preference = appConfig?.theme ?? runtime.theme;
-      const nextTheme = preference === 'system'
-        ? (media.matches ? 'light' : 'dark')
-        : preference;
+      const nextTheme = resolvedAppearanceTheme(preference, media.matches, appearance);
       document.documentElement.dataset.theme = nextTheme;
       setResolvedTheme(nextTheme);
     };
     applyTheme();
     media.addEventListener('change', applyTheme);
     return () => media.removeEventListener('change', applyTheme);
-  }, [runtime, appConfig?.theme, activeTab]);
+  }, [runtime, appConfig?.theme, appearance?.resolved_theme, activeTab]);
 
-  const appearance = state.appearance;
   useEffect(() => {
     if (!appearance) return;
     setAppConfig((previous) => {
@@ -181,15 +161,15 @@ const App: React.FC = () => {
         && previous?.color_palette === appearance.color_palette
         && previous?.accent_color === appearance.accent_color
         && previous?.custom_accent_color === appearance.custom_accent_color) return previous;
-      const next = { ...previous, ...appearance };
+      const next = mergeAppearance(previous ?? {}, appearance);
       persistJson(STORAGE.config, next);
       return next;
     });
   }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color]);
 
-  const accentColor = resolvedAccent(runtime, appConfig);
+  const accentColor = resolvedAccent(runtime, appConfig, appearance);
   const accentTextColor = accentForeground(accentColor);
-  const paletteName = appConfig?.color_palette === 'native' ? 'native' : 'studio';
+  const paletteName = resolvePaletteName(appConfig);
   const palette = palettes[paletteName][resolvedTheme];
 
   useLayoutEffect(() => {
@@ -601,6 +581,7 @@ const App: React.FC = () => {
               <PreferencesTab
                 apiBaseUrl={apiBaseUrl}
                 locale={runtime?.locale || 'en'}
+                appearance={appearance}
                 onConfigChange={(values) => {
                   setAppConfig(values);
                   persistJson(STORAGE.config, values);

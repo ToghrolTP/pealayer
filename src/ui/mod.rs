@@ -69,6 +69,19 @@ fn light_accent_fill(accent: eframe::egui::Color32) -> eframe::egui::Color32 {
     eframe::egui::Color32::from_rgb(tint(accent.r()), tint(accent.g()), tint(accent.b()))
 }
 
+fn dark_accent_fill(
+    accent: eframe::egui::Color32,
+    surface: eframe::egui::Color32,
+) -> eframe::egui::Color32 {
+    let tint =
+        |channel: u8, base: u8| ((u16::from(channel) * 28 + u16::from(base) * 72) / 100) as u8;
+    eframe::egui::Color32::from_rgb(
+        tint(accent.r(), surface.r()),
+        tint(accent.g(), surface.g()),
+        tint(accent.b(), surface.b()),
+    )
+}
+
 /// Install a restrained native desktop palette for both themes. The active
 /// theme can change later without reconstructing widget styling, and both the
 /// main window and independently hosted dialogs use this same function.
@@ -92,9 +105,17 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
     dark.widgets.inactive.bg_fill = Color32::from_rgb(45, 45, 45);
     dark.widgets.hovered.weak_bg_fill = Color32::from_rgb(55, 55, 55);
     dark.widgets.hovered.bg_fill = Color32::from_rgb(55, 55, 55);
-    dark.widgets.active.weak_bg_fill = accent.gamma_multiply(0.82);
-    dark.widgets.active.bg_fill = accent;
-    dark.widgets.active.fg_stroke = Stroke::new(1.0_f32, accent_text);
+    // egui uses the active foreground for ordinary bold captions too. A
+    // bright accent's dark contrast text must only be used on selected fills,
+    // never on dark panels. Tint active controls and keep their text light.
+    let dark_active = dark_accent_fill(
+        accent,
+        palette::color(config.color_palette, true, "surface-2"),
+    );
+    dark.widgets.active.weak_bg_fill = dark_active;
+    dark.widgets.active.bg_fill = dark_active;
+    dark.widgets.active.fg_stroke =
+        Stroke::new(1.0_f32, palette::color(config.color_palette, true, "text"));
     dark.window_corner_radius = CornerRadius::same(10);
     dark.menu_corner_radius = CornerRadius::same(8);
 
@@ -121,7 +142,8 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
     // accent plus `selection.stroke` contrast above.
     light.widgets.active.weak_bg_fill = light_accent_fill(accent);
     light.widgets.active.bg_fill = light_accent_fill(accent);
-    light.widgets.active.fg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(23, 29, 38));
+    light.widgets.active.fg_stroke =
+        Stroke::new(1.0_f32, palette::color(config.color_palette, false, "text"));
     light.window_corner_radius = CornerRadius::same(10);
     light.menu_corner_radius = CornerRadius::same(8);
 
@@ -182,9 +204,68 @@ mod tests {
 
     #[test]
     fn web_and_native_accent_presets_are_kept_in_lockstep() {
-        let web = include_str!("../../web_ui/src/App.tsx").to_ascii_lowercase();
+        let web = include_str!("../../web_ui/src/appearance.ts").to_ascii_lowercase();
         for color in ["#38d27a", "#0078d4", "#0a84ff"] {
             assert!(web.contains(color), "web accent preset {color} drifted");
+        }
+    }
+
+    #[test]
+    fn palette_accent_contrast_keeps_bold_captions_readable_on_both_themes() {
+        use crate::config::{AccentColor, AppConfig, ColorPalette};
+        use eframe::egui::{Context, Theme};
+        fn luminance(color: Color32) -> f64 {
+            let linear = |channel: u8| {
+                let value = f64::from(channel) / 255.0;
+                if value <= 0.04045 {
+                    value / 12.92
+                } else {
+                    ((value + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
+        }
+        let contrast = |text: Color32, fill: Color32| {
+            let (a, b) = (luminance(text), luminance(fill));
+            (a.max(b) + 0.05) / (a.min(b) + 0.05)
+        };
+        for palette in [ColorPalette::Native, ColorPalette::Studio] {
+            for accent in [
+                AccentColor::PealayerGreen,
+                AccentColor::WindowsBlue,
+                AccentColor::MacosBlue,
+                AccentColor::Custom,
+            ] {
+                let ctx = Context::default();
+                let config = AppConfig {
+                    color_palette: palette,
+                    accent_color: accent,
+                    custom_accent_color: Some("#ffff00".into()),
+                    ..Default::default()
+                };
+                super::configure_native_visuals(&ctx, &config);
+                for theme in [Theme::Dark, Theme::Light] {
+                    let style = ctx.style_of(theme);
+                    let visuals = &style.visuals;
+                    let text = visuals.strong_text_color();
+                    for fill in [
+                        visuals.panel_fill,
+                        visuals.window_fill,
+                        visuals.widgets.active.bg_fill,
+                    ] {
+                        assert!(
+                            contrast(text, fill) >= 4.5,
+                            "{palette:?}/{accent:?}/{theme:?}: {text:?} on {fill:?}"
+                        );
+                    }
+                    if accent == AccentColor::PealayerGreen {
+                        assert!(
+                            contrast(visuals.selection.stroke.color, visuals.selection.bg_fill)
+                                >= 4.5
+                        );
+                    }
+                }
+            }
         }
     }
 }

@@ -134,6 +134,7 @@ pub fn configure_config_directory(
 
 static WINDOW_HWND: AtomicIsize = AtomicIsize::new(0);
 static WINDOW_DARK_THEME: AtomicBool = AtomicBool::new(true);
+static WINDOW_STUDIO_PALETTE: AtomicBool = AtomicBool::new(false);
 static WINDOW_DWM_THEMING: AtomicBool = AtomicBool::new(true);
 static WINDOW_MICA_BACKDROP: AtomicBool = AtomicBool::new(false);
 static WINDOW_MOVE_RESIZE_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -1123,10 +1124,12 @@ pub fn set_window_owner(_hwnd_raw: isize, _owner_raw: isize) -> Result<(), Strin
     Ok(())
 }
 
-pub fn set_window_theme(dark: bool) {
-    let previous = WINDOW_DARK_THEME.swap(dark, Ordering::SeqCst);
+pub fn set_window_appearance(dark: bool, palette: crate::config::ColorPalette) {
+    let theme_changed = WINDOW_DARK_THEME.swap(dark, Ordering::SeqCst) != dark;
+    let studio = palette == crate::config::ColorPalette::Studio;
+    let palette_changed = WINDOW_STUDIO_PALETTE.swap(studio, Ordering::SeqCst) != studio;
     let hwnd = get_registered_hwnd();
-    if hwnd != 0 && previous != dark {
+    if hwnd != 0 && (theme_changed || palette_changed) {
         apply_windows_window_decorations(hwnd);
     }
 }
@@ -1167,12 +1170,13 @@ pub fn system_accent_color() -> Option<[u8; 3]> {
 }
 
 #[cfg(any(target_os = "windows", test))]
-fn decoration_colors(dark: bool) -> (u32, u32) {
-    if dark {
-        (0x00212121, 0x00FFFFFF)
-    } else {
-        (0x00F4F4F4, 0x00111111)
-    }
+fn decoration_colors(dark: bool, palette: crate::config::ColorPalette) -> (u32, u32) {
+    let colorref = |role| {
+        let color = crate::ui::palette::color(palette, dark, role);
+        u32::from(color.r()) | (u32::from(color.g()) << 8) | (u32::from(color.b()) << 16)
+    };
+    // Match the header's panel surface, including Studio's blue-gray tint.
+    (colorref("surface-0"), colorref("text"))
 }
 
 #[cfg(target_os = "windows")]
@@ -1182,6 +1186,11 @@ pub fn apply_windows_window_decorations(hwnd_raw: isize) {
         WINDOW_DARK_THEME.load(Ordering::SeqCst),
         WINDOW_DWM_THEMING.load(Ordering::SeqCst),
         WINDOW_MICA_BACKDROP.load(Ordering::SeqCst),
+        if WINDOW_STUDIO_PALETTE.load(Ordering::SeqCst) {
+            crate::config::ColorPalette::Studio
+        } else {
+            crate::config::ColorPalette::Native
+        },
     );
 }
 
@@ -1191,6 +1200,7 @@ fn apply_windows_window_decorations_with(
     dark: bool,
     dwm_theming: bool,
     mica_backdrop: bool,
+    palette: crate::config::ColorPalette,
 ) {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE;
@@ -1204,7 +1214,7 @@ fn apply_windows_window_decorations_with(
         return;
     }
     let hwnd = HWND(hwnd_raw as *mut _);
-    let (caption_color, text_color) = decoration_colors(dark);
+    let (caption_color, text_color) = decoration_colors(dark, palette);
 
     unsafe {
         // 1. Enable immersive dark mode (attribute 20, fallback 19 for older Win10 builds)
@@ -2615,14 +2625,23 @@ mod tests {
 
     #[test]
     fn test_decoration_colorref_conversion() {
-        // RGB(33, 33, 33) => COLORREF 0x00212121
-        let r: u32 = 33;
-        let g: u32 = 33;
-        let b: u32 = 33;
-        let colorref = r | (g << 8) | (b << 16);
-        assert_eq!(colorref, 0x00212121);
-        assert_eq!(decoration_colors(true), (0x00212121, 0x00FFFFFF));
-        assert_eq!(decoration_colors(false), (0x00F4F4F4, 0x00111111));
+        use crate::config::ColorPalette;
+        assert_eq!(
+            decoration_colors(true, ColorPalette::Studio),
+            (0x0016100d, 0x00f7f2ee)
+        );
+        assert_eq!(
+            decoration_colors(false, ColorPalette::Studio),
+            (0x00fcfaf8, 0x002b2017)
+        );
+        assert_eq!(
+            decoration_colors(true, ColorPalette::Native),
+            (0x00202020, 0x00eeeeee)
+        );
+        assert_eq!(
+            decoration_colors(false, ColorPalette::Native),
+            (0x00f3f3f3, 0x00342a23)
+        );
     }
 
     #[test]

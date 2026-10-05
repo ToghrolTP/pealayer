@@ -9,6 +9,7 @@ const fa: Record<string, string> = {
   'Total duration': 'مدت کل',
   'Color palette': 'پالت رنگ',
   'Neutral': 'خنثی',
+  'Neutral (default)': 'خنثی (پیش‌فرض)',
   'Expand navigation': 'باز کردن ناوبری',
   'Collapse navigation': 'جمع کردن ناوبری',
   'Group name': 'نام گروه',

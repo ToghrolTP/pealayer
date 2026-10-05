@@ -35,6 +35,7 @@ import {
   WifiOutlined,
 } from '@ant-design/icons';
 import { tr } from '../i18n';
+import { mergeAppearance } from '../appearance';
 
 type JsonObject = Record<string, any>;
 
@@ -79,6 +80,7 @@ interface PreferencesContract {
 interface PreferencesTabProps {
   apiBaseUrl: string;
   locale: 'en' | 'fa';
+  appearance?: import('../appearance').AppearanceState;
   onConfigChange?: (values: JsonObject) => void;
 }
 
@@ -134,7 +136,7 @@ function patchForPath(values: JsonObject, path: string): JsonObject {
   return { [root]: values[root] };
 }
 
-export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, locale, onConfigChange }) => {
+export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, locale, appearance, onConfigChange }) => {
   const [contract, setContract] = useState<PreferencesContract | null>(null);
   const [section, setSection] = useState('appearance');
   const [loading, setLoading] = useState(true);
@@ -160,6 +162,15 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
   };
 
   useEffect(() => { void load(); }, [apiBaseUrl]);
+
+  // Keep open preference controls in step with native previews and other
+  // browser clients, not just the surrounding page's colors.
+  useEffect(() => {
+    if (!appearance) return;
+    setContract((current) => current
+      ? { ...current, values: mergeAppearance(current.values, appearance) }
+      : current);
+  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color]);
 
   const controls = useMemo(
     () => contract?.controls.filter((control) => control.section === section) ?? [],
