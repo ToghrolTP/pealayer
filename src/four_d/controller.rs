@@ -929,6 +929,23 @@ pub struct ControllerClient {
     backend: ControllerBackend,
 }
 
+fn controller_json_rpc_error_message(error: &Value) -> String {
+    error
+        .get("message")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            error
+                .get("data")
+                .and_then(|data| data.get("message"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| error.as_str())
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+        .unwrap_or("PCController rejected the request")
+        .to_string()
+}
+
 impl ControllerClient {
     pub fn connect(endpoint: &str) -> Result<Self, String> {
         Self::connect_with_timeouts(endpoint, Duration::from_secs(2), Duration::from_secs(3))
@@ -1068,7 +1085,7 @@ impl ControllerClient {
                 continue;
             }
             if let Some(error) = response.get("error").filter(|value| !value.is_null()) {
-                return Err(format!("PCController JSON-RPC error: {error}"));
+                return Err(controller_json_rpc_error_message(error));
             }
             return Ok(response.get("result").cloned().unwrap_or(Value::Null));
         }
@@ -2259,6 +2276,31 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
     use std::thread;
+
+    #[test]
+    fn json_rpc_errors_expose_the_human_message_without_the_raw_envelope() {
+        let error = json!({
+            "code": -32000,
+            "message": "effect reference \"sequence:0\" must use effect:ID or ID"
+        });
+
+        assert_eq!(
+            controller_json_rpc_error_message(&error),
+            "effect reference \"sequence:0\" must use effect:ID or ID"
+        );
+    }
+
+    #[test]
+    fn json_rpc_error_message_has_safe_string_and_missing_message_fallbacks() {
+        assert_eq!(
+            controller_json_rpc_error_message(&json!("controller is busy")),
+            "controller is busy"
+        );
+        assert_eq!(
+            controller_json_rpc_error_message(&json!({"code": -32000})),
+            "PCController rejected the request"
+        );
+    }
 
     #[test]
     fn normalizes_controller_endpoints() {

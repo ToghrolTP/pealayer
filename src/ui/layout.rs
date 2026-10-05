@@ -1474,7 +1474,7 @@ fn take_effect_drop_on_rect(
 
 fn effect_preset_reference(preset: &crate::app::EffectPreset) -> Option<String> {
     match preset.source {
-        crate::app::EffectPresetSource::ControllerMacro(id) => Some(format!("sequence:{id}")),
+        crate::app::EffectPresetSource::ControllerMacro(id) => Some(format!("effect:{id}")),
         crate::app::EffectPresetSource::ControllerStrip => preset
             .effect
             .controller_strip_effect
@@ -8081,7 +8081,7 @@ mod timeline_row_tests {
         );
         assert_eq!(
             effect_preset_reference(&first).as_deref(),
-            Some("sequence:7")
+            Some("effect:7")
         );
     }
 
