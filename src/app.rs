@@ -432,6 +432,8 @@ pub struct PealayerApp {
     pub(crate) auto_connect_hardware: bool,
     pub(crate) click_player_to_toggle: bool,
     pub(crate) show_subseconds: bool,
+    pub(crate) seekbar_hover_thumbnails: bool,
+    pub(crate) seekbar_thumbnail_preview: crate::ui::seek_preview::SeekbarThumbnailPreview,
     pub(crate) quick_seek_seconds: f64,
     pub(crate) frame_step_count: u32,
     pub(crate) wheel_seek_seconds: f64,
@@ -4830,6 +4832,7 @@ impl PealayerApp {
         cfg.subtitle_text_replacements = self.subtitle_text_replacements.clone();
         cfg.audio_delay_seconds = self.audio_delay;
         cfg.show_subseconds = self.show_subseconds;
+        cfg.seekbar_hover_thumbnails = self.seekbar_hover_thumbnails;
         cfg.quick_seek_seconds = self.quick_seek_seconds;
         cfg.frame_step_count = self.frame_step_count;
         cfg.wheel_seek_seconds = self.wheel_seek_seconds;
@@ -5010,6 +5013,7 @@ impl PealayerApp {
         self.subtitle_direction = config.subtitle_direction;
         self.subtitle_text_replacements = config.subtitle_text_replacements.clone();
         self.show_subseconds = config.show_subseconds;
+        self.seekbar_hover_thumbnails = config.seekbar_hover_thumbnails;
         self.quick_seek_seconds = config.quick_seek_seconds;
         self.frame_step_count = config.frame_step_count;
         self.wheel_seek_seconds = config.wheel_seek_seconds;
@@ -6270,6 +6274,8 @@ impl Default for PealayerApp {
             auto_connect_hardware: true,
             click_player_to_toggle: true,
             show_subseconds: true,
+            seekbar_hover_thumbnails: false,
+            seekbar_thumbnail_preview: crate::ui::seek_preview::SeekbarThumbnailPreview::default(),
             quick_seek_seconds: 10.0,
             frame_step_count: 1,
             wheel_seek_seconds: 5.0,

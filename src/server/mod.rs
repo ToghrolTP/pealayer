@@ -634,6 +634,9 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
             dispatch_ipc_payload(state, String::from_utf8_lossy(&request.body).trim()),
         ),
         ("GET", "/api/player/frame") => player_frame_response(&request.target, state),
+        ("GET", "/api/player/seek-thumbnail") => {
+            player_seek_thumbnail_response(&request.target, state)
+        }
         ("GET", "/api/fs/browse") => browse_response(&request.target),
         ("GET", "/api/fs/thumbnail") => thumbnail_response(&request.target),
         ("POST", "/api/fs/rename") => rename_response(&request.body),
@@ -1032,6 +1035,53 @@ fn player_frame_response(target: &str, state: &ControlState) -> HttpResponse {
                 .map(std::path::PathBuf::from)
         });
     image_response(path.as_deref(), "Frame Not Found")
+}
+
+fn current_media_target(state: &ControlState) -> Option<String> {
+    state
+        .latest_status
+        .lock()
+        .ok()
+        .and_then(|status| status.clone())
+        .as_deref()
+        .and_then(|status| {
+            serde_json::from_str::<crate::platform::interop::PlayerStatusResponse>(status).ok()
+        })
+        .and_then(|status| status.current_video)
+}
+
+fn player_seek_thumbnail_response(target: &str, state: &ControlState) -> HttpResponse {
+    let Some(seconds) = query_value(target, "seconds").and_then(|value| value.parse::<f64>().ok())
+    else {
+        return HttpResponse::text(400, "Bad Request", "A numeric seconds value is required");
+    };
+    if !seconds.is_finite() || seconds < 0.0 {
+        return HttpResponse::text(
+            400,
+            "Bad Request",
+            "Seek-preview time must be finite and non-negative",
+        );
+    }
+    let Some(media_target) = current_media_target(state) else {
+        return HttpResponse::text(404, "Not Found", "No media is currently loaded");
+    };
+    let config = crate::config::AppConfig::load();
+    match thumbnails::get_or_generate_seek_thumbnail(
+        &media_target,
+        seconds,
+        config.open_url_use_proxy,
+        config.open_url_proxy_url.as_deref(),
+    ) {
+        Ok(path) => match std::fs::read(path) {
+            Ok(data) => HttpResponse::bytes(200, "OK", "image/jpeg", data),
+            Err(error) => HttpResponse::text(
+                500,
+                "Internal Server Error",
+                format!("Could not read the seek preview: {error}"),
+            ),
+        },
+        Err(error) => HttpResponse::text(404, "Not Found", error),
+    }
 }
 
 fn browse_response(target: &str) -> HttpResponse {

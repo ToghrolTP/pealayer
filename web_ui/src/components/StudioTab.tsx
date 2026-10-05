@@ -25,6 +25,7 @@ import { tr, UiLocale } from '../i18n';
 import { effectGlyph as configuredEffectGlyph, effectIconOptions } from '../effectIcons';
 import { EffectRecorder } from './EffectRecorder';
 import { mediaBasename } from '../mediaLabel';
+import { SeekThumbnailPreview } from './SeekThumbnailPreview';
 
 interface StudioTabProps {
   state: PlayerState;
@@ -33,6 +34,7 @@ interface StudioTabProps {
   appName: string;
   quickSeekSeconds: number;
   apiBaseUrl: string;
+  seekbarHoverThumbnails: boolean;
   surface?: 'studio' | 'timeline';
 }
 
@@ -73,7 +75,7 @@ const workspaceGlyph = (icon?: string) => {
   }
 };
 
-export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl, surface = 'studio' }) => {
+export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl, seekbarHoverThumbnails, surface = 'studio' }) => {
   const [selectedEffect, setSelectedEffect] = useState<string | null>(null);
   const [effectEditorOpen, setEffectEditorOpen] = useState(false);
   const [effectDraft, setEffectDraft] = useState<Record<string, any> | null>(null);
@@ -544,19 +546,27 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             <Button icon={<FastForwardOutlined />} onClick={() => sendCmd('seek', { seconds: quickSeekSeconds })} />
           </Tooltip>
           <span className="studio-timecode">{formatTime(currentSeconds)}</span>
-          <Slider
+          <SeekThumbnailPreview
+            enabled={seekbarHoverThumbnails && Boolean(state.seekable) && durationSeconds > 0}
+            duration={durationSeconds}
+            mediaIdentity={state.current_video}
+            apiBaseUrl={apiBaseUrl}
+            unavailableLabel={tr(locale, 'Preview unavailable')}
             className="studio-scrubber"
-            min={0}
-            max={100}
-            value={activeSeek}
-            disabled={!state.seekable || durationSeconds <= 0}
-            onChange={(value) => setSeekDraft(value)}
-            onChangeComplete={(value) => {
-              setSeekDraft(null);
-              sendCmd('seek_abs', { percentage: value });
-            }}
-            tooltip={{ formatter: (value) => formatTime(((value ?? 0) / 100) * durationSeconds) }}
-          />
+          >
+            <Slider
+              min={0}
+              max={100}
+              value={activeSeek}
+              disabled={!state.seekable || durationSeconds <= 0}
+              onChange={(value) => setSeekDraft(value)}
+              onChangeComplete={(value) => {
+                setSeekDraft(null);
+                sendCmd('seek_abs', { percentage: value });
+              }}
+              tooltip={seekbarHoverThumbnails ? { open: false } : { formatter: (value) => formatTime(((value ?? 0) / 100) * durationSeconds) }}
+            />
+          </SeekThumbnailPreview>
           <span className="studio-timecode studio-timecode--muted">
             {state.live ? tr(locale, 'LIVE') : formatTime(durationSeconds)}
           </span>

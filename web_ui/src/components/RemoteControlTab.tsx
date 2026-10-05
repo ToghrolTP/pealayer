@@ -13,6 +13,7 @@ import {
 } from '@ant-design/icons';
 import { tr, UiLocale } from '../i18n';
 import { mediaBasename } from '../mediaLabel';
+import { SeekThumbnailPreview } from './SeekThumbnailPreview';
 
 export interface PlayerState {
   status?: string;
@@ -149,6 +150,7 @@ interface RemoteControlTabProps {
   locale: UiLocale;
   quickSeekSeconds: number;
   apiBaseUrl: string;
+  seekbarHoverThumbnails: boolean;
 }
 
 const formatTime = (seconds?: number) => {
@@ -166,6 +168,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
   locale,
   quickSeekSeconds,
   apiBaseUrl,
+  seekbarHoverThumbnails,
 }) => {
   const [frameTimestamp, setFrameTimestamp] = useState(Date.now());
   const [seekDraft, setSeekDraft] = useState<number | null>(null);
@@ -209,18 +212,26 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
 
       <div className="remote-player__timeline">
         <span>{formatTime(state.playback_time)}</span>
-        <Slider
-          min={0}
-          max={100}
-          value={seekDraft ?? seekPercent}
-          disabled={!state.seekable || !state.duration}
-          onChange={setSeekDraft}
-          onChangeComplete={(value) => {
-            setSeekDraft(null);
-            sendCmd('seek_abs', { percentage: value });
-          }}
-          tooltip={{ formatter: (value) => formatTime(((value || 0) / 100) * (state.duration || 0)) }}
-        />
+        <SeekThumbnailPreview
+          enabled={seekbarHoverThumbnails && Boolean(state.seekable) && Boolean(state.duration)}
+          duration={state.duration || 0}
+          mediaIdentity={state.current_video}
+          apiBaseUrl={apiBaseUrl}
+          unavailableLabel={tr(locale, 'Preview unavailable')}
+        >
+          <Slider
+            min={0}
+            max={100}
+            value={seekDraft ?? seekPercent}
+            disabled={!state.seekable || !state.duration}
+            onChange={setSeekDraft}
+            onChangeComplete={(value) => {
+              setSeekDraft(null);
+              sendCmd('seek_abs', { percentage: value });
+            }}
+            tooltip={seekbarHoverThumbnails ? { open: false } : { formatter: (value) => formatTime(((value || 0) / 100) * (state.duration || 0)) }}
+          />
+        </SeekThumbnailPreview>
         <span>{state.live ? tr(locale, 'LIVE') : formatTime(state.duration)}</span>
       </div>
 

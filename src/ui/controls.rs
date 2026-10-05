@@ -716,7 +716,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             .trailing_fill(true);
                         let response = add_fill_width_slider(ui, can_seek, slider);
                         let response = if can_seek {
-                            response.on_hover_text(&seek_tooltip)
+                            if app.seekbar_hover_thumbnails {
+                                response
+                            } else {
+                                response.on_hover_text(&seek_tooltip)
+                            }
                         } else {
                             response.on_disabled_hover_text(&seek_tooltip)
                         };
@@ -730,6 +734,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 (buffered_until / app.duration).clamp(0.0, 1.0) as f32,
                             );
                         }
+                        crate::ui::seek_preview::draw(
+                            app,
+                            ui,
+                            &response,
+                            "simple-seekbar-preview",
+                        );
                         // `changed` covers both dragging and a single click on
                         // the seekbar. Restricting this to `dragged` left click
                         // seeks without a preview request on some egui input

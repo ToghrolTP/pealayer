@@ -7688,6 +7688,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 as f32,
                                         );
                                     }
+                                    crate::ui::seek_preview::draw(
+                                        self.app,
+                                        ui,
+                                        &response,
+                                        "nle-seekbar-preview",
+                                    );
 
                                     if can_seek && response.changed() {
                                         self.app.scrub_to(current_pos);

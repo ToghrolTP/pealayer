@@ -414,6 +414,7 @@ pub struct AppConfig {
     pub subtitle_text_replacements: Vec<crate::subtitle::SubtitleReplacement>,
     pub audio_delay_seconds: f64,
     pub show_subseconds: bool,
+    pub seekbar_hover_thumbnails: bool,
     pub quick_seek_seconds: f64,
     pub frame_step_count: u32,
     pub wheel_seek_seconds: f64,
@@ -533,6 +534,7 @@ impl Default for AppConfig {
             subtitle_text_replacements: crate::subtitle::default_text_replacements(),
             audio_delay_seconds: 0.0,
             show_subseconds: true,
+            seekbar_hover_thumbnails: false,
             quick_seek_seconds: 10.0,
             frame_step_count: 1,
             wheel_seek_seconds: 5.0,
@@ -1635,6 +1637,7 @@ mod tests {
         assert!(cfg.open_url_proxy_url.is_none());
         assert_eq!(cfg.playback_speed, 1.0);
         assert_eq!(cfg.temporary_fast_forward_speed, 2.0);
+        assert!(!cfg.seekbar_hover_thumbnails);
         assert!(cfg.native_dialog_windows);
         assert!(cfg.auto_reload_config);
         assert_eq!(cfg.active_workspace_profile.as_deref(), Some("nle"));
@@ -1748,6 +1751,7 @@ mod tests {
         cfg.open_url_fetch_remote_thumbnail = false;
         cfg.open_url_use_proxy = false;
         cfg.open_url_proxy_url = Some("http://127.0.0.1:8080".to_string());
+        cfg.seekbar_hover_thumbnails = true;
         cfg.native_dialog_windows = true;
         cfg.recent_media.push(PathBuf::from("/test/file.mp4"));
         cfg.last_media_target = Some(PathBuf::from("/test/file.mp4"));
@@ -1819,6 +1823,7 @@ mod tests {
             loaded.open_url_proxy_url.as_deref(),
             Some("http://127.0.0.1:8080")
         );
+        assert!(loaded.seekbar_hover_thumbnails);
         assert_eq!(loaded.recent_media.len(), 1);
         assert_eq!(loaded.recent_media[0], PathBuf::from("/test/file.mp4"));
         assert_eq!(

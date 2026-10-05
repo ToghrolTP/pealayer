@@ -16,6 +16,7 @@ pub mod media_tracks;
 pub mod menu;
 pub mod open_url;
 pub mod preferences;
+pub mod seek_preview;
 pub mod status_bar;
 pub mod subtitles;
 pub mod video;

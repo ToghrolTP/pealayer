@@ -2,10 +2,15 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const THUMBNAIL_PIPELINE_REVISION: &str = "fit-letterbox-v2";
 const THUMBNAIL_FILTER: &str = "thumbnail=60,scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2:color=0x0b0f14";
 const REMOTE_THUMBNAIL_PIPELINE_REVISION: &str = "remote-20-percent-v1";
+const SEEK_THUMBNAIL_PIPELINE_REVISION: &str = "seek-preview-320x180-v1";
+const SEEK_THUMBNAIL_FILTER: &str = "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2:color=0x0b0f14";
+const MAX_SEEK_THUMBNAILS: usize = 512;
+static SEEK_THUMBNAIL_STAGE_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RemoteThumbnailFile {
@@ -215,6 +220,178 @@ pub fn get_or_generate_remote_thumbnail(
     })
 }
 
+/// Decode the frame belonging to one whole playback second. Hover previews
+/// deliberately share a persistent, bounded cache so egui and Web UI requests
+/// never run separate extraction pipelines for the same media position.
+pub fn get_or_generate_seek_thumbnail(
+    media_target: &str,
+    position_seconds: f64,
+    use_proxy: bool,
+    proxy_url: Option<&str>,
+) -> Result<PathBuf, String> {
+    let second = seek_preview_second(position_seconds)?;
+    let target = media_target.trim();
+    if target.is_empty() {
+        return Err("No media target is available for seek preview".to_string());
+    }
+    let remote = crate::media::is_remote_media_target(target);
+    if !remote && !Path::new(target).is_file() {
+        return Err("The media file is no longer available".to_string());
+    }
+
+    let cache_dir = get_thumbnail_cache_dir().join("seek");
+    std::fs::create_dir_all(&cache_dir)
+        .map_err(|error| format!("Could not create the seek-preview cache: {error}"))?;
+    let cache_key = seek_thumbnail_cache_key(target, second)?;
+    let thumbnail_path = cache_dir.join(format!("{cache_key}.jpg"));
+    if thumbnail_path.is_file() {
+        return Ok(thumbnail_path);
+    }
+
+    let stage_id = SEEK_THUMBNAIL_STAGE_ID.fetch_add(1, Ordering::Relaxed);
+    let staged_path = cache_dir.join(format!(
+        "{cache_key}.{}.{}.tmp.jpg",
+        std::process::id(),
+        stage_id
+    ));
+    let _ = std::fs::remove_file(&staged_path);
+    let output = staged_path.to_string_lossy().into_owned();
+    let seek = second.to_string();
+
+    let mut ffmpeg = silent_command("ffmpeg");
+    if remote {
+        configure_remote_proxy(&mut ffmpeg, use_proxy, proxy_url);
+    }
+    let ffmpeg_ok = ffmpeg
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-ss",
+            seek.as_str(),
+            "-i",
+            target,
+            "-an",
+            "-sn",
+            "-dn",
+            "-frames:v",
+            "1",
+            "-vf",
+            SEEK_THUMBNAIL_FILTER,
+            "-q:v",
+            "4",
+            "-y",
+            output.as_str(),
+        ])
+        .status()
+        .is_ok_and(|status| status.success());
+
+    let generated = ffmpeg_ok && staged_path.is_file() || {
+        let filter = format!("--vf=lavfi=[{SEEK_THUMBNAIL_FILTER}]");
+        let output_arg = format!("--o={output}");
+        let start_arg = format!("--start={seek}");
+        let mut mpv = silent_command("mpv");
+        if remote {
+            configure_remote_proxy(&mut mpv, use_proxy, proxy_url);
+        }
+        mpv.args([
+            target,
+            "--no-config",
+            "--no-audio",
+            start_arg.as_str(),
+            "--frames=1",
+            "--ovc=mjpeg",
+            "--of=image2",
+            filter.as_str(),
+            output_arg.as_str(),
+        ])
+        .status()
+        .is_ok_and(|status| status.success())
+            && staged_path.is_file()
+    };
+
+    if !generated {
+        let _ = std::fs::remove_file(&staged_path);
+        return Err(format!(
+            "Could not decode a preview frame at {second} seconds"
+        ));
+    }
+    if std::fs::rename(&staged_path, &thumbnail_path).is_err() && !thumbnail_path.is_file() {
+        let _ = std::fs::remove_file(&staged_path);
+        return Err("The completed seek preview could not be published".to_string());
+    }
+    let _ = std::fs::remove_file(&staged_path);
+    prune_seek_thumbnail_cache(&cache_dir, MAX_SEEK_THUMBNAILS);
+    Ok(thumbnail_path)
+}
+
+fn seek_preview_second(position_seconds: f64) -> Result<u64, String> {
+    if !position_seconds.is_finite() || position_seconds < 0.0 {
+        return Err("Seek-preview time must be a finite non-negative value".to_string());
+    }
+    Ok(position_seconds.floor().min(u64::MAX as f64) as u64)
+}
+
+fn seek_thumbnail_cache_key(media_target: &str, second: u64) -> Result<String, String> {
+    let remote = crate::media::is_remote_media_target(media_target);
+    let identity = if remote {
+        normalize_remote_thumbnail_url(media_target)
+    } else {
+        std::fs::canonicalize(media_target)
+            .unwrap_or_else(|_| PathBuf::from(media_target))
+            .to_string_lossy()
+            .into_owned()
+    };
+    let mut hash = 0xcbf29ce484222325_u64;
+    let mut feed = |bytes: &[u8]| {
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    };
+    feed(SEEK_THUMBNAIL_PIPELINE_REVISION.as_bytes());
+    feed(&[0]);
+    feed(identity.as_bytes());
+    if !remote {
+        let metadata = Path::new(media_target)
+            .metadata()
+            .map_err(|error| format!("Could not inspect media for seek preview: {error}"))?;
+        feed(&metadata.len().to_le_bytes());
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|value| value.as_nanos())
+            .unwrap_or_default();
+        feed(&modified.to_le_bytes());
+    }
+    feed(&second.to_le_bytes());
+    Ok(format!("{hash:016x}-{second}"))
+}
+
+fn prune_seek_thumbnail_cache(cache_dir: &Path, maximum: usize) {
+    let Ok(entries) = std::fs::read_dir(cache_dir) else {
+        return;
+    };
+    let mut thumbnails = entries
+        .flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|value| value == "jpg"))
+        .filter_map(|entry| {
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            Some((modified, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    if thumbnails.len() <= maximum {
+        return;
+    }
+    thumbnails.sort_by_key(|(modified, _)| *modified);
+    let remove_count = thumbnails.len() - maximum;
+    for (_, path) in thumbnails.into_iter().take(remove_count) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 fn probe_remote_duration(media_url: &str, use_proxy: bool, proxy_url: Option<&str>) -> Option<f64> {
     let mut command = silent_command("ffprobe");
     command.stdout(Stdio::piped());
@@ -383,6 +560,43 @@ mod tests {
             first,
             remote_thumbnail_cache_key("https://example.test/movie.mp4?edition=two")
         );
+    }
+
+    #[test]
+    fn seek_preview_uses_whole_seconds_and_rejects_invalid_time() {
+        assert_eq!(seek_preview_second(0.0).unwrap(), 0);
+        assert_eq!(seek_preview_second(12.999).unwrap(), 12);
+        assert!(seek_preview_second(-0.001).is_err());
+        assert!(seek_preview_second(f64::NAN).is_err());
+        assert!(seek_preview_second(f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn seek_preview_remote_cache_key_tracks_media_and_second() {
+        let first = seek_thumbnail_cache_key("https://example.test/movie.mp4#chapter", 12)
+            .expect("first cache key");
+        assert_eq!(
+            first,
+            seek_thumbnail_cache_key("https://example.test/movie.mp4", 12)
+                .expect("normalized cache key")
+        );
+        assert_ne!(
+            first,
+            seek_thumbnail_cache_key("https://example.test/movie.mp4", 13)
+                .expect("next-second cache key")
+        );
+        assert_ne!(
+            first,
+            seek_thumbnail_cache_key("https://example.test/other.mp4", 12)
+                .expect("different-media cache key")
+        );
+    }
+
+    #[test]
+    fn seek_preview_filter_preserves_source_aspect_ratio() {
+        assert!(SEEK_THUMBNAIL_FILTER.contains("force_original_aspect_ratio=decrease"));
+        assert!(SEEK_THUMBNAIL_FILTER.contains("pad=320:180"));
+        assert!(!SEEK_THUMBNAIL_FILTER.contains("thumbnail="));
     }
 
     #[test]

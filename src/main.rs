@@ -784,6 +784,9 @@ fn main() -> eframe::Result {
                 auto_connect_hardware: loaded_config.auto_connect_hardware,
                 click_player_to_toggle: loaded_config.click_player_to_toggle,
                 show_subseconds: loaded_config.show_subseconds,
+                seekbar_hover_thumbnails: loaded_config.seekbar_hover_thumbnails,
+                seekbar_thumbnail_preview:
+                    crate::ui::seek_preview::SeekbarThumbnailPreview::default(),
                 quick_seek_seconds: loaded_config.quick_seek_seconds,
                 frame_step_count: loaded_config.frame_step_count,
                 wheel_seek_seconds: loaded_config.wheel_seek_seconds,

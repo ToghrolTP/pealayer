@@ -534,6 +534,7 @@ const App: React.FC = () => {
                 appName={runtime?.appName || 'Pealayer'}
                 quickSeekSeconds={quickSeekSeconds}
                 apiBaseUrl={apiBaseUrl}
+                seekbarHoverThumbnails={Boolean(appConfig?.seekbar_hover_thumbnails)}
                 surface="timeline"
               />
             )}
@@ -545,6 +546,7 @@ const App: React.FC = () => {
                 locale={runtime?.locale || 'en'}
                 quickSeekSeconds={quickSeekSeconds}
                 apiBaseUrl={apiBaseUrl}
+                seekbarHoverThumbnails={Boolean(appConfig?.seekbar_hover_thumbnails)}
               />
             )}
             {activeTab === 'library' && (

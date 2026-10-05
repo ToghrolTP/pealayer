@@ -314,6 +314,16 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Player controls",
             "Show milliseconds in time displays",
         ),
+        {
+            let mut control = PreferenceControl::boolean(
+                "seekbar_hover_thumbnails",
+                "playback",
+                "Player controls",
+                "Show a thumbnail when hovering over the seekbar",
+            );
+            control.description = Some("Shows the decoded frame for the hovered playback second");
+            control
+        },
         PreferenceControl::number(
             "quick_seek_seconds",
             "playback",
@@ -921,6 +931,20 @@ mod tests {
         assert!(matches!(control.kind, PreferenceControlKind::Boolean));
         assert_eq!(control.section, "hardware");
         assert_eq!(control.group, "Timeline");
+    }
+
+    #[test]
+    fn seekbar_thumbnail_preview_is_an_opt_in_shared_playback_preference() {
+        let config = crate::config::AppConfig::default();
+        assert!(!config.seekbar_hover_thumbnails);
+        let controls = preference_controls(&config);
+        let control = controls
+            .iter()
+            .find(|control| control.key == "seekbar_hover_thumbnails")
+            .expect("seekbar hover thumbnail preference");
+        assert!(matches!(control.kind, PreferenceControlKind::Boolean));
+        assert_eq!(control.section, "playback");
+        assert_eq!(control.group, "Player controls");
     }
 
     #[test]

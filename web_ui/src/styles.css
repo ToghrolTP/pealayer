@@ -347,6 +347,52 @@ body {
 .studio-timecode { color: var(--text); font: 600 11px ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; }
 .studio-timecode--muted { color: var(--muted); }
 .studio-scrubber, .studio-volume { margin: 0 5px !important; }
+.seek-thumbnail-host { position: relative; min-width: 0; width: 100%; }
+.seek-thumbnail-host > .ant-slider { width: 100%; margin: 0; }
+.seek-thumbnail-popover {
+  position: absolute;
+  z-index: 80;
+  inset-block-end: calc(100% + 10px);
+  width: 212px;
+  overflow: hidden;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-1) 96%, transparent);
+  color: var(--text);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, .34);
+  transform: translateX(-50%);
+  pointer-events: none;
+  backdrop-filter: blur(14px);
+}
+.seek-thumbnail-popover__image {
+  position: relative;
+  width: 200px;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: #080b10;
+}
+.seek-thumbnail-popover__image img { width: 100%; height: 100%; object-fit: contain; opacity: 0; transition: opacity .12s ease; }
+.seek-thumbnail-popover__image img.is-ready { opacity: 1; }
+.seek-thumbnail-popover__loading {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border: 2px solid color-mix(in srgb, var(--text) 18%, transparent);
+  border-block-start-color: var(--accent);
+  border-radius: 50%;
+  animation: seek-thumbnail-spin .7s linear infinite;
+}
+.seek-thumbnail-popover__unavailable { position: absolute; color: var(--muted); font: 600 11px var(--font-sans); }
+.seek-thumbnail-popover > strong { display: block; padding: 5px 2px 0; text-align: center; font: 650 11px var(--font-mono); }
+@keyframes seek-thumbnail-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .seek-thumbnail-popover__image img { transition: none; }
+  .seek-thumbnail-popover__loading { animation-duration: 1.4s; }
+}
 .volume-icon { color: var(--muted); }
 
 .timeline-panel-web { grid-column: 1 / -1; display: grid; grid-template-rows: auto 28px minmax(0, 1fr); }
