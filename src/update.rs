@@ -401,7 +401,16 @@ impl UpdateManager {
             ..
         } = upload;
         drop(file);
-        fs::remove_file(path).map_err(|error| format!("remove aborted update: {error}"))?;
+        if let Err(error) = fs::remove_file(path) {
+            let error = format!("remove aborted update: {error}");
+            drop(inner);
+            self.fail(
+                Some(operation_id.to_string()),
+                Some("peer-upload".into()),
+                &error,
+            );
+            return Err(error);
+        }
         inner.status = UpdateStatus {
             operation_id: Some(operation_id.to_string()),
             state: "aborted".to_string(),
@@ -1758,6 +1767,42 @@ fn validate_libmpv_compatibility(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn abort_closes_staging_file_and_cleanup_failure_does_not_lock_future_updates() {
+        for missing_file in [false, true] {
+            let manager = UpdateManager::default();
+            let path =
+                std::env::temp_dir().join(format!(".pealayer-abort-{}", uuid::Uuid::new_v4()));
+            let file = create_update_file(&path, true).unwrap();
+            manager.inner.lock().unwrap().upload = Some(ActiveUpload {
+                operation_id: "abort-test".into(),
+                path: path.clone(),
+                file,
+                hasher: Sha256::new(),
+                expected_sha256: "0".repeat(64),
+                expected_size: 1,
+                received: 0,
+                version: None,
+            });
+            manager.replace_status(UpdateStatus {
+                state: "receiving".into(),
+                ..Default::default()
+            });
+            if missing_file {
+                fs::remove_file(&path).unwrap();
+            }
+            let result = manager.abort_upload("abort-test");
+            assert_eq!(result.is_err(), missing_file);
+            assert_eq!(
+                manager.status().state,
+                if missing_file { "failed" } else { "aborted" }
+            );
+            assert!(!manager.status().active());
+            assert!(manager.inner.lock().unwrap().upload.is_none());
+            assert!(!path.exists());
+        }
+    }
 
     #[cfg(windows)]
     #[test]

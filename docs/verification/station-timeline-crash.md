@@ -111,5 +111,29 @@ only Hidden cleared, preserving unrelated attributes. Unix dot-prefixed staging
 paths remain unchanged. A real Windows filesystem test covers hidden staging,
 journaling, activation, rollback, preserved attributes and deletion while hidden.
 
-Focused validation: 10 updater tests, 3 timeline/diagnostic-process tests, and
+Aborting an upload closes its handle before cleanup; a cleanup failure is
+reported as failed, not left as a permanently active receiving operation.
+
+Focused validation: 11 updater tests, 3 timeline/diagnostic-process tests, and
 1 diagnostic writer test passed. Only focused tests were run, not the full suite.
+
+## First fixed deployment and live Hidden evidence
+
+Commit `00ab0e9c7dc9914909a7d11c697d3ee83bc4a572` was built locally without the
+full test suite, then launched from the canonical DAVID-PC installation after
+graceful JSON IPC Quit. Station received it through `/api/update/from-url` and
+the SSH reverse API transport. Because that receiver was still the old build,
+one explicit JSON IPC Quit was needed; replacement was performed by its updater.
+
+Both manifests reported clean commit `00ab0e9`, 35,645,952 bytes and SHA256
+`4a77ae19c09ce97c219eb0ff5d7c3b86608188cdaefde3d21c24eac0ef3ca666`.
+Station's installed executable was in the requested Share directory, process
+20660 in interactive Session 1, with Archive but not Hidden. Its libmpv digest
+was unchanged. Temporary recovery/bootstrap task definitions were removed.
+
+A subsequent same-build fetch, operation
+`update-c12e0f51-9383-4040-82e0-f6ceea48e8d3`, exposed its download as
+`Hidden, Archive`, then deleted it and correctly returned `current` without
+restarting. This verifies live download visibility and same-build cleanup, not
+automatic replacement; another distinct build is needed for that acceptance.
+Cafe's `asus@localhost:7022` tunnel still refused connections at this checkpoint.
