@@ -436,6 +436,10 @@ pub struct PealayerApp {
     pub(crate) osd_timeout_seconds: f32,
     pub(crate) paused_drag_action: crate::config::PlayerDragAction,
     pub(crate) playing_drag_action: crate::config::PlayerDragAction,
+    pub(crate) middle_click_action: crate::config::PlayerClickAction,
+    pub(crate) middle_hold_action: crate::config::PlayerDragAction,
+    pub(crate) right_click_action: crate::config::PlayerClickAction,
+    pub(crate) right_hold_action: crate::config::PlayerDragAction,
     pub(crate) fullscreen_video_background: crate::config::VideoBackground,
     pub(crate) motion_control_mode: crate::config::MotionControlMode,
     pub(crate) held_motion_action: Option<(String, String)>,
@@ -4785,6 +4789,10 @@ impl PealayerApp {
         cfg.osd_timeout_seconds = self.osd_timeout_seconds;
         cfg.paused_drag_action = self.paused_drag_action;
         cfg.playing_drag_action = self.playing_drag_action;
+        cfg.middle_click_action = self.middle_click_action;
+        cfg.middle_hold_action = self.middle_hold_action;
+        cfg.right_click_action = self.right_click_action;
+        cfg.right_hold_action = self.right_hold_action;
         cfg.fullscreen_video_background = self.fullscreen_video_background;
         cfg.motion_control_mode = self.motion_control_mode;
         cfg.compact_hardware_controls = self.compact_hardware_controls;
@@ -4957,6 +4965,10 @@ impl PealayerApp {
         self.osd_timeout_seconds = config.osd_timeout_seconds;
         self.paused_drag_action = config.paused_drag_action;
         self.playing_drag_action = config.playing_drag_action;
+        self.middle_click_action = config.middle_click_action;
+        self.middle_hold_action = config.middle_hold_action;
+        self.right_click_action = config.right_click_action;
+        self.right_hold_action = config.right_hold_action;
         self.fullscreen_video_background = config.fullscreen_video_background;
         self.motion_control_mode = config.motion_control_mode;
         self.compact_hardware_controls = config.compact_hardware_controls;
@@ -6198,6 +6210,10 @@ impl Default for PealayerApp {
             osd_timeout_seconds: 3.5,
             paused_drag_action: crate::config::PlayerDragAction::MoveWindow,
             playing_drag_action: crate::config::PlayerDragAction::TemporaryFastForward,
+            middle_click_action: crate::config::PlayerClickAction::None,
+            middle_hold_action: crate::config::PlayerDragAction::None,
+            right_click_action: crate::config::PlayerClickAction::ContextMenu,
+            right_hold_action: crate::config::PlayerDragAction::None,
             fullscreen_video_background: crate::config::VideoBackground::Black,
             motion_control_mode: crate::config::MotionControlMode::Hold,
             held_motion_action: None,

@@ -81,6 +81,17 @@ pub enum PlayerDragAction {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum PlayerClickAction {
+    PlayPause,
+    ToggleMute,
+    ToggleFullscreen,
+    ContextMenu,
+    #[default]
+    None,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum VideoBackground {
     #[default]
     Black,
@@ -410,6 +421,10 @@ pub struct AppConfig {
     pub osd_timeout_seconds: f32,
     pub paused_drag_action: PlayerDragAction,
     pub playing_drag_action: PlayerDragAction,
+    pub middle_click_action: PlayerClickAction,
+    pub middle_hold_action: PlayerDragAction,
+    pub right_click_action: PlayerClickAction,
+    pub right_hold_action: PlayerDragAction,
     pub fullscreen_video_background: VideoBackground,
     pub motion_control_mode: MotionControlMode,
     pub compact_hardware_controls: bool,
@@ -517,6 +532,10 @@ impl Default for AppConfig {
             osd_timeout_seconds: 3.5,
             paused_drag_action: PlayerDragAction::MoveWindow,
             playing_drag_action: PlayerDragAction::TemporaryFastForward,
+            middle_click_action: PlayerClickAction::None,
+            middle_hold_action: PlayerDragAction::None,
+            right_click_action: PlayerClickAction::ContextMenu,
+            right_hold_action: PlayerDragAction::None,
             fullscreen_video_background: VideoBackground::Black,
             motion_control_mode: MotionControlMode::Hold,
             compact_hardware_controls: false,

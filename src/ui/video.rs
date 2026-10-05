@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct VideoSurfaceGesture {
+    pub(crate) button: egui::PointerButton,
     pub(crate) action: crate::config::PlayerDragAction,
     pub(crate) start_time: f64,
     pub(crate) start_rate: f64,
@@ -25,20 +26,41 @@ fn temporary_fast_forward_rate(start_rate: f64, configured_rate: f64, drag_delta
     (configured_rate.max(start_rate) + drag_delta_x.abs() as f64 / 160.0).clamp(1.0, 16.0)
 }
 
-fn should_consume_fast_forward_click(
+fn should_consume_gesture_click(
     action: crate::config::PlayerDragAction,
     dragged: bool,
     held_for: std::time::Duration,
 ) -> bool {
-    action == crate::config::PlayerDragAction::TemporaryFastForward
-        && (dragged || held_for >= std::time::Duration::from_millis(180))
+    dragged
+        || (action == crate::config::PlayerDragAction::TemporaryFastForward
+            && held_for >= std::time::Duration::from_millis(180))
 }
 
-fn begin_video_surface_gesture(app: &mut PealayerApp, action: crate::config::PlayerDragAction) {
+fn gesture_action_for_button(
+    app: &PealayerApp,
+    button: egui::PointerButton,
+) -> crate::config::PlayerDragAction {
+    match button {
+        egui::PointerButton::Primary if app.is_paused => app.paused_drag_action,
+        egui::PointerButton::Primary => app.playing_drag_action,
+        egui::PointerButton::Middle => app.middle_hold_action,
+        egui::PointerButton::Secondary => app.right_hold_action,
+        egui::PointerButton::Extra1 | egui::PointerButton::Extra2 => {
+            crate::config::PlayerDragAction::None
+        }
+    }
+}
+
+fn begin_video_surface_gesture(
+    app: &mut PealayerApp,
+    button: egui::PointerButton,
+    action: crate::config::PlayerDragAction,
+) {
     if app.video_surface_gesture.is_some() {
         return;
     }
     let gesture = VideoSurfaceGesture {
+        button,
         action,
         start_time: app.playback_time,
         start_rate: app.playback_rate,
@@ -89,11 +111,36 @@ fn finish_video_surface_gesture(app: &mut PealayerApp) -> bool {
         }
         crate::config::PlayerDragAction::MoveWindow | crate::config::PlayerDragAction::None => {}
     }
-    should_consume_fast_forward_click(
+    should_consume_gesture_click(
         gesture.action,
         gesture.dragged,
         gesture.started_at.elapsed(),
     )
+}
+
+fn perform_video_surface_click(
+    app: &mut PealayerApp,
+    ctx: &egui::Context,
+    action: crate::config::PlayerClickAction,
+) {
+    match action {
+        crate::config::PlayerClickAction::PlayPause => {
+            if app.current_video_path.is_some() {
+                app.toggle_playback();
+            }
+        }
+        crate::config::PlayerClickAction::ToggleMute => {
+            if app.current_video_path.is_some() {
+                app.toggle_audio_muted();
+            }
+        }
+        crate::config::PlayerClickAction::ToggleFullscreen => {
+            if app.current_video_path.is_some() {
+                app.toggle_fullscreen(ctx);
+            }
+        }
+        crate::config::PlayerClickAction::ContextMenu | crate::config::PlayerClickAction::None => {}
+    }
 }
 
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
@@ -105,35 +152,44 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
     let (rect, response) = ui.allocate_exact_size(video_size, egui::Sense::click_and_drag());
 
-    let selected_action = if app.is_paused {
-        app.paused_drag_action
-    } else {
-        app.playing_drag_action
-    };
-    let primary_pressed =
-        ui.input(|input| input.pointer.button_pressed(egui::PointerButton::Primary));
-    let primary_down = ui.input(|input| input.pointer.primary_down());
+    const GESTURE_BUTTONS: [egui::PointerButton; 3] = [
+        egui::PointerButton::Primary,
+        egui::PointerButton::Middle,
+        egui::PointerButton::Secondary,
+    ];
 
-    // Temporary fast-forward is a hold gesture, so it starts on mouse-down
-    // without requiring the pointer to move far enough to become an egui drag.
-    if response.hovered()
-        && primary_pressed
-        && app.current_video_path.is_some()
-        && selected_action == crate::config::PlayerDragAction::TemporaryFastForward
-    {
-        begin_video_surface_gesture(app, selected_action);
-    }
-
-    if response.drag_started() && app.current_video_path.is_some() {
-        begin_video_surface_gesture(app, selected_action);
-        if selected_action == crate::config::PlayerDragAction::Seek {
-            app.scrub_to(app.playback_time);
+    if response.hovered() && app.current_video_path.is_some() {
+        // Temporary fast-forward is a hold gesture, so it starts on mouse-down
+        // without requiring movement. Every supported pointer button follows
+        // the same rule and one button owns the gesture until release.
+        for button in GESTURE_BUTTONS {
+            let pressed = ui.input(|input| input.pointer.button_pressed(button));
+            let action = gesture_action_for_button(app, button);
+            if pressed && action == crate::config::PlayerDragAction::TemporaryFastForward {
+                begin_video_surface_gesture(app, button, action);
+                break;
+            }
         }
     }
 
-    if response.dragged()
-        && app.current_video_path.is_some()
+    if app.video_surface_gesture.is_none() && app.current_video_path.is_some() {
+        for button in GESTURE_BUTTONS {
+            if response.drag_started_by(button) {
+                let action = gesture_action_for_button(app, button);
+                if action != crate::config::PlayerDragAction::None {
+                    begin_video_surface_gesture(app, button, action);
+                    if action == crate::config::PlayerDragAction::Seek {
+                        app.scrub_to(app.playback_time);
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    if app.current_video_path.is_some()
         && let Some(mut gesture) = app.video_surface_gesture
+        && response.dragged_by(gesture.button)
     {
         gesture.dragged = true;
         app.video_surface_gesture = Some(gesture);
@@ -168,8 +224,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         }
     }
 
-    let gesture_released =
-        response.drag_stopped() || (app.video_surface_gesture.is_some() && !primary_down);
+    let gesture_released = app.video_surface_gesture.is_some_and(|gesture| {
+        response.drag_stopped_by(gesture.button)
+            || !ui.input(|input| input.pointer.button_down(gesture.button))
+    });
     let suppress_click = if gesture_released {
         finish_video_surface_gesture(app)
     } else {
@@ -195,6 +253,18 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 app.load_video_file(path);
             }
         }
+    }
+
+    if !suppress_click && response.clicked_by(egui::PointerButton::Middle) {
+        let action = app.middle_click_action;
+        perform_video_surface_click(app, ui.ctx(), action);
+    }
+    if !suppress_click
+        && response.clicked_by(egui::PointerButton::Secondary)
+        && app.right_click_action != crate::config::PlayerClickAction::ContextMenu
+    {
+        let action = app.right_click_action;
+        perform_video_surface_click(app, ui.ctx(), action);
     }
 
     if response.hovered() {
@@ -230,171 +300,194 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         }
     }
 
-    response.context_menu(|ui| {
-        if ui
-            .button(format!(
-                "{} {}",
-                crate::ui::icons::PLAY,
-                app.tr("Open Video File...")
-            ))
-            .clicked()
-        {
-            ui.close();
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter(
-                    &video_files_label,
-                    &["mp4", "mkv", "avi", "webm", "mov", "flv"],
-                )
-                .pick_file()
-            {
-                app.load_video_file(path);
-            }
-        }
-
-        if ui
-            .button(format!(
-                "{} {}",
-                crate::ui::icons::ARROW_SQUARE_OUT,
-                app.tr("Open Location / URL...")
-            ))
-            .clicked()
-        {
-            ui.close();
-            app.show_open_url_dialog = true;
-        }
-
-        let has_video = app.current_video_path.is_some();
-        if ui
-            .add_enabled(
-                has_video,
-                egui::Button::new(format!("{} {}", crate::ui::icons::X, app.tr("Close Video"))),
-            )
-            .clicked()
-        {
-            ui.close();
-            app.close_video();
-        }
-
-        ui.separator();
-
-        let play_title = if app.is_playback_finished() {
-            format!(
-                "{} {}",
-                crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
-                app.tr("Replay")
-            )
-        } else if app.is_paused {
-            format!("{} {}", crate::ui::icons::PLAY, app.tr("Play"))
+    let middle_context_menu =
+        app.middle_click_action == crate::config::PlayerClickAction::ContextMenu;
+    let right_context_menu =
+        app.right_click_action == crate::config::PlayerClickAction::ContextMenu;
+    if middle_context_menu || right_context_menu {
+        let should_open = !suppress_click
+            && ((middle_context_menu && response.clicked_by(egui::PointerButton::Middle))
+                || (right_context_menu && response.clicked_by(egui::PointerButton::Secondary)));
+        let open_command = if should_open {
+            Some(egui::SetOpenCommand::Bool(true))
+        } else if response.clicked() {
+            Some(egui::SetOpenCommand::Bool(false))
         } else {
-            format!("{} {}", crate::ui::icons::STOP_CIRCLE, app.tr("Pause"))
+            None
         };
-        if ui
-            .add_enabled(has_video, egui::Button::new(play_title))
-            .clicked()
-        {
-            ui.close();
-            app.toggle_playback();
-        }
-
-        crate::ui::icons::submenu(
-            ui,
-            format!("{} {}", crate::ui::icons::GAUGE, app.tr("Playback speed")),
-            |ui| {
-                for speed in [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0] {
-                    let selected = (app.configured_playback_speed - speed).abs() < 0.001;
-                    let label = if selected {
-                        format!("{} {speed}×", crate::ui::icons::CHECK)
-                    } else {
-                        format!("   {speed}×")
-                    };
-                    if ui
-                        .add_enabled(has_video, egui::Button::new(label))
-                        .clicked()
+        egui::Popup::menu(&response)
+            .open_memory(open_command)
+            .at_pointer_fixed()
+            .show(|ui| {
+                if ui
+                    .button(format!(
+                        "{} {}",
+                        crate::ui::icons::PLAY,
+                        app.tr("Open Video File...")
+                    ))
+                    .clicked()
+                {
+                    ui.close();
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter(
+                            &video_files_label,
+                            &["mp4", "mkv", "avi", "webm", "mov", "flv"],
+                        )
+                        .pick_file()
                     {
-                        ui.close();
-                        app.set_playback_speed(speed, true);
+                        app.load_video_file(path);
                     }
                 }
-            },
-        );
 
-        let is_fullscreen = app.fullscreen_intent(ui.ctx());
-        let fs_title = if is_fullscreen {
-            format!(
-                "{} {}",
-                crate::ui::icons::ARROWS_OUT,
-                app.tr("Exit Fullscreen")
-            )
-        } else {
-            format!("{} {}", crate::ui::icons::ARROWS_OUT, app.tr("Fullscreen"))
-        };
-        if ui.button(fs_title).clicked() {
-            ui.close();
-            app.toggle_fullscreen(ui.ctx());
-        }
+                if ui
+                    .button(format!(
+                        "{} {}",
+                        crate::ui::icons::ARROW_SQUARE_OUT,
+                        app.tr("Open Location / URL...")
+                    ))
+                    .clicked()
+                {
+                    ui.close();
+                    app.show_open_url_dialog = true;
+                }
 
-        let mute_title = if app.is_muted {
-            format!("{} {}", crate::ui::icons::SPEAKER_HIGH, app.tr("Unmute"))
-        } else {
-            format!("{} {}", crate::ui::icons::SPEAKER_SLASH, app.tr("Mute"))
-        };
-        if ui
-            .add_enabled(has_video, egui::Button::new(mute_title))
-            .clicked()
-        {
-            ui.close();
-            app.toggle_audio_muted();
-        }
+                let has_video = app.current_video_path.is_some();
+                if ui
+                    .add_enabled(
+                        has_video,
+                        egui::Button::new(format!(
+                            "{} {}",
+                            crate::ui::icons::X,
+                            app.tr("Close Video")
+                        )),
+                    )
+                    .clicked()
+                {
+                    ui.close();
+                    app.close_video();
+                }
 
-        ui.separator();
+                ui.separator();
 
-        crate::ui::icons::submenu(
-            ui,
-            format!(
-                "{} {}",
-                crate::ui::icons::CLOCK_COUNTER_CLOCKWISE,
-                app.tr("Open Recent")
-            ),
-            |ui| {
-                if app.recent_media.is_empty() {
-                    ui.label(app.tr("No recent media"));
+                let play_title = if app.is_playback_finished() {
+                    format!(
+                        "{} {}",
+                        crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                        app.tr("Replay")
+                    )
+                } else if app.is_paused {
+                    format!("{} {}", crate::ui::icons::PLAY, app.tr("Play"))
                 } else {
-                    for path in app.recent_media.clone() {
-                        let target = path.to_string_lossy();
-                        let label = crate::media::media_target_label(&target);
-                        if ui
-                            .button(app.display_text(&label))
-                            .on_hover_text(crate::media::redact_media_target(&target))
-                            .clicked()
-                        {
-                            ui.close();
-                            app.load_media_target(&target);
-                        }
-                    }
-                    ui.separator();
-                    if ui.button(app.tr("Clear Recent")).clicked() {
-                        ui.close();
-                        app.clear_recent_media();
-                    }
+                    format!("{} {}", crate::ui::icons::STOP_CIRCLE, app.tr("Pause"))
+                };
+                if ui
+                    .add_enabled(has_video, egui::Button::new(play_title))
+                    .clicked()
+                {
+                    ui.close();
+                    app.toggle_playback();
                 }
-            },
-        );
 
-        let pin_title = if app.pin_controls {
-            format!(
-                "{} {}",
-                crate::ui::icons::PUSH_PIN_SLASH,
-                app.tr("Unpin Controls")
-            )
-        } else {
-            format!("{} {}", crate::ui::icons::PUSH_PIN, app.tr("Pin Controls"))
-        };
-        if ui.button(pin_title).clicked() {
-            ui.close();
-            app.pin_controls = !app.pin_controls;
-            app.save_config();
-        }
-    });
+                crate::ui::icons::submenu(
+                    ui,
+                    format!("{} {}", crate::ui::icons::GAUGE, app.tr("Playback speed")),
+                    |ui| {
+                        for speed in [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0] {
+                            let selected = (app.configured_playback_speed - speed).abs() < 0.001;
+                            let label = if selected {
+                                format!("{} {speed}×", crate::ui::icons::CHECK)
+                            } else {
+                                format!("   {speed}×")
+                            };
+                            if ui
+                                .add_enabled(has_video, egui::Button::new(label))
+                                .clicked()
+                            {
+                                ui.close();
+                                app.set_playback_speed(speed, true);
+                            }
+                        }
+                    },
+                );
+
+                let is_fullscreen = app.fullscreen_intent(ui.ctx());
+                let fs_title = if is_fullscreen {
+                    format!(
+                        "{} {}",
+                        crate::ui::icons::ARROWS_OUT,
+                        app.tr("Exit Fullscreen")
+                    )
+                } else {
+                    format!("{} {}", crate::ui::icons::ARROWS_OUT, app.tr("Fullscreen"))
+                };
+                if ui.button(fs_title).clicked() {
+                    ui.close();
+                    app.toggle_fullscreen(ui.ctx());
+                }
+
+                let mute_title = if app.is_muted {
+                    format!("{} {}", crate::ui::icons::SPEAKER_HIGH, app.tr("Unmute"))
+                } else {
+                    format!("{} {}", crate::ui::icons::SPEAKER_SLASH, app.tr("Mute"))
+                };
+                if ui
+                    .add_enabled(has_video, egui::Button::new(mute_title))
+                    .clicked()
+                {
+                    ui.close();
+                    app.toggle_audio_muted();
+                }
+
+                ui.separator();
+
+                crate::ui::icons::submenu(
+                    ui,
+                    format!(
+                        "{} {}",
+                        crate::ui::icons::CLOCK_COUNTER_CLOCKWISE,
+                        app.tr("Open Recent")
+                    ),
+                    |ui| {
+                        if app.recent_media.is_empty() {
+                            ui.label(app.tr("No recent media"));
+                        } else {
+                            for path in app.recent_media.clone() {
+                                let target = path.to_string_lossy();
+                                let label = crate::media::media_target_label(&target);
+                                if ui
+                                    .button(app.display_text(&label))
+                                    .on_hover_text(crate::media::redact_media_target(&target))
+                                    .clicked()
+                                {
+                                    ui.close();
+                                    app.load_media_target(&target);
+                                }
+                            }
+                            ui.separator();
+                            if ui.button(app.tr("Clear Recent")).clicked() {
+                                ui.close();
+                                app.clear_recent_media();
+                            }
+                        }
+                    },
+                );
+
+                let pin_title = if app.pin_controls {
+                    format!(
+                        "{} {}",
+                        crate::ui::icons::PUSH_PIN_SLASH,
+                        app.tr("Unpin Controls")
+                    )
+                } else {
+                    format!("{} {}", crate::ui::icons::PUSH_PIN, app.tr("Pin Controls"))
+                };
+                if ui.button(pin_title).clicked() {
+                    ui.close();
+                    app.pin_controls = !app.pin_controls;
+                    app.save_config();
+                }
+            });
+    }
 
     let is_fullscreen = app.fullscreen_intent(ui.ctx());
     let surface_background = if is_fullscreen {
@@ -831,18 +924,23 @@ mod tests {
 
     #[test]
     fn fast_forward_hold_does_not_turn_release_into_play_pause_click() {
-        assert!(!should_consume_fast_forward_click(
+        assert!(!should_consume_gesture_click(
             crate::config::PlayerDragAction::TemporaryFastForward,
             false,
             std::time::Duration::from_millis(50),
         ));
-        assert!(should_consume_fast_forward_click(
+        assert!(should_consume_gesture_click(
             crate::config::PlayerDragAction::TemporaryFastForward,
             false,
             std::time::Duration::from_millis(250),
         ));
-        assert!(should_consume_fast_forward_click(
+        assert!(should_consume_gesture_click(
             crate::config::PlayerDragAction::TemporaryFastForward,
+            true,
+            std::time::Duration::ZERO,
+        ));
+        assert!(should_consume_gesture_click(
+            crate::config::PlayerDragAction::Seek,
             true,
             std::time::Duration::ZERO,
         ));

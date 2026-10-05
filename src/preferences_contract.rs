@@ -554,7 +554,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "paused_drag_action",
             "input",
             "Video surface",
-            "Drag while paused",
+            "Left-button hold / drag while paused",
             &[
                 ("move_window", "Move application window"),
                 ("seek", "Seek video"),
@@ -566,7 +566,57 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "playing_drag_action",
             "input",
             "Video surface",
-            "Drag while playing",
+            "Left-button hold / drag while playing",
+            &[
+                ("move_window", "Move application window"),
+                ("seek", "Seek video"),
+                ("temporary_fast_forward", "Temporarily fast-forward"),
+                ("none", "Do nothing"),
+            ],
+        ),
+        PreferenceControl::select(
+            "middle_click_action",
+            "input",
+            "Video surface",
+            "Middle-button click",
+            &[
+                ("play_pause", "Play / pause"),
+                ("toggle_mute", "Mute / unmute"),
+                ("toggle_fullscreen", "Toggle fullscreen"),
+                ("context_menu", "Open context menu"),
+                ("none", "Do nothing"),
+            ],
+        ),
+        PreferenceControl::select(
+            "middle_hold_action",
+            "input",
+            "Video surface",
+            "Middle-button hold / drag",
+            &[
+                ("move_window", "Move application window"),
+                ("seek", "Seek video"),
+                ("temporary_fast_forward", "Temporarily fast-forward"),
+                ("none", "Do nothing"),
+            ],
+        ),
+        PreferenceControl::select(
+            "right_click_action",
+            "input",
+            "Video surface",
+            "Right-button click",
+            &[
+                ("play_pause", "Play / pause"),
+                ("toggle_mute", "Mute / unmute"),
+                ("toggle_fullscreen", "Toggle fullscreen"),
+                ("context_menu", "Open context menu"),
+                ("none", "Do nothing"),
+            ],
+        ),
+        PreferenceControl::select(
+            "right_hold_action",
+            "input",
+            "Video surface",
+            "Right-button hold / drag",
             &[
                 ("move_window", "Move application window"),
                 ("seek", "Seek video"),
@@ -895,5 +945,59 @@ mod tests {
             assert_eq!(control.minimum, Some(min));
             assert_eq!(control.maximum, Some(max));
         }
+    }
+
+    #[test]
+    fn every_video_surface_mouse_button_action_is_shared_and_persistent() {
+        let config = crate::config::AppConfig::default();
+        assert_eq!(
+            config.middle_click_action,
+            crate::config::PlayerClickAction::None
+        );
+        assert_eq!(
+            config.middle_hold_action,
+            crate::config::PlayerDragAction::None
+        );
+        assert_eq!(
+            config.right_click_action,
+            crate::config::PlayerClickAction::ContextMenu
+        );
+        assert_eq!(
+            config.right_hold_action,
+            crate::config::PlayerDragAction::None
+        );
+
+        let controls = preference_controls(&config);
+        for key in [
+            "paused_drag_action",
+            "playing_drag_action",
+            "middle_click_action",
+            "middle_hold_action",
+            "right_click_action",
+            "right_hold_action",
+        ] {
+            let control = controls
+                .iter()
+                .find(|control| control.key == key)
+                .unwrap_or_else(|| panic!("missing {key} preference"));
+            assert!(matches!(control.kind, PreferenceControlKind::Select));
+            assert_eq!(control.section, "input");
+            assert_eq!(control.group, "Video surface");
+        }
+
+        let right_click = controls
+            .iter()
+            .find(|control| control.key == "right_click_action")
+            .expect("right-button click preference");
+        assert!(right_click.options.iter().any(|option| {
+            option.value == serde_json::Value::String("context_menu".to_string())
+        }));
+        let middle_click = controls
+            .iter()
+            .find(|control| control.key == "middle_click_action")
+            .expect("middle-button click preference");
+        assert!(middle_click.options.iter().any(|option| {
+            option.value == serde_json::Value::String("context_menu".to_string())
+        }));
     }
 }
