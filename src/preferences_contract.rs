@@ -270,6 +270,13 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         ),
         PreferenceControl::accent(config),
         PreferenceControl::select(
+            "color_palette",
+            "appearance",
+            "Interface",
+            "Color palette",
+            &[("studio", "Studio"), ("native", "Neutral")],
+        ),
+        PreferenceControl::select(
             "language",
             "appearance",
             "Interface",

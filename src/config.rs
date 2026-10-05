@@ -26,6 +26,15 @@ pub enum AppTheme {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum ColorPalette {
+    /// The existing Web UI palette, shared with the desktop renderer.
+    #[default]
+    Studio,
+    Native,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum AccentColor {
     #[default]
     System,
@@ -397,6 +406,7 @@ pub struct AppConfig {
     pub app_publisher: Option<String>,
     pub app_copyright: Option<String>,
     pub theme: AppTheme,
+    pub color_palette: ColorPalette,
     pub accent_color: AccentColor,
     pub custom_accent_color: Option<String>,
     pub language: AppLanguage,
@@ -554,6 +564,7 @@ impl Default for AppConfig {
             app_publisher: None,
             app_copyright: None,
             theme: AppTheme::System,
+            color_palette: ColorPalette::Studio,
             accent_color: AccentColor::System,
             custom_accent_color: None,
             language: AppLanguage::System,

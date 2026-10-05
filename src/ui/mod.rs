@@ -15,6 +15,7 @@ pub mod media_track_properties;
 pub mod media_tracks;
 pub mod menu;
 pub mod open_url;
+pub mod palette;
 pub mod preferences;
 pub mod seek_preview;
 pub mod status_bar;
@@ -124,6 +125,8 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
     light.window_corner_radius = CornerRadius::same(10);
     light.menu_corner_radius = CornerRadius::same(8);
 
+    palette::apply(&mut dark, config.color_palette);
+    palette::apply(&mut light, config.color_palette);
     ctx.set_visuals_of(Theme::Dark, dark);
     ctx.set_visuals_of(Theme::Light, light);
     let mut style = (*ctx.global_style()).clone();

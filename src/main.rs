@@ -611,6 +611,7 @@ fn main() -> eframe::Result {
                 language,
                 direction_preference,
                 theme_preference: crate::config::resolved_theme(&loaded_config),
+                color_palette: loaded_config.color_palette,
                 rtl,
                 mpv: mpv_static,
                 mpv_client,

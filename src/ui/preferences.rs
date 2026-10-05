@@ -209,7 +209,7 @@ struct StandalonePreferencesApp {
     draft: PreferencesDraft,
     owner_hwnd: isize,
     native_window_initialized: bool,
-    applied_appearance: Option<(AppTheme, bool, bool, [u8; 3])>,
+    applied_appearance: Option<(AppTheme, bool, bool, [u8; 3], crate::config::ColorPalette)>,
     config_watcher: Option<crate::config::ConfigFileWatcher>,
     config_reload_due: Option<std::time::Instant>,
 }
@@ -264,6 +264,7 @@ impl StandalonePreferencesApp {
             self.draft.config.windows_dwm_theming,
             self.draft.config.windows_mica_backdrop,
             crate::ui::platform_accent_rgb(&self.draft.config),
+            self.draft.config.color_palette,
         );
         if self.applied_appearance == Some(appearance) {
             return;

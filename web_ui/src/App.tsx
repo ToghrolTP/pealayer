@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useState, useRef } from 'react';
 import { Alert, ConfigProvider, theme, Layout, Menu, Spin } from 'antd';
 import {
   AppstoreOutlined,
@@ -14,6 +14,7 @@ import type { PlayerState } from './components/RemoteControlTab';
 import { tr } from './i18n';
 import { useWebPlatform } from './webPlatform';
 import './styles.css';
+import palettes from '../../assets/themes/palettes.json';
 
 const { Sider, Content } = Layout;
 const RemoteControlTab = React.lazy(() => import('./components/RemoteControlTab').then((module) => ({ default: module.RemoteControlTab })));
@@ -174,6 +175,14 @@ const App: React.FC = () => {
 
   const accentColor = resolvedAccent(runtime, appConfig);
   const accentTextColor = accentForeground(accentColor);
+
+  useLayoutEffect(() => {
+    const name = appConfig?.color_palette === 'native' ? 'native' : 'studio';
+    document.documentElement.dataset.palette = name;
+    for (const [role, value] of Object.entries(palettes[name][resolvedTheme])) {
+      document.documentElement.style.setProperty(`--${role}`, value);
+    }
+  }, [appConfig?.color_palette, resolvedTheme]);
 
   useEffect(() => {
     document.documentElement.style.setProperty('--accent', accentColor);
@@ -459,12 +468,21 @@ const App: React.FC = () => {
           colorWarning: '#f3b954',
           colorError: '#ff5c68',
           colorBgContainer: 'var(--surface-1)',
+          colorBgElevated: 'var(--surface-1)',
           colorBgBase: 'var(--canvas)',
           colorBorder: 'var(--line)',
           colorText: 'var(--text)',
           colorTextSecondary: 'var(--muted)',
           borderRadius: 9,
           fontFamily: `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif`,
+        },
+        components: {
+          Modal: {
+            contentBg: 'var(--surface-1)',
+            headerBg: 'transparent',
+            footerBg: 'transparent',
+            titleColor: 'var(--text)',
+          },
         },
       }}
     >

@@ -261,6 +261,7 @@ pub struct PealayerApp {
     pub(crate) language: crate::config::AppLanguage,
     pub(crate) direction_preference: crate::config::AppDirection,
     pub(crate) theme_preference: crate::config::AppTheme,
+    pub(crate) color_palette: crate::config::ColorPalette,
     pub(crate) rtl: bool,
     pub(crate) mpv: &'static Mpv,
     pub(crate) mpv_client: libmpv2::Mpv,
@@ -4870,6 +4871,7 @@ impl PealayerApp {
         cfg.language = self.language_preference;
         cfg.direction = self.direction_preference;
         cfg.theme = self.theme_preference;
+        cfg.color_palette = self.color_palette;
         cfg.hardware_endpoint =
             (!self.serial_port.trim().is_empty()).then(|| self.serial_port.clone());
         cfg.auto_connect_hardware = self.auto_connect_hardware;
@@ -5053,6 +5055,7 @@ impl PealayerApp {
         self.direction_preference = crate::config::resolved_direction_preference(&config);
         self.rtl = crate::config::resolve_rtl(self.direction_preference, self.language);
         self.theme_preference = crate::config::resolved_theme(&config);
+        self.color_palette = config.color_palette;
         self.serial_port = endpoint.clone();
         self.auto_connect_hardware = config.auto_connect_hardware;
         self.pause_on_hardware_disconnect = config.pause_on_hardware_disconnect;
@@ -6211,6 +6214,7 @@ impl Default for PealayerApp {
             language: crate::config::resolve_language(crate::config::AppLanguage::System),
             direction_preference: crate::config::AppDirection::Auto,
             theme_preference: crate::config::AppTheme::System,
+            color_palette: crate::config::ColorPalette::Studio,
             rtl: crate::config::resolve_rtl(
                 crate::config::AppDirection::Auto,
                 crate::config::resolve_language(crate::config::AppLanguage::System),

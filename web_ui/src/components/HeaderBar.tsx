@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layout, Typography, Space, Tag, Button, Dropdown, Input, Modal, Switch, Tooltip } from 'antd';
+import { Layout, Typography, Tag, Button, Dropdown, Input, Modal, Switch, Tooltip } from 'antd';
 import {
   ApiOutlined,
   AppstoreAddOutlined,
@@ -54,14 +54,15 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
 
   return (
     <Header className="studio-header">
-      <Space size={14} className="studio-header__leading">
+      <div className="studio-header__leading">
         <Button
           type="text"
           icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
           onClick={onToggleCollapse}
           className="studio-header__menu-button"
+          aria-label={tr(locale, collapsed ? 'Expand navigation' : 'Collapse navigation')}
         />
-        <Space size={10} align="center" className="studio-brand">
+        <div className="studio-brand">
           <span className="studio-brand__mark">
             <img
               src={appIconPath || '/api/runtime/app-icon'}
@@ -72,8 +73,8 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
             <Title level={4}>{appName || 'Pealayer'}</Title>
             <span>{connected ? tr(locale, 'Connected workspace') : tr(locale, 'Connecting')}</span>
           </div>
-        </Space>
-      </Space>
+        </div>
+      </div>
 
       <div className="connection-cluster" aria-live="polite">
         <Tooltip title={tr(locale, 'Connect to another Pealayer')}>
