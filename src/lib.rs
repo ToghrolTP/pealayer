@@ -7,6 +7,7 @@ pub mod hardware_shortcuts;
 pub mod media;
 pub mod media_info;
 pub mod mpv;
+pub mod network;
 pub mod platform;
 pub mod preferences_contract;
 pub mod server;

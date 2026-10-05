@@ -1031,6 +1031,60 @@ fn render_contract_control(
                     });
             });
         }
+        PreferenceControlKind::MultiSelect => {
+            let mut selected = current
+                .as_array()
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let selected_text = match selected.as_slice() {
+                [] => tr("Choose interfaces"),
+                [value] => control
+                    .options
+                    .iter()
+                    .find(|option| option.value.as_str() == Some(value.as_str()))
+                    .and_then(|option| option.description.clone())
+                    .unwrap_or_else(|| value.clone()),
+                values => format!("{} {}", values.len(), tr("addresses selected")),
+            };
+            preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
+                let control_width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
+                egui::ComboBox::from_id_salt(("preference-multi-select", control.key))
+                    .width(control_width)
+                    .selected_text(selected_text)
+                    .show_ui(ui, |ui| {
+                        ui.set_min_width(control_width.max(360.0));
+                        for option in &control.options {
+                            let Some(value) = option.value.as_str() else {
+                                continue;
+                            };
+                            let mut checked = selected.iter().any(|selected| selected == value);
+                            ui.horizontal(|ui| {
+                                if ui.checkbox(&mut checked, "").changed() {
+                                    if checked {
+                                        selected.push(value.to_string());
+                                    } else {
+                                        selected.retain(|selected| selected != value);
+                                    }
+                                    replacement = Some(serde_json::json!(selected));
+                                }
+                                ui.label(preference_option_icon(option.icon));
+                                ui.vertical(|ui| {
+                                    ui.label(egui::RichText::new(tr(option.label)).strong());
+                                    if let Some(detail) = option.description.as_deref() {
+                                        ui.label(egui::RichText::new(detail).small().weak());
+                                    }
+                                });
+                            });
+                        }
+                    });
+            });
+        }
         PreferenceControlKind::Number => {
             let mut number = current.as_f64().unwrap_or_default();
             let mut slider = egui::Slider::new(
@@ -1586,9 +1640,22 @@ fn preference_control_icon(kind: &PreferenceControlKind) -> &'static str {
         PreferenceControlKind::Accent => crate::ui::icons::PALETTE,
         PreferenceControlKind::Boolean => crate::ui::icons::CHECK_SQUARE,
         PreferenceControlKind::Number => crate::ui::icons::SLIDERS_HORIZONTAL,
+        PreferenceControlKind::MultiSelect => crate::ui::icons::GLOBE,
         PreferenceControlKind::ReplacementList => crate::ui::icons::TEXT_ALIGN_LEFT,
         PreferenceControlKind::Select => crate::ui::icons::LIST_CHECKS,
         PreferenceControlKind::Text => crate::ui::icons::PENCIL_SIMPLE,
+    }
+}
+
+fn preference_option_icon(icon: Option<&str>) -> &'static str {
+    match icon.unwrap_or_default() {
+        "wifi" => crate::ui::icons::BROADCAST,
+        "ethernet" => crate::ui::icons::PLUG,
+        "vpn" => crate::ui::icons::LOCK,
+        "virtual" => crate::ui::icons::CIRCUITRY,
+        "loopback" => crate::ui::icons::ARROW_CLOCKWISE,
+        "globe" => crate::ui::icons::GLOBE,
+        _ => crate::ui::icons::LINK,
     }
 }
 
@@ -1635,6 +1702,7 @@ fn section_icon(section: &str) -> &'static str {
         "playback" => crate::ui::icons::PLAY,
         "hardware" => crate::ui::icons::PLUG,
         "input" => crate::ui::icons::SLIDERS_HORIZONTAL,
+        "web" => crate::ui::icons::GLOBE,
         _ => crate::ui::icons::GEAR,
     }
 }
@@ -1650,6 +1718,9 @@ fn group_icon(group: &str) -> &'static str {
         "Connection" => crate::ui::icons::PLUG,
         "Motion controls" => crate::ui::icons::SEAT,
         "Keyboard shortcuts" => crate::ui::icons::KEYBOARD,
+        "Web server" => crate::ui::icons::GLOBE,
+        "Permissions" => crate::ui::icons::LOCK,
+        "Live synchronization" => crate::ui::icons::BROADCAST,
         "Video surface" => crate::ui::icons::SELECTION_ALL,
         "Window movement" => crate::ui::icons::APP_WINDOW,
         "Status bar" => crate::ui::icons::GAUGE,
@@ -1664,6 +1735,7 @@ fn section_heading(section: &str) -> &'static str {
         "playback" => "Playback behavior",
         "hardware" => "PCController and hardware",
         "input" => "Keyboard, mouse, and gesture bindings",
+        "web" => "Web UI and network APIs",
         _ => "Configuration",
     }
 }

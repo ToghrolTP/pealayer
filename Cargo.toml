@@ -38,6 +38,7 @@ ab_glyph = "0.2"
 notify = "8.2.0"
 open = "5.4.4"
 global-hotkey = "0.8.0"
+network-interface = "2.0.5"
 
 [build-dependencies]
 winres = "0.1.12"

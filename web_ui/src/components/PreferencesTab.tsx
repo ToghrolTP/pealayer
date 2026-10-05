@@ -27,6 +27,12 @@ import {
   SettingOutlined,
   SwapRightOutlined,
   DeleteOutlined,
+  DesktopOutlined,
+  GlobalOutlined,
+  LinkOutlined,
+  SafetyCertificateOutlined,
+  SyncOutlined,
+  WifiOutlined,
 } from '@ant-design/icons';
 import { tr } from '../i18n';
 
@@ -42,6 +48,8 @@ interface PreferenceOption {
   value: string | number | boolean;
   label: string;
   color?: string;
+  description?: string;
+  icon?: string;
 }
 
 interface PreferenceControl {
@@ -49,7 +57,7 @@ interface PreferenceControl {
   section: string;
   group: string;
   label: string;
-  kind: 'accent' | 'boolean' | 'number' | 'replacement_list' | 'select' | 'text';
+  kind: 'accent' | 'boolean' | 'multi_select' | 'number' | 'replacement_list' | 'select' | 'text';
   description?: string;
   options?: PreferenceOption[];
   minimum?: number;
@@ -79,16 +87,30 @@ const sectionIcons: Record<string, React.ReactNode> = {
   playback: <PlayCircleOutlined />,
   hardware: <ExperimentOutlined />,
   input: <ControlOutlined />,
+  web: <GlobalOutlined />,
   advanced: <SettingOutlined />,
 };
 
 const controlIcons: Record<PreferenceControl['kind'], React.ReactNode> = {
   accent: <BgColorsOutlined />,
   boolean: <CheckSquareOutlined />,
+  multi_select: <GlobalOutlined />,
   number: <ControlOutlined />,
   replacement_list: <SwapRightOutlined />,
   select: <BarsOutlined />,
   text: <EditOutlined />,
+};
+
+const networkOptionIcon = (icon?: string) => {
+  switch (icon) {
+    case 'wifi': return <WifiOutlined />;
+    case 'ethernet': return <DesktopOutlined />;
+    case 'vpn': return <SafetyCertificateOutlined />;
+    case 'virtual': return <SyncOutlined />;
+    case 'loopback': return <SyncOutlined />;
+    case 'globe': return <GlobalOutlined />;
+    default: return <LinkOutlined />;
+  }
 };
 
 function valueAtPath(root: JsonObject, path: string): any {
@@ -276,6 +298,38 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
         <label className="preference-control preference-control--boolean" key={control.key}>
           <span>{commonLabel}{control.description && <small>{tr(locale, control.description)}</small>}</span>
           <Switch checked={Boolean(value)} loading={saving === control.key} onChange={(next) => void update(control, next)} />
+        </label>
+      );
+    }
+    if (control.kind === 'multi_select') {
+      const selected = Array.isArray(value) ? value : [];
+      const options = (control.options ?? []).map((option) => ({
+        value: option.value,
+        label: option.description || tr(locale, option.label),
+        title: tr(locale, option.label),
+        description: option.description,
+        icon: option.icon,
+      }));
+      return (
+        <label className="preference-control" key={control.key}>
+          <span>{commonLabel}{control.description && <small>{tr(locale, control.description)}</small>}</span>
+          <Select
+            mode="multiple"
+            value={selected}
+            options={options}
+            maxTagCount="responsive"
+            placeholder={tr(locale, 'Choose interfaces')}
+            optionRender={(option) => (
+              <span className="preference-network-option">
+                {networkOptionIcon(option.data.icon)}
+                <span>
+                  <strong>{option.data.title}</strong>
+                  {option.data.description && <small>{option.data.description}</small>}
+                </span>
+              </span>
+            )}
+            onChange={(next) => void update(control, next)}
+          />
         </label>
       );
     }

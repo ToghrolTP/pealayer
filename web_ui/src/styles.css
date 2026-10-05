@@ -149,6 +149,11 @@ body {
 .preference-control__number { min-width: 0; display: grid; grid-template-columns: minmax(90px, 1fr) 90px; align-items: center; gap: 14px; }
 .preference-control__number .ant-slider { margin: 0; }
 .preference-control .ant-select, .preference-control .ant-input, .preference-control .ant-input-number { width: 100%; }
+.preference-network-option { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.preference-network-option > .anticon { flex: 0 0 18px; color: var(--accent); font-size: 16px; }
+.preference-network-option > span { min-width: 0; display: flex; flex-direction: column; }
+.preference-network-option strong { overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.preference-network-option small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .preference-control__accent { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .preference-control__accent > .ant-select { min-width: 138px; width: 100%; }
 .preference-control--replacements { align-items: start; }

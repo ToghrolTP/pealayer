@@ -9,6 +9,7 @@ pub mod hardware_shortcuts;
 pub mod media;
 pub mod media_info;
 pub mod mpv;
+pub mod network;
 pub mod platform;
 pub mod preferences_contract;
 pub mod server;
@@ -532,7 +533,6 @@ fn main() -> eframe::Result {
                 crate::cli::resolved_instance_identity(),
             );
 
-            let control_port = crate::config::control_port();
             let web_runtime = crate::server::WebRuntimeConfig::production(
                 app_name.clone(),
                 match language {
@@ -549,8 +549,8 @@ fn main() -> eframe::Result {
                 .to_string(),
                 crate::ui::platform_accent_rgb(&loaded_config),
             );
-            let web_state_tx = crate::server::spawn_control_server_configured(
-                control_port,
+            let web_state_tx = crate::server::spawn_control_server_for_config(
+                &loaded_config,
                 cc.egui_ctx.clone(),
                 web_runtime,
                 interop_tx.clone(),

@@ -109,7 +109,7 @@ hardware-free verification.
 * **Live Actuator Telemetry**: Real-time status LEDs and manual "Force ON" overrides in the Hardware Monitor panel.
 
 ### 🌐 Built-In Web Remote Control & REST/WebSocket APIs
-* **Unified Control Contract**: HTTP, REST, WebSocket, JSON-RPC, CLI, and single-instance IPC dispatch the same typed player commands. Network automation uses the loopback-only listener at `127.0.0.1:8080`; local process launches prefer OS-native IPC and fall back to HTTP. Set `PEALAYER_PORT` to override the port, or `PEALAYER_WEB_BIND` to a specific interface address only when remote access is intended.
+* **Unified Control Contract**: HTTP, REST, WebSocket, JSON-RPC, CLI, and single-instance IPC dispatch the same typed player commands. **Preferences → Web UI** discovers the host's real NIC addresses and configures one or more listeners, the shared port, live-state cadence, and explicit control/configuration/file/update permissions. The safe default remains `127.0.0.1:8080`; local process launches prefer OS-native IPC and fall back to HTTP. `PEALAYER_WEB_ENABLED`, `PEALAYER_PORT`, and comma-separated `PEALAYER_WEB_BIND` remain deployment overrides.
 * **Mobile-Responsive Remote Web App**: Standalone SPA built with **React 19**, **TypeScript**, **Vite**, and **Ant Design 6** (`web_ui/dist`). Control playback, seek, adjust volume, and trigger E-STOP from any phone, tablet, or secondary monitor.
 * **Remote Media Library & Thumbnail Caching**: Browse server directories, inspect media durations, and view dynamically cached video thumbnails over HTTP.
 
@@ -269,10 +269,15 @@ share, fullscreen, notification, haptic/audio-feedback, Media Session, app
 badge, and playback wake-lock integrations. Permission-requiring features are
 requested only from an explicit user action.
 
-All TCP-facing interfaces share one listener. `PEALAYER_PORT` selects that
-listener (default `8080`). There are no protocol-specific port settings. Unix
-builds may additionally expose their native domain socket, which does not
-consume a TCP port.
+All TCP-facing protocols share the configured port, but Pealayer may own one
+listener per selected host address. The persisted `web_listen_addresses`
+setting accepts literal IPv4/IPv6 addresses; the Preferences UI populates it
+from native adapter discovery and also offers `0.0.0.0` / `::` wildcard
+choices. Listener enablement, addresses, and port apply on restart. Permission
+and WebSocket synchronization settings apply live. `PEALAYER_WEB_ENABLED`,
+`PEALAYER_PORT`, and comma-separated `PEALAYER_WEB_BIND` override the persisted
+deployment at launch. Unix builds may additionally expose their native domain
+socket, which does not consume a TCP port.
 
 To run Pealayer with the full Rust/libmpv/PCController backend but no visible
 native egui window, start it in Web-only mode:
@@ -283,9 +288,9 @@ pealayer --web-only
 pealayer --headless
 ```
 
-Then open `http://127.0.0.1:8080/`. Set `PEALAYER_WEB_BIND` and
-`PEALAYER_PORT` before launch when a deliberately remote-accessible listener is
-required. Web-only mode preserves the same typed commands, WebSocket state,
+Then open the address shown in **Preferences → Web UI**. Select an actual NIC
+address to expose only that interface, or `0.0.0.0` to listen on every IPv4
+interface. Web-only mode preserves the same typed commands, WebSocket state,
 media engine, effect/macro engine, and hardware integration as the desktop UI;
 it only hides the native viewport. Browser APIs such as install, wake lock,
 notifications, and vibration remain capability/secure-context dependent.

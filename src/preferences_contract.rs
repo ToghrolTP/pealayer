@@ -10,6 +10,7 @@ pub enum PreferenceControlKind {
     Accent,
     Boolean,
     Number,
+    MultiSelect,
     ReplacementList,
     Select,
     Text,
@@ -21,6 +22,10 @@ pub struct PreferenceOption {
     pub label: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,8 +110,23 @@ impl PreferenceControl {
                 value: serde_json::Value::String((*value).to_string()),
                 label,
                 color: None,
+                description: None,
+                icon: None,
             })
             .collect();
+        control
+    }
+
+    fn multi_select(
+        key: &'static str,
+        section: &'static str,
+        group: &'static str,
+        label: &'static str,
+        options: Vec<PreferenceOption>,
+    ) -> Self {
+        let mut control = Self::boolean(key, section, group, label);
+        control.kind = PreferenceControlKind::MultiSelect;
+        control.options = options;
         control
     }
 
@@ -134,21 +154,29 @@ impl PreferenceControl {
                 value: serde_json::json!("system"),
                 label: "System accent",
                 color: Some(system_color),
+                description: None,
+                icon: None,
             },
             PreferenceOption {
                 value: serde_json::json!("pealayer_green"),
                 label: "Pealayer green",
                 color: Some("#38d27a".to_string()),
+                description: None,
+                icon: None,
             },
             PreferenceOption {
                 value: serde_json::json!("macos_blue"),
                 label: "macOS blue",
                 color: Some("#0a84ff".to_string()),
+                description: None,
+                icon: None,
             },
             PreferenceOption {
                 value: serde_json::json!("custom"),
                 label: "Custom",
                 color: Some(custom_color),
+                description: None,
+                icon: None,
             },
         ];
         control
@@ -217,6 +245,11 @@ pub fn preference_sections() -> Vec<PreferenceSection> {
             id: "input",
             label: "Input",
             icon: "sliders",
+        },
+        PreferenceSection {
+            id: "web",
+            label: "Web UI",
+            icon: "globe",
         },
         PreferenceSection {
             id: "advanced",
@@ -672,6 +705,100 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         ),
         {
             let mut control = PreferenceControl::boolean(
+                "web_enabled",
+                "web",
+                "Web server",
+                "Enable Web UI and network APIs",
+            );
+            control.description = Some(
+                "Hosts the PWA, REST, WebSocket, JSON-RPC, and HTTP IPC surfaces after restart",
+            );
+            control
+        },
+        {
+            let options = crate::network::discover_bind_targets()
+                .into_iter()
+                .map(|target| PreferenceOption {
+                    value: serde_json::Value::String(target.value),
+                    label: target.label,
+                    color: None,
+                    description: Some(target.detail),
+                    icon: Some(target.icon),
+                })
+                .collect();
+            let mut control = PreferenceControl::multi_select(
+                "web_listen_addresses",
+                "web",
+                "Web server",
+                "Listening interfaces and addresses",
+                options,
+            );
+            control.description = Some(
+                "Select one or more discovered host addresses; wildcard entries include future adapters and apply after restart",
+            );
+            control
+        },
+        {
+            let mut control = PreferenceControl::number(
+                "web_port",
+                "web",
+                "Web server",
+                "Port",
+                1.0,
+                65_535.0,
+                1.0,
+            );
+            control.description = Some(
+                "Shared by the Web UI, REST, WebSocket, JSON-RPC, and HTTP IPC surfaces; applies after restart",
+            );
+            control
+        },
+        PreferenceControl::boolean(
+            "web_allow_control",
+            "web",
+            "Permissions",
+            "Allow player, window, OSD, and hardware control",
+        ),
+        PreferenceControl::boolean(
+            "web_allow_configuration",
+            "web",
+            "Permissions",
+            "Allow configuration access",
+        ),
+        PreferenceControl::boolean(
+            "web_allow_file_access",
+            "web",
+            "Permissions",
+            "Allow host file browsing and management",
+        ),
+        PreferenceControl::boolean(
+            "web_allow_updates",
+            "web",
+            "Permissions",
+            "Allow application update operations",
+        ),
+        PreferenceControl::boolean(
+            "web_sync_state",
+            "web",
+            "Live synchronization",
+            "Synchronize live player and hardware state",
+        ),
+        {
+            let mut control = PreferenceControl::number(
+                "web_sync_interval_ms",
+                "web",
+                "Live synchronization",
+                "State refresh interval (milliseconds)",
+                16.0,
+                5_000.0,
+                1.0,
+            );
+            control.description =
+                Some("Limits WebSocket snapshot frequency; 100 ms equals 10 updates per second");
+            control
+        },
+        {
+            let mut control = PreferenceControl::boolean(
                 "window_magnetic_snap",
                 "input",
                 "Window movement",
@@ -922,6 +1049,35 @@ mod tests {
                 .all(|control| control.key != "custom_accent_color"),
             "the custom hex value belongs inline with the accent picker"
         );
+    }
+
+    #[test]
+    fn web_preferences_include_real_interface_metadata_and_permissions() {
+        let controls = preference_controls(&crate::config::AppConfig::default());
+        let listeners = controls
+            .iter()
+            .find(|control| control.key == "web_listen_addresses")
+            .expect("Web listener selector");
+        assert!(matches!(listeners.kind, PreferenceControlKind::MultiSelect));
+        assert_eq!(listeners.section, "web");
+        assert!(listeners.options.iter().any(|option| {
+            option.value == serde_json::json!("0.0.0.0")
+                && option.icon == Some("globe")
+                && option.description.is_some()
+        }));
+        for key in [
+            "web_allow_control",
+            "web_allow_configuration",
+            "web_allow_file_access",
+            "web_allow_updates",
+            "web_sync_state",
+            "web_sync_interval_ms",
+        ] {
+            assert!(
+                controls.iter().any(|control| control.key == key),
+                "missing {key}"
+            );
+        }
     }
 
     #[test]

@@ -454,6 +454,25 @@ pub struct AppConfig {
     pub hardware_key_bindings: Vec<HardwareKeyBinding>,
     pub show_estop_control: bool,
     pub confirm_estop_release: bool,
+    /// Hosts the PWA, REST, WebSocket, JSON-RPC, and HTTP IPC surfaces.
+    pub web_enabled: bool,
+    /// One or more literal IP addresses. Wildcards (`0.0.0.0` / `::`) bind
+    /// every interface; concrete values are populated from real NIC discovery.
+    pub web_listen_addresses: Vec<String>,
+    pub web_port: u16,
+    /// Accept state-changing player, window, OSD, and hardware commands from
+    /// HTTP/WebSocket clients. Read-only status remains available.
+    pub web_allow_control: bool,
+    /// Permit reading or changing the complete application configuration.
+    pub web_allow_configuration: bool,
+    /// Permit browsing, thumbnailing, renaming, or trashing host files.
+    pub web_allow_file_access: bool,
+    /// Permit binary update upload, download, staging, and activation routes.
+    pub web_allow_updates: bool,
+    /// Push live player/hardware state over WebSocket.
+    pub web_sync_state: bool,
+    /// Maximum interval between WebSocket state snapshots.
+    pub web_sync_interval_ms: u32,
     pub single_instance: bool,
     pub window_magnetic_snap: bool,
     pub window_magnetic_snap_distance: u32,
@@ -575,6 +594,15 @@ impl Default for AppConfig {
             hardware_key_bindings: Vec::new(),
             show_estop_control: true,
             confirm_estop_release: true,
+            web_enabled: true,
+            web_listen_addresses: vec!["127.0.0.1".to_string()],
+            web_port: 8080,
+            web_allow_control: true,
+            web_allow_configuration: true,
+            web_allow_file_access: true,
+            web_allow_updates: true,
+            web_sync_state: true,
+            web_sync_interval_ms: 100,
             single_instance: true,
             // Match RayanLamp's proven opt-in policy and 16-DIP acquisition
             // distance. Ctrl remains a live, per-message bypass.
@@ -959,7 +987,35 @@ pub fn runtime_port(env_name: &str, default: u16) -> u16 {
 
 /// The single TCP port used by Pealayer's HTTP, WebSocket, and local IPC APIs.
 pub fn control_port() -> u16 {
-    runtime_port("PEALAYER_PORT", 8080)
+    let config = AppConfig::load();
+    runtime_port("PEALAYER_PORT", config.web_port)
+}
+
+pub fn resolved_web_enabled(config: &AppConfig) -> bool {
+    std::env::var("PEALAYER_WEB_ENABLED")
+        .ok()
+        .and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        })
+        .unwrap_or(config.web_enabled)
+}
+
+pub fn resolved_web_bind_addresses(config: &AppConfig) -> Result<Vec<std::net::IpAddr>, String> {
+    let values = std::env::var("PEALAYER_WEB_BIND")
+        .ok()
+        .map(|value| {
+            value
+                .split([',', ';'])
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|values| !values.is_empty())
+        .unwrap_or_else(|| config.web_listen_addresses.clone());
+    crate::network::parse_bind_addresses(&values)
 }
 
 impl AppConfig {
@@ -1326,6 +1382,13 @@ impl AppConfig {
         }
         if !(1..=128).contains(&self.window_magnetic_snap_distance) {
             return Err("window_magnetic_snap_distance must be between 1 and 128".to_string());
+        }
+        if self.web_port == 0 {
+            return Err("web_port must be between 1 and 65535".to_string());
+        }
+        crate::network::parse_bind_addresses(&self.web_listen_addresses)?;
+        if !(16..=5_000).contains(&self.web_sync_interval_ms) {
+            return Err("web_sync_interval_ms must be between 16 and 5000".to_string());
         }
         if self.subtitle_text_replacements.len() > 128 {
             return Err("subtitle_text_replacements contains more than 128 entries".to_string());
@@ -2086,6 +2149,40 @@ mod tests {
         let config = AppConfig::default();
         assert!(config.show_estop_control);
         assert!(config.confirm_estop_release);
+    }
+
+    #[test]
+    fn web_server_preferences_are_persisted_and_validated() {
+        let updated = AppConfig::default()
+            .apply_patch(&serde_json::json!({
+                "web_enabled": true,
+                "web_listen_addresses": ["0.0.0.0"],
+                "web_port": 8181,
+                "web_allow_control": false,
+                "web_allow_configuration": true,
+                "web_allow_file_access": false,
+                "web_allow_updates": false,
+                "web_sync_state": true,
+                "web_sync_interval_ms": 250
+            }))
+            .unwrap();
+        assert_eq!(updated.web_listen_addresses, ["0.0.0.0"]);
+        assert_eq!(updated.web_port, 8181);
+        assert!(!updated.web_allow_control);
+        assert!(!updated.web_allow_file_access);
+        assert!(!updated.web_allow_updates);
+        assert_eq!(updated.web_sync_interval_ms, 250);
+
+        let invalid_address = AppConfig {
+            web_listen_addresses: vec!["not-an-address".to_string()],
+            ..AppConfig::default()
+        };
+        assert!(invalid_address.validate().is_err());
+        let invalid_interval = AppConfig {
+            web_sync_interval_ms: 15,
+            ..AppConfig::default()
+        };
+        assert!(invalid_interval.validate().is_err());
     }
 
     #[test]

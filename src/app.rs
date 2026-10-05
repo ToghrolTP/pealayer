@@ -775,10 +775,14 @@ impl eframe::App for PealayerApp {
             );
         }
 
-        // Broadcast state JSON to Web-UI clients (throttled to 10Hz to save CPU / network spam)
+        // Keep the read-only status snapshot current at the configured cadence;
+        // WebSocket delivery itself can be disabled independently.
+        let web_config = crate::platform::interop::get_live_config();
+        let web_sync_interval =
+            std::time::Duration::from_millis(u64::from(web_config.web_sync_interval_ms));
         let now = std::time::Instant::now();
         let should_broadcast = match self.last_web_broadcast {
-            Some(last) => now.duration_since(last) >= std::time::Duration::from_millis(100),
+            Some(last) => now.duration_since(last) >= web_sync_interval,
             None => true,
         };
 

@@ -15,16 +15,6 @@ use include_dir::{Dir, include_dir};
 const MAX_HTTP_REQUEST_BYTES: usize = 1024 * 1024;
 static EMBEDDED_WEB_UI: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web_ui/dist");
 
-fn resolve_web_bind_address(value: Option<&str>) -> std::net::IpAddr {
-    value
-        .and_then(|candidate| candidate.trim().parse().ok())
-        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
-}
-
-fn web_bind_address() -> std::net::IpAddr {
-    resolve_web_bind_address(std::env::var("PEALAYER_WEB_BIND").ok().as_deref())
-}
-
 fn web_dist_root() -> std::path::PathBuf {
     if let Some(override_root) = std::env::var_os("PEALAYER_WEB_ROOT")
         .map(std::path::PathBuf::from)
@@ -192,7 +182,82 @@ pub fn spawn_control_server_configured(
     command_tx: Sender<crate::platform::interop::InteropCommand>,
     application_identity: String,
 ) -> Sender<String> {
+    spawn_control_server_on_addresses(
+        vec![std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)],
+        port,
+        egui_ctx,
+        runtime_config,
+        command_tx,
+        application_identity,
+    )
+}
+
+pub fn spawn_control_server_for_config(
+    config: &crate::config::AppConfig,
+    egui_ctx: eframe::egui::Context,
+    runtime_config: WebRuntimeConfig,
+    command_tx: Sender<crate::platform::interop::InteropCommand>,
+    application_identity: String,
+) -> Sender<String> {
     let (state_tx, state_rx) = channel::<String>();
+    if !crate::config::resolved_web_enabled(config) {
+        // Keep a receiver alive so the application's status publisher remains
+        // non-blocking even when every network surface is disabled.
+        thread::spawn(move || while state_rx.recv().is_ok() {});
+        return state_tx;
+    }
+    let addresses = match crate::config::resolved_web_bind_addresses(config) {
+        Ok(addresses) => addresses,
+        Err(error) => {
+            log::error!("Could not resolve Pealayer Web listener addresses: {error}");
+            vec![std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)]
+        }
+    };
+    let port = crate::config::runtime_port("PEALAYER_PORT", config.web_port);
+    spawn_control_server_on_addresses_with_channel(
+        addresses,
+        port,
+        egui_ctx,
+        runtime_config,
+        command_tx,
+        application_identity,
+        state_tx,
+        state_rx,
+    )
+}
+
+fn spawn_control_server_on_addresses(
+    addresses: Vec<std::net::IpAddr>,
+    port: u16,
+    egui_ctx: eframe::egui::Context,
+    runtime_config: WebRuntimeConfig,
+    command_tx: Sender<crate::platform::interop::InteropCommand>,
+    application_identity: String,
+) -> Sender<String> {
+    let (state_tx, state_rx) = channel::<String>();
+    spawn_control_server_on_addresses_with_channel(
+        addresses,
+        port,
+        egui_ctx,
+        runtime_config,
+        command_tx,
+        application_identity,
+        state_tx,
+        state_rx,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_control_server_on_addresses_with_channel(
+    addresses: Vec<std::net::IpAddr>,
+    port: u16,
+    egui_ctx: eframe::egui::Context,
+    runtime_config: WebRuntimeConfig,
+    command_tx: Sender<crate::platform::interop::InteropCommand>,
+    application_identity: String,
+    state_tx: Sender<String>,
+    state_rx: Receiver<String>,
+) -> Sender<String> {
     let latest_status = Arc::new(Mutex::new(None));
     let websocket_clients: Arc<Mutex<Vec<Sender<String>>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -203,7 +268,9 @@ pub fn spawn_control_server_configured(
             if let Ok(mut status_guard) = latest_status_updates.lock() {
                 *status_guard = Some(state_json.clone());
             }
-            if let Ok(mut clients) = websocket_updates.lock() {
+            if crate::platform::interop::get_live_config().web_sync_state
+                && let Ok(mut clients) = websocket_updates.lock()
+            {
                 clients.retain(|client| client.send(state_json.clone()).is_ok());
             }
         }
@@ -228,22 +295,30 @@ pub fn spawn_control_server_configured(
         application_identity: Arc::from(application_identity),
         expected_session_id,
     };
-    let address = std::net::SocketAddr::new(web_bind_address(), port);
-
-    thread::spawn(move || {
+    let mut listening = 0_usize;
+    for ip in addresses {
+        let address = std::net::SocketAddr::new(ip, port);
         let listener = match TcpListener::bind(address) {
             Ok(listener) => listener,
             Err(error) => {
                 log::error!("Could not bind unified Pealayer control port {address}: {error}");
-                return;
+                continue;
             }
         };
-        for stream in listener.incoming() {
-            let Ok(stream) = stream else { continue };
-            let connection_state = state.clone();
-            thread::spawn(move || handle_connection(stream, connection_state));
-        }
-    });
+        listening += 1;
+        log::info!("Pealayer Web UI and APIs listening on http://{address}/");
+        let listener_state = state.clone();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { continue };
+                let connection_state = listener_state.clone();
+                thread::spawn(move || handle_connection(stream, connection_state));
+            }
+        });
+    }
+    if listening == 0 {
+        log::error!("Pealayer Web UI could not start any configured listener");
+    }
 
     state_tx
 }
@@ -296,11 +371,12 @@ fn handle_websocket(stream: TcpStream, state: ControlState) {
     if let Ok(mut clients) = state.websocket_clients.lock() {
         clients.push(client_tx);
     }
-    if let Some(status) = state
-        .latest_status
-        .lock()
-        .ok()
-        .and_then(|value| value.clone())
+    if crate::platform::interop::get_live_config().web_sync_state
+        && let Some(status) = state
+            .latest_status
+            .lock()
+            .ok()
+            .and_then(|value| value.clone())
     {
         if websocket
             .send(tungstenite::Message::Text(status.into()))
@@ -344,6 +420,13 @@ fn handle_websocket(stream: TcpStream, state: ControlState) {
 
 fn handle_websocket_text(state: &ControlState, text: &str) -> Option<String> {
     if let Ok(command) = serde_json::from_str::<crate::platform::interop::InteropCommand>(text) {
+        if !crate::platform::interop::get_live_config().web_allow_control {
+            return Some(crate::platform::interop::format_interop_error(
+                None,
+                -32003,
+                "Web control permission is disabled",
+            ));
+        }
         if state.command_tx.send(command).is_ok() {
             state.egui_ctx.request_repaint();
         }
@@ -351,29 +434,55 @@ fn handle_websocket_text(state: &ControlState, text: &str) -> Option<String> {
     }
     let request = serde_json::from_str::<crate::platform::interop::JsonRpcRequest>(text).ok()?;
     Some(
-        match crate::platform::interop::command_from_json_rpc(&request) {
-            Ok(Some(command)) => {
-                let accepted = state.command_tx.send(command).is_ok();
-                if accepted {
-                    state.egui_ctx.request_repaint();
-                }
+        if matches!(
+            request.method.as_str(),
+            "config.get" | "pealayer.config.get"
+        ) {
+            if crate::platform::interop::get_live_config().web_allow_configuration {
                 crate::platform::interop::json_rpc_result(
                     &request.id,
-                    serde_json::json!({"accepted":accepted}),
+                    serde_json::to_value(crate::platform::interop::get_live_config())
+                        .unwrap_or_else(|_| serde_json::json!({})),
+                )
+            } else {
+                crate::platform::interop::json_rpc_error(
+                    &request.id,
+                    -32003,
+                    "Web configuration permission is disabled",
                 )
             }
-            Ok(None) => {
-                let value = state
-                    .latest_status
-                    .lock()
-                    .ok()
-                    .and_then(|status| status.clone())
-                    .as_deref()
-                    .and_then(|status| serde_json::from_str(status).ok())
-                    .unwrap_or_else(|| serde_json::json!({"status":"initializing"}));
-                crate::platform::interop::json_rpc_result(&request.id, value)
+        } else {
+            match crate::platform::interop::command_from_json_rpc(&request) {
+                Ok(Some(command)) => {
+                    if !crate::platform::interop::get_live_config().web_allow_control {
+                        return Some(crate::platform::interop::json_rpc_error(
+                            &request.id,
+                            -32003,
+                            "Web control permission is disabled",
+                        ));
+                    }
+                    let accepted = state.command_tx.send(command).is_ok();
+                    if accepted {
+                        state.egui_ctx.request_repaint();
+                    }
+                    crate::platform::interop::json_rpc_result(
+                        &request.id,
+                        serde_json::json!({"accepted":accepted}),
+                    )
+                }
+                Ok(None) => {
+                    let value = state
+                        .latest_status
+                        .lock()
+                        .ok()
+                        .and_then(|status| status.clone())
+                        .as_deref()
+                        .and_then(|status| serde_json::from_str(status).ok())
+                        .unwrap_or_else(|| serde_json::json!({"status":"initializing"}));
+                    crate::platform::interop::json_rpc_result(&request.id, value)
+                }
+                Err(error) => crate::platform::interop::json_rpc_error(&request.id, -32601, &error),
             }
-            Err(error) => crate::platform::interop::json_rpc_error(&request.id, -32601, &error),
         },
     )
 }
@@ -495,6 +604,10 @@ fn write_http_response(stream: &mut TcpStream, response: HttpResponse) -> std::i
 
 fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
     let path = request.target.split('?').next().unwrap_or("/");
+    let web = crate::platform::interop::get_live_config();
+    if let Some(capability) = denied_web_capability(&request.method, path, &web) {
+        return permission_denied(capability);
+    }
     match (request.method.as_str(), path) {
         ("OPTIONS", _) => HttpResponse::text(204, "No Content", ""),
         ("GET", "/healthz") => HttpResponse::json(
@@ -646,6 +759,52 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
     }
 }
 
+fn denied_web_capability(
+    method: &str,
+    path: &str,
+    web: &crate::config::AppConfig,
+) -> Option<&'static str> {
+    let configuration_route = matches!(
+        (method, path),
+        ("GET", "/api/config") | ("GET", "/api/preferences") | ("POST", "/api/config")
+    );
+    let control_route = matches!(
+        (method, path),
+        ("POST", "/api/osd")
+            | ("DELETE", "/api/osd")
+            | ("POST", "/api/player/command")
+            | ("POST", "/api/ipc")
+    );
+    let file_route = path.starts_with("/api/fs/")
+        || matches!(path, "/api/player/frame" | "/api/player/seek-thumbnail");
+    let update_route = path.starts_with("/api/update/");
+    if configuration_route && !web.web_allow_configuration {
+        return Some("configuration");
+    }
+    if control_route && !web.web_allow_control {
+        return Some("control");
+    }
+    if file_route && !web.web_allow_file_access {
+        return Some("host file access");
+    }
+    if update_route && !web.web_allow_updates {
+        return Some("application updates");
+    }
+    None
+}
+
+fn permission_denied(capability: &str) -> HttpResponse {
+    HttpResponse::json(
+        403,
+        "Forbidden",
+        serde_json::json!({
+            "error": format!("Web {capability} permission is disabled"),
+            "permission": capability,
+        })
+        .to_string(),
+    )
+}
+
 fn update_status_response(
     status: u16,
     reason: &'static str,
@@ -765,14 +924,33 @@ fn json_rpc_response(body: &[u8], state: &ControlState) -> HttpResponse {
                 "config.get" | "pealayer.config.get"
             ) =>
         {
-            crate::platform::interop::json_rpc_result(
-                &request.id,
-                serde_json::to_value(crate::platform::interop::get_live_config())
-                    .unwrap_or_else(|_| serde_json::json!({})),
-            )
+            if crate::platform::interop::get_live_config().web_allow_configuration {
+                crate::platform::interop::json_rpc_result(
+                    &request.id,
+                    serde_json::to_value(crate::platform::interop::get_live_config())
+                        .unwrap_or_else(|_| serde_json::json!({})),
+                )
+            } else {
+                crate::platform::interop::json_rpc_error(
+                    &request.id,
+                    -32003,
+                    "Web configuration permission is disabled",
+                )
+            }
         }
         Ok(request) => match crate::platform::interop::command_from_json_rpc(&request) {
             Ok(Some(command)) => {
+                if !crate::platform::interop::get_live_config().web_allow_control {
+                    return HttpResponse::json(
+                        403,
+                        "Forbidden",
+                        crate::platform::interop::json_rpc_error(
+                            &request.id,
+                            -32003,
+                            "Web control permission is disabled",
+                        ),
+                    );
+                }
                 let accepted = state.command_tx.send(command).is_ok();
                 if accepted {
                     state.egui_ctx.request_repaint();
@@ -1234,26 +1412,45 @@ fn mime_for_path(path: &std::path::Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     #[test]
-    fn web_server_is_loopback_only_unless_explicitly_exposed() {
+    fn web_server_defaults_are_explicit_loopback_settings() {
+        let config = crate::config::AppConfig::default();
+        assert!(config.web_enabled);
+        assert_eq!(config.web_listen_addresses, ["127.0.0.1"]);
+        assert_eq!(config.web_port, 8080);
+    }
+
+    #[test]
+    fn web_permissions_gate_only_their_owned_api_surfaces() {
+        let restricted = crate::config::AppConfig {
+            web_allow_control: false,
+            web_allow_configuration: false,
+            web_allow_file_access: false,
+            web_allow_updates: false,
+            ..crate::config::AppConfig::default()
+        };
         assert_eq!(
-            resolve_web_bind_address(None),
-            IpAddr::V4(Ipv4Addr::LOCALHOST)
+            denied_web_capability("POST", "/api/player/command", &restricted),
+            Some("control")
         );
         assert_eq!(
-            resolve_web_bind_address(Some("invalid-hostname")),
-            IpAddr::V4(Ipv4Addr::LOCALHOST)
+            denied_web_capability("GET", "/api/preferences", &restricted),
+            Some("configuration")
         );
         assert_eq!(
-            resolve_web_bind_address(Some("0.0.0.0")),
-            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+            denied_web_capability("GET", "/api/fs/browse", &restricted),
+            Some("host file access")
         );
         assert_eq!(
-            resolve_web_bind_address(Some("::")),
-            IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+            denied_web_capability("POST", "/api/update/begin", &restricted),
+            Some("application updates")
         );
+        assert_eq!(
+            denied_web_capability("GET", "/api/player/status", &restricted),
+            None
+        );
+        assert_eq!(denied_web_capability("GET", "/", &restricted), None);
     }
 
     #[test]
