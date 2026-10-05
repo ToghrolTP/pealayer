@@ -13,3 +13,14 @@
 - `cargo test --lib --locked --jobs 1 effect_ -- --test-threads=1`: 31 passed, 0 failed. Includes real pointer press/release tests for all four native header actions (including the new pencil), no accidental drag payload, trailing alignment in light/dark and narrow/wide cards, stable card geometry, full drag regressions, scoped one-shot context rename requests and bounded inline input layout.
 - TypeScript `tsc --noEmit` and Web production build passed; PWA `e19d72605f310121` verified 39 precached resources.
 - No full test suite, hardware output activation or native visual acceptance is claimed. Live catalog names are not changed merely for verification.
+
+## Deployment and live Web acceptance
+
+- Optimized Windows package completed with `scripts/package-windows.ps1 -SkipTests -NoUpx`. The previous canonical process accepted the IPC quit command and exited before replacement.
+- Canonical local executable is running as PID 31848 from `%LOCALAPPDATA%/Programs/Pealayer/bin/pealayer.exe`. `/healthz` reports `ok`; the update manifest reports source commit `d09cd3cbc54767521bdc327c089d2cceabd02c9e`, `git_dirty: false`, SHA-256 `78fb7c1cf42a3e9d894a1e9539770c21d2b202ecc099b88d6727381422a167c1`.
+- In a temporary background browser tab, right-clicking the real Relay 8 effect showed Rename. Selecting it opened its existing inline name editor with keyboard focus. Clicking the pencil independently opened the same focused editor. Cancel restored each card without changing catalog names; all four real effects remain present. No Play/Run action was triggered. The user's original tab was left untouched.
+- Cafe-PC's health endpoint was unreachable in this pass, so no remote deployment is claimed. PR #46 remains unmerged.
+
+![Effect card context menu with Rename](effect-card-rename-menu-web.png)
+
+![Inline editor focused after Rename](effect-card-rename-inline-web.png)
