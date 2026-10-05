@@ -273,6 +273,7 @@ pub struct PealayerApp {
     pub(crate) cache_duration: Option<f64>,
     pub(crate) cache_buffering_percent: Option<f64>,
     pub(crate) media_fps: f64,
+    pub(crate) video_aspect_ratio: f64,
     pub is_paused: bool,
     pub is_eof: bool,
     pub(crate) volume: f64,
@@ -757,6 +758,14 @@ impl eframe::App for PealayerApp {
             }
         }
         self.observe_fullscreen_state(is_fullscreen);
+        if self.show_four_d_editor || is_fullscreen {
+            crate::platform::windows::set_simple_video_aspect_constraint(
+                false,
+                self.video_aspect_ratio,
+                0,
+                0,
+            );
+        }
 
         // Broadcast state JSON to Web-UI clients (throttled to 10Hz to save CPU / network spam)
         let now = std::time::Instant::now();
@@ -3513,6 +3522,11 @@ impl PealayerApp {
                         self.sub_position_percent = v.clamp(0.0, 100.0);
                         self.sync_subtitle_rendering();
                     }
+                    (21, PropertyData::Double(v)) => {
+                        if v.is_finite() && (0.05..=20.0).contains(&v) {
+                            self.video_aspect_ratio = v;
+                        }
+                    }
                     _ => {}
                 },
                 Some(Ok(Event::EndFile(reason))) => {
@@ -3548,6 +3562,7 @@ impl PealayerApp {
                     self.media_file_info = crate::media_info::MediaFileInfo::default();
                     self.cache_duration = None;
                     self.cache_buffering_percent = None;
+                    self.video_aspect_ratio = 16.0 / 9.0;
                     self.subtitle_text.clear();
                     self.clear_subtitle_overlay();
                     self.reset_scrub_state();
@@ -3564,6 +3579,13 @@ impl PealayerApp {
                     }
                     if let Ok(seekable) = self.mpv.get_property::<bool>("seekable") {
                         self.is_seekable = seekable;
+                    }
+                    if let Ok(aspect_ratio) =
+                        self.mpv.get_property::<f64>("video-out-params/aspect")
+                        && aspect_ratio.is_finite()
+                        && (0.05..=20.0).contains(&aspect_ratio)
+                    {
+                        self.video_aspect_ratio = aspect_ratio;
                     }
                     if let Some(position) = self.pending_resume_position.take() {
                         if self.is_seekable {
@@ -4755,6 +4777,7 @@ impl PealayerApp {
         self.media_file_info = crate::media_info::MediaFileInfo::default();
         self.cache_duration = None;
         self.cache_buffering_percent = None;
+        self.video_aspect_ratio = 16.0 / 9.0;
         self.is_eof = false;
         self.is_paused = false;
         if let Some(ref mut mc) = self.media_controls {
@@ -6050,6 +6073,7 @@ impl Default for PealayerApp {
         let _ = mpv_client.observe_property("vid", libmpv2::Format::String, 18);
         let _ = mpv_client.observe_property("sub-text", libmpv2::Format::String, 19);
         let _ = mpv_client.observe_property("sub-pos", libmpv2::Format::Double, 20);
+        let _ = mpv_client.observe_property("video-out-params/aspect", libmpv2::Format::Double, 21);
         let (interop_tx, interop_rx) = std::sync::mpsc::channel();
         let (_controller_cmd_tx, controller_cmd_rx) =
             std::sync::mpsc::channel::<crate::platform::interop::ControllerDelivery>();
@@ -6085,6 +6109,7 @@ impl Default for PealayerApp {
             cache_duration: None,
             cache_buffering_percent: None,
             media_fps: 0.0,
+            video_aspect_ratio: 16.0 / 9.0,
             is_paused: false,
             is_eof: false,
             volume: 100.0,

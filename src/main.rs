@@ -466,6 +466,9 @@ fn main() -> eframe::Result {
             mpv_client
                 .observe_property("sub-pos", libmpv2::Format::Double, 20)
                 .unwrap();
+            mpv_client
+                .observe_property("video-out-params/aspect", libmpv2::Format::Double, 21)
+                .unwrap();
 
             let egui_ctx2 = cc.egui_ctx.clone();
             mpv_client.set_wakeup_callback(move || {
@@ -599,6 +602,7 @@ fn main() -> eframe::Result {
                 cache_duration: None,
                 cache_buffering_percent: None,
                 media_fps: 0.0,
+                video_aspect_ratio: 16.0 / 9.0,
                 is_paused: false,
                 is_eof: false,
                 volume: initial_volume,

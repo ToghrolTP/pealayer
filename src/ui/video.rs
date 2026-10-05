@@ -3,6 +3,16 @@ use crate::mpv::render::GetProcAddress;
 use eframe::egui;
 use std::sync::Arc;
 
+const DEFAULT_VIDEO_ASPECT_RATIO: f64 = 16.0 / 9.0;
+
+fn resolved_video_aspect_ratio(aspect_ratio: f64) -> f32 {
+    if aspect_ratio.is_finite() && (0.05..=20.0).contains(&aspect_ratio) {
+        aspect_ratio as f32
+    } else {
+        DEFAULT_VIDEO_ASPECT_RATIO as f32
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct VideoSurfaceGesture {
     pub(crate) button: egui::PointerButton,
@@ -151,6 +161,39 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 
     let (rect, response) = ui.allocate_exact_size(video_size, egui::Sense::click_and_drag());
+    let aspect_ratio = resolved_video_aspect_ratio(app.video_aspect_ratio);
+    let is_fullscreen = app.fullscreen_intent(ui.ctx());
+    let simple_aspect_lock = !app.show_four_d_editor && !is_fullscreen;
+    let pixels_per_point = ui.ctx().pixels_per_point();
+    let viewport = ui.input(|input| input.viewport().clone());
+    if simple_aspect_lock {
+        if let Some(outer_rect) = viewport.outer_rect {
+            let outer_width = (outer_rect.width() * pixels_per_point).round() as i32;
+            let outer_height = (outer_rect.height() * pixels_per_point).round() as i32;
+            let video_width = (rect.width() * pixels_per_point).round() as i32;
+            let video_height = (rect.height() * pixels_per_point).round() as i32;
+            crate::platform::windows::set_simple_video_aspect_constraint(
+                true,
+                f64::from(aspect_ratio),
+                outer_width.saturating_sub(video_width),
+                outer_height.saturating_sub(video_height),
+            );
+        } else {
+            crate::platform::windows::set_simple_video_aspect_constraint(
+                false,
+                f64::from(aspect_ratio),
+                0,
+                0,
+            );
+        }
+    } else {
+        crate::platform::windows::set_simple_video_aspect_constraint(
+            false,
+            f64::from(aspect_ratio),
+            0,
+            0,
+        );
+    }
 
     const GESTURE_BUTTONS: [egui::PointerButton; 3] = [
         egui::PointerButton::Primary,
@@ -489,7 +532,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             });
     }
 
-    let is_fullscreen = app.fullscreen_intent(ui.ctx());
     let surface_background = if is_fullscreen {
         match app.fullscreen_video_background {
             crate::config::VideoBackground::Black => egui::Color32::BLACK,
@@ -501,8 +543,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     };
     ui.painter().rect_filled(rect, 0.0, surface_background);
 
-    // 1. Calculate destination rect maintaining 16:9 aspect ratio
-    let aspect_ratio = 16.0 / 9.0;
+    // 1. Calculate the destination from libmpv's post-filter display aspect.
+    // The same value drives native WM_SIZING, so the outer window and the
+    // rendered image cannot drift apart during a Simple-workspace resize.
     let rect_w = rect.width();
     let rect_h = rect.height();
 
@@ -525,7 +568,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     };
 
     // 2. Calculate DPI-aware physical pixel dimensions
-    let ppi = ui.ctx().pixels_per_point();
+    let ppi = pixels_per_point;
     let (target_phys_w, target_phys_h) = calculate_physical_bounds(dest_rect, ppi);
 
     // Draw the offscreen texture if registered
@@ -908,6 +951,19 @@ mod tests {
 
         // 2.0x scaling (200% Retina / 4K DPI)
         assert_eq!(calculate_physical_bounds(rect, 2.0), (1600, 1200));
+    }
+
+    #[test]
+    fn video_aspect_uses_live_value_and_rejects_invalid_input() {
+        assert!((resolved_video_aspect_ratio(2.35) - 2.35).abs() < f32::EPSILON);
+        assert_eq!(
+            resolved_video_aspect_ratio(f64::NAN),
+            DEFAULT_VIDEO_ASPECT_RATIO as f32
+        );
+        assert_eq!(
+            resolved_video_aspect_ratio(0.0),
+            DEFAULT_VIDEO_ASPECT_RATIO as f32
+        );
     }
 
     #[test]

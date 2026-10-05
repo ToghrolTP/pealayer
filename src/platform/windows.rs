@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 
 #[cfg(target_os = "windows")]
 fn wide_null_path(path: &std::path::Path) -> Vec<u16> {
@@ -135,6 +135,10 @@ static WINDOW_DWM_THEMING: AtomicBool = AtomicBool::new(true);
 static WINDOW_MICA_BACKDROP: AtomicBool = AtomicBool::new(false);
 static WINDOW_MOVE_RESIZE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static WINDOW_MOVE_RESIZE_ENDED: AtomicBool = AtomicBool::new(false);
+static SIMPLE_VIDEO_ASPECT_ENABLED: AtomicBool = AtomicBool::new(false);
+static SIMPLE_VIDEO_ASPECT_BITS: AtomicU64 = AtomicU64::new(0);
+static SIMPLE_VIDEO_CHROME_WIDTH: AtomicI32 = AtomicI32::new(0);
+static SIMPLE_VIDEO_CHROME_HEIGHT: AtomicI32 = AtomicI32::new(0);
 static ORIGINAL_WINDOW_PROC: AtomicIsize = AtomicIsize::new(0);
 static SHELL_COMMAND: AtomicU32 = AtomicU32::new(0);
 static SHELL_PAUSED: AtomicBool = AtomicBool::new(true);
@@ -311,6 +315,203 @@ pub fn get_registered_hwnd() -> isize {
 // alone cannot distinguish this operation from ordinary playback.
 const WM_ENTERSIZEMOVE_VALUE: u32 = 0x0231;
 const WM_EXITSIZEMOVE_VALUE: u32 = 0x0232;
+const WM_SIZING_VALUE: u32 = 0x0214;
+
+const WMSZ_LEFT_VALUE: usize = 1;
+const WMSZ_RIGHT_VALUE: usize = 2;
+const WMSZ_TOP_VALUE: usize = 3;
+const WMSZ_TOPLEFT_VALUE: usize = 4;
+const WMSZ_TOPRIGHT_VALUE: usize = 5;
+const WMSZ_BOTTOM_VALUE: usize = 6;
+const WMSZ_BOTTOMLEFT_VALUE: usize = 7;
+const WMSZ_BOTTOMRIGHT_VALUE: usize = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SimpleVideoAspectConstraint {
+    aspect_ratio: f64,
+    chrome_width: i32,
+    chrome_height: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SizingRect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+impl SizingRect {
+    fn width(self) -> i32 {
+        self.right.saturating_sub(self.left)
+    }
+
+    fn height(self) -> i32 {
+        self.bottom.saturating_sub(self.top)
+    }
+
+    fn set_width(&mut self, edge: usize, width: i32) {
+        match edge {
+            WMSZ_LEFT_VALUE | WMSZ_TOPLEFT_VALUE | WMSZ_BOTTOMLEFT_VALUE => {
+                self.left = self.right.saturating_sub(width);
+            }
+            WMSZ_RIGHT_VALUE | WMSZ_TOPRIGHT_VALUE | WMSZ_BOTTOMRIGHT_VALUE => {
+                self.right = self.left.saturating_add(width);
+            }
+            _ => {
+                let center = i64::from(self.left) + i64::from(self.width()) / 2;
+                self.left = (center - i64::from(width) / 2) as i32;
+                self.right = self.left.saturating_add(width);
+            }
+        }
+    }
+
+    fn set_height(&mut self, edge: usize, height: i32) {
+        match edge {
+            WMSZ_TOP_VALUE | WMSZ_TOPLEFT_VALUE | WMSZ_TOPRIGHT_VALUE => {
+                self.top = self.bottom.saturating_sub(height);
+            }
+            WMSZ_BOTTOM_VALUE | WMSZ_BOTTOMLEFT_VALUE | WMSZ_BOTTOMRIGHT_VALUE => {
+                self.bottom = self.top.saturating_add(height);
+            }
+            _ => {
+                let center = i64::from(self.top) + i64::from(self.height()) / 2;
+                self.top = (center - i64::from(height) / 2) as i32;
+                self.bottom = self.top.saturating_add(height);
+            }
+        }
+    }
+}
+
+/// Publish the most recently painted Simple-workspace video geometry to the
+/// native HWND hook. `WM_SIZING` runs inside Windows' modal resize loop, where
+/// waiting for another egui frame would visibly lag behind the pointer.
+pub fn set_simple_video_aspect_constraint(
+    enabled: bool,
+    aspect_ratio: f64,
+    chrome_width: i32,
+    chrome_height: i32,
+) {
+    if !enabled || !aspect_ratio.is_finite() || !(0.05..=20.0).contains(&aspect_ratio) {
+        SIMPLE_VIDEO_ASPECT_ENABLED.store(false, Ordering::Release);
+        return;
+    }
+
+    // Publish the tuple as one logical update. The HWND and egui callbacks run
+    // on the UI thread today, but this also prevents a future cross-thread
+    // reader from combining a new aspect with an old chrome measurement.
+    SIMPLE_VIDEO_ASPECT_ENABLED.store(false, Ordering::Release);
+    SIMPLE_VIDEO_ASPECT_BITS.store(aspect_ratio.to_bits(), Ordering::Relaxed);
+    SIMPLE_VIDEO_CHROME_WIDTH.store(chrome_width.max(0), Ordering::Relaxed);
+    SIMPLE_VIDEO_CHROME_HEIGHT.store(chrome_height.max(0), Ordering::Relaxed);
+    SIMPLE_VIDEO_ASPECT_ENABLED.store(true, Ordering::Release);
+}
+
+fn simple_video_aspect_constraint() -> Option<SimpleVideoAspectConstraint> {
+    if !SIMPLE_VIDEO_ASPECT_ENABLED.load(Ordering::Acquire) {
+        return None;
+    }
+    let aspect_ratio = f64::from_bits(SIMPLE_VIDEO_ASPECT_BITS.load(Ordering::Relaxed));
+    if !aspect_ratio.is_finite() || !(0.05..=20.0).contains(&aspect_ratio) {
+        return None;
+    }
+    Some(SimpleVideoAspectConstraint {
+        aspect_ratio,
+        chrome_width: SIMPLE_VIDEO_CHROME_WIDTH.load(Ordering::Relaxed).max(0),
+        chrome_height: SIMPLE_VIDEO_CHROME_HEIGHT.load(Ordering::Relaxed).max(0),
+    })
+}
+
+fn width_driven_size(width: i32, constraint: SimpleVideoAspectConstraint) -> (i32, i32) {
+    const MIN_VIDEO_WIDTH: i32 = 96;
+    let video_width = width
+        .saturating_sub(constraint.chrome_width)
+        .max(MIN_VIDEO_WIDTH);
+    let video_height = (f64::from(video_width) / constraint.aspect_ratio)
+        .round()
+        .max(1.0) as i32;
+    (
+        video_width.saturating_add(constraint.chrome_width),
+        video_height.saturating_add(constraint.chrome_height),
+    )
+}
+
+fn height_driven_size(height: i32, constraint: SimpleVideoAspectConstraint) -> (i32, i32) {
+    const MIN_VIDEO_HEIGHT: i32 = 54;
+    let video_height = height
+        .saturating_sub(constraint.chrome_height)
+        .max(MIN_VIDEO_HEIGHT);
+    let video_width = (f64::from(video_height) * constraint.aspect_ratio)
+        .round()
+        .max(1.0) as i32;
+    (
+        video_width.saturating_add(constraint.chrome_width),
+        video_height.saturating_add(constraint.chrome_height),
+    )
+}
+
+fn constrain_sizing_rect(
+    rect: SizingRect,
+    edge: usize,
+    constraint: SimpleVideoAspectConstraint,
+) -> Option<SizingRect> {
+    if rect.width() <= 0 || rect.height() <= 0 {
+        return None;
+    }
+
+    let (width, height) = match edge {
+        WMSZ_LEFT_VALUE | WMSZ_RIGHT_VALUE => width_driven_size(rect.width(), constraint),
+        WMSZ_TOP_VALUE | WMSZ_BOTTOM_VALUE => height_driven_size(rect.height(), constraint),
+        WMSZ_TOPLEFT_VALUE
+        | WMSZ_TOPRIGHT_VALUE
+        | WMSZ_BOTTOMLEFT_VALUE
+        | WMSZ_BOTTOMRIGHT_VALUE => {
+            let from_width = width_driven_size(rect.width(), constraint);
+            let from_height = height_driven_size(rect.height(), constraint);
+            let width_correction = (from_width.1 - rect.height()).abs();
+            let height_correction = (from_height.0 - rect.width()).abs();
+            if width_correction <= height_correction {
+                from_width
+            } else {
+                from_height
+            }
+        }
+        _ => return None,
+    };
+
+    let mut constrained = rect;
+    constrained.set_width(edge, width);
+    constrained.set_height(edge, height);
+    Some(constrained)
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn constrain_native_sizing_rect(edge: usize, lparam: isize) -> bool {
+    use windows::Win32::Foundation::RECT;
+
+    let Some(constraint) = simple_video_aspect_constraint() else {
+        return false;
+    };
+    // SAFETY: WM_SIZING guarantees that lParam points to a writable RECT for
+    // the duration of the window-procedure call. We reject a null pointer.
+    let Some(native_rect) = (unsafe { (lparam as *mut RECT).as_mut() }) else {
+        return false;
+    };
+    let proposed = SizingRect {
+        left: native_rect.left,
+        top: native_rect.top,
+        right: native_rect.right,
+        bottom: native_rect.bottom,
+    };
+    let Some(constrained) = constrain_sizing_rect(proposed, edge, constraint) else {
+        return false;
+    };
+    native_rect.left = constrained.left;
+    native_rect.top = constrained.top;
+    native_rect.right = constrained.right;
+    native_rect.bottom = constrained.bottom;
+    true
+}
 
 fn native_window_operation_transition(message: u32) -> Option<bool> {
     match message {
@@ -921,6 +1122,12 @@ unsafe extern "system" fn shell_window_proc(
     };
 
     observe_native_window_message(message);
+
+    if message == WM_SIZING_VALUE && unsafe { constrain_native_sizing_rect(wparam.0, lparam.0) } {
+        // WM_SIZING expects TRUE after the application updates the proposed
+        // screen-coordinate RECT in place.
+        return LRESULT(1);
+    }
 
     if message == WM_TRAYICON {
         let mouse_message = lparam.0 as u32;
@@ -1596,6 +1803,130 @@ mod tests {
         assert!(take_native_window_operation_ended());
         assert!(!take_native_window_operation_ended());
         assert_eq!(native_window_operation_transition(0x000F), None);
+    }
+
+    fn assert_video_aspect(
+        rect: SizingRect,
+        constraint: SimpleVideoAspectConstraint,
+        expected: f64,
+    ) {
+        let video_width = rect.width() - constraint.chrome_width;
+        let video_height = rect.height() - constraint.chrome_height;
+        assert!(video_width > 0 && video_height > 0);
+        assert!((f64::from(video_width) / f64::from(video_height) - expected).abs() < 0.01);
+    }
+
+    #[test]
+    fn native_right_edge_resize_keeps_the_live_video_aspect() {
+        let constraint = SimpleVideoAspectConstraint {
+            aspect_ratio: 16.0 / 9.0,
+            chrome_width: 16,
+            chrome_height: 92,
+        };
+        let proposed = SizingRect {
+            left: 100,
+            top: 80,
+            right: 1116,
+            bottom: 772,
+        };
+        let constrained = constrain_sizing_rect(proposed, WMSZ_RIGHT_VALUE, constraint).unwrap();
+        assert_eq!(constrained.left, proposed.left);
+        assert_eq!(
+            constrained.top + constrained.height() / 2,
+            proposed.top + proposed.height() / 2
+        );
+        assert_video_aspect(constrained, constraint, 16.0 / 9.0);
+    }
+
+    #[test]
+    fn native_bottom_edge_resize_keeps_the_live_video_aspect() {
+        let constraint = SimpleVideoAspectConstraint {
+            aspect_ratio: 4.0 / 3.0,
+            chrome_width: 18,
+            chrome_height: 88,
+        };
+        let proposed = SizingRect {
+            left: 200,
+            top: 100,
+            right: 1018,
+            bottom: 788,
+        };
+        let constrained = constrain_sizing_rect(proposed, WMSZ_BOTTOM_VALUE, constraint).unwrap();
+        assert_eq!(constrained.top, proposed.top);
+        assert_video_aspect(constrained, constraint, 4.0 / 3.0);
+    }
+
+    #[test]
+    fn native_top_left_corner_keeps_the_opposite_corner_fixed() {
+        let constraint = SimpleVideoAspectConstraint {
+            aspect_ratio: 2.35,
+            chrome_width: 20,
+            chrome_height: 90,
+        };
+        let proposed = SizingRect {
+            left: 120,
+            top: 110,
+            right: 1320,
+            bottom: 810,
+        };
+        let constrained = constrain_sizing_rect(proposed, WMSZ_TOPLEFT_VALUE, constraint).unwrap();
+        assert_eq!(constrained.right, proposed.right);
+        assert_eq!(constrained.bottom, proposed.bottom);
+        assert_video_aspect(constrained, constraint, 2.35);
+        assert!(constrain_sizing_rect(proposed, 0, constraint).is_none());
+    }
+
+    #[test]
+    fn every_native_resize_edge_and_corner_preserves_video_geometry() {
+        let constraint = SimpleVideoAspectConstraint {
+            aspect_ratio: 16.0 / 10.0,
+            chrome_width: 18,
+            chrome_height: 86,
+        };
+        let proposed = SizingRect {
+            left: 100,
+            top: 120,
+            right: 1118,
+            bottom: 806,
+        };
+        for edge in [
+            WMSZ_LEFT_VALUE,
+            WMSZ_RIGHT_VALUE,
+            WMSZ_TOP_VALUE,
+            WMSZ_TOPLEFT_VALUE,
+            WMSZ_TOPRIGHT_VALUE,
+            WMSZ_BOTTOM_VALUE,
+            WMSZ_BOTTOMLEFT_VALUE,
+            WMSZ_BOTTOMRIGHT_VALUE,
+        ] {
+            let constrained = constrain_sizing_rect(proposed, edge, constraint)
+                .unwrap_or_else(|| panic!("resize edge {edge} was not handled"));
+            assert_video_aspect(constrained, constraint, constraint.aspect_ratio);
+            if matches!(
+                edge,
+                WMSZ_LEFT_VALUE | WMSZ_TOPLEFT_VALUE | WMSZ_BOTTOMLEFT_VALUE
+            ) {
+                assert_eq!(constrained.right, proposed.right);
+            }
+            if matches!(
+                edge,
+                WMSZ_RIGHT_VALUE | WMSZ_TOPRIGHT_VALUE | WMSZ_BOTTOMRIGHT_VALUE
+            ) {
+                assert_eq!(constrained.left, proposed.left);
+            }
+            if matches!(
+                edge,
+                WMSZ_TOP_VALUE | WMSZ_TOPLEFT_VALUE | WMSZ_TOPRIGHT_VALUE
+            ) {
+                assert_eq!(constrained.bottom, proposed.bottom);
+            }
+            if matches!(
+                edge,
+                WMSZ_BOTTOM_VALUE | WMSZ_BOTTOMLEFT_VALUE | WMSZ_BOTTOMRIGHT_VALUE
+            ) {
+                assert_eq!(constrained.top, proposed.top);
+            }
+        }
     }
 
     #[test]
