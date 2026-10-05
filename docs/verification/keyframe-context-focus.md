@@ -19,3 +19,13 @@ The native timeline already had exact-marker and PWM-keyframe menus, but their h
 `cargo test --lib --locked --jobs 1 keyframe_ -- --test-threads=1`: six focused checks, including persistence/deduplication, separate playhead/marker geometry, nearest-point priority, real secondary-button press/release opening the dedicated popup over overlapping canvas/ruler widgets for both marker types, and primary click-away/Escape clearing selection without deleting model data. Menu interaction preserves its target.
 
 Manual acceptance: right-click on a diamond or up to 16 pixels from it; verify its dedicated menu. Move into the menu and use a contextual action. Select a keyframe, click another panel or blank lane, and verify the highlight clears. Select again and press Escape. Right-click/deselect must not move the playhead or send any hardware output.
+
+## Deployment checkpoint
+
+- Code commit: `0223a8b248c26874ed5539c8c4d8a472080750d4`, pushed to `fix/hardware-monitor-layout` for PR #46; PR remains unmerged.
+- Built locally with `scripts/package-windows.ps1 -SkipTests -NoUpx`; optimized Rust and Web/PWA packaging succeeded. The full test suite was not run; the six focused checks above passed after the final changes.
+- Graceful shutdown through `POST /api/ipc` with `{"command":"quit"}` completed before replacement. Relaunched the canonical `C:\Users\David\AppData\Local\Programs\Pealayer\bin\pealayer.exe` (observed PID 23028).
+- Live `/healthz` returned `status: ok`; `/api/update/manifest` reported the exact code commit above and `git_dirty: false`. Executable SHA-256: `c2c5b3ce1175eb972db6c256f73b0f403f14533993fe882698e0127fbba76e4a` (35,682,304 bytes). `/api/player/status` reported `hardware_connected: true`; no hardware output was activated for this verification.
+- Native screenshot acceptance remains unverified: both the first capture and one fresh-window recovery retry failed with `IGraphicsCaptureItemInterop.CreateForMonitor failed: The service did not respond to the start or control request in a timely fashion. (0x8007041D)`. The freshly inventoried canonical window was titled `Pealayer — Hardware connected`; no screenshot or manual gesture success is claimed.
+- Cafe-PC `/healthz` timed out on this pass; no Cafe deployment is claimed. A reachable peer update and real native-window acceptance remain pending.
+- This documentation checkpoint follows the built code commit; the running binary correctly identifies the code commit, not the subsequent documentation-only commit.
