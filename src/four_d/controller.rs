@@ -102,7 +102,15 @@ pub struct HardwareCapabilities {
     pub strip_control: Option<HardwareStripControl>,
     pub strip_effects: Vec<HardwareStripEffect>,
     pub macros: Vec<HardwareMacro>,
+    pub effect_groups: Vec<HardwareEffectGroup>,
     pub effect_recording: HardwareEffectRecording,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HardwareEffectGroup {
+    pub name: String,
+    #[serde(default)]
+    pub icon: String,
 }
 
 impl HardwareCapabilities {
@@ -2179,6 +2187,8 @@ fn parse_hardware_capabilities_with_front_panel(
         strip_control,
         strip_effects,
         macros,
+        effect_groups: snapshot.get("effect_groups").cloned()
+            .and_then(|value| serde_json::from_value(value).ok()).unwrap_or_default(),
         effect_recording,
     }
 }
@@ -2482,6 +2492,18 @@ mod tests {
             assert!(!valid_strip_effect_id(id), "expected {id:?} to be rejected");
         }
         assert!(!valid_strip_effect_id(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn empty_effect_groups_are_consumed_from_the_live_snapshot() {
+        let parsed = parse_hardware_capabilities(&json!({
+            "effects": [],
+            "effect_groups": [{"name": "Cinema lighting", "icon": "lamp"}]
+        }), &json!({}));
+        assert_eq!(parsed.effect_groups[0].name, "Cinema lighting");
+        assert_eq!(parsed.effect_groups[0].icon, "lamp");
+        assert!(parsed.macros.is_empty());
+        assert!(parsed.strip_effects.is_empty());
     }
 
     #[test]

@@ -281,19 +281,19 @@ pub(crate) fn begin_new_group(app: &mut PealayerApp) {
     });
 }
 
-pub(crate) fn create_first_group_effect(app: &mut PealayerApp) -> bool {
-    let Some(category) = app
-        .effect_group_draft
-        .as_ref()
-        .filter(|draft| draft.original_name.is_empty())
-        .map(|draft| draft.name.trim().to_string())
-        .filter(|name| !name.is_empty())
-    else {
-        return false;
-    };
-    begin_new_effect(app, Some(category));
-    app.effect_group_draft = None;
-    true
+pub(crate) fn empty_library_context_menu(app: &mut PealayerApp, ui: &mut egui::Ui) -> egui::Response {
+    let response = ui.allocate_rect(ui.available_rect_before_wrap(), egui::Sense::click());
+    response.context_menu(|ui| {
+        if ui.button(format!("{} {}", crate::ui::icons::PLUS, app.tr("New effect"))).clicked() {
+            begin_new_effect(app, None);
+            ui.close();
+        }
+        if ui.button(format!("{} {}", crate::ui::icons::FOLDER_OPEN, app.tr("New group"))).clicked() {
+            begin_new_group(app);
+            ui.close();
+        }
+    });
+    response
 }
 
 fn start_new_lighting(
@@ -1642,13 +1642,7 @@ fn draw_sequence_step_editor(
 
 pub(crate) fn draw_effect_recording_panel(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let hardware = app.advertised_hardware();
-    let groups = crate::ui::group_picker::group_options(
-        hardware.iter().flat_map(|hardware| {
-            hardware.macros.iter().map(|effect| effect.category.as_str())
-                .chain(hardware.strip_effects.iter().map(|effect| effect.category.as_str()))
-        }),
-        &app.hardware_effect_authoring.category,
-    );
+    let groups = hardware.as_ref().map(|hardware| hardware.effect_groups.clone()).unwrap_or_default();
     let connected = hardware
         .as_ref()
         .is_some_and(|hardware| hardware.board_connected);
@@ -1711,15 +1705,15 @@ pub(crate) fn draw_effect_recording_panel(app: &mut PealayerApp, ui: &mut egui::
                                 .desired_width(260.0),
                         );
                         ui.end_row();
-                        ui.label("Category");
-                        crate::ui::group_picker::group_picker(
+                        ui.label(app.tr("Group"));
+                        if crate::ui::group_picker::effect_group_picker(
                             ui,
                             "recording-group",
                             &mut app.hardware_effect_authoring.category,
-                            groups.iter().map(String::as_str),
+                            &groups,
                             260.0,
                             app.language,
-                        );
+                        ) { begin_new_group(app); }
                         ui.end_row();
                         ui.label("Capture");
                         egui::ComboBox::from_id_salt("effect_recording_mode")
@@ -1862,11 +1856,8 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .as_ref()
         .map(|value| value.strip_effects.clone())
         .unwrap_or_default();
-    let groups = crate::ui::group_picker::group_options(
-        sequences.iter().map(|effect| effect.category.as_str())
-            .chain(strips.iter().map(|effect| effect.category.as_str())),
-        &app.effect_library_draft.category,
-    );
+    let groups = capabilities.as_ref().map(|hardware| hardware.effect_groups.clone()).unwrap_or_default();
+    let mut new_group_requested = false;
     let geometry = crate::ui::dialog::bounded_geometry(
         ui.ctx().content_rect(),
         20.0,
@@ -2034,7 +2025,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 app.tr("Addressable lighting"),
                                 app.tr("Stable ID"),
                                 app.tr("Name"),
-                                app.tr("Category"),
+                                app.tr("Group"),
                                 app.tr("Icon"),
                                 app.tr("Frame rate"),
                                 app.tr("LED count"),
@@ -2078,11 +2069,11 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     );
                                     ui.end_row();
                                     ui.label(&labels.5);
-                                    crate::ui::group_picker::group_picker(
+                                    new_group_requested |= crate::ui::group_picker::effect_group_picker(
                                         ui,
                                         "effect-group",
                                         &mut draft.category,
-                                        groups.iter().map(String::as_str),
+                                        &groups,
                                         320.0,
                                         display_language,
                                     );
@@ -2363,6 +2354,10 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
         app.save_config();
     }
     app.show_effect_library_editor = open;
+    if new_group_requested { begin_new_group(app); }
+    if app.effect_group_draft.is_some() {
+        ui.ctx().move_to_top(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("effect_group_editor")));
+    }
 }
 
 #[cfg(test)]
@@ -2400,19 +2395,15 @@ mod tests {
     }
 
     #[test]
-    fn new_group_creates_its_first_effect_in_the_named_category() {
+    fn new_group_is_separate_from_the_current_effect_draft() {
         let mut app = PealayerApp::default();
         app.effect_library_draft.name = "Existing draft".to_string();
         begin_new_group(&mut app);
         assert_eq!(app.effect_library_draft.name, "Existing draft");
-        assert!(!create_first_group_effect(&mut app));
         assert!(app.effect_group_draft.is_some());
         app.effect_group_draft.as_mut().unwrap().name = "  Cinema lighting  ".to_string();
-        assert!(create_first_group_effect(&mut app));
-        assert!(app.effect_group_draft.is_none());
-        assert!(app.show_effect_library_editor);
-        assert!(app.effect_library_draft.is_new);
-        assert_eq!(app.effect_library_draft.category, "Cinema lighting");
+        assert_eq!(app.effect_library_draft.name, "Existing draft");
+        assert!(!app.show_effect_library_editor);
     }
 
     #[test]

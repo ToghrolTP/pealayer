@@ -4,19 +4,21 @@ import { Button, Input, Popconfirm, Select, Space, Tag } from 'antd';
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
 import { GroupSelect } from './GroupSelect';
+import { EffectGroupDialog } from './EffectGroupDialog';
 
 interface EffectRecorderProps {
   state: PlayerState;
   sendCmd: (command: string, payload?: Record<string, unknown>) => void;
   locale: UiLocale;
   compact?: boolean;
+  onNewGroup?: () => void;
 }
 
 /**
  * One recorder for every Web surface. PCController owns the take and the
  * finished catalog entry; this component only presents that live state.
  */
-export const EffectRecorder: React.FC<EffectRecorderProps> = ({ state, sendCmd, locale, compact = false }) => {
+export const EffectRecorder: React.FC<EffectRecorderProps> = ({ state, sendCmd, locale, compact = false, onNewGroup }) => {
   const recording = state.effect_recording ?? {
     active: false, id: 0, name: '', mode: '', category: '', color: '', steps: 0,
     device_retained: false, overwritten: 0, started_at: '', last_error: '', pending: false,
@@ -24,6 +26,7 @@ export const EffectRecorder: React.FC<EffectRecorderProps> = ({ state, sendCmd, 
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [category, setCategory] = useState('Recorded');
+  const [newGroupName, setNewGroupName] = useState<string | null>(null);
   const [color, setColor] = useState('violet');
   const [mode, setMode] = useState('automatic');
   const canRecord = state.controller_connected && state.hardware_connected;
@@ -52,7 +55,7 @@ export const EffectRecorder: React.FC<EffectRecorderProps> = ({ state, sendCmd, 
 
       {!recording.active && <div className="effect-recorder__grid">
         <label><span>{tr(locale, 'Name')}</span><Input value={name} autoFocus onChange={(event) => setName(event.target.value)} placeholder={tr(locale, 'Recorded effect name')} /></label>
-        <label><span>{tr(locale, 'Category')}</span><GroupSelect value={category} groups={(state.controller_effects ?? []).map((effect) => effect.category)} locale={locale} onChange={setCategory} /></label>
+        <label><span>{tr(locale, 'Group')}</span><GroupSelect value={category} groups={(state.controller_effect_groups ?? []).map((group) => group.name)} locale={locale} onChange={setCategory} onCreate={onNewGroup ?? (() => setNewGroupName(''))} /></label>
         <label><span>{tr(locale, 'Capture mode')}</span><Select value={mode} onChange={setMode} options={[
           { value: 'automatic', label: tr(locale, 'Automatic · all live sources') },
           { value: 'device-clock', label: tr(locale, 'Device clock') },
@@ -86,5 +89,10 @@ export const EffectRecorder: React.FC<EffectRecorderProps> = ({ state, sendCmd, 
         </>}
       </div>
     </div>}
+    <EffectGroupDialog name={newGroupName} setName={setNewGroupName} locale={locale} create={() => {
+      if (!newGroupName?.trim()) return;
+      sendCmd('controller_effect.group.create', { name: newGroupName.trim() });
+      setNewGroupName(null);
+    }} />
   </section>;
 };

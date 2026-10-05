@@ -128,6 +128,52 @@ pub(crate) fn group_picker<'a>(
     *value != previous
 }
 
+/// Effects select only authoritative groups. Creating a group is a separate,
+/// persistent operation, never a side effect of typing in the selector.
+pub(crate) fn effect_group_picker(
+    ui: &mut egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    value: &mut String,
+    groups: &[crate::four_d::controller::HardwareEffectGroup],
+    width: f32,
+    language: AppLanguage,
+) -> bool {
+    let mut new_group = false;
+    egui::ComboBox::from_id_salt(id_salt)
+        .width(width)
+        .height(280.0)
+        .truncate()
+        .selected_text(if value.is_empty() {
+            crate::ui::i18n::tr(language, "Select group")
+        } else {
+            crate::ui::i18n::visual_text(language, value)
+        })
+        .show_ui(ui, |ui| {
+            ui.set_width(width.min((ui.ctx().content_rect().width() - 24.0).max(80.0)));
+            for group in groups {
+                if ui.add_sized([ui.available_width(), 26.0], egui::Button::new(
+                    crate::ui::i18n::visual_text(language, &group.name))
+                    .selected(*value == group.name).truncate()).on_hover_text(&group.name).clicked() {
+                    *value = group.name.clone();
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if ui
+                .button(format!(
+                    "{} {}",
+                    crate::ui::icons::PLUS,
+                    crate::ui::i18n::tr(language, "New...")
+                ))
+                .clicked()
+            {
+                new_group = true;
+                ui.close();
+            }
+        });
+    new_group
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,6 +329,69 @@ mod tests {
             group_options(["seats", "Seats"], "Seats"),
             ["Seats", "seats"]
         );
+    }
+
+    #[test]
+    fn effect_group_dropdown_does_not_accept_arbitrary_typing_and_has_new_action() {
+        let context = egui::Context::default();
+        let mut value = "Lighting".to_owned();
+        let groups = vec![crate::four_d::controller::HardwareEffectGroup {
+            name: "Lighting".to_owned(),
+            icon: String::new(),
+        }];
+        let mut render = |events: Vec<egui::Event>| {
+            let mut requested = false;
+            let mut rect = egui::Rect::NOTHING;
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600.0, 400.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    rect = ui
+                        .scope(|ui| {
+                            requested = effect_group_picker(
+                                ui,
+                                "saved-groups",
+                                &mut value,
+                                &groups,
+                                260.0,
+                                AppLanguage::English,
+                            );
+                        })
+                        .response
+                        .rect;
+                },
+            );
+            output.textures_delta.clear();
+            (output, rect, requested)
+        };
+        render(vec![]);
+        let (_, rect, _) = render(vec![]);
+        let pointer = |pos, pressed| {
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        render(pointer(rect.center(), true));
+        render(pointer(rect.center(), false));
+        let (output, _, _) = render(vec![egui::Event::Text("Arbitrary input".to_owned())]);
+        let pos = text_rect(&output, &format!("{} New...", crate::ui::icons::PLUS)).center();
+        render(pointer(pos, true));
+        let (_, _, requested) = render(pointer(pos, false));
+        assert!(requested);
+        drop(render);
+        assert_eq!(value, "Lighting");
     }
 
     #[test]

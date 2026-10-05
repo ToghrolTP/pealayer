@@ -224,6 +224,7 @@ pub enum InteropCommand {
         reference: String,
     },
     StopControllerEffect,
+    CreateControllerEffectGroup { name: String, icon: String },
     DeleteControllerEffect {
         reference: String,
     },
@@ -488,6 +489,12 @@ impl InteropCommand {
                 Err("controller effect reference is invalid".to_string())
             }
             Self::SaveControllerEffect { effect } => effect.validate(),
+            Self::CreateControllerEffectGroup { name, icon }
+                if name.trim().is_empty() || name.len() > 64 || icon.len() > 64
+                    || name.chars().any(char::is_control) || icon.chars().any(char::is_control) =>
+            {
+                Err("Group name and icon must be bounded printable values".to_owned())
+            }
             Self::StartControllerEffectRecording {
                 name,
                 category,
@@ -564,6 +571,7 @@ pub fn command_catalog() -> Value {
             "reload_config", "add_effect_cue", "update_effect_cue", "remove_effect_cue", "set_recording",
             "get_status", "quit", "controller_effect_cue.add", "controller_effect.play",
             "controller_effect.stop", "controller_effect.save", "controller_effect.delete",
+            "controller_effect.group.create",
             "controller_effect.record.start", "controller_effect.record.status",
             "controller_effect.record.save", "controller_effect.record.discard",
             "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm",
@@ -796,6 +804,8 @@ pub struct PlayerStatusResponse {
     #[serde(default)]
     pub controller_effects: Vec<WebControllerEffect>,
     #[serde(default)]
+    pub controller_effect_groups: Vec<crate::four_d::controller::HardwareEffectGroup>,
+    #[serde(default)]
     pub effect_recording: WebEffectRecording,
     #[serde(default)]
     pub cues: Vec<WebEffectCue>,
@@ -990,6 +1000,7 @@ impl Default for PlayerStatusResponse {
             recordable_track_count: 0,
             effects: Vec::new(),
             controller_effects: Vec::new(),
+            controller_effect_groups: Vec::new(),
             effect_recording: WebEffectRecording::default(),
             cues: Vec::new(),
             hardware_details: None,
@@ -1283,6 +1294,12 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         }
         "controller_effect.stop" | "pealayer.controller_effect.stop" => {
             Some(InteropCommand::StopControllerEffect)
+        }
+        "controller_effect.group.create" | "pealayer.controller_effect.group.create" => {
+            Some(InteropCommand::CreateControllerEffectGroup {
+                name: string(&["name"])?,
+                icon: request.params.get("icon").and_then(Value::as_str).unwrap_or_default().to_owned(),
+            })
         }
         "controller_effect.delete" | "pealayer.controller_effect.delete" => {
             Some(InteropCommand::DeleteControllerEffect {
@@ -2554,6 +2571,15 @@ mod tests {
 
     #[test]
     fn web_controller_effect_commands_are_typed_and_validated() {
+        let group: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":1,"method":"controller_effect.group.create","params":{"name":"Cinema lighting","icon":"lamp"}}"#,
+        ).unwrap();
+        assert!(matches!(command_from_json_rpc(&group).unwrap(),
+            Some(InteropCommand::CreateControllerEffectGroup { name, icon })
+                if name == "Cinema lighting" && icon == "lamp"));
+        assert!(InteropCommand::CreateControllerEffectGroup {
+            name: " ".to_owned(), icon: String::new(),
+        }.validate().is_err());
         let cue: JsonRpcRequest = serde_json::from_str(
             r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.controller_effect_cue.add","params":{"reference":"effect:lighting-primary","start_time_ms":1250}}"#,
         )

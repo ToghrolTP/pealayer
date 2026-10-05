@@ -1026,6 +1026,7 @@ impl eframe::App for PealayerApp {
                     })
                     .collect(),
                 controller_effects,
+                controller_effect_groups: hardware.as_ref().map(|hardware| hardware.effect_groups.clone()).unwrap_or_default(),
                 cues: self
                     .timeline
                     .instances
@@ -2458,7 +2459,7 @@ impl PealayerApp {
             Ok(value.to_string())
         };
         let name = checked_text(&draft.name, "Effect name", true)?;
-        let category = checked_text(&draft.category, "Effect category", true)?;
+        let category = checked_text(&draft.category, "Effect group", true)?;
         let icon = checked_text(&draft.icon, "Effect icon", false)?;
         let descriptor = if draft.kind == "sequence" {
             let id = draft
@@ -2535,8 +2536,6 @@ impl PealayerApp {
         &mut self,
         draft: ControllerEffectGroupDraft,
     ) -> Result<(), String> {
-        let original = Self::controller_command_argument(&draft.original_name)
-            .ok_or_else(|| "The original effect group name is invalid".to_string())?;
         let name = Self::controller_command_argument(&draft.name).ok_or_else(|| {
             "Effect group name must use 1–64 letters, numbers, spaces, dashes, or underscores"
                 .to_string()
@@ -2549,9 +2548,16 @@ impl PealayerApp {
                     .to_string()
             })?
         };
+        let command = if draft.original_name.trim().is_empty() {
+            format!("effect group create {name} {icon}")
+        } else {
+            let original = Self::controller_command_argument(&draft.original_name)
+                .ok_or_else(|| "The original effect group name is invalid".to_string())?;
+            format!("effect group update {original} {name} {icon}")
+        };
         self.request_hardware_effect_command(
             "effect-group-save",
-            format!("effect group update {original} {name} {icon}"),
+            command,
         )
     }
 
@@ -3211,6 +3217,11 @@ impl PealayerApp {
                     self.set_osd(error);
                     return;
                 }
+            }
+            InteropCommand::CreateControllerEffectGroup { name, icon } => {
+                if let Err(error) = self.save_controller_effect_group(ControllerEffectGroupDraft {
+                    original_name: String::new(), name, icon,
+                }) { self.set_osd(error); }
             }
             InteropCommand::SaveControllerEffect { effect } => {
                 let steps = if effect.kind == "sequence" {

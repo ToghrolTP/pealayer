@@ -9122,7 +9122,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         // Filter presets based on query
                         let query = self.app.effects_search_query.trim().to_lowercase();
                         let advertised_presets = self.app.advertised_effect_presets();
+                        let effect_groups = self.app.advertised_hardware()
+                            .map(|hardware| hardware.effect_groups).unwrap_or_default();
                         let mut categorized: std::collections::BTreeMap<String, Vec<&crate::app::EffectPreset>> = std::collections::BTreeMap::new();
+
+                        for group in &effect_groups {
+                            if query.is_empty() || group.name.to_lowercase().contains(&query) {
+                                categorized.entry(group.name.clone()).or_default();
+                            }
+                        }
 
                         for preset in &advertised_presets {
                             if query.is_empty() || preset.effect.name.to_lowercase().contains(&query) {
@@ -9172,6 +9180,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             .iter()
                                             .map(|preset| preset.group_icon.trim())
                                             .find(|icon| !icon.is_empty())
+                                            .or_else(|| effect_groups.iter().find(|group| group.name == category).map(|group| group.icon.as_str()))
                                             .unwrap_or_default()
                                             .to_string();
                                         let group_icon = crate::ui::icons::named_control_icon(
@@ -9576,6 +9585,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     }
                                 });
 
+                        }
+                        crate::ui::effects_library::empty_library_context_menu(self.app, ui);
                             let mut keep_group_editor_open = self.app.effect_group_draft.is_some();
                             let mut save_group = false;
                             let mut cancel_group = false;
@@ -9592,16 +9603,18 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let icon_search_hint = self.app.tr("Search icons...");
                             let icon_no_matches_label = self.app.tr("No matching icons");
                             let group_default_icon_label = self.app.tr("Folder");
-                            let save_group_label = self.app.tr(if new_group { "Create effect" } else { "Save to PCController" });
+                            let save_group_label = self.app.tr(if new_group { "Create group" } else { "Save to PCController" });
                             let cancel_group_label = self.app.tr("Cancel");
                             let rtl_ui = self.app.rtl;
                             let icon_language = self.app.language;
                             if let Some(draft) = self.app.effect_group_draft.as_mut() {
                                 egui::Window::new(group_editor_title)
                                 .id(egui::Id::new("effect_group_editor"))
+                                .order(egui::Order::Foreground)
                                 .open(&mut keep_group_editor_open)
                                 .resizable(false)
                                 .collapsible(false)
+                                .frame(crate::ui::dialog::opaque_window_frame(ui))
                                 .show(ui.ctx(), |ui| {
                                     egui::Grid::new("effect_group_editor_grid")
                                         .num_columns(2)
@@ -9628,7 +9641,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 ui.data_mut(|data| data.insert_temp(focus_id, true));
                                             }
                                             ui.end_row();
-                                            if !new_group {
                                             ui.label(&group_icon_label);
                                             crate::ui::icons::searchable_icon_picker(
                                                 ui,
@@ -9648,7 +9660,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 },
                                             );
                                             ui.end_row();
-                                            }
                                         });
                                     ui.add_space(10.0);
                                     ui.horizontal(|ui| {
@@ -9683,9 +9694,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
                             if save_group {
                                 if let Some(draft) = self.app.effect_group_draft.clone() {
-                                    if new_group {
-                                        keep_group_editor_open = !crate::ui::effects_library::create_first_group_effect(self.app);
-                                    } else if let Err(error) = self.app.save_controller_effect_group(draft) {
+                                    if let Err(error) = self.app.save_controller_effect_group(draft) {
                                         self.app.set_osd(error);
                                     } else {
                                         keep_group_editor_open = false;
@@ -9696,7 +9705,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 self.app.effect_group_draft = None;
                                 ui.data_mut(|data| data.remove::<bool>(egui::Id::new("new-effect-group-name-focus")));
                             }
-                        }
                     }
                     PealayerTab::HardwareMonitor => {
                         let capabilities = self.app.advertised_hardware();

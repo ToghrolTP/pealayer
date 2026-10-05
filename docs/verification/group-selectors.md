@@ -14,7 +14,7 @@ The egui and Web interfaces share the same behavior within their renderer.
    their Save button. The Web channel dialog applies selections using
    `hardware.presentation.update`. Effect edits retain their existing save flow.
 
-Choices come from PCController's current channel/effect catalog, with the current
+Channel choices come from PCController's current channel catalog, with the current
 draft retained even if absent from the latest catalog. No sample group names or
 second group store were introduced. Searching alone neither modifies a draft nor
 sends an RPC. Group names retain case, Unicode and existing authoritative identity.
@@ -26,5 +26,20 @@ sends an RPC. Group names retain case, Unicode and existing authoritative identi
   selection/search/Enter creation/clearing in light and dark themes.
 - Existing mutable-presentation contract test checks PCController catalog parsing.
 - `npm run build`: TypeScript, production bundle and offline PWA integrity.
+
+## Stateful effect Groups
+
+Effect properties and recording use a selection-only **Group** dropdown. Its
+**New...** button opens the shared group-creation dialog. The Effects Library's
+empty-space context menu also offers **New group** and **New effect** in both
+egui and Web. Empty groups are displayed and can be managed before any effects
+are added. Creating a group saves a real PCController record instead of opening
+a placeholder effect. Existing effect drafts are retained.
+
+PCController publishes `effect_groups` in its snapshot and includes empty group
+records in effects.json export/import. Pealayer relays creation through
+`controller_effect.group.create`; no Pealayer-owned group persistence was added.
+The existing `category` storage key remains intact to preserve saved memberships;
+user-facing labels consistently say **Group**.
 
 Automated renderer/input checks are not physical-board or desktop screenshot proof.

@@ -42,6 +42,7 @@ export interface PlayerState {
   }>;
   controller_connected?: boolean;
   hardware_connected?: boolean;
+  controller_effect_groups?: Array<{ name: string; icon: string }>;
   estop_active?: boolean;
   hardware?: {
     board_name?: string;

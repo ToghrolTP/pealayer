@@ -568,6 +568,8 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Ungrouped" => "بدون گروه",
         "Search or create group..." => "جست‌وجو یا ایجاد گروه…",
         "Create group" => "ایجاد گروه",
+        "New..." => "جدید…",
+        "Select group" => "انتخاب گروه",
         "Change group" => "تغییر گروه",
         "Connected board:" => "برد متصل:",
         "Force ON" => "روشن‌کردن اجباری",

@@ -16,6 +16,7 @@ const fa: Record<string, string> = {
   'Group': 'گروه',
   'Ungrouped': 'بدون گروه',
   'Create group': 'ایجاد گروه',
+  'New...': 'جدید…',
   'Create effect': 'ایجاد جلوه',
   'New effect in this group': 'جلوهٔ جدید در این گروه',
   'Hardware Monitor': 'پایش سخت‌افزار',

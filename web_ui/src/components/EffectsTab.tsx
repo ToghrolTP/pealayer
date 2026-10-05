@@ -37,6 +37,7 @@ import { tr, UiLocale } from '../i18n';
 import { EffectIconPicker, effectGlyph, effectIconOptions } from '../effectIcons';
 import { EffectRecorder } from './EffectRecorder';
 import { GroupSelect } from './GroupSelect';
+import { EffectGroupDialog } from './EffectGroupDialog';
 
 interface EffectsTabProps {
   state: PlayerState;
@@ -110,9 +111,10 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
   const selectedEffect = effects.find((effect) => effect.reference === selected);
   const grouped = useMemo(() => {
     const groups = new Map<string, typeof effects>();
+    for (const group of state.controller_effect_groups ?? []) groups.set(group.name, []);
     for (const effect of effects) groups.set(effect.category || tr(locale, 'Other'), [...(groups.get(effect.category || tr(locale, 'Other')) ?? []), effect]);
     return [...groups.entries()];
-  }, [effects, locale]);
+  }, [effects, locale, state.controller_effect_groups]);
 
   const openEditor = (effect?: typeof effects[number], category?: string) => {
     const parts = programParts(effect?.program);
@@ -140,10 +142,10 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
     });
   };
 
-  const createGroupEffect = () => {
+  const createGroup = () => {
     const category = newGroupName?.trim();
     if (!category) return;
-    openEditor(undefined, category);
+    sendCmd('controller_effect.group.create', { name: category });
     setNewGroupName(null);
   };
 
@@ -226,7 +228,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       </Space>
     </header>
 
-    {effects.length === 0 ? <Card className="surface-card"><Empty description={tr(locale, 'No effects')}><Space wrap><Button type="primary" icon={<PlusOutlined />} onClick={() => openEditor()}>{tr(locale, 'Create effect')}</Button><Button icon={<FolderAddOutlined />} onClick={() => setNewGroupName('')}>{tr(locale, 'New group')}</Button></Space></Empty></Card> :
+    {grouped.length === 0 ? <Card className="surface-card"><Empty description={tr(locale, 'No effects')}><Space wrap><Button type="primary" icon={<PlusOutlined />} onClick={() => openEditor()}>{tr(locale, 'Create effect')}</Button><Button icon={<FolderAddOutlined />} onClick={() => setNewGroupName('')}>{tr(locale, 'New group')}</Button></Space></Empty></Card> :
       <Collapse className="effect-groups" defaultActiveKey={grouped.map(([group]) => group)} items={grouped.map(([group, items]) => ({
         key: group,
         label: <span className="effect-group-title"><strong>{group}</strong><span className="effect-group-count">{items.length}</span></span>,
@@ -304,19 +306,13 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
 
     {selectedEffect && <div className="selection-bar"><span>{selectedEffect.name}</span><Button icon={<EditOutlined />} onClick={() => openEditor(selectedEffect)}>{tr(locale, 'Manage')}</Button></div>}
 
-    <Modal
-      title={<Space><FolderAddOutlined />{tr(locale, 'New group')}</Space>}
-      open={newGroupName !== null}
-      width={360}
-      destroyOnHidden
-      okText={tr(locale, 'Create effect')}
-      cancelText={tr(locale, 'Cancel')}
-      okButtonProps={{ disabled: !newGroupName?.trim(), icon: <PlusOutlined /> }}
-      onCancel={() => setNewGroupName(null)}
-      onOk={createGroupEffect}
-    >
-      <Input autoFocus aria-label={tr(locale, 'Group name')} placeholder={tr(locale, 'Group name')} value={newGroupName ?? ''} onChange={(event) => setNewGroupName(event.target.value)} onPressEnter={createGroupEffect} />
-    </Modal>
+    <Dropdown trigger={['contextMenu']} menu={{ items: [
+      { key: 'effect', icon: <PlusOutlined />, label: tr(locale, 'New effect') },
+      { key: 'group', icon: <FolderAddOutlined />, label: tr(locale, 'New group') },
+    ], onClick: ({ key }) => { if (key === 'group') setNewGroupName(''); else openEditor(); } }}>
+      <div className="effects-library-empty-space" style={{ minHeight: 140, flex: 1 }} aria-label={tr(locale, 'Effects Library')} />
+    </Dropdown>
+    <EffectGroupDialog name={newGroupName} setName={setNewGroupName} create={createGroup} locale={locale} />
 
     <Modal
       className="effect-editor-modal"
@@ -329,13 +325,13 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       width={900}
     >
       {draft && <div className="effect-editor">
-        {draft.is_new && draft.kind === 'sequence' && <EffectRecorder state={state} sendCmd={sendCmd} locale={locale} />}
+        {draft.is_new && draft.kind === 'sequence' && <EffectRecorder state={state} sendCmd={sendCmd} locale={locale} onNewGroup={() => setNewGroupName('')} />}
         <div className="effect-editor__identity">
           <label><span>{tr(locale, 'Type')}</span><Select value={draft.kind} options={[{ value: 'sequence', label: tr(locale, 'Sequence') }, { value: 'strip-stream', label: tr(locale, 'Lighting') }]} onChange={(kind) => setDraft({ ...draft, kind })} /></label>
           <label><span>{tr(locale, 'ID')}</span><Input value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} /></label>
           <label><span>{tr(locale, 'Name')}</span><Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
           <label><span>{tr(locale, 'Icon')}</span><EffectIconPicker value={draft.icon} searchPlaceholder={tr(locale, 'Search icons...')} presetsLabel={tr(locale, 'Presets')} emptyLabel={tr(locale, 'No matching icons')} onChange={(icon) => setDraft({ ...draft, icon })} /></label>
-          <label><span>{tr(locale, 'Category')}</span><GroupSelect value={draft.category} groups={effects.map((effect) => effect.category)} locale={locale} onChange={(category) => setDraft({ ...draft, category })} /></label>
+          <label><span>{tr(locale, 'Group')}</span><GroupSelect value={draft.category} groups={(state.controller_effect_groups ?? []).map((group) => group.name)} locale={locale} onChange={(category) => setDraft({ ...draft, category })} onCreate={() => setNewGroupName('')} /></label>
           <label className="effect-editor__wide"><span>{tr(locale, 'Description')}</span><Input value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
           <label><span>{tr(locale, 'Duration')}</span><InputNumber min={1} addonAfter="ms" value={draft.duration_ms} onChange={(duration_ms) => setDraft({ ...draft, duration_ms: duration_ms ?? 1 })} /></label>
           <label><span>{tr(locale, 'Color')}</span><ColorPicker value={draft.color} disabledAlpha onChangeComplete={(color) => setDraft({ ...draft, color: color.toHexString().toUpperCase() })} /></label>
