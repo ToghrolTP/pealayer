@@ -23,3 +23,15 @@ Paste requests use the OS clipboard event and only replace the requested numeric
 ## Manual acceptance
 
 Open Subtitle Settings; right-click the delay value and verify all six actions. Reset delay, use + normally, Ctrl+ and Shift+, expecting 0.1s, 0.01s and 1s increments. Paste a negative numeric delay. Edit step sizes, close/reopen the application, and verify they persist. Repeat with position, audio delay, font size and Web Preferences. On an integer preference, a fine adjustment must still change by at least one. No hardware output is required for these checks.
+
+## Deployment and live acceptance
+
+- Code `3bc3066` was preserved alongside remote recording fixes (`7c28540`, including PR #58) through normal merge `ea429ff`, with no conflicts or wholesale replacements. Six numeric tests passed again after integration.
+- Embedded assets were rebuilt and committed at `0ae734f6504396636fa23e978daf9e8a7a91cd63`. TypeScript/Vite/PWA packaging passed; PWA `0c0e630e41aa9929` verified 39 resources. Optimized packaging used `scripts/package-windows.ps1 -SkipTests -NoUpx` (release build 1m49s).
+- The old canonical process exited through `POST /api/ipc` (`quit`) before replacement; no force-kill. The new canonical binary is running (observed PID 26648), `/healthz` returned `ok`, and `/api/player/status` reported hardware connected. No hardware output was activated.
+- Live update manifest reports the exact commit above, `git_dirty: false`, SHA-256 `a2c389a2d7234cebe5d7ad6abc262ed9d4e5bfc985b5d1c946a6767f39a44b09`. `/api/preferences` returned numeric defaults, the step map, and integer metadata for frame-step count.
+- In an isolated browser tab, a real right-click on the OSD numeric input displayed Reset, Copy, Paste, Increase, Decrease and Adjustment steps. Opening the steps dialog showed 0.5 normal / 0.05 fine / 5 coarse. Captured the real running page below; cancelled without saving and closed only the temporary verification tab. The original tab and its draft were left intact.
+- Native visual acceptance remains blocked: capture and one fresh-window retry both returned `IGraphicsCaptureItemInterop.CreateForMonitor failed: The service did not respond to the start or control request in a timely fashion. (0x8007041D)`. Native interaction evidence is the focused egui tests, not a claimed manual screenshot.
+- Cafe-PC health probe timed out; no Cafe deployment is claimed. PR #46 remains unmerged; this documentation/image checkpoint follows the built code commit.
+
+![Live Web Preferences adjustment steps](https://github.com/ToghrolTP/pealayer/blob/fix/hardware-monitor-layout/docs/verification/numeric-adjustment-steps-web.png?raw=true)
