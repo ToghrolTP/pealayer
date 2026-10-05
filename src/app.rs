@@ -251,6 +251,7 @@ pub fn dropped_file_kind(path: &std::path::Path) -> DroppedFileKind {
 }
 
 pub struct PealayerApp {
+    pub(crate) web_only: bool,
     pub(crate) app_name: String,
     pub(crate) app_publisher: Option<String>,
     pub(crate) app_copyright: Option<String>,
@@ -601,6 +602,14 @@ pub struct MediaTrackInfo {
 
 impl eframe::App for PealayerApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        if self.web_only {
+            // Keep the native event/render loop alive for libmpv and the
+            // shared command engine while exposing only the Web/PWA surface.
+            // Reasserting visibility prevents a focus/restore command from
+            // accidentally presenting the implementation viewport.
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
         #[cfg(target_os = "windows")]
         {
             use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -615,10 +624,18 @@ impl eframe::App for PealayerApp {
             } else if self.window_handle.is_none() {
                 self.window_handle = Some(crate::platform::windows::get_registered_hwnd());
             }
+            if self.web_only {
+                crate::platform::windows::hide_native_window(
+                    crate::platform::windows::get_registered_hwnd(),
+                );
+                crate::platform::windows::hide_current_process_windows();
+            }
         }
 
-        self.ensure_shell_initialized();
-        self.process_shell_commands(ui.ctx());
+        if !self.web_only {
+            self.ensure_shell_initialized();
+            self.process_shell_commands(ui.ctx());
+        }
         self.process_controller_call_results();
         self.poll_external_config(ui.ctx());
 
@@ -5947,6 +5964,7 @@ impl Default for PealayerApp {
         let (_web_cmd_tx, web_cmd_rx) = std::sync::mpsc::channel();
 
         Self {
+            web_only: false,
             app_name: crate::config::resolved_app_name(&crate::config::AppConfig::default()),
             app_publisher: crate::config::resolved_app_publisher(
                 &crate::config::AppConfig::default(),

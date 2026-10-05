@@ -254,6 +254,9 @@ fn main() -> eframe::Result {
     if cli_options.fullscreen {
         viewport = viewport.with_fullscreen(true);
     }
+    if cli_options.web_only {
+        viewport = viewport.with_visible(false);
+    }
     if let Some(icon) = icon_data {
         viewport = viewport.with_icon(icon);
     }
@@ -270,6 +273,24 @@ fn main() -> eframe::Result {
         },
         ..Default::default()
     };
+
+    #[cfg(target_os = "windows")]
+    if cli_options.web_only {
+        // Winit can make the primary HWND visible after the first eframe
+        // callback even when ViewportBuilder starts hidden. Keep the
+        // implementation window hidden for the lifetime of Web-only mode;
+        // the native event loop is still required by libmpv and egui.
+        std::thread::spawn(|| {
+            loop {
+                let hwnd = crate::platform::windows::get_registered_hwnd();
+                if hwnd != 0 {
+                    crate::platform::windows::hide_native_window(hwnd);
+                }
+                crate::platform::windows::hide_current_process_windows();
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+        });
+    }
 
     eframe::run_native(
         &initial_window_title,
@@ -538,6 +559,7 @@ fn main() -> eframe::Result {
             }
 
             let mut app = PealayerApp {
+                web_only: cli_options.web_only,
                 app_name: app_name.clone(),
                 app_publisher: crate::config::resolved_app_publisher(&loaded_config),
                 app_copyright: crate::config::resolved_app_copyright(&loaded_config),

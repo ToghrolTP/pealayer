@@ -8,10 +8,13 @@ import {
   SoundOutlined,
   CloudDownloadOutlined,
   SafetyCertificateOutlined,
+  MobileOutlined,
+  CloudSyncOutlined,
 } from '@ant-design/icons';
 import { PlayerState } from './RemoteControlTab';
 import { RuntimeConfig } from '../App';
 import { tr, UiLocale } from '../i18n';
+import type { WebPlatformController } from '../webPlatform';
 
 const { Title, Text } = Typography;
 
@@ -22,9 +25,10 @@ interface PlayerInfoTabProps {
   locale: UiLocale;
   apiBaseUrl: string;
   websocketUrl: string;
+  platform: WebPlatformController;
 }
 
-export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionMode, runtime, locale, apiBaseUrl, websocketUrl }) => {
+export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionMode, runtime, locale, apiBaseUrl, websocketUrl, platform }) => {
   const [updateUrl, setUpdateUrl] = useState('');
   const [expectedHash, setExpectedHash] = useState('');
   const [updateStatus, setUpdateStatus] = useState(state.update);
@@ -173,6 +177,37 @@ export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionM
           </Descriptions.Item>
           <Descriptions.Item label={tr(locale, 'Hardware Acceleration')}>
             <Tag color="blue">mpv libmpv2 render</Tag>
+          </Descriptions.Item>
+        </Descriptions>
+      </Card>
+
+      <Card bordered={false} className="surface-card info-surface"
+        title={<Space><MobileOutlined /><Title level={4} style={{ margin: 0 }}>{tr(locale, 'Web application runtime')}</Title></Space>}
+      >
+        <Descriptions bordered column={{ xs: 1, sm: 2, md: 3 }} size="small">
+          <Descriptions.Item label={tr(locale, 'Network')}>
+            <Tag color={platform.online ? 'success' : 'warning'}>{platform.online ? tr(locale, 'Online') : tr(locale, 'Offline mode')}</Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label={tr(locale, 'Installation')}>
+            <Tag icon={<MobileOutlined />} color={platform.standalone ? 'success' : 'default'}>
+              {platform.standalone ? tr(locale, 'Installed app') : tr(locale, 'Browser tab')}
+            </Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label={tr(locale, 'Offline shell')}>
+            <Tag icon={<CloudSyncOutlined />} color={platform.capabilities.serviceWorker ? 'success' : 'default'}>
+              {platform.capabilities.serviceWorker ? tr(locale, 'Available') : tr(locale, 'Unsupported')}
+            </Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label={tr(locale, 'OS media controls')}>
+            <Tag color={platform.capabilities.mediaSession ? 'success' : 'default'}>{platform.capabilities.mediaSession ? tr(locale, 'Available') : tr(locale, 'Unsupported')}</Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label={tr(locale, 'Screen wake lock')}>
+            <Tag color={platform.capabilities.wakeLock ? 'success' : 'default'}>{platform.capabilities.wakeLock ? tr(locale, 'Available') : tr(locale, 'Unsupported')}</Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label={tr(locale, 'Haptics / audio')}>
+            <Tag color={platform.capabilities.vibration || platform.capabilities.audio ? 'success' : 'default'}>
+              {platform.capabilities.vibration || platform.capabilities.audio ? tr(locale, 'Available') : tr(locale, 'Unsupported')}
+            </Tag>
           </Descriptions.Item>
         </Descriptions>
       </Card>

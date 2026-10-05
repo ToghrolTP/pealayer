@@ -2394,6 +2394,7 @@ mod tests {
             fullscreen: false,
             volume: None,
             commands: vec![],
+            web_only: false,
         };
         let request = crate::cli::launch_request(&options);
         let identity = request.application_identity.clone();

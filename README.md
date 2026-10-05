@@ -259,10 +259,36 @@ When the coordinator is unavailable, selecting a `direct:` endpoint uses:
 
 Pealayer embeds a high-performance web service to control playback and view media libraries over local networks.
 
+The Web interface is also an installable mobile/desktop PWA and a real
+client-side SPA. Its generated service worker precaches the exact hashed build,
+keeps the application shell available offline, and restores the last known
+runtime/configuration/player snapshot as read-only context until the Rust
+backend reconnects. Live hardware/player commands are never queued from stale
+offline state. Supported browsers additionally expose contextual install,
+share, fullscreen, notification, haptic/audio-feedback, Media Session, app
+badge, and playback wake-lock integrations. Permission-requiring features are
+requested only from an explicit user action.
+
 All TCP-facing interfaces share one listener. `PEALAYER_PORT` selects that
 listener (default `8080`). There are no protocol-specific port settings. Unix
 builds may additionally expose their native domain socket, which does not
 consume a TCP port.
+
+To run Pealayer with the full Rust/libmpv/PCController backend but no visible
+native egui window, start it in Web-only mode:
+
+```text
+pealayer --web-only
+# Alias:
+pealayer --headless
+```
+
+Then open `http://127.0.0.1:8080/`. Set `PEALAYER_WEB_BIND` and
+`PEALAYER_PORT` before launch when a deliberately remote-accessible listener is
+required. Web-only mode preserves the same typed commands, WebSocket state,
+media engine, effect/macro engine, and hardware integration as the desktop UI;
+it only hides the native viewport. Browser APIs such as install, wake lock,
+notifications, and vibration remain capability/secure-context dependent.
 
 <div align="center">
   <b>Local Web Remote:</b> <code>http://127.0.0.1:8080/</code> &nbsp;•&nbsp; <b>WebSocket Endpoint:</b> <code>ws://127.0.0.1:8080/ws</code><br>
@@ -459,6 +485,13 @@ npm ci
 npm run build
 cd ..
 ```
+
+`npm run build` is a production gate rather than a plain Vite invocation: it
+type-checks, bundles, injects the content-derived service-worker precache
+manifest, writes `dist/pwa-build.json`, and verifies that every hashed bundle
+referenced by `index.html` is offline-cached. CI and Windows packaging call the
+same command, so a stale or incomplete PWA cannot silently enter a packaged
+Pealayer build. `npm run verify:pwa` reruns the final artifact audit.
 
 ---
 

@@ -303,6 +303,58 @@ pub fn get_registered_hwnd() -> isize {
     WINDOW_HWND.load(Ordering::SeqCst)
 }
 
+/// Hide the implementation viewport used by Web-only mode without stopping
+/// its event loop. The Rust media, hardware, IPC, and HTTP/WebSocket engines
+/// remain fully active while Windows has no native Pealayer surface to show.
+#[cfg(target_os = "windows")]
+pub fn hide_native_window(hwnd_raw: isize) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
+    if hwnd_raw != 0 {
+        unsafe {
+            let _ = ShowWindow(HWND(hwnd_raw as *mut _), SW_HIDE);
+        }
+    }
+}
+
+/// Hide every top-level window owned by this process. Winit may create or
+/// publish its HWND after eframe's first callback, before it is registered in
+/// the application state, so Web-only mode also needs this process-scoped
+/// fallback.
+#[cfg(target_os = "windows")]
+pub fn hide_current_process_windows() {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn EnumWindows(
+            callback: Option<unsafe extern "system" fn(isize, isize) -> i32>,
+            parameter: isize,
+        ) -> i32;
+        fn GetWindowThreadProcessId(hwnd: isize, process_id: *mut u32) -> u32;
+        fn ShowWindow(hwnd: isize, command: i32) -> i32;
+    }
+
+    unsafe extern "system" fn hide_owned_window(hwnd: isize, process_id: isize) -> i32 {
+        let mut owner = 0_u32;
+        unsafe {
+            GetWindowThreadProcessId(hwnd, &mut owner);
+            if owner == process_id as u32 {
+                ShowWindow(hwnd, 0); // SW_HIDE
+            }
+        }
+        1
+    }
+
+    unsafe {
+        EnumWindows(Some(hide_owned_window), std::process::id() as isize);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn hide_current_process_windows() {}
+
+#[cfg(not(target_os = "windows"))]
+pub fn hide_native_window(_hwnd_raw: isize) {}
+
 #[cfg(target_os = "windows")]
 pub fn set_window_owner(hwnd_raw: isize, owner_raw: isize) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;

@@ -1,36 +1,76 @@
-const CACHE = 'pealayer-app-shell-v1';
-const SHELL = ['/', '/manifest.webmanifest', '/api/runtime/app-icon'];
+const PRECACHE = 'pealayer-precache-__CACHE_VERSION__';
+const RUNTIME = 'pealayer-runtime-__CACHE_VERSION__';
+const PRECACHE_URLS = __PRECACHE_MANIFEST__;
+
+const notifyClients = async (message) => {
+  const clients = await self.clients.matchAll({ includeUncontrolled: true, type: 'window' });
+  for (const client of clients) client.postMessage(message);
+};
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
+  event.waitUntil(
+    caches.open(PRECACHE)
+      .then((cache) => cache.addAll(PRECACHE_URLS.map((url) => new Request(url, { cache: 'reload' }))))
+      .then(() => (self.registration.active ? undefined : self.skipWaiting())),
+  );
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))))
-      .then(() => self.clients.claim()),
+      .then((keys) => Promise.all(keys
+        .filter((key) => key.startsWith('pealayer-') && ![PRECACHE, RUNTIME].includes(key))
+        .map((key) => caches.delete(key))))
+      .then(() => self.clients.claim())
+      .then(() => notifyClients({ type: 'PEALAYER_SW_READY', version: '__CACHE_VERSION__' })),
   );
+});
+
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'SKIP_WAITING') {
+    event.waitUntil(self.skipWaiting());
+    return;
+  }
+  if (event.data?.type === 'CLEAR_RUNTIME_CACHE') {
+    event.waitUntil(caches.delete(RUNTIME));
+  }
 });
 
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/') || url.pathname === '/ws') return;
+  const precached = PRECACHE_URLS.includes(url.pathname);
+  if (
+    url.origin !== self.location.origin
+    || url.pathname === '/ws'
+    || (url.pathname.startsWith('/api/') && !precached)
+  ) return;
+
   if (request.mode === 'navigate') {
-    event.respondWith(fetch(request).then((response) => {
-      const copy = response.clone();
-      void caches.open(CACHE).then((cache) => cache.put('/', copy));
-      return response;
-    }).catch(() => caches.match('/')));
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response.ok) void caches.open(RUNTIME).then((cache) => cache.put('/', response.clone()));
+          return response;
+        })
+        .catch(async () => (await caches.match('/')) || (await caches.match('/index.html')) || Response.error()),
+    );
     return;
   }
-  event.respondWith(caches.match(request).then((cached) => cached || fetch(request).then((response) => {
-    if (response.ok) {
-      const copy = response.clone();
-      void caches.open(CACHE).then((cache) => cache.put(request, copy));
-    }
-    return response;
-  })));
+
+  const immutableAsset = url.pathname.startsWith('/assets/');
+  if (immutableAsset || precached) {
+    event.respondWith(caches.match(request).then((cached) => cached || fetch(request)));
+    return;
+  }
+
+  event.respondWith(
+    fetch(request)
+      .then((response) => {
+        if (response.ok) void caches.open(RUNTIME).then((cache) => cache.put(request, response.clone()));
+        return response;
+      })
+      .catch(() => caches.match(request)),
+  );
 });

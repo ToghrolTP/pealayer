@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import { registerPealayerServiceWorker } from './webPlatform';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
@@ -8,8 +9,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   </React.StrictMode>
 );
 
-if ('serviceWorker' in navigator && import.meta.env.PROD) {
-  window.addEventListener('load', () => {
-    void navigator.serviceWorker.register('/sw.js', { scope: '/' });
+window.addEventListener('load', () => {
+  void registerPealayerServiceWorker().catch((error) => {
+    console.warn('Pealayer offline support could not start', error);
   });
-}
+});

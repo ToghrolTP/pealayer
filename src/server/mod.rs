@@ -446,6 +446,7 @@ struct HttpResponse {
     reason: &'static str,
     content_type: &'static str,
     body: Vec<u8>,
+    cache_control: &'static str,
 }
 
 impl HttpResponse {
@@ -468,18 +469,25 @@ impl HttpResponse {
             reason,
             content_type,
             body,
+            cache_control: "no-store",
         }
+    }
+
+    fn with_cache_control(mut self, value: &'static str) -> Self {
+        self.cache_control = value;
+        self
     }
 }
 
 fn write_http_response(stream: &mut TcpStream, response: HttpResponse) -> std::io::Result<()> {
     write!(
         stream,
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: {}\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: SAMEORIGIN\r\nReferrer-Policy: no-referrer\r\nPermissions-Policy: fullscreen=(self), screen-wake-lock=(self)\r\nContent-Security-Policy: default-src 'self'; connect-src 'self' ws: wss: http: https:; img-src 'self' data: blob: http: https:; media-src 'self' blob: http: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\n\r\n",
         response.status,
         response.reason,
         response.content_type,
-        response.body.len()
+        response.body.len(),
+        response.cache_control,
     )?;
     stream.write_all(&response.body)?;
     stream.flush()
@@ -705,6 +713,7 @@ fn pwa_manifest_response(state: &ControlState) -> HttpResponse {
         serde_json::json!({
             "name": app_name,
             "short_name": app_name,
+            "id": "/",
             "description": "Media, timeline, effects, and live PCController hardware workspace",
             "start_url": "/#/player",
             "scope": "/",
@@ -713,18 +722,21 @@ fn pwa_manifest_response(state: &ControlState) -> HttpResponse {
             "background_color": "#080a0e",
             "theme_color": theme_color,
             "orientation": "any",
+            "categories": ["entertainment", "multimedia", "productivity", "utilities"],
+            "prefer_related_applications": false,
+            "launch_handler": {"client_mode": ["navigate-existing", "auto"]},
             "icons": [
                 {
                     "src": "/api/runtime/app-icon-192.png",
                     "sizes": "192x192",
                     "type": "image/png",
-                    "purpose": "any"
+                    "purpose": "any maskable"
                 },
                 {
                     "src": "/api/runtime/app-icon-512.png",
                     "sizes": "512x512",
                     "type": "image/png",
-                    "purpose": "any"
+                    "purpose": "any maskable"
                 }
             ],
             "shortcuts": [
@@ -737,6 +749,7 @@ fn pwa_manifest_response(state: &ControlState) -> HttpResponse {
         .to_string()
         .into_bytes(),
     )
+    .with_cache_control("no-cache")
 }
 
 fn json_rpc_response(body: &[u8], state: &ControlState) -> HttpResponse {
@@ -1020,13 +1033,19 @@ fn trash_response(body: &[u8]) -> HttpResponse {
 }
 
 fn static_response(path: &str, state: &ControlState) -> HttpResponse {
+    let cache_control = if path.starts_with("/assets/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
     if !state.web_dist_root.as_os_str().is_empty() {
         let target = web_asset_path(&state.web_dist_root, path)
             .unwrap_or_else(|| state.web_dist_root.join("__invalid_request_path__"));
         if target.is_file()
             && let Ok(data) = std::fs::read(&target)
         {
-            return HttpResponse::bytes(200, "OK", mime_for_path(&target), data);
+            return HttpResponse::bytes(200, "OK", mime_for_path(&target), data)
+                .with_cache_control(cache_control);
         }
     }
     let relative = path.trim_start_matches('/');
@@ -1041,7 +1060,8 @@ fn static_response(path: &str, state: &ControlState) -> HttpResponse {
             "OK",
             mime_for_path(std::path::Path::new(embedded_path)),
             file.contents().to_vec(),
-        );
+        )
+        .with_cache_control(cache_control);
     }
     if let Some(index) = EMBEDDED_WEB_UI.get_file("index.html") {
         return HttpResponse::bytes(
@@ -1049,7 +1069,8 @@ fn static_response(path: &str, state: &ControlState) -> HttpResponse {
             "OK",
             "text/html; charset=utf-8",
             index.contents().to_vec(),
-        );
+        )
+        .with_cache_control("no-cache");
     }
     HttpResponse::bytes(
         200,
@@ -1057,6 +1078,7 @@ fn static_response(path: &str, state: &ControlState) -> HttpResponse {
         "text/html; charset=utf-8",
         web_assets::INDEX_HTML.as_bytes().to_vec(),
     )
+    .with_cache_control("no-cache")
 }
 
 fn query_value(target: &str, name: &str) -> Option<String> {

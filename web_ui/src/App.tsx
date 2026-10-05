@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState, useRef } from 'react';
-import { ConfigProvider, theme, Layout, Menu, Spin } from 'antd';
+import { Alert, ConfigProvider, theme, Layout, Menu, Spin } from 'antd';
 import {
   AppstoreOutlined,
   BulbOutlined,
@@ -12,6 +12,7 @@ import {
 import { HeaderBar } from './components/HeaderBar';
 import type { PlayerState } from './components/RemoteControlTab';
 import { tr } from './i18n';
+import { useWebPlatform } from './webPlatform';
 import './styles.css';
 
 const { Sider, Content } = Layout;
@@ -25,6 +26,25 @@ const HardwareTab = React.lazy(() => import('./components/HardwareTab').then((mo
 
 const SURFACE_IDS = ['player', 'timeline', 'effects', 'hardware', 'library', 'about', 'preferences'] as const;
 type SurfaceId = typeof SURFACE_IDS[number];
+
+const STORAGE = {
+  runtime: 'pealayer.lastKnownRuntime',
+  config: 'pealayer.lastKnownConfig',
+  state: 'pealayer.lastKnownState',
+} as const;
+
+function readStoredJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? JSON.parse(raw) as T : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function persistJson(key: string, value: unknown): void {
+  try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* Storage can be disabled or full. */ }
+}
 
 function surfaceFromLocation(): SurfaceId {
   const requested = window.location.hash.replace(/^#\/?/, '') || window.localStorage.getItem('pealayer.webTab') || 'player';
@@ -66,11 +86,12 @@ const App: React.FC = () => {
   const [activeTab, setActiveTabState] = useState<SurfaceId>(surfaceFromLocation);
   const [connected, setConnected] = useState<boolean>(false);
   const [connectionMode, setConnectionMode] = useState<'ws' | 'http'>('http');
-  const [state, setState] = useState<PlayerState>({ status: 'initializing' });
-  const [runtime, setRuntime] = useState<RuntimeConfig | null>(null);
+  const [state, setState] = useState<PlayerState>(() => readStoredJson<PlayerState>(STORAGE.state, { status: 'initializing' }));
+  const [runtime, setRuntime] = useState<RuntimeConfig | null>(() => readStoredJson<RuntimeConfig | null>(STORAGE.runtime, null));
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('dark');
   const [quickSeekSeconds, setQuickSeekSeconds] = useState<number>(10);
-  const [appConfig, setAppConfig] = useState<Record<string, any> | null>(null);
+  const [appConfig, setAppConfig] = useState<Record<string, any> | null>(() => readStoredJson<Record<string, any> | null>(STORAGE.config, null));
+  const [hasCachedState] = useState(() => window.localStorage.getItem(STORAGE.state) !== null);
   const [connectionTarget, setConnectionTarget] = useState<string>(() => {
     const query = new URLSearchParams(window.location.search).get('connect');
     return query ?? window.localStorage.getItem('pealayer.connectionTarget') ?? '';
@@ -161,7 +182,7 @@ const App: React.FC = () => {
   }, [accentColor, accentTextColor]);
 
   const nextRequestId = useRef(1);
-  const sendCmd = useCallback((command: string, payload: Record<string, any> = {}) => {
+  const rawSendCmd = useCallback((command: string, payload: Record<string, any> = {}) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       const methodAliases: Record<string, string> = {
         add_effect_cue: 'pealayer.timeline.effect.add',
@@ -197,6 +218,21 @@ const App: React.FC = () => {
       }).catch(() => {});
     }
   }, [connectionTarget]);
+
+  const platform = useWebPlatform(
+    state,
+    rawSendCmd,
+    runtime?.appName || 'Pealayer',
+    runtime?.appIconPath || '/api/runtime/app-icon-192.png',
+  );
+
+  const signalInteraction = platform.signalInteraction;
+
+  const sendCmd = useCallback((command: string, payload: Record<string, any> = {}) => {
+    if (!platform.online && !connected) return;
+    signalInteraction();
+    rawSendCmd(command, payload);
+  }, [connected, platform.online, rawSendCmd, signalInteraction]);
 
   const resolveWebSocketUrl = useCallback(() => {
     const fallbackProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -235,11 +271,12 @@ const App: React.FC = () => {
         return response.json();
       })
       .then((value: RuntimeConfig) => {
-        if (!disposed) setRuntime(value);
+        if (!disposed) {
+          setRuntime(value);
+          persistJson(STORAGE.runtime, value);
+        }
       })
-      .catch(() => {
-        if (!disposed) setRuntime(null);
-      });
+      .catch(() => {});
     return () => { disposed = true; };
   }, []);
 
@@ -249,7 +286,10 @@ const App: React.FC = () => {
     fetch('/api/config')
       .then((response) => response.ok ? response.json() : Promise.reject())
       .then((value) => {
-        if (!disposed && value && typeof value === 'object') setAppConfig(value);
+        if (!disposed && value && typeof value === 'object') {
+          setAppConfig(value);
+          persistJson(STORAGE.config, value);
+        }
         const seconds = Number(value?.quick_seek_seconds);
         if (!disposed && Number.isFinite(seconds) && seconds > 0) {
           setQuickSeekSeconds(seconds);
@@ -263,8 +303,17 @@ const App: React.FC = () => {
     if (!runtime) return;
     let disposed = false;
     let reconnectTimer: number | undefined;
+    let reconnectAttempt = Number(window.sessionStorage.getItem('pealayer.wsReconnectAttempt') || 0);
+    const scheduleReconnect = () => {
+      if (disposed) return;
+      reconnectAttempt += 1;
+      window.sessionStorage.setItem('pealayer.wsReconnectAttempt', String(reconnectAttempt));
+      const delay = Math.min(15_000, 500 * (2 ** Math.min(reconnectAttempt - 1, 5)));
+      reconnectTimer = window.setTimeout(connectWS, delay);
+    };
     const connectWS = () => {
       if (disposed) return;
+      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       const wsUrl = resolveWebSocketUrl();
 
       try {
@@ -278,13 +327,16 @@ const App: React.FC = () => {
           }
           setConnected(true);
           setConnectionMode('ws');
+          reconnectAttempt = 0;
+          window.sessionStorage.setItem('pealayer.wsReconnectAttempt', '0');
+          window.sessionStorage.setItem('pealayer.wsLastConnectedAt', new Date().toISOString());
         };
 
         ws.onclose = () => {
           if (disposed) return;
           setConnected(false);
           setConnectionMode('http');
-          reconnectTimer = window.setTimeout(connectWS, 3000);
+          scheduleReconnect();
         };
 
         ws.onmessage = (ev) => {
@@ -293,7 +345,11 @@ const App: React.FC = () => {
             if (data && data.jsonrpc === '2.0') return;
             const nextState = data?.type === 'state' ? data.state : data;
             if (nextState && typeof nextState === 'object' && typeof nextState.status === 'string') {
-              setState((prev) => ({ ...prev, ...nextState }));
+              setState((prev) => {
+                const merged = { ...prev, ...nextState };
+                persistJson(STORAGE.state, merged);
+                return merged;
+              });
               setConnected(true);
             }
           } catch {}
@@ -302,7 +358,7 @@ const App: React.FC = () => {
         if (disposed) return;
         setConnected(false);
         setConnectionMode('http');
-        reconnectTimer = window.setTimeout(connectWS, 3000);
+        scheduleReconnect();
       }
     };
 
@@ -316,7 +372,11 @@ const App: React.FC = () => {
         const res = await fetch('/api/player/status');
         if (res.ok) {
           const data = await res.json();
-          setState((prev) => ({ ...prev, ...data }));
+          setState((prev) => {
+            const merged = { ...prev, ...data };
+            persistJson(STORAGE.state, merged);
+            return merged;
+          });
           setConnected(true);
         }
       } catch {
@@ -326,12 +386,20 @@ const App: React.FC = () => {
       }
     }, 500);
 
+    const reconnectNow = () => {
+      reconnectAttempt = 0;
+      wsRef.current?.close();
+      connectWS();
+    };
+    window.addEventListener('online', reconnectNow);
+
     return () => {
       disposed = true;
       clearInterval(httpInterval);
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       if (wsRef.current) wsRef.current.close();
       wsRef.current = null;
+      window.removeEventListener('online', reconnectNow);
     };
   }, [runtime, connectionTarget, resolveWebSocketUrl]);
 
@@ -411,7 +479,22 @@ const App: React.FC = () => {
           locale={runtime?.locale || 'en'}
           connectionTarget={connectionTarget}
           onConnectionTargetChange={changeConnectionTarget}
+          platform={platform}
         />
+
+        {!connected && (
+          <Alert
+            className="offline-state-banner"
+            type={platform.online ? 'warning' : 'info'}
+            showIcon
+            message={platform.online
+              ? tr(runtime?.locale || 'en', 'Pealayer backend unavailable')
+              : tr(runtime?.locale || 'en', 'Offline mode')}
+            description={hasCachedState
+              ? tr(runtime?.locale || 'en', 'Showing the last known state. Live controls resume when the connection returns.')
+              : tr(runtime?.locale || 'en', 'The app shell is available, but live controls require a Pealayer backend connection.')}
+          />
+        )}
 
         <Layout className="app-body">
           <Sider
@@ -475,7 +558,7 @@ const App: React.FC = () => {
             {activeTab === 'effects' && <EffectsTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} />}
             {activeTab === 'hardware' && <HardwareTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} />}
             {activeTab === 'about' && (
-              <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} websocketUrl={resolveWebSocketUrl()} />
+              <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} websocketUrl={resolveWebSocketUrl()} platform={platform} />
             )}
             {activeTab === 'preferences' && (
               <PreferencesTab
@@ -483,6 +566,7 @@ const App: React.FC = () => {
                 locale={runtime?.locale || 'en'}
                 onConfigChange={(values) => {
                   setAppConfig(values);
+                  persistJson(STORAGE.config, values);
                   const seconds = Number(values.quick_seek_seconds);
                   if (Number.isFinite(seconds) && seconds > 0) setQuickSeekSeconds(seconds);
                 }}

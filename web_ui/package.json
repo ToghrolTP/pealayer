@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && node scripts/finalize-pwa.mjs && node scripts/verify-pwa.mjs",
+    "verify:pwa": "node scripts/verify-pwa.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

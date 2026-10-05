@@ -35,6 +35,7 @@ fn test_cli_remote_and_single_instance_forwarding() {
         fullscreen: true,
         volume: Some(65.0),
         commands: vec![InteropCommand::Play],
+        web_only: false,
     });
     let forwarded = try_forward_launch_request(&request);
     assert!(forwarded);

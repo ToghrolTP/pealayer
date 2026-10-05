@@ -10,6 +10,8 @@ pub struct CliOptions {
     pub fullscreen: bool,
     pub volume: Option<f64>,
     pub commands: Vec<InteropCommand>,
+    /// Run the complete Rust backend and web app without presenting the native window.
+    pub web_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -86,6 +88,7 @@ UPDATE OPTIONS:
   --update-status [HOST]    Query local or remote update progress
 
 APPLICATION OPTIONS:
+  --web-only, --headless     Run the full backend with only the Web/PWA interface visible
   --register-associations    Register Pealayer as the default media handler
   --unregister-associations  Unregister Pealayer file associations
   -h, --help                 Print help information
@@ -101,6 +104,7 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
     let mut fullscreen = false;
     let mut volume = None;
     let mut commands = Vec::new();
+    let mut web_only = false;
 
     let parse_number = |option: &str, value: String| {
         value
@@ -118,6 +122,9 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
                     "pealayer {}",
                     env!("CARGO_PKG_VERSION")
                 )));
+            }
+            "--web-only" | "--headless" => {
+                web_only = true;
             }
             "--register-associations" => {
                 return Ok(CliAction::RegisterAssociations);
@@ -275,6 +282,7 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
         fullscreen,
         volume,
         commands,
+        web_only,
     }))
 }
 
@@ -316,7 +324,7 @@ pub fn launch_request(options: &CliOptions) -> LaunchRequest {
         target: options.target.clone(),
         fullscreen: options.fullscreen,
         volume: options.volume,
-        activate: true,
+        activate: !options.web_only,
         commands: options.commands.clone(),
     }
 }
@@ -397,6 +405,7 @@ mod tests {
                 fullscreen: false,
                 volume: None,
                 commands: vec![],
+                web_only: false,
             })
         );
 
@@ -419,6 +428,7 @@ mod tests {
                     InteropCommand::SetFullscreen { enabled: true },
                     InteropCommand::SetVolume { value: 80.0 },
                 ],
+                web_only: false,
             })
         );
 
@@ -477,8 +487,16 @@ mod tests {
                 fullscreen: false,
                 volume: None,
                 commands: vec![],
+                web_only: false,
             })
         );
+
+        let web_only =
+            parse_cli_args(vec!["pealayer".to_string(), "--web-only".to_string()]).unwrap();
+        assert!(matches!(
+            web_only,
+            CliAction::RunGui(CliOptions { web_only: true, .. })
+        ));
 
         // Long form flags
         let args = vec![
