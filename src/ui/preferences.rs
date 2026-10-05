@@ -43,6 +43,13 @@ struct PreferencesOutcome {
     discard: bool,
 }
 
+impl PreferencesOutcome {
+    fn request_save(&mut self) {
+        self.save = true;
+        self.close_after_save = true;
+    }
+}
+
 impl PreferencesDraft {
     fn new(config: AppConfig, tab: usize) -> Self {
         Self {
@@ -687,7 +694,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
                         .inner
                         .on_disabled_hover_text(tr("No changes to save"));
                     if save.clicked() {
-                        outcome.save = true;
+                        outcome.request_save();
                     }
                 },
             );
@@ -778,8 +785,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
                 )
                 .clicked()
                 {
-                    outcome.save = true;
-                    outcome.close_after_save = true;
+                    outcome.request_save();
                     draft.confirm_close = false;
                 }
             });
@@ -1905,6 +1911,32 @@ mod tests {
         assert!(draft.is_dirty());
         draft.mark_saved();
         assert!(!draft.is_dirty());
+    }
+
+    #[test]
+    fn every_preferences_save_requests_close_after_success() {
+        let mut outcome = PreferencesOutcome::default();
+        assert!(!outcome.close_after_save);
+        outcome.request_save();
+        assert!(outcome.save);
+        assert!(outcome.close_after_save);
+        assert!(!outcome.close); // Hosts must wait for persistence/commit success.
+        let editor = include_str!("preferences.rs")
+            .split_once("fn draw_preferences_editor(")
+            .unwrap().1
+            .split_once("fn draw_contract_section(")
+            .unwrap().0;
+        assert_eq!(editor.matches("outcome.request_save()").count(), 2);
+    }
+
+    #[test]
+    fn failed_preferences_save_preserves_the_dirty_draft() {
+        let mut draft = PreferencesDraft::new(AppConfig::default(), 0);
+        draft.config.playback_speed = 0.0;
+        assert!(!save_draft(&mut draft, &egui::Context::default()));
+        assert!(draft.is_dirty());
+        assert!(draft.status.contains("playback_speed"));
+        assert_eq!(draft.saved_config.playback_speed, 1.0);
     }
 
     #[test]
