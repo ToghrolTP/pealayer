@@ -1064,12 +1064,15 @@ fn render_contract_control(
                 serde_json::from_value(current.clone()).unwrap_or_default();
             let mut changed = false;
             let mut remove = None;
+            let replacement_body_height = PREFERENCE_ROW_HEIGHT * (replacements.len() + 1) as f32
+                + PREFERENCE_ROW_GAP * replacements.len() as f32;
             preference_multiline_row(
                 ui,
                 control_icon,
                 &tr(control.label),
                 control.description.map(tr),
                 label_width,
+                replacement_body_height,
                 |ui| {
                     for (index, item) in replacements.iter_mut().enumerate() {
                         ui.allocate_ui_with_layout(
@@ -1463,6 +1466,7 @@ fn preference_multiline_row<R>(
     label: &str,
     description: Option<String>,
     desired_label_width: f32,
+    body_height: f32,
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
     let width = ui.available_width();
@@ -1502,26 +1506,24 @@ fn preference_multiline_row<R>(
     let control_width = (width - label_width - PREFERENCE_COLUMN_GAP)
         .max(PREFERENCE_CONTROL_MIN_WIDTH)
         .min(PREFERENCE_CONTROL_MAX_WIDTH);
-    ui.horizontal_top(|ui| {
-        ui.spacing_mut().item_spacing.x = PREFERENCE_COLUMN_GAP;
-        ui.allocate_ui_with_layout(
-            egui::vec2(label_width, 0.0),
-            egui::Layout::top_down(egui::Align::Min),
-            |ui| {
-                ui.set_width(label_width);
-                draw_label(ui);
-            },
-        );
-        ui.allocate_ui_with_layout(
-            egui::vec2(control_width, 0.0),
-            egui::Layout::top_down(egui::Align::Min),
-            |ui| {
-                ui.set_width(control_width);
-                body(ui)
-            },
-        )
-        .inner
-    })
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, body_height),
+        egui::Layout::left_to_right(egui::Align::Min),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = PREFERENCE_COLUMN_GAP;
+            ui.allocate_ui_with_layout(
+                egui::vec2(label_width, body_height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| draw_label(ui),
+            );
+            ui.allocate_ui_with_layout(
+                egui::vec2(control_width, body_height),
+                egui::Layout::top_down(egui::Align::Min),
+                body,
+            )
+            .inner
+        },
+    )
     .inner
 }
 
@@ -1801,8 +1803,9 @@ mod tests {
             .0;
         assert!(multiline_layout.contains("REPLACEMENT_ROW_MIN_WIDTH"));
         assert!(multiline_layout.contains("width - label_width - PREFERENCE_COLUMN_GAP"));
-        assert!(multiline_layout.contains("egui::vec2(label_width, 0.0)"));
-        assert!(multiline_layout.contains("egui::vec2(control_width, 0.0)"));
+        assert!(multiline_layout.contains("egui::vec2(width, body_height)"));
+        assert!(multiline_layout.contains("egui::vec2(label_width, body_height)"));
+        assert!(multiline_layout.contains("egui::vec2(control_width, body_height)"));
     }
 
     #[test]
