@@ -54,7 +54,7 @@ export function RemoteLocationDialog({ state, connected, base, sendCmd }: {
     { key: 'copy', label: 'Copy URL', icon: <CopyOutlined />, onClick: () => copy(entry.url) },
   ] });
   const sortOrder = (by: RemoteBrowser['sort']) => state.sort === by ? state.descending ? 'descend' as const : 'ascend' as const : null;
-  return <Modal title={<Space><FolderOpenOutlined />Remote location</Space>} open onCancel={() => sendCmd('pealayer.remote.close')}
+  return <Modal title={<Space><FolderOpenOutlined />Remote location</Space>} open centered onCancel={() => sendCmd('pealayer.remote.close')}
     width="min(1000px, calc(100vw - 32px))" className="remote-location-modal" styles={{ body: { maxHeight: 'calc(100dvh - 220px)', overflow: 'auto' } }}
     footer={<Space><Button onClick={() => sendCmd('pealayer.remote.close')}>Close</Button><Button type="primary" icon={<PlayCircleOutlined />} disabled={!connected || !selected?.playable} onClick={() => selected && choose(selected, true)}>Play selected</Button></Space>}>
     <div className="remote-location-address"><Input aria-label="Remote location" value={target} onChange={e => setTarget(e.target.value)} onPressEnter={() => valid && browse(target)} placeholder="https://host/folder/" prefix={<GlobalOutlined />} /><Button icon={<SearchOutlined />} disabled={!connected || !valid || state.loading} onClick={() => browse(target)}>Browse</Button></div>

@@ -46,6 +46,7 @@ const config = await api('/api/config');
 const original = await api('/api/player/status');
 const temporary = await mkdtemp(join(tmpdir(), 'pealayer-folder-verify-'));
 let server;
+let finishHold;
 try {
   const clip = join(temporary, 'test.mp4');
   const generated = spawnSync('ffmpeg', ['-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc2=size=160x90:rate=12','-t','3','-an','-c:v','libx264','-preset','ultrafast','-pix_fmt','yuv420p','-movflags','+faststart','-y',clip], { windowsHide: true });
@@ -55,6 +56,9 @@ try {
   const table = `<title>Index of /folder/</title><table summary="Directory Listing"><tr><td></td><td><a href="sub/">sub/</a></td><td>-</td><td>-</td></tr>${names.map((name, i) => `<tr><td>V</td><td><a href="${encodeURIComponent(name)}">${name}</a></td><td>2025-02-${String(i + 1).padStart(2,'0')} 12:00</td><td>${media.length}</td></tr>`).join('')}</table>`;
   let requests = 0; let correctAgent = false;
   server = http.createServer((request, response) => {
+    if (request.url === '/__finish' && request.method === 'POST') {
+      response.writeHead(200); response.end('Finishing verification'); finishHold?.(); return;
+    }
     requests++; correctAgent ||= /^Pealayer\//.test(request.headers['user-agent'] || '');
     const target = new URL(request.url, 'http://fixture.invalid');
     const path = decodeURIComponent(target.pathname);
@@ -113,15 +117,20 @@ try {
   if(internal.length===3) assert.deepEqual(internal[1],internal[2],'Query and path listings must discover the same files in the same order');
   if(hold) {
     await browse(folder); await thumbnail(file1);
-    console.log('Ready for browser verification. Send any input to finish and restore the original playback/settings.');
-    await new Promise(resolve=>process.stdin.once('data',resolve));
+    console.log(`Ready for browser verification. Send input or POST http://127.0.0.1:${server.address().port}/__finish to restore playback/settings.`);
+    await new Promise(resolve => {
+      const timeout = setTimeout(done, 15 * 60 * 1000);
+      function done() { clearTimeout(timeout); process.stdin.off('data',done); resolve(); }
+      finishHold = done; process.stdin.once('data',done);
+    });
   }
 } finally {
   await command({command:'close_remote_browser'}).catch(()=>{});
   await command({command:'update_config',values:{remote_folder_auto_next:config.remote_folder_auto_next,remote_folder_thumbnails:config.remote_folder_thumbnails}}).catch(()=>{});
   if(original.current_video) {
     await command({command:'open',target:original.current_video});
-    await until(()=>api('/api/player/status'),s=>s.current_video===original.current_video&&s.duration>0).catch(()=>{});
+    await until(()=>api('/api/player/status'),s=>s.current_video===original.current_video&&s.duration>0&&(!original.seekable||s.seekable)).catch(()=>{});
+    await command({command:'pause'});
     if(original.seekable) await command({command:'seek_to',seconds:original.playback_time||0});
     await command({command:original.playing?'play':'pause'});
   } else await command({command:'stop'}).catch(()=>{});
