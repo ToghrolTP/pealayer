@@ -87,8 +87,8 @@ const EFFECTS_PANEL_RIGHT_GUTTER: f32 = 10.0;
 const EFFECT_CARD_MIN_WIDTH: f32 = 160.0;
 const EFFECT_CARD_HORIZONTAL_MARGIN: i8 = 9;
 const EFFECT_CARD_STROKE_WIDTH: f32 = 1.0;
-const EFFECT_CARD_ACTION_GUTTER: f32 = 100.0;
-const EFFECT_CARD_ACTION_BUTTONS_WIDTH: f32 = 72.0;
+const EFFECT_CARD_ACTION_GUTTER: f32 = 132.0;
+const EFFECT_CARD_ACTION_BUTTONS_WIDTH: f32 = 96.0;
 const HARDWARE_CARD_STROKE_WIDTH: f32 = 1.0;
 const BOARD_IDENTITY_TWO_LINE_HEIGHT: f32 = 42.0;
 const BOARD_IDENTITY_LINE_GAP: f32 = 0.0;
@@ -146,6 +146,15 @@ fn timeline_content_height(
 struct InlineEffectIdentityEdit {
     name: String,
     icon: String,
+}
+
+fn request_effect_card_rename(ctx: &egui::Context, item_id: egui::Id) {
+    ctx.data_mut(|data| data.insert_temp(item_id.with("rename-request"), true));
+    ctx.request_repaint();
+}
+
+fn effect_card_rename_name_width(available_after_icon: f32, spacing: f32) -> f32 {
+    (available_after_icon - 48.0 - spacing * 2.0).max(1.0)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -720,11 +729,12 @@ fn effects_frame_content_width(outer_width: f32) -> f32 {
 }
 
 fn effect_card_header_widths(available_after_icon: f32, item_spacing: f32) -> (f32, f32) {
-    // Three 24 px action buttons plus the two gaps between them. The title and
+    // Four 24 px action buttons plus the three gaps between them. The title and
     // action container are separate horizontal-layout items, so their own gap
     // must also be removed from the title budget. Omitting that final gap made
     // every child card one spacing unit wider than its group header.
-    let actions_width = EFFECT_CARD_ACTION_BUTTONS_WIDTH + item_spacing * 2.0;
+    let actions_width = (EFFECT_CARD_ACTION_BUTTONS_WIDTH + item_spacing * 3.0)
+        .min((available_after_icon - item_spacing - 12.0).max(1.0));
     let title_width = (available_after_icon - actions_width - item_spacing).max(1.0);
     (title_width, actions_width)
 }
@@ -733,6 +743,7 @@ struct EffectCardHeaderResponse {
     grip: egui::Response,
     icon: egui::Response,
     title: egui::Response,
+    rename: egui::Response,
     run: egui::Response,
     place: egui::Response,
     more: egui::Response,
@@ -743,7 +754,7 @@ fn effect_library_card_header(
     id: egui::Id,
     icon: &str,
     title: &str,
-    tooltips: [&str; 6],
+    tooltips: [&str; 7],
 ) -> EffectCardHeaderResponse {
     ui.horizontal(|ui| {
         // Compact spacing is local to a narrow card, never a global theme change.
@@ -787,6 +798,7 @@ fn effect_library_card_header(
             .on_hover_text(tooltips[1]);
         let (title_width, actions_width) =
             effect_card_header_widths(ui.available_width(), ui.spacing().item_spacing.x);
+        let action_button_width = ((actions_width - ui.spacing().item_spacing.x * 3.0) / 4.0).max(1.0);
         let title = ui
             .allocate_ui_with_layout(
                 egui::vec2(title_width, 24.0),
@@ -804,7 +816,7 @@ fn effect_library_card_header(
             )
             .inner
             .on_hover_text(tooltips[2]);
-        let (more, place, run) = ui
+        let (more, place, run, rename) = ui
             .allocate_ui_with_layout(
                 egui::vec2(actions_width, 24.0),
                 egui::Layout::right_to_left(egui::Align::Center),
@@ -812,23 +824,29 @@ fn effect_library_card_header(
                     ui.set_min_width(actions_width);
                     let more = ui
                         .add_sized(
-                            [24.0, 24.0],
+                            [action_button_width, 24.0],
                             egui::Button::new(crate::ui::icons::DOTS_THREE).frame(false),
                         )
                         .on_hover_text(tooltips[5]);
                     let place = ui
                         .add_sized(
-                            [24.0, 24.0],
+                            [action_button_width, 24.0],
                             egui::Button::new(crate::ui::icons::PLUS).frame(false),
                         )
                         .on_hover_text(tooltips[4]);
                     let run = ui
                         .add_sized(
-                            [24.0, 24.0],
+                            [action_button_width, 24.0],
                             egui::Button::new(crate::ui::icons::PLAY).frame(false),
                         )
                         .on_hover_text(tooltips[3]);
-                    (more, place, run)
+                    let rename = ui
+                        .add_sized(
+                            [action_button_width, 24.0],
+                            egui::Button::new(crate::ui::icons::PENCIL_SIMPLE).frame(false),
+                        )
+                        .on_hover_text(tooltips[6]);
+                    (more, place, run, rename)
                 },
             )
             .inner;
@@ -836,6 +854,7 @@ fn effect_library_card_header(
             grip,
             icon,
             title,
+            rename,
             run,
             place,
             more,
@@ -7437,7 +7456,7 @@ mod timeline_row_tests {
                                     egui::Id::new("header-anchor"),
                                     crate::ui::icons::SPARKLE,
                                     title,
-                                    ["Drag", "Icon", "Rename", "Run", "Place", "More"],
+                                    ["Drag", "Icon", "Rename", "Run", "Place", "More", "Rename"],
                                 );
                                 geometry.set((
                                     header.grip.rect,
@@ -7474,7 +7493,7 @@ mod timeline_row_tests {
         for available in [112.0, 180.0, 297.0] {
             let (title, actions) = effect_card_header_widths(available, spacing);
             assert!(title + spacing + actions <= available + f32::EPSILON);
-            assert_eq!(actions, 88.0);
+            assert_eq!(actions, 120.0_f32.min(available - spacing - 12.0));
         }
 
         let context = egui::Context::default();
@@ -7514,7 +7533,7 @@ mod timeline_row_tests {
                                 egui::vec2(actions, 24.0),
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    for label in ["more", "add", "play"] {
+                                    for label in ["more", "add", "play", "rename"] {
                                         ui.add_sized([24.0, 24.0], egui::Button::new(label));
                                     }
                                 },
@@ -7608,7 +7627,7 @@ mod timeline_row_tests {
 
     #[test]
     fn effect_card_action_click_survives_the_drag_surface() {
-        for action in 0..3 {
+        for action in 0..4 {
             let context = egui::Context::default();
             let payload = EffectDragPayload {
                 name: "Seat rise".to_string(),
@@ -7646,12 +7665,13 @@ mod timeline_row_tests {
                                         egui::Id::new("effect-card-with-action"),
                                         crate::ui::icons::SPARKLE,
                                         "Seat rise",
-                                        ["Drag", "Icon", "Rename", "Run", "Place", "More"],
+                                        ["Drag", "Icon", "Rename", "Run", "Place", "More", "Rename"],
                                     );
                                     let button = match action {
                                         0 => header.run,
                                         1 => header.place,
-                                        _ => header.more,
+                                        2 => header.more,
+                                        _ => header.rename,
                                     };
                                     action_rect.set(button.rect);
                                     button_response = Some(button);
@@ -7696,6 +7716,27 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn effect_card_context_rename_request_is_scoped_and_consumed_once() {
+        let context = egui::Context::default();
+        let first = egui::Id::new("sequence-effect-card");
+        let second = egui::Id::new("strip-effect-card");
+        request_effect_card_rename(&context, second);
+        assert!(!context.data_mut(|data| data.remove_temp::<bool>(first.with("rename-request")).unwrap_or(false)));
+        assert!(context.data_mut(|data| data.remove_temp::<bool>(second.with("rename-request")).unwrap_or(false)));
+        assert!(!context.data_mut(|data| data.remove_temp::<bool>(second.with("rename-request")).unwrap_or(false)));
+    }
+
+    #[test]
+    fn effect_card_rename_input_reserves_confirm_cancel_without_widening() {
+        for available in [64.0, 98.0, 220.0, 460.0] {
+            for spacing in [2.0, 4.0] {
+                let name = effect_card_rename_name_width(available, spacing);
+                assert_eq!(name + 48.0 + spacing * 2.0, available);
+            }
+        }
+    }
+
+    #[test]
     fn effect_library_grip_starts_the_existing_drag_without_a_grab_offset_jump() {
         let context = egui::Context::default();
         let id = egui::Id::new("production-library-grip");
@@ -7733,7 +7774,7 @@ mod timeline_row_tests {
                                     id,
                                     crate::ui::icons::SPARKLE,
                                     "Grip fixture",
-                                    ["Drag", "Icon", "Rename", "Run", "Place", "More"],
+                                    ["Drag", "Icon", "Rename", "Run", "Place", "More", "Rename"],
                                 )
                             })
                         },
@@ -9823,7 +9864,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     )
                                                 });
                                                 let inline_editing = inline_edit.is_some();
-                                                let mut begin_inline_edit = false;
+                                                let mut begin_inline_edit = ui.data_mut(|data| {
+                                                    data.remove_temp::<bool>(item_id.with("rename-request"))
+                                                        .unwrap_or(false)
+                                                });
                                                 let mut save_inline_edit = false;
                                                 let mut cancel_inline_edit = false;
                                                 let response = effect_drag_source_with_action_gutter(
@@ -9839,6 +9883,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         effect_card(ui, card_width, |ui| {
                                                             if let Some(edit) = inline_edit.as_mut() {
                                                                 ui.horizontal(|ui| {
+                                                                    if ui.available_width() < 180.0 {
+                                                                        ui.spacing_mut().item_spacing.x = ui.spacing().item_spacing.x.min(2.0);
+                                                                    }
                                                                     let search_hint = self.app.tr("Search icons...");
                                                                     let presets_label = self.app.tr("Presets");
                                                                     let no_matches_label = self.app.tr("No matching icons");
@@ -9860,10 +9907,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                         },
                                                                     );
                                                                     let action_spacing = ui.spacing().item_spacing.x;
-                                                                    let name_width = (ui.available_width()
-                                                                        - 48.0
-                                                                        - action_spacing * 2.0)
-                                                                        .max(54.0);
+                                                                    let name_width = effect_card_rename_name_width(ui.available_width(), action_spacing);
                                                                     let name_align = crate::ui::i18n::input_alignment(
                                                                         self.app.rtl,
                                                                         &edit.name,
@@ -9871,9 +9915,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                     let name_response = ui.add_sized(
                                                                         [name_width, 24.0],
                                                                         egui::TextEdit::singleline(&mut edit.name)
+                                                                            .id(item_id.with("inline-name"))
                                                                             .horizontal_align(name_align)
                                                                             .char_limit(64),
                                                                     );
+                                                                    if ui.data_mut(|data| data.remove_temp::<bool>(item_id.with("rename-focus")).unwrap_or(false)) {
+                                                                        name_response.request_focus();
+                                                                    }
                                                                     if name_response.lost_focus()
                                                                         && ui.input(|input| {
                                                                             input.key_pressed(egui::Key::Enter)
@@ -9924,9 +9972,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                         &self.app.tr("Run now"),
                                                                         &self.app.tr("Place at playhead"),
                                                                         &self.app.tr("More actions"),
+                                                                        &self.app.tr("Rename"),
                                                                     ],
                                                                 );
-                                                                begin_inline_edit |= header.icon.clicked() || header.title.clicked();
+                                                                begin_inline_edit |= header.rename.clicked() || header.icon.clicked() || header.title.clicked();
                                                                 run_now = header.run.clicked();
                                                                 place_at_playhead = header.place.clicked();
                                                                 more_response = Some(header.more);
@@ -9959,6 +10008,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         name: self.app.effect_library_draft.name.clone(),
                                                         icon: self.app.effect_library_draft.icon.clone(),
                                                     });
+                                                    ui.data_mut(|data| data.insert_temp(item_id.with("rename-focus"), true));
                                                     ui.ctx().request_repaint();
                                                 }
                                                 if cancel_inline_edit {
@@ -10022,6 +10072,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     ui.strong(&displayed_effect_name);
                                                     ui.label(egui::RichText::new(&reference).monospace().weak().small());
                                                     ui.separator();
+                                                    if ui.button(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, self.app.tr("Rename"))).clicked() {
+                                                        request_effect_card_rename(ui.ctx(), item_id);
+                                                        ui.close();
+                                                    }
                                                     if ui.button(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, self.app.tr("Manage"))).clicked() {
                                                         if crate::ui::effects_library::select_advertised_effect(
                                                             self.app,

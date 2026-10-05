@@ -235,6 +235,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
         extra: <Tooltip title={tr(locale, 'New effect in this group')}><Button type="text" size="small" icon={<PlusOutlined />} aria-label={tr(locale, 'New effect in this group')} onClick={(event) => { event.stopPropagation(); openEditor(undefined, group); }} /></Tooltip>,
         children: <div className="effect-card-grid">{items.map((effect) => {
           const actions = [
+            { key: 'rename', label: tr(locale, 'Rename'), icon: <EditOutlined /> },
             { key: 'play', label: tr(locale, 'Play effect'), icon: <PlayCircleOutlined /> },
             { key: 'manage', label: tr(locale, 'Manage'), icon: <EditOutlined /> },
             { key: 'cue', label: tr(locale, 'Add cue at playhead'), icon: <PlusOutlined /> },
@@ -242,6 +243,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
             { key: 'delete', label: tr(locale, 'Delete'), icon: <DeleteOutlined />, danger: true },
           ];
           const run = (key: string) => {
+            if (key === 'rename') beginInlineEdit();
             if (key === 'play') sendCmd('controller_effect.play', { reference: effect.reference });
             if (key === 'manage') openEditor(effect);
             if (key === 'cue') sendCmd('controller_effect_cue.add', { reference: effect.reference, start_time_ms: Math.max(0, Math.round((state.playback_time ?? 0) * 1000)) });
@@ -253,7 +255,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
             name: effect.name,
             icon: effect.icon || 'plug',
           });
-          return <article className={`effect-card ${selected === effect.reference ? 'is-selected' : ''} ${editing ? 'is-editing' : ''}`} key={effect.reference} onClick={() => setSelected(effect.reference)}>
+          return <Dropdown key={effect.reference} trigger={['contextMenu']} menu={{ items: actions, onClick: ({ key }) => run(key) }}><article className={`effect-card ${selected === effect.reference ? 'is-selected' : ''} ${editing ? 'is-editing' : ''}`} onClick={() => setSelected(effect.reference)}>
             {editing ? <>
               <Select
                 className="effect-card__inline-icon"
@@ -289,6 +291,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
                 <strong>{effect.name}</strong>
               </button>
               <Tooltip title={tr(locale, 'Play effect')}><Button type="text" icon={<PlayCircleOutlined />} onClick={(event) => { event.stopPropagation(); run('play'); }} /></Tooltip>
+              <Tooltip title={tr(locale, 'Rename')}><Button type="text" icon={<EditOutlined />} aria-label={tr(locale, 'Rename')} onClick={(event) => { event.stopPropagation(); beginInlineEdit(); }} /></Tooltip>
               <Dropdown menu={{ items: actions, onClick: ({ key }) => run(key) }} trigger={['click']}>
                 <Button type="text" icon={<MoreOutlined />} onClick={(event) => event.stopPropagation()} aria-label={tr(locale, 'Actions')} />
               </Dropdown>
@@ -300,7 +303,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
               </div>
               <span className="effect-card__duration" title={tr(locale, 'Total duration')}><ClockCircleOutlined /><span>{effect.duration_display}</span></span>
             </div>
-          </article>;
+          </article></Dropdown>;
         })}</div>,
       }))} />}
 

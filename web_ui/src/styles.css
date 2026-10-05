@@ -535,7 +535,7 @@ body {
 .segment-display { margin-bottom: 12px; display: flex; align-items: center; gap: 6px; direction: ltr; }
 .segment-display span { min-width: 48px; padding: 9px 8px; border: 1px solid #3c241d; border-radius: 7px; color: #ff6a43; background: #180b08; text-align: center; text-shadow: 0 0 10px #ff542f; font: 700 19px var(--font-mono); }
 .lcd-display { margin-top: 12px; padding: 10px 12px; display: grid; gap: 2px; border-radius: 7px; color: #192b1e; background: #9fbd81; font: 600 12px var(--font-mono); }
-.effect-card { min-width: 0; padding: 10px 12px; display: grid; grid-template-columns: 32px minmax(0, 1fr) 28px 28px; align-items: center; column-gap: 7px; row-gap: 9px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-1); cursor: pointer; transition: border-color .16s ease, box-shadow .16s ease; }
+.effect-card { min-width: 0; padding: 10px 12px; display: grid; grid-template-columns: 32px minmax(0, 1fr) repeat(3, 28px); align-items: center; column-gap: 7px; row-gap: 9px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-1); cursor: pointer; transition: border-color .16s ease, box-shadow .16s ease; }
 .effect-card:hover { border-color: var(--line-strong); }
 .effect-card.is-selected { border-color: var(--accent); }
 .effect-card:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
