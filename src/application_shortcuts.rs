@@ -45,6 +45,33 @@ pub enum ApplicationAction {
     EditConfig,
 }
 
+/// Consume the frame accelerator once, before player/timeline arrow handlers.
+/// Text edits keep Ctrl+arrows for word navigation; other focused widgets,
+/// including the timeline canvas, do not disable this transport accelerator.
+pub fn take_frame_step_shortcut(ctx: &egui::Context, enabled: bool) -> Option<i32> {
+    if !enabled || ctx.text_edit_focused() || egui::Popup::is_any_open(ctx) {
+        return None;
+    }
+    ctx.input_mut(|input| {
+        let chord = input.events.iter().find_map(|event| match event {
+            egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } if (modifiers.ctrl || modifiers.command) && !modifiers.shift && !modifiers.alt => {
+                match key {
+                    egui::Key::ArrowLeft => Some((*key, *modifiers, -1)),
+                    egui::Key::ArrowRight => Some((*key, *modifiers, 1)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })?;
+        input.consume_key(chord.1, chord.0).then_some(chord.2)
+    })
+}
+
 pub fn parse_shortcut(value: &str) -> Result<Option<KeyChord>, String> {
     if value.trim().is_empty() {
         return Ok(None);
@@ -166,6 +193,120 @@ mod tests {
             modifiers,
         }
     }
+    #[test]
+    fn frame_step_accelerators_consume_arrows_once_and_allow_key_repeat() {
+        for modifiers in [egui::Modifiers::CTRL, egui::Modifiers::COMMAND] {
+            for (arrow, direction) in [(egui::Key::ArrowLeft, -1), (egui::Key::ArrowRight, 1)] {
+                for repeat in [false, true] {
+                    let ctx = egui::Context::default();
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            events: vec![key(arrow, modifiers, repeat, true)],
+                            ..Default::default()
+                        },
+                        |_| {
+                            assert_eq!(take_frame_step_shortcut(&ctx, true), Some(direction));
+                            assert_eq!(take_frame_step_shortcut(&ctx, true), None);
+                            assert!(
+                                !ctx.input(|input| input.key_pressed(arrow)),
+                                "seek/cue navigation must not also receive the arrow"
+                            );
+                        },
+                    );
+                    output.textures_delta.clear();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn frame_step_preserves_other_arrow_chords_and_disabled_shortcuts() {
+        for (modifiers, enabled, pressed) in [
+            (egui::Modifiers::NONE, true, true),
+            (egui::Modifiers::CTRL | egui::Modifiers::SHIFT, true, true),
+            (egui::Modifiers::CTRL | egui::Modifiers::ALT, true, true),
+            (egui::Modifiers::CTRL, false, true),
+            (egui::Modifiers::CTRL, true, false),
+        ] {
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![key(egui::Key::ArrowLeft, modifiers, false, pressed)],
+                    ..Default::default()
+                },
+                |_| {
+                    assert_eq!(take_frame_step_shortcut(&ctx, enabled), None);
+                    assert_eq!(
+                        ctx.input(|input| input.key_pressed(egui::Key::ArrowLeft)),
+                        pressed
+                    );
+                },
+            );
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn frame_step_preserves_text_edit_word_navigation_but_works_with_canvas_focus() {
+        let ctx = egui::Context::default();
+        let mut text = "one two three".to_string();
+        for frame in 0..2 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: if frame == 0 {
+                        vec![]
+                    } else {
+                        vec![key(
+                            egui::Key::ArrowLeft,
+                            egui::Modifiers::CTRL,
+                            false,
+                            true,
+                        )]
+                    },
+                    ..Default::default()
+                },
+                |ui| {
+                    if frame == 1 {
+                        assert!(ctx.text_edit_focused());
+                        assert_eq!(take_frame_step_shortcut(&ctx, true), None);
+                        assert!(ctx.input(|input| input.key_pressed(egui::Key::ArrowLeft)));
+                    }
+                    ui.text_edit_singleline(&mut text).request_focus();
+                },
+            );
+            output.textures_delta.clear();
+        }
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let response = ui
+                .push_id("timeline-canvas", |ui| {
+                    ui.allocate_response(egui::vec2(100.0, 100.0), egui::Sense::click())
+                })
+                .inner;
+            ctx.memory_mut(|memory| memory.surrender_focus(memory.focused().unwrap()));
+            ctx.memory_mut(|memory| memory.request_focus(response.id));
+        });
+        output.textures_delta.clear();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events: vec![key(
+                    egui::Key::ArrowRight,
+                    egui::Modifiers::CTRL,
+                    false,
+                    true,
+                )],
+                ..Default::default()
+            },
+            |ui| {
+                assert!(!ctx.text_edit_focused());
+                assert_eq!(take_frame_step_shortcut(&ctx, true), Some(1));
+                ui.push_id("timeline-canvas", |ui| {
+                    ui.allocate_response(egui::vec2(100.0, 100.0), egui::Sense::click());
+                });
+            },
+        );
+        output.textures_delta.clear();
+    }
+
     #[test]
     fn application_shortcuts_use_exact_modifiers_and_ignore_repeat_and_release() {
         let bindings = ApplicationShortcuts::default();

@@ -14436,11 +14436,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let jump_previous_pressed = ui.input(|i| {
                                     i.key_pressed(egui::Key::ArrowLeft)
                                         && (i.modifiers.ctrl || i.modifiers.command)
+                                        && i.modifiers.shift
                                         && !i.modifiers.alt
                                 });
                                 let jump_next_pressed = ui.input(|i| {
                                     i.key_pressed(egui::Key::ArrowRight)
                                         && (i.modifiers.ctrl || i.modifiers.command)
+                                        && i.modifiers.shift
                                         && !i.modifiers.alt
                                 });
                                 let scroll_left_pressed = ui.input(|i| {

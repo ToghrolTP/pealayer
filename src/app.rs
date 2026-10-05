@@ -1276,6 +1276,12 @@ impl eframe::App for PealayerApp {
             &ctx,
             transport_shortcuts_enabled && self.hardware_binding_dialog_channel.is_none(),
         );
+        if let Some(direction) = crate::application_shortcuts::take_frame_step_shortcut(
+            &ctx,
+            self.keyboard_shortcuts_enabled,
+        ) {
+            self.step_frames(direction);
+        }
         if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::Space)) {
             self.toggle_playback();
         }
@@ -1285,10 +1291,14 @@ impl eframe::App for PealayerApp {
         if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::M)) {
             self.toggle_audio_muted();
         }
-        if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
+        if transport_shortcuts_enabled
+            && ctx.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::ArrowLeft))
+        {
             self.seek_relative(-self.quick_seek_seconds);
         }
-        if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
+        if transport_shortcuts_enabled
+            && ctx.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::ArrowRight))
+        {
             self.seek_relative(self.quick_seek_seconds);
         }
         if transport_shortcuts_enabled

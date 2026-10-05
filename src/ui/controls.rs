@@ -235,7 +235,7 @@ pub fn draw_contextual_transport_nudge(
             action_name,
             app.frame_step_count,
             app.tr("frames"),
-            if backwards { "[" } else { "]" }
+            if backwards { "Ctrl+← / [" } else { "Ctrl+→ / ]" }
         ),
     };
     let response = response.on_hover_text(tooltip);
