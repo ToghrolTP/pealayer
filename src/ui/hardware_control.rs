@@ -2994,6 +2994,13 @@ fn draw_channel_detail_page(
         });
 }
 
+pub(crate) fn channel_manager_available(
+    controller_connected: bool,
+    capabilities: Option<&HardwareCapabilities>,
+) -> bool {
+    controller_connected && capabilities.is_some_and(|capabilities| capabilities.board_connected)
+}
+
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if !app.show_hardware_channels_dialog
         && app.hardware_control_dialog_key.is_none()
@@ -3003,7 +3010,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
     let Some(capabilities) = app
         .advertised_hardware()
-        .filter(|capabilities| capabilities.board_connected)
+        .filter(|capabilities| channel_manager_available(app.is_connected, Some(capabilities)))
     else {
         // Capability discovery is asynchronous during startup and reconnect.
         // Keep the requested dialog state intact so an open channel manager
@@ -3161,6 +3168,29 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn channel_manager_requires_a_live_controller_and_connected_discovered_board() {
+        let offline = HardwareCapabilities::default();
+        let connected = HardwareCapabilities {
+            board_connected: true,
+            ..Default::default()
+        };
+        assert!(!channel_manager_available(false, None));
+        assert!(
+            !channel_manager_available(true, None),
+            "discovery is not ready"
+        );
+        assert!(
+            !channel_manager_available(true, Some(&offline)),
+            "controller is online but the board is not"
+        );
+        assert!(
+            !channel_manager_available(false, Some(&connected)),
+            "cached capabilities must not imply a live connection"
+        );
+        assert!(channel_manager_available(true, Some(&connected)));
+    }
 
     #[test]
     fn manager_rows_inset_selection_children_and_preserve_opacity() {

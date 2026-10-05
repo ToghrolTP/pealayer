@@ -304,7 +304,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
         </Typography.Text>
       </div>
       <Space>
-        <Button icon={<ToolOutlined />} onClick={() => setManagerOpen(true)}>{tr(locale, 'Manage channels')}</Button>
+        {state.hardware_connected && <Button icon={<ToolOutlined />} onClick={() => setManagerOpen(true)}>{tr(locale, 'Manage channels')}</Button>}
         <Tag color={state.hardware_connected ? 'success' : 'warning'}>{state.hardware_connected ? tr(locale, 'Connected') : tr(locale, 'Board unavailable')}</Tag>
         <Button
           danger
@@ -320,7 +320,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
       title={detailKey
         ? <Space><Button type="text" size="small" icon={<ArrowLeftOutlined />} aria-label={tr(locale, 'All board channels')} onClick={() => setDetailKey(null)} /><ToolOutlined />{tr(locale, 'Manage')}</Space>
         : <Space><ToolOutlined />{tr(locale, 'Manage channels')}</Space>}
-      open={managerOpen}
+      open={managerOpen && Boolean(state.hardware_connected)}
       width={860}
       footer={null}
       onCancel={() => {

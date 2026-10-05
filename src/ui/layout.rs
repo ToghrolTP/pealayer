@@ -9494,27 +9494,33 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         }
                     }
                     PealayerTab::HardwareMonitor => {
+                        let capabilities = self.app.advertised_hardware();
                         ui.horizontal(|ui| {
                             ui.heading(self.app.tr("Hardware Monitor Dashboard"));
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if ui
-                                        .button(format!(
-                                            "{} {}",
-                                            crate::ui::icons::SLIDERS_HORIZONTAL,
-                                            self.app.tr("Manage channels")
-                                        ))
-                                        .on_hover_text(self.app.tr(
-                                            "Rename, control, and reorder every advertised board channel",
-                                        ))
-                                        .clicked()
-                                    {
-                                        self.app.show_hardware_channels_dialog = true;
-                                        self.app.hardware_channel_detail_active = false;
-                                    }
-                                },
-                            );
+                            if crate::ui::hardware_control::channel_manager_available(
+                                self.app.is_connected,
+                                capabilities.as_ref(),
+                            ) {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui
+                                            .button(format!(
+                                                "{} {}",
+                                                crate::ui::icons::SLIDERS_HORIZONTAL,
+                                                self.app.tr("Manage channels")
+                                            ))
+                                            .on_hover_text(self.app.tr(
+                                                "Rename, control, and reorder every advertised board channel",
+                                            ))
+                                            .clicked()
+                                        {
+                                            self.app.show_hardware_channels_dialog = true;
+                                            self.app.hardware_channel_detail_active = false;
+                                        }
+                                    },
+                                );
+                            }
                         });
                         ui.add_space(8.0);
 
@@ -9537,7 +9543,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             ui.add_space(8.0);
                         }
 
-                        let capabilities = self.app.advertised_hardware();
                         if !self.app.is_connected {
                             ui.label(egui::RichText::new(
                                 self.app.tr("Hardware Disconnected")
