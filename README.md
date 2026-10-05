@@ -226,6 +226,13 @@ Hardware discovery and connection are enabled by default and can be disabled in 
 
 PCController's peripheral catalog is authoritative for stable control/action keys and mutable names, icons, and groups. Pealayer renders semantic controls only from advertised action IDs, invokes them through `controller.action.invoke`, and edits channel names through the presentation contract. Older coordinators remain rename-compatible through `controller.peripherals.set`. Renames made in PCController WebUI/TUI are refreshed into Pealayer after the `peripherals.changed` notification (with periodic catalog refresh as recovery), while saved projects continue to identify hardware by stable keys rather than labels.
 
+Seat direction indicators use PCController's semantic per-side motion state.
+While the firmware safely disables a side before reversing its direction relay,
+Pealayer continues to show the accepted `requested` direction and marks it as
+transitioning; after board feedback settles, it shows the reconciled `applied`
+direction. Raw relay edges remain available for recording and diagnostics, and
+Pealayer falls back to those edges when connected to an older coordinator.
+
 #### Hardware effect authoring
 
 With an attached, configured board, open **Effects Library → Manage** and use
