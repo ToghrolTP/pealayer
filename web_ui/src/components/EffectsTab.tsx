@@ -31,7 +31,7 @@ import {
 } from '@ant-design/icons';
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
-import { effectGlyph, effectIconOptions } from '../effectIcons';
+import { EffectIconPicker, effectGlyph, effectIconOptions } from '../effectIcons';
 import { EffectRecorder } from './EffectRecorder';
 
 interface EffectsTabProps {
@@ -300,7 +300,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
           <label><span>{tr(locale, 'Type')}</span><Select value={draft.kind} options={[{ value: 'sequence', label: tr(locale, 'Sequence') }, { value: 'strip-stream', label: tr(locale, 'Lighting') }]} onChange={(kind) => setDraft({ ...draft, kind })} /></label>
           <label><span>{tr(locale, 'ID')}</span><Input value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} /></label>
           <label><span>{tr(locale, 'Name')}</span><Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
-          <label><span>{tr(locale, 'Icon')}</span><Select showSearch optionFilterProp="value" value={draft.icon} options={effectIconOptions} onChange={(icon) => setDraft({ ...draft, icon })} /></label>
+          <label><span>{tr(locale, 'Icon')}</span><EffectIconPicker value={draft.icon} searchPlaceholder={tr(locale, 'Search icons...')} presetsLabel={tr(locale, 'Presets')} emptyLabel={tr(locale, 'No matching icons')} onChange={(icon) => setDraft({ ...draft, icon })} /></label>
           <label><span>{tr(locale, 'Category')}</span><Input value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value })} /></label>
           <label className="effect-editor__wide"><span>{tr(locale, 'Description')}</span><Input value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
           <label><span>{tr(locale, 'Duration')}</span><InputNumber min={1} addonAfter="ms" value={draft.duration_ms} onChange={(duration_ms) => setDraft({ ...draft, duration_ms: duration_ms ?? 1 })} /></label>

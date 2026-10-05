@@ -17,6 +17,7 @@ pub use egui_phosphor::regular::{
 };
 
 pub const CONTROL_ICON_PRESETS: &[(&str, &str, &str)] = &[
+    ("sparkle", "Sparkle", SPARKLE),
     ("plug", "Plug", PLUG),
     ("lightning", "Lightning", LIGHTNING),
     ("lightbulb", "Light bulb", LIGHTBULB),
@@ -76,6 +77,106 @@ pub fn control_icon_name(name: &str) -> Option<&'static str> {
         .iter()
         .find(|(key, _, _)| key.eq_ignore_ascii_case(name.trim()))
         .map(|(_, label, _)| *label)
+}
+
+fn control_icon_preset_matches(key: &str, label: &str, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    query.is_empty() || key.to_lowercase().contains(&query) || label.to_lowercase().contains(&query)
+}
+
+/// A single searchable icon combobox shared by effect editors. The closed
+/// control shows the selected Phosphor icon and its human-readable name. Its
+/// popup keeps search and results as separate sections so the layout stays
+/// predictable as filtering changes the visible presets.
+pub fn searchable_control_icon_picker(
+    ui: &mut eframe::egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    value: &mut String,
+    width: f32,
+    search_hint: &str,
+    presets_label: &str,
+    no_matches_label: &str,
+) -> bool {
+    use eframe::egui;
+
+    let button_id = ui.make_persistent_id(&id_salt);
+    let search_id = button_id.with("search");
+    let was_open = egui::ComboBox::is_open(ui.ctx(), button_id);
+    let mut search = ui.data_mut(|data| data.get_temp::<String>(search_id).unwrap_or_default());
+    let previous = value.clone();
+    let selected_glyph = named_control_icon(value).unwrap_or(SPARKLE);
+    let selected_name = control_icon_name(value)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| value.trim());
+    let selected_text = if selected_name.is_empty() {
+        selected_glyph.to_string()
+    } else {
+        format!("{selected_glyph}  {selected_name}")
+    };
+
+    egui::ComboBox::from_id_salt(&id_salt)
+        .width(width)
+        .height(320.0)
+        .selected_text(selected_text)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show_ui(ui, |ui| {
+            ui.set_min_width(width.max(260.0));
+
+            let search_response = ui
+                .horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(MAGNIFYING_GLASS).color(ui.visuals().weak_text_color()),
+                    );
+                    ui.add(
+                        egui::TextEdit::singleline(&mut search)
+                            .id_salt(search_id.with("input"))
+                            .hint_text(search_hint)
+                            .desired_width(ui.available_width()),
+                    )
+                })
+                .inner;
+            if !was_open {
+                search_response.request_focus();
+            }
+
+            ui.separator();
+            ui.label(
+                egui::RichText::new(presets_label)
+                    .small()
+                    .strong()
+                    .color(ui.visuals().weak_text_color()),
+            );
+
+            let mut match_count = 0;
+            for (key, label, glyph) in CONTROL_ICON_PRESETS {
+                if !control_icon_preset_matches(key, label, &search) {
+                    continue;
+                }
+                match_count += 1;
+                if ui
+                    .selectable_label(value.eq_ignore_ascii_case(key), format!("{glyph}  {label}"))
+                    .clicked()
+                {
+                    *value = (*key).to_string();
+                    search.clear();
+                    ui.close();
+                }
+            }
+            if match_count == 0 {
+                ui.label(
+                    egui::RichText::new(no_matches_label)
+                        .italics()
+                        .color(ui.visuals().weak_text_color()),
+                );
+            }
+        });
+
+    if egui::ComboBox::is_open(ui.ctx(), button_id) {
+        ui.data_mut(|data| data.insert_temp(search_id, search));
+    } else {
+        ui.data_mut(|data| data.remove::<String>(search_id));
+    }
+    *value != previous
 }
 
 pub fn control(kind: &str, advertised: &str) -> &'static str {
@@ -146,9 +247,21 @@ mod tests {
 
     #[test]
     fn control_icon_presets_are_searchable_by_stable_name() {
+        assert_eq!(named_control_icon("sparkle"), Some(SPARKLE));
         assert_eq!(named_control_icon("  LAMP "), Some(LAMP));
         assert_eq!(control_icon_name("seat"), Some("Seat"));
         assert_eq!(named_control_icon("not-a-preset"), None);
+        assert!(control_icon_preset_matches(
+            "lightbulb",
+            "Light bulb",
+            "bulb"
+        ));
+        assert!(control_icon_preset_matches(
+            "lightbulb",
+            "Light bulb",
+            "LIGHT"
+        ));
+        assert!(!control_icon_preset_matches("seat", "Seat", "lamp"));
     }
 
     #[test]

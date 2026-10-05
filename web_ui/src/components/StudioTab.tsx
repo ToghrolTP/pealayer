@@ -22,7 +22,7 @@ import {
 import { Button, Divider, Dropdown, Empty, Input, InputNumber, message, Modal, Popconfirm, Select, Slider, Space, Tooltip } from 'antd';
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
-import { effectGlyph as configuredEffectGlyph, effectIconOptions } from '../effectIcons';
+import { EffectIconPicker, effectGlyph as configuredEffectGlyph } from '../effectIcons';
 import { EffectRecorder } from './EffectRecorder';
 import { mediaBasename } from '../mediaLabel';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
@@ -343,7 +343,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             <label><span>{tr(locale, 'Type')}</span><Select value={effectDraft.kind} options={[{ value: 'sequence', label: tr(locale, 'Timed sequence') }, { value: 'strip-stream', label: tr(locale, 'Addressable lighting') }]} onChange={(kind) => setEffectDraft({ ...effectDraft, kind })} /></label>
             <label><span>{tr(locale, 'ID')}</span><Input value={effectDraft.id} onChange={(event) => setEffectDraft({ ...effectDraft, id: event.target.value })} /></label>
             <label><span>{tr(locale, 'Name')}</span><Input value={effectDraft.name} onChange={(event) => setEffectDraft({ ...effectDraft, name: event.target.value })} /></label>
-            <label><span>{tr(locale, 'Icon')}</span><Select showSearch optionFilterProp="value" value={effectDraft.icon} options={effectIconOptions} onChange={(icon) => setEffectDraft({ ...effectDraft, icon })} /></label>
+            <label><span>{tr(locale, 'Icon')}</span><EffectIconPicker value={effectDraft.icon} searchPlaceholder={tr(locale, 'Search icons...')} presetsLabel={tr(locale, 'Presets')} emptyLabel={tr(locale, 'No matching icons')} onChange={(icon) => setEffectDraft({ ...effectDraft, icon })} /></label>
             <label><span>{tr(locale, 'Category')}</span><Input value={effectDraft.category} onChange={(event) => setEffectDraft({ ...effectDraft, category: event.target.value })} /></label>
             <label className="effect-editor-grid__wide"><span>{tr(locale, 'Description')}</span><Input value={effectDraft.description} onChange={(event) => setEffectDraft({ ...effectDraft, description: event.target.value })} /></label>
             <label><span>{tr(locale, 'Duration (ms)')}</span><InputNumber min={1} value={effectDraft.duration_ms} onChange={(duration_ms) => setEffectDraft({ ...effectDraft, duration_ms: duration_ms ?? 1 })} /></label>

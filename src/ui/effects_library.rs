@@ -2004,6 +2004,11 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 app.tr("Duration"),
                                 app.tr("Execution"),
                             );
+                            let icon_picker_labels = (
+                                app.tr("Search icons..."),
+                                app.tr("Presets"),
+                                app.tr("No matching icons"),
+                            );
                             let rtl_ui = app.rtl;
                             let draft = &mut app.effect_library_draft;
                             egui::Grid::new("controller_effect_definition_grid")
@@ -2047,34 +2052,15 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     );
                                     ui.end_row();
                                     ui.label(&labels.6);
-                                    ui.horizontal(|ui| {
-                                        ui.label(
-                                            crate::ui::icons::named_control_icon(&draft.icon)
-                                                .unwrap_or(crate::ui::icons::SPARKLE),
-                                        );
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut draft.icon)
-                                                .desired_width(150.0)
-                                                .hint_text("sparkle"),
-                                        );
-                                        egui::ComboBox::from_id_salt("effect_icon_preset")
-                                            .selected_text("Presets")
-                                            .show_ui(ui, |ui| {
-                                                for (key, label, glyph) in
-                                                    crate::ui::icons::CONTROL_ICON_PRESETS
-                                                {
-                                                    if ui
-                                                        .selectable_label(
-                                                            draft.icon.eq_ignore_ascii_case(key),
-                                                            format!("{glyph}  {label}"),
-                                                        )
-                                                        .clicked()
-                                                    {
-                                                        draft.icon = (*key).to_string();
-                                                    }
-                                                }
-                                            });
-                                    });
+                                    crate::ui::icons::searchable_control_icon_picker(
+                                        ui,
+                                        "effect_icon_picker",
+                                        &mut draft.icon,
+                                        320.0,
+                                        &icon_picker_labels.0,
+                                        &icon_picker_labels.1,
+                                        &icon_picker_labels.2,
+                                    );
                                     ui.end_row();
                                     if draft.kind != "sequence" {
                                         ui.label(&labels.7);
@@ -2345,6 +2331,13 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effect_properties_use_one_searchable_icon_control() {
+        let source = include_str!("effects_library.rs");
+        assert!(source.contains("searchable_control_icon_picker"));
+        assert!(!source.contains(concat!("effect_icon_", "preset")));
+    }
 
     #[test]
     fn empty_catalog_creates_no_pealayer_owned_lighting_definition() {

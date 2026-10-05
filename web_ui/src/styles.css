@@ -537,6 +537,17 @@ body {
 .effect-card__inline-icon { width: 58px; }
 .effect-card__inline-name { min-width: 0; }
 .effect-icon-option { display: inline-flex; align-items: center; gap: 8px; }
+.effect-icon-picker { width: 100%; }
+.effect-icon-picker__popup { min-width: 250px; }
+.effect-icon-picker__search {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 2;
+  padding: 8px 8px 0;
+  background: var(--surface-1);
+}
+.effect-icon-picker__divider { margin: 8px 0 4px !important; border-color: var(--line) !important; }
+.effect-icon-picker__empty { display: block; padding: 8px; color: var(--muted); text-align: center; }
 .selection-bar { position: sticky; inset-block-end: 0; padding: 8px 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 9px; background: color-mix(in srgb, var(--surface-1) 94%, transparent); backdrop-filter: blur(14px); }
 .effect-editor-modal .ant-modal-body { max-height: min(68vh, 720px); overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .effect-editor-modal .ant-modal-content { max-height: calc(100dvh - 32px); display: flex; flex-direction: column; overflow: hidden; }
