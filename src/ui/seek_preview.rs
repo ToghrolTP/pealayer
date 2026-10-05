@@ -177,7 +177,16 @@ pub fn draw(
     id_source: impl std::hash::Hash + std::fmt::Debug,
 ) {
     app.seekbar_thumbnail_preview.poll(ui.ctx());
-    if !enabled || !app.is_seekable || app.duration <= 0.0 {
+    // A thumbnail helps the user decide where to begin a seek. Once the
+    // pointer is actively operating the slider, the thumb and decoded video
+    // frame are the direct feedback; leaving a floating card above the
+    // gesture only obscures the content and competes with the drag.
+    if !enabled
+        || !app.is_seekable
+        || app.duration <= 0.0
+        || response.is_pointer_button_down_on()
+        || response.dragged()
+    {
         app.seekbar_thumbnail_preview.clear_hover();
         return;
     }

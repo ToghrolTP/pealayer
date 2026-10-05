@@ -41,6 +41,7 @@ export const SeekThumbnailPreview: React.FC<SeekThumbnailPreviewProps> = ({
   const [requestedSecond, setRequestedSecond] = useState<number | null>(null);
   const [loadedSecond, setLoadedSecond] = useState<number | null>(null);
   const [failedSecond, setFailedSecond] = useState<number | null>(null);
+  const [seeking, setSeeking] = useState(false);
 
   useEffect(() => {
     setHover(null);
@@ -48,6 +49,17 @@ export const SeekThumbnailPreview: React.FC<SeekThumbnailPreviewProps> = ({
     setLoadedSecond(null);
     setFailedSecond(null);
   }, [mediaIdentity]);
+
+  useEffect(() => {
+    if (!seeking) return;
+    const finishSeek = () => setSeeking(false);
+    window.addEventListener('pointerup', finishSeek);
+    window.addEventListener('pointercancel', finishSeek);
+    return () => {
+      window.removeEventListener('pointerup', finishSeek);
+      window.removeEventListener('pointercancel', finishSeek);
+    };
+  }, [seeking]);
 
   useEffect(() => {
     if (!enabled || !hover) return;
@@ -71,7 +83,7 @@ export const SeekThumbnailPreview: React.FC<SeekThumbnailPreviewProps> = ({
   const previewReady = hover && requestedSecond === hover.second && loadedSecond === hover.second;
   const previewFailed = hover && requestedSecond === hover.second && failedSecond === hover.second;
 
-  const preview = enabled && hover ? createPortal(
+  const preview = enabled && !seeking && hover ? createPortal(
     <div
       className="seek-thumbnail-popover"
       style={{ left: hover.x, bottom: hover.bottom }}
@@ -102,8 +114,13 @@ export const SeekThumbnailPreview: React.FC<SeekThumbnailPreviewProps> = ({
   return (
     <div
       className={`seek-thumbnail-host${className ? ` ${className}` : ''}`}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        setSeeking(true);
+        setHover(null);
+      }}
       onPointerMove={(event) => {
-        if (!enabled || !Number.isFinite(duration) || duration <= 0) return;
+        if (seeking || (event.buttons & 1) !== 0 || !enabled || !Number.isFinite(duration) || duration <= 0) return;
         const bounds = event.currentTarget.getBoundingClientRect();
         if (bounds.width <= 0) return;
         const fraction = Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
