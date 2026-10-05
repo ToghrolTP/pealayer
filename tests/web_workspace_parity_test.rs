@@ -47,12 +47,14 @@ fn web_hardware_and_effects_consume_the_shared_live_contract() {
 #[test]
 fn pwa_never_caches_live_api_or_websocket_state() {
     let main = include_str!("../web_ui/src/main.tsx");
+    let platform = include_str!("../web_ui/src/webPlatform.ts");
     let worker = include_str!("../web_ui/public/sw.js");
     let html = include_str!("../web_ui/index.html");
 
-    assert!(main.contains("navigator.serviceWorker.register('/sw.js'"));
+    assert!(main.contains("registerPealayerServiceWorker"));
+    assert!(platform.contains("navigator.serviceWorker.register('/sw.js'"));
     assert!(html.contains("rel=\"manifest\""));
-    assert!(worker.contains("url.pathname.startsWith('/api/')"));
+    assert!(worker.contains("(url.pathname.startsWith('/api/') && !precached)"));
     assert!(worker.contains("url.pathname === '/ws'"));
     assert!(worker.contains("request.mode === 'navigate'"));
 }
