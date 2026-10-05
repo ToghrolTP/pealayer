@@ -7679,27 +7679,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         .inner;
 
                                     if let Some(buffered_until) = self.app.buffered_until() {
-                                        let fraction = (buffered_until / self.app.duration)
-                                            .clamp(0.0, 1.0)
-                                            as f32;
-                                        let buffered_rect = egui::Rect::from_min_max(
-                                            egui::pos2(
-                                                response.rect.left(),
-                                                response.rect.bottom() - 2.0,
-                                            ),
-                                            egui::pos2(
-                                                response.rect.left()
-                                                    + response.rect.width() * fraction,
-                                                response.rect.bottom(),
-                                            ),
-                                        );
-                                        ui.painter().rect_filled(
-                                            buffered_rect,
-                                            1.0,
-                                            ui.visuals()
-                                                .selection
-                                                .bg_fill
-                                                .linear_multiply(0.55),
+                                        crate::ui::controls::paint_buffered_seekbar(
+                                            ui,
+                                            &response,
+                                            (current_pos / self.app.duration).clamp(0.0, 1.0)
+                                                as f32,
+                                            (buffered_until / self.app.duration).clamp(0.0, 1.0)
+                                                as f32,
                                         );
                                     }
 

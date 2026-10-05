@@ -26,6 +26,80 @@ pub(crate) fn add_fill_width_slider(
     response
 }
 
+fn buffered_seekbar_rect(
+    slider_rect: egui::Rect,
+    playback_fraction: f32,
+    buffered_fraction: f32,
+    rail_height: f32,
+) -> Option<egui::Rect> {
+    if slider_rect.width() <= 0.0 || slider_rect.height() <= 0.0 {
+        return None;
+    }
+    let playback_fraction = playback_fraction.clamp(0.0, 1.0);
+    let buffered_fraction = buffered_fraction.clamp(0.0, 1.0);
+    if buffered_fraction <= playback_fraction {
+        return None;
+    }
+
+    // Match egui Slider's horizontal value range rather than its complete
+    // response rectangle. Leaving the handle radius at the start prevents the
+    // late buffer paint from crossing over the already-painted thumb.
+    let handle_radius = slider_rect.height() / 2.5;
+    let value_left = slider_rect.left() + handle_radius;
+    let value_right = slider_rect.right() - handle_radius;
+    if value_right <= value_left {
+        return None;
+    }
+    let playback_x = egui::lerp(value_left..=value_right, playback_fraction);
+    let buffered_x = egui::lerp(value_left..=value_right, buffered_fraction);
+    let left = (playback_x + handle_radius * 0.78).min(buffered_x);
+    if buffered_x - left < 0.75 {
+        return None;
+    }
+
+    // The secondary range sits *inside* the real slider rail. It is slightly
+    // slimmer than the playback fill so buffered media reads as supporting
+    // information instead of a second competing progress value.
+    let height = (rail_height * 0.58)
+        .clamp(2.0, rail_height.max(2.0))
+        .min(slider_rect.height());
+    Some(egui::Rect::from_min_max(
+        egui::pos2(left, slider_rect.center().y - height / 2.0),
+        egui::pos2(buffered_x, slider_rect.center().y + height / 2.0),
+    ))
+}
+
+/// Paint the cached/buffered range as a secondary segment inside an egui
+/// slider's own rail. Call this after adding the slider: only the unplayed
+/// portion is painted, and the segment begins beyond the thumb.
+pub(crate) fn paint_buffered_seekbar(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    playback_fraction: f32,
+    buffered_fraction: f32,
+) {
+    let rail_height = ui.spacing().slider_rail_height;
+    let Some(buffered_rect) = buffered_seekbar_rect(
+        response.rect,
+        playback_fraction,
+        buffered_fraction,
+        rail_height,
+    ) else {
+        return;
+    };
+    let accent = ui.visuals().selection.bg_fill;
+    let muted = ui.visuals().weak_text_color();
+    let blend = |accent: u8, muted: u8| ((u16::from(accent) * 2 + u16::from(muted) * 3) / 5) as u8;
+    let color = egui::Color32::from_rgba_unmultiplied(
+        blend(accent.r(), muted.r()),
+        blend(accent.g(), muted.g()),
+        blend(accent.b(), muted.b()),
+        185,
+    );
+    ui.painter()
+        .rect_filled(buffered_rect, buffered_rect.height() / 2.0, color);
+}
+
 fn compact_number(value: f64) -> String {
     let mut rendered = format!("{value:.3}");
     while rendered.contains('.') && rendered.ends_with('0') {
@@ -649,18 +723,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         response.context_menu(|ui| transport_context_menu(app, ui));
 
                         if let Some(buffered_until) = app.buffered_until() {
-                            let fraction = (buffered_until / app.duration).clamp(0.0, 1.0) as f32;
-                            let buffered_rect = egui::Rect::from_min_max(
-                                egui::pos2(response.rect.left(), response.rect.bottom() - 2.0),
-                                egui::pos2(
-                                    response.rect.left() + response.rect.width() * fraction,
-                                    response.rect.bottom(),
-                                ),
-                            );
-                            ui.painter().rect_filled(
-                                buffered_rect,
-                                1.0,
-                                ui.visuals().selection.bg_fill.linear_multiply(0.55),
+                            paint_buffered_seekbar(
+                                ui,
+                                &response,
+                                (current_pos / app.duration).clamp(0.0, 1.0) as f32,
+                                (buffered_until / app.duration).clamp(0.0, 1.0) as f32,
                             );
                         }
                         // `changed` covers both dragging and a single click on
@@ -1046,6 +1113,23 @@ mod tests {
 
         assert_eq!(current_pos, 0.0);
         assert_eq!(max_dur, 1.0);
+    }
+
+    #[test]
+    fn buffered_seekbar_segment_is_centered_inside_the_slider_rail() {
+        let slider = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(240.0, 20.0));
+        let segment = buffered_seekbar_rect(slider, 0.25, 0.75, 8.0).unwrap();
+        assert_eq!(segment.center().y, slider.center().y);
+        assert!(segment.height() < 8.0);
+        assert!(segment.left() > slider.left());
+        assert!(segment.right() < slider.right());
+    }
+
+    #[test]
+    fn buffered_seekbar_does_not_paint_behind_played_or_unbuffered_media() {
+        let slider = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 20.0));
+        assert!(buffered_seekbar_rect(slider, 0.75, 0.50, 8.0).is_none());
+        assert!(buffered_seekbar_rect(slider, 0.50, 0.50, 8.0).is_none());
     }
 
     #[test]
