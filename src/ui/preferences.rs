@@ -1504,14 +1504,22 @@ fn preference_multiline_row<R>(
         .min(PREFERENCE_CONTROL_MAX_WIDTH);
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = PREFERENCE_COLUMN_GAP;
-        ui.vertical(|ui| {
-            ui.set_width(label_width);
-            draw_label(ui);
-        });
-        ui.vertical(|ui| {
-            ui.set_width(control_width);
-            body(ui)
-        })
+        ui.allocate_ui_with_layout(
+            egui::vec2(label_width, 0.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_width(label_width);
+                draw_label(ui);
+            },
+        );
+        ui.allocate_ui_with_layout(
+            egui::vec2(control_width, 0.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_width(control_width);
+                body(ui)
+            },
+        )
         .inner
     })
     .inner
@@ -1793,7 +1801,8 @@ mod tests {
             .0;
         assert!(multiline_layout.contains("REPLACEMENT_ROW_MIN_WIDTH"));
         assert!(multiline_layout.contains("width - label_width - PREFERENCE_COLUMN_GAP"));
-        assert!(multiline_layout.contains("ui.set_width(control_width)"));
+        assert!(multiline_layout.contains("egui::vec2(label_width, 0.0)"));
+        assert!(multiline_layout.contains("egui::vec2(control_width, 0.0)"));
     }
 
     #[test]
