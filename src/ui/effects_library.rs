@@ -1506,11 +1506,20 @@ fn draw_sequence_step_editor(
                             "motion" => {
                                 ui.label("Seat");
                                 let target = step.target.get_or_insert(0);
+                                let selected_name = motion_seat_name(capabilities, *target);
                                 egui::ComboBox::from_id_salt(("motion-side", index))
-                                    .selected_text(if *target == 0 { "Seat A" } else { "Seat B" })
+                                    .selected_text(selected_name)
                                     .show_ui(ui, |ui| {
-                                        ui.selectable_value(target, 0, "Seat A");
-                                        ui.selectable_value(target, 1, "Seat B");
+                                        ui.selectable_value(
+                                            target,
+                                            0,
+                                            motion_seat_name(capabilities, 0),
+                                        );
+                                        ui.selectable_value(
+                                            target,
+                                            1,
+                                            motion_seat_name(capabilities, 1),
+                                        );
                                     });
                                 ui.end_row();
                                 ui.label("Action");
@@ -1847,6 +1856,35 @@ fn draw_sequence_step_editor(
     }
     ui.data_mut(|data| data.insert_persisted(selection_id, selected_index));
     draft.duration_ms = sequence_duration_ms(&draft.steps);
+}
+
+fn motion_seat_name(
+    capabilities: Option<&crate::four_d::controller::HardwareCapabilities>,
+    target: u8,
+) -> String {
+    let (key, fallback) = if target == 0 {
+        ("seat.a", "Seat A")
+    } else {
+        ("seat.b", "Seat B")
+    };
+    capabilities
+        .and_then(|value| {
+            value
+                .controls
+                .iter()
+                .find(|control| control.key == key)
+                .map(|control| control.name.trim())
+                .filter(|name| !name.is_empty())
+                .or_else(|| {
+                    value
+                        .peripheral_names
+                        .get(key)
+                        .map(|name| name.trim())
+                        .filter(|name| !name.is_empty())
+                })
+        })
+        .unwrap_or(fallback)
+        .to_string()
 }
 
 #[derive(serde::Deserialize)]
@@ -3167,5 +3205,29 @@ mod tests {
         step.value = Some(1);
         refresh_semantic_action(&mut step);
         assert_eq!(step.action_ids, ["relay.5.on"]);
+    }
+
+    #[test]
+    fn effect_editor_uses_current_seat_presentation_names() {
+        let capabilities = crate::four_d::controller::HardwareCapabilities {
+            controls: vec![
+                crate::four_d::controller::HardwareControl {
+                    key: "seat.a".to_string(),
+                    name: "Seat Left".to_string(),
+                    ..Default::default()
+                },
+                crate::four_d::controller::HardwareControl {
+                    key: "seat.b".to_string(),
+                    name: "Seat Right".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(motion_seat_name(Some(&capabilities), 0), "Seat Left");
+        assert_eq!(motion_seat_name(Some(&capabilities), 1), "Seat Right");
+        assert_eq!(motion_seat_name(None, 0), "Seat A");
+        assert_eq!(motion_seat_name(None, 1), "Seat B");
     }
 }
