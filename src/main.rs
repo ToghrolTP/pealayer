@@ -677,6 +677,7 @@ fn main() -> eframe::Result {
                 elapsed_time_input: String::new(),
                 elapsed_edit_focus_requested: false,
                 osd_message: None,
+                osd_display_options: None,
                 recent_media: loaded_config.recent_media.clone(),
                 last_media_target: loaded_config.last_media_target.clone(),
                 restore_last_media_on_startup: loaded_config.restore_last_media_on_startup,

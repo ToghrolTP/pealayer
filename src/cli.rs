@@ -77,6 +77,7 @@ PLAYER OPTIONS:
   --minimize | --maximize   Change the window state
   --restore                 Restore and focus the window
   --message <TEXT>          Show a message in the OSD and status bar
+  --hide-osd                Hide the currently displayed OSD message
   --quit                    Close the running application
   --command <COMMAND>       Queue a unified text or JSON command; repeatable
   --remote <COMMAND>        Send one unified command and exit
@@ -191,6 +192,7 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
                 command.validate()?;
                 commands.push(command);
             }
+            "--hide-osd" => commands.push(InteropCommand::HideOsd),
             "--quit" => commands.push(InteropCommand::Quit),
             "--seek" | "--seek-to" | "--seek-percent" | "--rate" => {
                 let val_str = args_iter

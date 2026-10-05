@@ -174,6 +174,12 @@ pub enum InteropCommand {
     ShowMessage {
         message: String,
     },
+    ShowOsd {
+        message: String,
+        #[serde(default)]
+        options: OsdOptions,
+    },
+    HideOsd,
     Quit,
     SetWorkspace {
         profile: String,
@@ -272,6 +278,100 @@ pub enum InteropCommand {
     CancelPreviewConfig,
     ReloadConfig,
     GetStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OsdAnchor {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    CenterLeft,
+    Center,
+    CenterRight,
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+}
+
+/// Optional per-message OSD presentation overrides. Omitted values inherit
+/// the user's application preferences, while X/Y percentages override the
+/// named anchor and place the overlay around that point in the video surface.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OsdOptions {
+    pub position: Option<OsdAnchor>,
+    pub x_percent: Option<f32>,
+    pub y_percent: Option<f32>,
+    pub font_size: Option<f32>,
+    pub icon: Option<String>,
+    pub text_color: Option<String>,
+    pub background_color: Option<String>,
+    pub timeout_seconds: Option<f32>,
+    pub padding_x: Option<f32>,
+    pub padding_y: Option<f32>,
+    pub corner_radius: Option<f32>,
+}
+
+fn valid_osd_color(value: &str) -> bool {
+    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    matches!(hex.len(), 3 | 4 | 6 | 8) && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+impl OsdOptions {
+    pub fn validate(&self) -> Result<(), String> {
+        if self
+            .x_percent
+            .is_some_and(|value| !value.is_finite() || !(0.0..=100.0).contains(&value))
+            || self
+                .y_percent
+                .is_some_and(|value| !value.is_finite() || !(0.0..=100.0).contains(&value))
+        {
+            return Err("OSD X/Y percentages must be finite values from 0 to 100".to_string());
+        }
+        if self
+            .font_size
+            .is_some_and(|value| !value.is_finite() || !(8.0..=128.0).contains(&value))
+        {
+            return Err("OSD font size must be a finite value from 8 to 128".to_string());
+        }
+        if self
+            .timeout_seconds
+            .is_some_and(|value| !value.is_finite() || !(0.25..=300.0).contains(&value))
+        {
+            return Err("OSD timeout must be a finite value from 0.25 to 300 seconds".to_string());
+        }
+        if self
+            .padding_x
+            .is_some_and(|value| !value.is_finite() || !(0.0..=96.0).contains(&value))
+            || self
+                .padding_y
+                .is_some_and(|value| !value.is_finite() || !(0.0..=96.0).contains(&value))
+            || self
+                .corner_radius
+                .is_some_and(|value| !value.is_finite() || !(0.0..=64.0).contains(&value))
+        {
+            return Err("OSD padding/radius values are outside their supported range".to_string());
+        }
+        if self
+            .icon
+            .as_ref()
+            .is_some_and(|value| value.chars().count() > 64 || value.chars().any(char::is_control))
+        {
+            return Err("OSD icon name must not exceed 64 printable characters".to_string());
+        }
+        for color in [&self.text_color, &self.background_color]
+            .into_iter()
+            .flatten()
+        {
+            if !valid_osd_color(color) {
+                return Err(
+                    "OSD colors must use #RGB, #RGBA, #RRGGBB, or #RRGGBBAA notation".to_string(),
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 fn valid_workspace_profile_id(value: &str) -> bool {
@@ -408,12 +508,13 @@ impl InteropCommand {
                         .to_string(),
                 )
             }
-            Self::ShowMessage { message } if message.trim().is_empty() => {
-                Err("message must not be empty".to_string())
-            }
             Self::ShowMessage { message } if message.chars().count() > 2_048 => {
                 Err("message must not exceed 2048 characters".to_string())
             }
+            Self::ShowOsd { message, .. } if message.chars().count() > 2_048 => {
+                Err("OSD message must not exceed 2048 characters".to_string())
+            }
+            Self::ShowOsd { options, .. } => options.validate(),
             Self::SetWorkspace { profile }
             | Self::DeleteWorkspaceProfile { id: profile }
             | Self::MoveWorkspaceProfile { id: profile, .. }
@@ -454,7 +555,7 @@ pub fn command_catalog() -> Value {
             "chapter_previous", "chapter_next", "set_chapter",
             "seek", "seek_to", "seek_abs", "set_volume", "set_mute", "toggle_mute",
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
-            "maximize", "restore", "open_preferences", "open_board_information", "show_message", "set_workspace",
+            "maximize", "restore", "open_preferences", "open_board_information", "show_message", "show_osd", "hide_osd", "set_workspace",
             "create_workspace_profile", "update_workspace_profile", "delete_workspace_profile",
             "move_workspace_profile", "update_config",
             "reload_config", "add_effect_cue", "update_effect_cue", "remove_effect_cue", "set_recording",
@@ -569,6 +670,11 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "message" | "show_message" | "show-message" => InteropCommand::ShowMessage {
             message: argument.to_string(),
         },
+        "osd" | "show_osd" | "show-osd" => InteropCommand::ShowOsd {
+            message: argument.to_string(),
+            options: OsdOptions::default(),
+        },
+        "hide_osd" | "hide-osd" | "clear_osd" | "clear-osd" => InteropCommand::HideOsd,
         "workspace" | "set_workspace" | "set-workspace" => InteropCommand::SetWorkspace {
             profile: argument.to_string(),
         },
@@ -1011,8 +1117,39 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
             Some(InteropCommand::OpenBoardInformation { tab })
         }
         "message" | "show_message" | "pealayer.message.show" => Some(InteropCommand::ShowMessage {
-            message: string(&["message", "text", "value"])?,
+            message: request
+                .params
+                .get("message")
+                .or_else(|| request.params.get("text"))
+                .or_else(|| request.params.get("value"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
         }),
+        "osd.show" | "show_osd" | "pealayer.osd.show" => {
+            let options_value = request
+                .params
+                .get("options")
+                .or_else(|| request.params.get("style"))
+                .cloned()
+                .unwrap_or_else(|| request.params.clone());
+            let options = serde_json::from_value::<OsdOptions>(options_value)
+                .map_err(|error| format!("invalid OSD options: {error}"))?;
+            Some(InteropCommand::ShowOsd {
+                message: request
+                    .params
+                    .get("message")
+                    .or_else(|| request.params.get("text"))
+                    .or_else(|| request.params.get("value"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                options,
+            })
+        }
+        "osd.hide" | "hide_osd" | "clear_osd" | "pealayer.osd.hide" | "pealayer.message.hide" => {
+            Some(InteropCommand::HideOsd)
+        }
         "quit" | "exit" | "pealayer.quit" => Some(InteropCommand::Quit),
         "workspace" | "set_workspace" | "pealayer.workspace.set" | "pealayer.workspace.restore" => {
             Some(InteropCommand::SetWorkspace {
@@ -2183,7 +2320,16 @@ mod tests {
                 message: "Render complete".to_string()
             }
         );
-        assert!(parse_text_command("message").is_err());
+        assert_eq!(
+            parse_text_command("message").unwrap(),
+            InteropCommand::ShowMessage {
+                message: String::new()
+            }
+        );
+        assert_eq!(
+            parse_text_command("hide-osd").unwrap(),
+            InteropCommand::HideOsd
+        );
         assert_eq!(
             parse_text_command("estop on").unwrap(),
             InteropCommand::SetEmergencyStop { active: true }
@@ -2270,6 +2416,51 @@ mod tests {
             Some(InteropCommand::ShowMessage {
                 message: "Hardware ready".to_string()
             })
+        );
+        let styled_osd_request = JsonRpcRequest {
+            jsonrpc: Some("2.0".to_string()),
+            id: serde_json::json!(3),
+            method: "pealayer.osd.show".to_string(),
+            params: serde_json::json!({
+                "message": "Centered",
+                "position": "center",
+                "x_percent": 42.5,
+                "y_percent": 60.0,
+                "font_size": 30.0,
+                "icon": "play",
+                "text_color": "#ffffff",
+                "background_color": "#112233cc"
+            }),
+        };
+        assert!(matches!(
+            command_from_json_rpc(&styled_osd_request).unwrap(),
+            Some(InteropCommand::ShowOsd { message, options })
+                if message == "Centered"
+                    && options.position == Some(OsdAnchor::Center)
+                    && options.x_percent == Some(42.5)
+                    && options.icon.as_deref() == Some("play")
+        ));
+        let empty_message_request = JsonRpcRequest {
+            jsonrpc: Some("2.0".to_string()),
+            id: serde_json::json!(4),
+            method: "pealayer.message.show".to_string(),
+            params: serde_json::json!({"message": ""}),
+        };
+        assert_eq!(
+            command_from_json_rpc(&empty_message_request).unwrap(),
+            Some(InteropCommand::ShowMessage {
+                message: String::new()
+            })
+        );
+        let hide_request = JsonRpcRequest {
+            jsonrpc: Some("2.0".to_string()),
+            id: serde_json::json!(5),
+            method: "pealayer.osd.hide".to_string(),
+            params: serde_json::json!({}),
+        };
+        assert_eq!(
+            command_from_json_rpc(&hide_request).unwrap(),
+            Some(InteropCommand::HideOsd)
         );
         assert!(parse_text_command("volume 131").is_err());
         assert!(parse_text_command("rate 0").is_err());

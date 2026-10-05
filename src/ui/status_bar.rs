@@ -124,7 +124,13 @@ fn current_status_message(app: &PealayerApp) -> Option<String> {
         });
     }
     let (message, timestamp) = app.osd_message.as_ref()?;
-    let lifetime = std::time::Duration::from_secs_f32(app.osd_timeout_seconds.max(1.0));
+    let lifetime = std::time::Duration::from_secs_f32(
+        app.osd_display_options
+            .as_ref()
+            .and_then(|options| options.timeout_seconds)
+            .unwrap_or(app.osd_timeout_seconds)
+            .max(0.25),
+    );
     (timestamp.elapsed() <= lifetime).then(|| message.clone())
 }
 

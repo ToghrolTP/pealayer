@@ -304,6 +304,8 @@ notifications, and vibration remain capability/secure-context dependent.
 | `POST` | `/api/player/command` | Dispatches player commands (JSON payload), including local files and remote media URLs |
 | `POST` | `/api/rpc` | JSON-RPC 2.0 methods such as `pealayer.play`, `pealayer.seek`, `pealayer.open`, and `pealayer.status` |
 | `POST` | `/api/ipc` | CLI and single-instance command transport; accepts legacy command JSON or newline-compatible JSON-RPC payloads |
+| `POST` | `/api/osd` | Shows a message using optional anchor/X-Y percentages, font size, icon, colors, timeout, padding, and corner radius; an empty message hides it |
+| `DELETE` | `/api/osd` | Immediately hides the currently displayed OSD and status-bar message |
 | `GET` | `/healthz` | Service/API liveness for coordinators and supervisors |
 | `GET` | `/api/fs/browse?dir=<path>` | Lists directory entries, folders, video files, and metadata |
 | `GET` | `/api/fs/thumbnail?path=<path>` | Returns extracted, cached thumbnail image (JPEG/PNG) for media files |
@@ -329,6 +331,12 @@ Send and receive JSON command packets in real time:
 
 // Open an HTTP file, HLS manifest, or live feed (RTSP/RTMP/SRT/UDP/TCP)
 { "command": "open", "target": "rtsp://camera.example.invalid/live" }
+
+// Show a styled OSD at an exact point on the video surface
+{ "command": "show_osd", "message": "Intermission", "options": { "x_percent": 50, "y_percent": 20, "font_size": 30, "icon": "info", "text_color": "#FFFFFF", "background_color": "#111827DD" } }
+
+// Hide the OSD (an empty show_message/show_osd value does the same)
+{ "command": "hide_osd" }
 ```
 
 The same operations are available from the executable. Examples:
@@ -339,6 +347,8 @@ pealayer --seek-to 90 --rate 1.25 --unmute
 pealayer --workspace nle --maximize
 pealayer --remote "seek -10"
 pealayer --command "{\"command\":\"set_volume\",\"value\":65}"
+pealayer --message "Starting feature" # empty text hides the current OSD
+pealayer --hide-osd
 ```
 
 When single-instance mode is enabled, these switches are delivered in order to

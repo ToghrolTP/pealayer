@@ -81,6 +81,11 @@ fn finish_video_surface_gesture(app: &mut PealayerApp) -> bool {
                     .is_playing
                     .store(false, std::sync::atomic::Ordering::Relaxed);
             }
+            app.set_osd(format!(
+                "{}: {:.1}×",
+                app.tr("Playback speed"),
+                gesture.start_rate
+            ));
         }
         crate::config::PlayerDragAction::MoveWindow | crate::config::PlayerDragAction::None => {}
     }
@@ -449,7 +454,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     // 2.5 Draw OSD overlay if active
     if let Some((msg, timestamp)) = &app.osd_message {
         let elapsed = timestamp.elapsed().as_secs_f32();
-        let timeout = app.osd_timeout_seconds.max(1.0);
+        let options = app.osd_display_options.as_ref();
+        let timeout = options
+            .and_then(|options| options.timeout_seconds)
+            .unwrap_or(app.osd_timeout_seconds)
+            .max(0.25);
         let fade_start = (timeout - 0.6).max(0.4);
         if elapsed < timeout {
             let alpha = if elapsed < fade_start {
@@ -457,32 +466,53 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             } else {
                 ((timeout - elapsed) / (timeout - fade_start)).clamp(0.0, 1.0)
             };
-            let text_color = egui::Color32::WHITE.linear_multiply(alpha);
-            let bg_color = egui::Color32::from_black_alpha((180.0 * alpha) as u8);
-
-            let center = match app.osd_position {
-                crate::config::OsdPosition::TopLeft => {
-                    dest_rect.left_top() + egui::vec2(24.0, 24.0)
-                }
-                crate::config::OsdPosition::Center => dest_rect.center(),
-            };
-            let font_id = egui::FontId::proportional(22.0);
-            let osd_text = format!("{}  {}", osd_icon(msg), msg);
+            let text_color = options
+                .and_then(|options| options.text_color.as_deref())
+                .and_then(parse_osd_color)
+                .unwrap_or(egui::Color32::WHITE)
+                .linear_multiply(alpha);
+            let bg_color = options
+                .and_then(|options| options.background_color.as_deref())
+                .and_then(parse_osd_color)
+                .unwrap_or_else(|| egui::Color32::from_black_alpha(180))
+                .linear_multiply(alpha);
+            let font_size = options
+                .and_then(|options| options.font_size)
+                .unwrap_or(22.0)
+                .clamp(8.0, 128.0);
+            let font_id = egui::FontId::proportional(font_size);
+            let icon = requested_osd_icon(options.and_then(|options| options.icon.as_deref()), msg);
+            let osd_text = icon
+                .map(|icon| format!("{icon}  {msg}"))
+                .unwrap_or_else(|| msg.clone());
             let galley = ui.painter().layout_no_wrap(osd_text, font_id, text_color);
-            let rect = match app.osd_position {
-                crate::config::OsdPosition::TopLeft => {
-                    egui::Rect::from_min_size(center, galley.size() + egui::vec2(24.0, 16.0))
-                }
-                crate::config::OsdPosition::Center => {
-                    egui::Rect::from_center_size(center, galley.size() + egui::vec2(24.0, 16.0))
-                }
-            };
-            ui.painter().rect_filled(rect, 8.0, bg_color);
-            ui.painter().galley(
-                rect.min + egui::vec2(12.0, 8.0),
-                galley,
-                egui::Color32::PLACEHOLDER,
+            let padding = egui::vec2(
+                options
+                    .and_then(|options| options.padding_x)
+                    .unwrap_or(12.0),
+                options.and_then(|options| options.padding_y).unwrap_or(8.0),
             );
+            let box_size = galley.size() + padding * 2.0;
+            let default_anchor = match app.osd_position {
+                crate::config::OsdPosition::TopLeft => crate::platform::interop::OsdAnchor::TopLeft,
+                crate::config::OsdPosition::Center => crate::platform::interop::OsdAnchor::Center,
+            };
+            let anchor = options
+                .and_then(|options| options.position)
+                .unwrap_or(default_anchor);
+            let rect = osd_rect(
+                dest_rect,
+                box_size,
+                anchor,
+                options.and_then(|options| options.x_percent),
+                options.and_then(|options| options.y_percent),
+            );
+            let corner_radius = options
+                .and_then(|options| options.corner_radius)
+                .unwrap_or(8.0);
+            ui.painter().rect_filled(rect, corner_radius, bg_color);
+            ui.painter()
+                .galley(rect.min + padding, galley, egui::Color32::PLACEHOLDER);
 
             // Keep a precise expiry without forcing the entire application to
             // render at 60 Hz while the message is static. During the short
@@ -603,6 +633,128 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             galley,
             egui::Color32::PLACEHOLDER,
         );
+    }
+}
+
+fn parse_osd_color(value: &str) -> Option<egui::Color32> {
+    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    let expand = |value: u8| value.saturating_mul(17);
+    match hex.len() {
+        3 | 4 => {
+            let mut digits = hex
+                .chars()
+                .map(|character| character.to_digit(16).map(|v| v as u8));
+            let red = expand(digits.next()??);
+            let green = expand(digits.next()??);
+            let blue = expand(digits.next()??);
+            let alpha = digits.next().flatten().map(expand).unwrap_or(255);
+            Some(egui::Color32::from_rgba_unmultiplied(
+                red, green, blue, alpha,
+            ))
+        }
+        6 | 8 => {
+            let byte = |start: usize| u8::from_str_radix(&hex[start..start + 2], 16).ok();
+            Some(egui::Color32::from_rgba_unmultiplied(
+                byte(0)?,
+                byte(2)?,
+                byte(4)?,
+                if hex.len() == 8 { byte(6)? } else { 255 },
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn osd_rect(
+    bounds: egui::Rect,
+    size: egui::Vec2,
+    anchor: crate::platform::interop::OsdAnchor,
+    x_percent: Option<f32>,
+    y_percent: Option<f32>,
+) -> egui::Rect {
+    use crate::platform::interop::OsdAnchor;
+
+    let margin = 24.0;
+    let min_x = bounds.left() + margin;
+    let center_x = bounds.center().x;
+    let max_x = bounds.right() - margin;
+    let min_y = bounds.top() + margin;
+    let center_y = bounds.center().y;
+    let max_y = bounds.bottom() - margin;
+    let (point, horizontal, vertical) = match anchor {
+        OsdAnchor::TopLeft => (egui::pos2(min_x, min_y), -1, -1),
+        OsdAnchor::TopCenter => (egui::pos2(center_x, min_y), 0, -1),
+        OsdAnchor::TopRight => (egui::pos2(max_x, min_y), 1, -1),
+        OsdAnchor::CenterLeft => (egui::pos2(min_x, center_y), -1, 0),
+        OsdAnchor::Center => (egui::pos2(center_x, center_y), 0, 0),
+        OsdAnchor::CenterRight => (egui::pos2(max_x, center_y), 1, 0),
+        OsdAnchor::BottomLeft => (egui::pos2(min_x, max_y), -1, 1),
+        OsdAnchor::BottomCenter => (egui::pos2(center_x, max_y), 0, 1),
+        OsdAnchor::BottomRight => (egui::pos2(max_x, max_y), 1, 1),
+    };
+    let custom = x_percent.is_some() || y_percent.is_some();
+    let point = egui::pos2(
+        x_percent
+            .map(|value| bounds.left() + bounds.width() * value.clamp(0.0, 100.0) / 100.0)
+            .unwrap_or(point.x),
+        y_percent
+            .map(|value| bounds.top() + bounds.height() * value.clamp(0.0, 100.0) / 100.0)
+            .unwrap_or(point.y),
+    );
+    let mut rect = if custom || (horizontal == 0 && vertical == 0) {
+        egui::Rect::from_center_size(point, size)
+    } else {
+        let left = match horizontal {
+            -1 => point.x,
+            1 => point.x - size.x,
+            _ => point.x - size.x / 2.0,
+        };
+        let top = match vertical {
+            -1 => point.y,
+            1 => point.y - size.y,
+            _ => point.y - size.y / 2.0,
+        };
+        egui::Rect::from_min_size(egui::pos2(left, top), size)
+    };
+    let dx = if rect.left() < bounds.left() {
+        bounds.left() - rect.left()
+    } else if rect.right() > bounds.right() {
+        bounds.right() - rect.right()
+    } else {
+        0.0
+    };
+    let dy = if rect.top() < bounds.top() {
+        bounds.top() - rect.top()
+    } else if rect.bottom() > bounds.bottom() {
+        bounds.bottom() - rect.bottom()
+    } else {
+        0.0
+    };
+    rect = rect.translate(egui::vec2(dx, dy));
+    rect
+}
+
+fn requested_osd_icon(name: Option<&str>, message: &str) -> Option<&'static str> {
+    let Some(name) = name.map(str::trim).filter(|name| !name.is_empty()) else {
+        return Some(osd_icon(message));
+    };
+    match name.to_ascii_lowercase().as_str() {
+        "none" | "hidden" => None,
+        "auto" => Some(osd_icon(message)),
+        "info" => Some(crate::ui::icons::INFO),
+        "play" => Some(crate::ui::icons::PLAY),
+        "pause" => Some(crate::ui::icons::PAUSE),
+        "stop" => Some(crate::ui::icons::STOP_CIRCLE),
+        "warning" => Some(crate::ui::icons::WARNING),
+        "volume" | "speaker" => Some(crate::ui::icons::SPEAKER_HIGH),
+        "mute" => Some(crate::ui::icons::SPEAKER_SLASH),
+        "fast_forward" | "fast-forward" => Some(crate::ui::icons::FAST_FORWARD),
+        "rewind" => Some(crate::ui::icons::REWIND),
+        "record" => Some(crate::ui::icons::RECORD),
+        "subtitle" | "subtitles" => Some(crate::ui::icons::SUBTITLES),
+        "video" => Some(crate::ui::icons::FILE_VIDEO),
+        "fullscreen" => Some(crate::ui::icons::ARROWS_OUT),
+        other => crate::ui::icons::named_control_icon(other).or(Some(crate::ui::icons::INFO)),
     }
 }
 

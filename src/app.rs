@@ -364,6 +364,7 @@ pub struct PealayerApp {
     pub(crate) elapsed_time_input: String,
     pub(crate) elapsed_edit_focus_requested: bool,
     pub(crate) osd_message: Option<(String, std::time::Instant)>,
+    pub(crate) osd_display_options: Option<crate::platform::interop::OsdOptions>,
     pub(crate) recent_media: Vec<std::path::PathBuf>,
     pub(crate) last_media_target: Option<std::path::PathBuf>,
     pub(crate) restore_last_media_on_startup: bool,
@@ -2897,6 +2898,14 @@ impl PealayerApp {
                 self.set_osd(message);
                 return;
             }
+            InteropCommand::ShowOsd { message, options } => {
+                self.set_osd_with_options(message, options);
+                return;
+            }
+            InteropCommand::HideOsd => {
+                self.clear_osd();
+                return;
+            }
             InteropCommand::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             InteropCommand::SetWorkspace { profile } => {
                 self.restore_workspace_profile(ctx, &profile);
@@ -5297,7 +5306,30 @@ impl PealayerApp {
     }
 
     pub fn set_osd(&mut self, msg: String) {
-        self.osd_message = Some((msg, std::time::Instant::now()));
+        self.osd_display_options = None;
+        if msg.trim().is_empty() {
+            self.osd_message = None;
+        } else {
+            self.osd_message = Some((msg, std::time::Instant::now()));
+        }
+    }
+
+    pub fn set_osd_with_options(
+        &mut self,
+        msg: String,
+        options: crate::platform::interop::OsdOptions,
+    ) {
+        if msg.trim().is_empty() {
+            self.clear_osd();
+        } else {
+            self.osd_message = Some((msg, std::time::Instant::now()));
+            self.osd_display_options = Some(options);
+        }
+    }
+
+    pub fn clear_osd(&mut self) {
+        self.osd_message = None;
+        self.osd_display_options = None;
     }
 
     pub(crate) fn set_playback_speed(&mut self, speed: f64, persist: bool) {
@@ -6075,6 +6107,7 @@ impl Default for PealayerApp {
             elapsed_time_input: String::new(),
             elapsed_edit_focus_requested: false,
             osd_message: None,
+            osd_display_options: None,
             recent_media: Vec::new(),
             last_media_target: None,
             restore_last_media_on_startup: true,

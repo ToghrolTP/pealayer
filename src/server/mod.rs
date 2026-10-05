@@ -482,7 +482,7 @@ impl HttpResponse {
 fn write_http_response(stream: &mut TcpStream, response: HttpResponse) -> std::io::Result<()> {
     write!(
         stream,
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: {}\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: SAMEORIGIN\r\nReferrer-Policy: no-referrer\r\nPermissions-Policy: fullscreen=(self), screen-wake-lock=(self)\r\nContent-Security-Policy: default-src 'self'; connect-src 'self' ws: wss: http: https:; img-src 'self' data: blob: http: https:; media-src 'self' blob: http: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: {}\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: SAMEORIGIN\r\nReferrer-Policy: no-referrer\r\nPermissions-Policy: fullscreen=(self), screen-wake-lock=(self)\r\nContent-Security-Policy: default-src 'self'; connect-src 'self' ws: wss: http: https:; img-src 'self' data: blob: http: https:; media-src 'self' blob: http: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n\r\n",
         response.status,
         response.reason,
         response.content_type,
@@ -624,6 +624,8 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
             "OK",
             crate::platform::interop::command_catalog().to_string(),
         ),
+        ("POST", "/api/osd") => osd_response(&request.body, false, state),
+        ("DELETE", "/api/osd") => osd_response(&request.body, true, state),
         ("POST", "/api/rpc") => json_rpc_response(&request.body, state),
         ("POST", "/api/player/command") => player_command_response(&request.body, state),
         ("POST", "/api/ipc") => HttpResponse::json(
@@ -848,6 +850,57 @@ fn player_command_response(body: &[u8], state: &ControlState) -> HttpResponse {
             400,
             "Bad Request",
             serde_json::json!({"error": format!("invalid command: {error}")}).to_string(),
+        ),
+    }
+}
+
+fn osd_response(body: &[u8], force_hide: bool, state: &ControlState) -> HttpResponse {
+    use crate::platform::interop::{InteropCommand, OsdOptions};
+
+    let command = if force_hide || body.iter().all(u8::is_ascii_whitespace) {
+        Ok(InteropCommand::HideOsd)
+    } else {
+        serde_json::from_slice::<serde_json::Value>(body)
+            .map_err(|error| format!("invalid OSD JSON: {error}"))
+            .and_then(|value| match value {
+                serde_json::Value::String(message) => Ok(InteropCommand::ShowMessage { message }),
+                serde_json::Value::Null => Ok(InteropCommand::HideOsd),
+                serde_json::Value::Object(values) => {
+                    let message = values
+                        .get("message")
+                        .or_else(|| values.get("text"))
+                        .or_else(|| values.get("value"))
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let options_value = values
+                        .get("options")
+                        .or_else(|| values.get("style"))
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::Value::Object(values));
+                    let options = serde_json::from_value::<OsdOptions>(options_value)
+                        .map_err(|error| format!("invalid OSD options: {error}"))?;
+                    Ok(InteropCommand::ShowOsd { message, options })
+                }
+                _ => Err("OSD body must be a JSON object, string, or null".to_string()),
+            })
+    };
+
+    match command.and_then(|command| {
+        command.validate()?;
+        state
+            .command_tx
+            .send(command)
+            .map_err(|_| "dispatcher unavailable".to_string())
+    }) {
+        Ok(()) => {
+            state.egui_ctx.request_repaint();
+            HttpResponse::json(202, "Accepted", r#"{"accepted":true}"#)
+        }
+        Err(error) => HttpResponse::json(
+            400,
+            "Bad Request",
+            serde_json::json!({"error": error}).to_string(),
         ),
     }
 }
