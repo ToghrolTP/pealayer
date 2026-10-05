@@ -208,5 +208,6 @@ fn workspace_icon_picker(
         &crate::ui::i18n::tr(language, "Search icons..."),
         &crate::ui::i18n::tr(language, "Presets"),
         &crate::ui::i18n::tr(language, "No matching icons"),
+        language,
     )
 }

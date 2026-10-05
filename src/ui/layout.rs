@@ -2528,6 +2528,7 @@ fn draw_control_icon_picker(
         size,
         &tooltip,
         crate::ui::icons::IconPickerConfig {
+            language: app.language,
             presets: crate::ui::icons::CONTROL_ICON_PRESETS,
             fallback_glyph: crate::ui::icons::control(&control.kind, ""),
             fallback_name: &default_label,
@@ -8686,6 +8687,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                         item_id.with("inline-icon"),
                                                                         &mut edit.icon,
                                                                         crate::ui::icons::IconPickerConfig {
+                                                                            language: self.app.language,
                                                                             presets: crate::ui::icons::CONTROL_ICON_PRESETS,
                                                                             fallback_glyph: crate::ui::icons::SPARKLE,
                                                                             fallback_name: "Sparkle",
@@ -9015,6 +9017,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let save_group_label = self.app.tr("Save to PCController");
                             let cancel_group_label = self.app.tr("Cancel");
                             let rtl_ui = self.app.rtl;
+                            let icon_language = self.app.language;
                             if let Some(draft) = self.app.effect_group_draft.as_mut() {
                                 egui::Window::new(group_editor_title)
                                 .id(egui::Id::new("effect_group_editor"))
@@ -9043,6 +9046,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 "effect_group_icon_picker",
                                                 &mut draft.icon,
                                                 crate::ui::icons::IconPickerConfig {
+                                                    language: icon_language,
                                                     presets: crate::ui::icons::CONTROL_ICON_PRESETS,
                                                     fallback_glyph: crate::ui::icons::FOLDER_OPEN,
                                                     fallback_name: &group_default_icon_label,

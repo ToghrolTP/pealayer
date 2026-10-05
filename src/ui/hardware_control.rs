@@ -2518,6 +2518,7 @@ fn draw_channel_detail_page(
                                         ("hardware-control-icon", &control.key),
                                         &mut app.hardware_control_icon_draft,
                                         crate::ui::icons::IconPickerConfig {
+                                            language: app.language,
                                             presets: crate::ui::icons::CONTROL_ICON_PRESETS,
                                             fallback_glyph: crate::ui::icons::control(
                                                 &control.kind,

@@ -826,6 +826,8 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Effect templates" => "الگوهای جلوه",
         "Icon" => "نماد",
         "Search icons..." => "جست‌وجوی نمادها…",
+        "List view" => "نمای فهرست",
+        "Grid view" => "نمای شبکه‌ای",
         "Presets" => "گزینه‌های آماده",
         "No matching icons" => "نماد منطبقی پیدا نشد",
         "Name" => "نام",

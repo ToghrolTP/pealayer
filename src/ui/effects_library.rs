@@ -2060,6 +2060,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         &icon_picker_labels.0,
                                         &icon_picker_labels.1,
                                         &icon_picker_labels.2,
+                                        display_language,
                                     );
                                     ui.end_row();
                                     if draft.kind != "sequence" {

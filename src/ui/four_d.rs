@@ -177,6 +177,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             &search_hint,
                             &presets_label,
                             &no_matches_label,
+                            app.language,
                         );
                         ui.end_row();
 
