@@ -241,6 +241,8 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Collapse group" => "جمع‌کردن گروه",
         "Expand group" => "بازکردن گروه",
         "New effect in this group" => "جلوهٔ جدید در این گروه",
+        "New group" => "گروه جدید",
+        "Create effect" => "ایجاد جلوه",
         "Edit effect" => "ویرایش جلوه",
         "My effects" => "جلوه‌های من",
         "Macro" => "ماکرو",

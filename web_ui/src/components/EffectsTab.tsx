@@ -23,6 +23,7 @@ import {
   CheckOutlined,
   DeleteOutlined,
   EditOutlined,
+  FolderAddOutlined,
   MoreOutlined,
   PlayCircleOutlined,
   PlusOutlined,
@@ -102,6 +103,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
   const [draft, setDraft] = useState<EffectDraft | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [inlineEdit, setInlineEdit] = useState<InlineEffectEdit | null>(null);
+  const [newGroupName, setNewGroupName] = useState<string | null>(null);
   const selectedEffect = effects.find((effect) => effect.reference === selected);
   const grouped = useMemo(() => {
     const groups = new Map<string, typeof effects>();
@@ -109,7 +111,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
     return [...groups.entries()];
   }, [effects, locale]);
 
-  const openEditor = (effect?: typeof effects[number]) => {
+  const openEditor = (effect?: typeof effects[number], category?: string) => {
     const parts = programParts(effect?.program);
     setDraft(effect ? {
       reference: effect.reference,
@@ -128,11 +130,18 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       programText: effect.kind === 'strip-stream' ? JSON.stringify(effect.program ?? {}, null, 2) : '{}',
       is_new: false,
     } : {
-      reference: '', id: '', name: '', icon: 'plug', category: 'Motion', description: '', kind: 'sequence',
+      reference: '', id: '', name: '', icon: 'plug', category: category ?? 'Motion', description: '', kind: 'sequence',
       duration_ms: 1000, color: '#38D27A', default_fps: 20, default_pixels: 100,
       steps: [defaultStep()], properties: { mode: 'host', timing_tolerance_us: 0, keep_outputs_on_cancel: false },
       programText: '{}', is_new: true,
     });
+  };
+
+  const createGroupEffect = () => {
+    const category = newGroupName?.trim();
+    if (!category) return;
+    openEditor(undefined, category);
+    setNewGroupName(null);
   };
 
   const updateStep = (index: number, patch: Partial<EffectStep>) => {
@@ -209,14 +218,16 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       </div>
       <Space>
         {state.hardware_details?.strip?.running && <Button icon={<StopOutlined />} onClick={() => sendCmd('controller_effect.stop')}>{tr(locale, 'Stop preview')}</Button>}
+        <Button icon={<FolderAddOutlined />} onClick={() => setNewGroupName('')}>{tr(locale, 'New group')}</Button>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => openEditor()}>{tr(locale, 'New effect')}</Button>
       </Space>
     </header>
 
-    {effects.length === 0 ? <Card className="surface-card"><Empty description={tr(locale, 'No effects')}><Button type="primary" icon={<PlusOutlined />} onClick={() => openEditor()}>{tr(locale, 'Create effect')}</Button></Empty></Card> :
+    {effects.length === 0 ? <Card className="surface-card"><Empty description={tr(locale, 'No effects')}><Space wrap><Button type="primary" icon={<PlusOutlined />} onClick={() => openEditor()}>{tr(locale, 'Create effect')}</Button><Button icon={<FolderAddOutlined />} onClick={() => setNewGroupName('')}>{tr(locale, 'New group')}</Button></Space></Empty></Card> :
       <Collapse className="effect-groups" defaultActiveKey={grouped.map(([group]) => group)} items={grouped.map(([group, items]) => ({
         key: group,
         label: <span className="effect-group-title"><strong>{group}</strong><Tag>{items.length}</Tag></span>,
+        extra: <Tooltip title={tr(locale, 'New effect in this group')}><Button type="text" size="small" icon={<PlusOutlined />} aria-label={tr(locale, 'New effect in this group')} onClick={(event) => { event.stopPropagation(); openEditor(undefined, group); }} /></Tooltip>,
         children: <div className="effect-card-grid">{items.map((effect) => {
           const actions = [
             { key: 'play', label: tr(locale, 'Play effect'), icon: <PlayCircleOutlined /> },
@@ -283,6 +294,20 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       }))} />}
 
     {selectedEffect && <div className="selection-bar"><span>{selectedEffect.name}</span><Button icon={<EditOutlined />} onClick={() => openEditor(selectedEffect)}>{tr(locale, 'Manage')}</Button></div>}
+
+    <Modal
+      title={<Space><FolderAddOutlined />{tr(locale, 'New group')}</Space>}
+      open={newGroupName !== null}
+      width={360}
+      destroyOnHidden
+      okText={tr(locale, 'Create effect')}
+      cancelText={tr(locale, 'Cancel')}
+      okButtonProps={{ disabled: !newGroupName?.trim(), icon: <PlusOutlined /> }}
+      onCancel={() => setNewGroupName(null)}
+      onOk={createGroupEffect}
+    >
+      <Input autoFocus aria-label={tr(locale, 'Group name')} placeholder={tr(locale, 'Group name')} value={newGroupName ?? ''} onChange={(event) => setNewGroupName(event.target.value)} onPressEnter={createGroupEffect} />
+    </Modal>
 
     <Modal
       className="effect-editor-modal"

@@ -273,6 +273,29 @@ pub(crate) fn begin_new_effect(app: &mut PealayerApp, category: Option<String>) 
     app.show_effect_library_editor = true;
 }
 
+pub(crate) fn begin_new_group(app: &mut PealayerApp) {
+    app.effect_group_draft = Some(crate::app::ControllerEffectGroupDraft {
+        original_name: String::new(),
+        name: String::new(),
+        icon: String::new(),
+    });
+}
+
+pub(crate) fn create_first_group_effect(app: &mut PealayerApp) -> bool {
+    let Some(category) = app
+        .effect_group_draft
+        .as_ref()
+        .filter(|draft| draft.original_name.is_empty())
+        .map(|draft| draft.name.trim().to_string())
+        .filter(|name| !name.is_empty())
+    else {
+        return false;
+    };
+    begin_new_effect(app, Some(category));
+    app.effect_group_draft = None;
+    true
+}
+
 fn start_new_lighting(
     app: &mut PealayerApp,
     effects: &[crate::four_d::controller::HardwareStripEffect],
@@ -2361,6 +2384,22 @@ mod tests {
         assert_eq!(app.effect_library_draft.category, "Motion");
         assert!(app.effect_library_draft.steps.is_empty());
         assert_eq!(app.effect_library_draft.engine, "auto");
+    }
+
+    #[test]
+    fn new_group_creates_its_first_effect_in_the_named_category() {
+        let mut app = PealayerApp::default();
+        app.effect_library_draft.name = "Existing draft".to_string();
+        begin_new_group(&mut app);
+        assert_eq!(app.effect_library_draft.name, "Existing draft");
+        assert!(!create_first_group_effect(&mut app));
+        assert!(app.effect_group_draft.is_some());
+        app.effect_group_draft.as_mut().unwrap().name = "  Cinema lighting  ".to_string();
+        assert!(create_first_group_effect(&mut app));
+        assert!(app.effect_group_draft.is_none());
+        assert!(app.show_effect_library_editor);
+        assert!(app.effect_library_draft.is_new);
+        assert_eq!(app.effect_library_draft.category, "Cinema lighting");
     }
 
     #[test]

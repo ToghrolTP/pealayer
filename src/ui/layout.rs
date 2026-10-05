@@ -700,6 +700,65 @@ fn effect_group_header<R>(
         })
 }
 
+fn effect_group_action_header(
+    ui: &mut egui::Ui,
+    outer_width: f32,
+    title: &str,
+    icon: &str,
+    open: bool,
+    count: usize,
+    add_tooltip: &str,
+) -> (egui::Response, egui::Response) {
+    effect_group_header(ui, outer_width, |ui| {
+        ui.horizontal(|ui| {
+            let spacing = ui.spacing().item_spacing.x;
+            let count_text = count.to_string();
+            let count_width = ui.fonts_mut(|fonts| {
+                fonts
+                    .layout_no_wrap(
+                        count_text.clone(),
+                        egui::TextStyle::Small.resolve(ui.style()),
+                        ui.visuals().text_color(),
+                    )
+                    .size()
+                    .x
+            }) + 14.0;
+            let title_width = (ui.available_width() - 24.0 - count_width - spacing * 2.0).max(1.0);
+            let title_response = ui
+                .allocate_ui_with_layout(
+                    egui::vec2(title_width, 24.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.style_mut().interaction.selectable_labels = false;
+                        ui.set_width(title_width);
+                        ui.label(if open {
+                            crate::ui::icons::CARET_DOWN
+                        } else {
+                            crate::ui::icons::CARET_RIGHT
+                        });
+                        ui.label(icon);
+                        ui.add(egui::Label::new(egui::RichText::new(title).strong()).truncate());
+                    },
+                )
+                .response
+                .interact(egui::Sense::click());
+            let add_response = ui
+                .add_sized([24.0, 24.0], egui::Button::new(crate::ui::icons::PLUS))
+                .on_hover_text(add_tooltip);
+            egui::Frame::new()
+                .fill(ui.visuals().selection.bg_fill.gamma_multiply(0.22))
+                .corner_radius(9.0)
+                .inner_margin(egui::Margin::symmetric(7, 2))
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new(count_text).small().strong());
+                });
+            (title_response, add_response)
+        })
+        .inner
+    })
+    .inner
+}
+
 fn effect_controls_content_width(available_width: f32) -> f32 {
     (available_width - EFFECT_CONTROLS_RIGHT_GUTTER).max(1.0)
 }
@@ -6389,6 +6448,70 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn effect_group_add_button_click_does_not_collapse_the_group() {
+        for dark in [false, true] {
+            let context = egui::Context::default();
+            context.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+            let frame = |events| {
+                let actions =
+                    std::cell::Cell::new((false, false, egui::Rect::NOTHING, egui::Rect::NOTHING));
+                let output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(400.0, 200.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let (title, add) = effect_group_action_header(
+                            ui,
+                            317.0,
+                            "Cinema lighting with a long caption",
+                            crate::ui::icons::FOLDER_OPEN,
+                            true,
+                            12,
+                            "New effect in this group",
+                        );
+                        actions.set((title.clicked(), add.clicked(), title.rect, add.rect));
+                        assert!(ui.min_rect().width() <= 317.0 + f32::EPSILON);
+                    },
+                );
+                discard_ui_output(output);
+                actions.get()
+            };
+            let (_, _, title, add) = frame(Vec::new());
+            assert!(title.right() <= add.left());
+            for (position, expected) in [
+                (add.center(), (false, true)),
+                (title.center(), (true, false)),
+            ] {
+                frame(vec![
+                    egui::Event::PointerMoved(position),
+                    egui::Event::PointerButton {
+                        pos: position,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]);
+                let (toggle, create, _, _) = frame(vec![egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }]);
+                assert_eq!((toggle, create), expected);
+            }
+        }
+    }
+
+    #[test]
     fn production_effect_action_row_stays_within_the_card_width() {
         let spacing = 8.0;
         for available in [112.0, 180.0, 297.0] {
@@ -8457,12 +8580,18 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         let force_open = !query.is_empty();
 
                         if categorized.is_empty() {
-                            ui.centered_and_justified(|ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(24.0);
                                 ui.label(
                                     egui::RichText::new(self.app.tr("No effects"))
                                     .weak()
                                     .size(12.0),
                                 );
+                                ui.add_space(8.0);
+                                if ui.button(format!("{} {}", crate::ui::icons::FOLDER_OPEN,
+                                    self.app.tr("New group"))).clicked() {
+                                    crate::ui::effects_library::begin_new_group(self.app);
+                                }
                             });
                         } else {
                             egui::ScrollArea::vertical()
@@ -8496,50 +8625,20 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             &group_icon_name,
                                         )
                                         .unwrap_or(crate::ui::icons::FOLDER_OPEN);
-                                        let group_header = effect_group_header(
+                                        let (group_response, add_effect) = effect_group_action_header(
                                             ui,
                                             effects_width,
-                                            |ui| {
-                                                ui.horizontal(|ui| {
-                                                    ui.label(if open {
-                                                        crate::ui::icons::CARET_DOWN
-                                                    } else {
-                                                        crate::ui::icons::CARET_RIGHT
-                                                    });
-                                                    ui.label(group_icon);
-                                                    ui.label(
-                                                        egui::RichText::new(displayed_category)
-                                                            .strong(),
-                                                    );
-                                                    ui.with_layout(
-                                                        egui::Layout::right_to_left(
-                                                            egui::Align::Center,
-                                                        ),
-                                                        |ui| {
-                                                            egui::Frame::new()
-                                                                .fill(
-                                                                    ui.visuals()
-                                                                        .selection
-                                                                        .bg_fill
-                                                                        .gamma_multiply(0.22),
-                                                                )
-                                                                .corner_radius(9.0)
-                                                                .inner_margin(egui::Margin::symmetric(7, 2))
-                                                                .show(ui, |ui| {
-                                                                    ui.label(
-                                                                        egui::RichText::new(
-                                                                            presets.len().to_string(),
-                                                                        )
-                                                                        .small()
-                                                                        .strong(),
-                                                                    );
-                                                                });
-                                                        },
-                                                    );
-                                                });
-                                            },
+                                            &displayed_category,
+                                            group_icon,
+                                            open,
+                                            presets.len(),
+                                            &self.app.tr("New effect in this group"),
                                         );
-                                        let group_response = group_header.response.interact(egui::Sense::click());
+                                        if add_effect.clicked() {
+                                            crate::ui::effects_library::begin_new_effect(
+                                                self.app, Some(category.clone()),
+                                            );
+                                        }
                                         if group_response.clicked() {
                                             open = !open;
                                         }
@@ -8569,7 +8668,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             if ui
                                                 .button(format!(
                                                     "{} {}",
-                                                    crate::ui::icons::SPARKLE,
+                                                    crate::ui::icons::PLUS,
                                                     self.app.tr("New effect in this group")
                                                 ))
                                                 .clicked()
@@ -8578,6 +8677,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     self.app,
                                                     Some(category.clone()),
                                                 );
+                                                ui.close();
+                                            }
+                                            if ui.button(format!("{} {}", crate::ui::icons::FOLDER_OPEN,
+                                                self.app.tr("New group"))).clicked() {
+                                                crate::ui::effects_library::begin_new_group(self.app);
                                                 ui.close();
                                             }
                                             if ui
@@ -9003,10 +9107,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let mut keep_group_editor_open = self.app.effect_group_draft.is_some();
                             let mut save_group = false;
                             let mut cancel_group = false;
+                            let new_group = self.app.effect_group_draft.as_ref()
+                                .is_some_and(|draft| draft.original_name.is_empty());
                             let group_editor_title = format!(
                                 "{} {}",
                                 crate::ui::icons::FOLDER_OPEN,
-                                self.app.tr("Manage effect group")
+                                self.app.tr(if new_group { "New group" } else { "Manage effect group" })
                             );
                             let group_name_label = self.app.tr("Name");
                             let group_icon_label = self.app.tr("Icon");
@@ -9014,7 +9120,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let icon_search_hint = self.app.tr("Search icons...");
                             let icon_no_matches_label = self.app.tr("No matching icons");
                             let group_default_icon_label = self.app.tr("Folder");
-                            let save_group_label = self.app.tr("Save to PCController");
+                            let save_group_label = self.app.tr(if new_group { "Create effect" } else { "Save to PCController" });
                             let cancel_group_label = self.app.tr("Cancel");
                             let rtl_ui = self.app.rtl;
                             let icon_language = self.app.language;
@@ -9034,12 +9140,23 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 rtl_ui,
                                                 &draft.name,
                                             );
-                                            ui.add(
+                                            let name_response = ui.add(
                                                 egui::TextEdit::singleline(&mut draft.name)
                                                     .horizontal_align(name_align)
                                                     .desired_width(250.0),
                                             );
+                                            let focus_id = egui::Id::new("new-effect-group-name-focus");
+                                            if new_group && !draft.name.trim().is_empty()
+                                                && name_response.lost_focus()
+                                                && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                                                save_group = true;
+                                            }
+                                            if new_group && !ui.data_mut(|data| data.get_temp::<bool>(focus_id).unwrap_or(false)) {
+                                                name_response.request_focus();
+                                                ui.data_mut(|data| data.insert_temp(focus_id, true));
+                                            }
                                             ui.end_row();
+                                            if !new_group {
                                             ui.label(&group_icon_label);
                                             crate::ui::icons::searchable_icon_picker(
                                                 ui,
@@ -9059,6 +9176,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 },
                                             );
                                             ui.end_row();
+                                            }
                                         });
                                     ui.add_space(10.0);
                                     ui.horizontal(|ui| {
@@ -9067,7 +9185,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 !draft.name.trim().is_empty(),
                                                 egui::Button::new(format!(
                                                     "{} {}",
-                                                    crate::ui::icons::FLOPPY_DISK,
+                                                    if new_group { crate::ui::icons::PLUS } else { crate::ui::icons::FLOPPY_DISK },
                                                     save_group_label
                                                 )),
                                             )
@@ -9093,7 +9211,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
                             if save_group {
                                 if let Some(draft) = self.app.effect_group_draft.clone() {
-                                    if let Err(error) = self.app.save_controller_effect_group(draft) {
+                                    if new_group {
+                                        keep_group_editor_open = !crate::ui::effects_library::create_first_group_effect(self.app);
+                                    } else if let Err(error) = self.app.save_controller_effect_group(draft) {
                                         self.app.set_osd(error);
                                     } else {
                                         keep_group_editor_open = false;
@@ -9102,6 +9222,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
                             if !keep_group_editor_open {
                                 self.app.effect_group_draft = None;
+                                ui.data_mut(|data| data.remove::<bool>(egui::Id::new("new-effect-group-name-focus")));
                             }
                         }
                     }
