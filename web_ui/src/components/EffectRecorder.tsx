@@ -22,7 +22,7 @@ interface EffectRecorderProps {
 export const EffectRecorder: React.FC<EffectRecorderProps> = ({ state, sendCmd, locale, compact = false, onNewGroup }) => {
   const recording = state.effect_recording ?? {
     active: false, id: 0, name: '', mode: '', category: '', color: '', steps: 0,
-    device_retained: false, overwritten: 0, started_at: '', last_error: '', pending: false,
+    preview: [], device_retained: false, overwritten: 0, started_at: '', last_error: '', pending: false,
   };
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
@@ -76,6 +76,23 @@ export const EffectRecorder: React.FC<EffectRecorderProps> = ({ state, sendCmd, 
         <Tag>{recording.device_retained ? tr(locale, 'Physical relays / Board RAM') : tr(locale, 'Board / RF / front panel')}</Tag>
         {recording.overwritten > 0 && <Tag color="orange">{recording.overwritten} {tr(locale, 'overwritten')}</Tag>}
       </Space>}
+      {recording.active && <div className="effect-recorder__preview" aria-live="polite">
+        <strong>{tr(locale, 'Live sequence')}</strong>
+        {(recording.preview ?? []).length === 0 ? <span>{tr(locale, 'Waiting for the first captured action…')}</span> : <ol>
+          {(recording.preview ?? []).map((step, index) => {
+            const detail = step.action_ids?.length
+              ? step.action_ids.join(' · ')
+              : step.text?.trim()
+                ? step.text.replace(/\n/g, ' · ')
+                : [step.target === undefined ? '' : `target ${step.target}`, step.value === undefined ? '' : `value ${step.value}`].filter(Boolean).join(' · ');
+            return <li key={`${step.at_us}-${index}`}>
+              <time>{(step.at_us / 1_000_000).toFixed(3)}s</time>
+              <b>{step.kind}</b>
+              {detail && <span>{detail}</span>}
+            </li>;
+          })}
+        </ol>}
+      </div>}
       {recording.last_error && <div className="effect-recorder__error">{recording.last_error}</div>}
 
       <div className="effect-recorder__actions">

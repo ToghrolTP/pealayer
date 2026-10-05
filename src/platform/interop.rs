@@ -224,7 +224,10 @@ pub enum InteropCommand {
         reference: String,
     },
     StopControllerEffect,
-    CreateControllerEffectGroup { name: String, icon: String },
+    CreateControllerEffectGroup {
+        name: String,
+        icon: String,
+    },
     DeleteControllerEffect {
         reference: String,
     },
@@ -490,8 +493,11 @@ impl InteropCommand {
             }
             Self::SaveControllerEffect { effect } => effect.validate(),
             Self::CreateControllerEffectGroup { name, icon }
-                if name.trim().is_empty() || name.len() > 64 || icon.len() > 64
-                    || name.chars().any(char::is_control) || icon.chars().any(char::is_control) =>
+                if name.trim().is_empty()
+                    || name.len() > 64
+                    || icon.len() > 64
+                    || name.chars().any(char::is_control)
+                    || icon.chars().any(char::is_control) =>
             {
                 Err("Group name and icon must be bounded printable values".to_owned())
             }
@@ -883,6 +889,8 @@ pub struct WebEffectRecording {
     pub category: String,
     pub color: String,
     pub steps: usize,
+    #[serde(default)]
+    pub preview: Vec<crate::four_d::controller::HardwareMacroStep>,
     pub device_retained: bool,
     pub overwritten: usize,
     pub started_at: String,
@@ -1141,9 +1149,15 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "preferences" | "open_preferences" | "pealayer.window.preferences" => {
             Some(InteropCommand::OpenPreferences)
         }
-        "media_information" | "open_media_information" | "pealayer.media.information" => Some(InteropCommand::OpenMediaInformation),
-        "media_folder" | "open_media_folder" | "pealayer.media.folder" => Some(InteropCommand::OpenMediaFolder),
-        "edit_configuration" | "edit_config" | "pealayer.config.edit" => Some(InteropCommand::EditConfiguration),
+        "media_information" | "open_media_information" | "pealayer.media.information" => {
+            Some(InteropCommand::OpenMediaInformation)
+        }
+        "media_folder" | "open_media_folder" | "pealayer.media.folder" => {
+            Some(InteropCommand::OpenMediaFolder)
+        }
+        "edit_configuration" | "edit_config" | "pealayer.config.edit" => {
+            Some(InteropCommand::EditConfiguration)
+        }
         "board_information" | "board.info.open" | "pealayer.board.info.open" => {
             let tab = request
                 .params
@@ -1298,7 +1312,12 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "controller_effect.group.create" | "pealayer.controller_effect.group.create" => {
             Some(InteropCommand::CreateControllerEffectGroup {
                 name: string(&["name"])?,
-                icon: request.params.get("icon").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                icon: request
+                    .params
+                    .get("icon")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
             })
         }
         "controller_effect.delete" | "pealayer.controller_effect.delete" => {
@@ -2577,9 +2596,14 @@ mod tests {
         assert!(matches!(command_from_json_rpc(&group).unwrap(),
             Some(InteropCommand::CreateControllerEffectGroup { name, icon })
                 if name == "Cinema lighting" && icon == "lamp"));
-        assert!(InteropCommand::CreateControllerEffectGroup {
-            name: " ".to_owned(), icon: String::new(),
-        }.validate().is_err());
+        assert!(
+            InteropCommand::CreateControllerEffectGroup {
+                name: " ".to_owned(),
+                icon: String::new(),
+            }
+            .validate()
+            .is_err()
+        );
         let cue: JsonRpcRequest = serde_json::from_str(
             r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.controller_effect_cue.add","params":{"reference":"effect:lighting-primary","start_time_ms":1250}}"#,
         )

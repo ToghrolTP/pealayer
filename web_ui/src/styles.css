@@ -240,6 +240,12 @@ body {
 .effect-recorder__header strong { color: var(--text); font-size: 13px; }
 .effect-recorder__header span { color: var(--subtle); font-size: 11px; }
 .recording-pulse { width: 11px; height: 11px; flex: 0 0 11px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 5px color-mix(in srgb, var(--red) 16%, transparent); animation: record-pulse 1.3s ease-in-out infinite; }
+.effect-recorder__preview { display: grid; gap: 7px; min-width: 0; }
+.effect-recorder__preview > span { color: var(--text-muted); font-size: 0.82rem; }
+.effect-recorder__preview ol { display: grid; gap: 4px; max-height: 190px; margin: 0; padding: 0 4px 0 0; overflow: auto; list-style: none; }
+.effect-recorder__preview li { display: grid; grid-template-columns: 64px minmax(84px, auto) minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; background: color-mix(in srgb, var(--panel) 88%, transparent); font-size: 0.78rem; }
+.effect-recorder__preview time { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.effect-recorder__preview li > span { min-width: 0; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @keyframes record-pulse { 50% { opacity: .45; box-shadow: 0 0 0 9px transparent; } }
 .effect-recorder__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
 .effect-recorder__grid label { min-width: 0; display: grid; gap: 4px; color: var(--muted); font-size: 11px; }
