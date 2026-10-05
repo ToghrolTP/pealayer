@@ -453,6 +453,105 @@ pub fn compact_row(ui: &mut egui::Ui, rtl: bool, body: impl FnOnce(&mut egui::Ui
     );
 }
 
+/// A responsive settings row shared by compact media dialogs. Labels retain
+/// their natural reading order, supporting copy sits directly below them, and
+/// the interactive control remains aligned at the trailing edge. At narrow
+/// widths the control wraps beneath the label instead of clipping either side.
+pub fn setting_row(
+    ui: &mut egui::Ui,
+    icon: &str,
+    label: &str,
+    description: Option<&str>,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    let available = ui.available_width();
+    if available < 330.0 {
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(icon).color(ui.visuals().selection.bg_fill));
+                ui.label(egui::RichText::new(label).strong());
+            });
+            if let Some(description) = description {
+                ui.label(egui::RichText::new(description).small().weak());
+            }
+            ui.add_space(3.0);
+            body(ui);
+        });
+    } else {
+        let label_width = (available * 0.44).clamp(145.0, 210.0);
+        ui.horizontal(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(label_width, 0.0),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(icon).color(ui.visuals().selection.bg_fill));
+                        ui.label(egui::RichText::new(label).strong());
+                    });
+                    if let Some(description) = description {
+                        ui.label(egui::RichText::new(description).small().weak());
+                    }
+                },
+            );
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), 0.0),
+                egui::Layout::right_to_left(egui::Align::Center),
+                body,
+            );
+        });
+    }
+}
+
+/// A compact numeric input flanked by explicit decrement/increment actions.
+/// This is intentionally one shared control so Subtitle and Audio settings do
+/// not drift in sizing, keyboard input, bounds, or icon treatment.
+pub fn numeric_stepper(
+    ui: &mut egui::Ui,
+    value: &mut f64,
+    range: std::ops::RangeInclusive<f64>,
+    step: f64,
+    decimals: usize,
+    suffix: &str,
+) -> bool {
+    let min = *range.start();
+    let max = *range.end();
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        let decrement = ui
+            .add_sized(
+                [28.0, 26.0],
+                egui::Button::new(crate::ui::icons::MINUS).corner_radius(6.0),
+            )
+            .on_hover_text(format!("Decrease by {step}"));
+        if decrement.clicked() {
+            *value = (*value - step).clamp(min, max);
+            changed = true;
+        }
+
+        let response = ui.add_sized(
+            [86.0, 26.0],
+            egui::DragValue::new(value)
+                .speed(step)
+                .range(range)
+                .fixed_decimals(decimals)
+                .suffix(suffix),
+        );
+        changed |= response.changed();
+
+        let increment = ui
+            .add_sized(
+                [28.0, 26.0],
+                egui::Button::new(crate::ui::icons::PLUS).corner_radius(6.0),
+            )
+            .on_hover_text(format!("Increase by {step}"));
+        if increment.clicked() {
+            *value = (*value + step).clamp(min, max);
+            changed = true;
+        }
+    });
+    changed
+}
+
 /// Force scroll content into one viewport-width vertical column. Scroll areas
 /// otherwise inherit a surrounding horizontal layout and can grow sideways.
 pub fn scroll_column(

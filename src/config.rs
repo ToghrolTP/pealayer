@@ -396,8 +396,12 @@ pub struct AppConfig {
     pub click_player_to_toggle: bool,
     pub playback_speed: f64,
     pub temporary_fast_forward_speed: f64,
+    pub subtitle_font_size: f64,
+    pub subtitle_delay_seconds: f64,
+    pub subtitle_position_percent: f64,
     pub subtitle_direction: crate::subtitle::SubtitleDirection,
     pub subtitle_text_replacements: Vec<crate::subtitle::SubtitleReplacement>,
+    pub audio_delay_seconds: f64,
     pub show_subseconds: bool,
     pub quick_seek_seconds: f64,
     pub frame_step_count: u32,
@@ -499,8 +503,12 @@ impl Default for AppConfig {
             click_player_to_toggle: true,
             playback_speed: 1.0,
             temporary_fast_forward_speed: 2.0,
+            subtitle_font_size: 55.0,
+            subtitle_delay_seconds: 0.0,
+            subtitle_position_percent: 100.0,
             subtitle_direction: crate::subtitle::SubtitleDirection::Auto,
             subtitle_text_replacements: crate::subtitle::default_text_replacements(),
+            audio_delay_seconds: 0.0,
             show_subseconds: true,
             quick_seek_seconds: 10.0,
             frame_step_count: 1,
@@ -1232,6 +1240,26 @@ impl AppConfig {
             || !(1.0..=16.0).contains(&self.temporary_fast_forward_speed)
         {
             return Err("temporary_fast_forward_speed must be between 1 and 16".to_string());
+        }
+        if !self.subtitle_font_size.is_finite()
+            || !(10.0..=100.0).contains(&self.subtitle_font_size)
+        {
+            return Err("subtitle_font_size must be between 10 and 100".to_string());
+        }
+        if !self.subtitle_delay_seconds.is_finite()
+            || !(-600.0..=600.0).contains(&self.subtitle_delay_seconds)
+        {
+            return Err("subtitle_delay_seconds must be between -600 and 600".to_string());
+        }
+        if !self.subtitle_position_percent.is_finite()
+            || !(0.0..=100.0).contains(&self.subtitle_position_percent)
+        {
+            return Err("subtitle_position_percent must be between 0 and 100".to_string());
+        }
+        if !self.audio_delay_seconds.is_finite()
+            || !(-600.0..=600.0).contains(&self.audio_delay_seconds)
+        {
+            return Err("audio_delay_seconds must be between -600 and 600".to_string());
         }
         if !self.wheel_seek_seconds.is_finite() || !(0.1..=60.0).contains(&self.wheel_seek_seconds)
         {

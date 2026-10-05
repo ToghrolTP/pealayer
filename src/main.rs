@@ -456,6 +456,9 @@ fn main() -> eframe::Result {
             mpv_client
                 .observe_property("sub-text", libmpv2::Format::String, 19)
                 .unwrap();
+            mpv_client
+                .observe_property("sub-pos", libmpv2::Format::Double, 20)
+                .unwrap();
 
             let egui_ctx2 = cc.egui_ctx.clone();
             mpv_client.set_wakeup_callback(move || {
@@ -493,6 +496,10 @@ fn main() -> eframe::Result {
             let _ = mpv_static.set_property("volume", initial_volume);
             let _ = mpv_static.set_property("mute", loaded_config.is_muted);
             let _ = mpv_static.set_property("speed", loaded_config.playback_speed);
+            let _ = mpv_static.set_property("sub-font-size", loaded_config.subtitle_font_size);
+            let _ = mpv_static.set_property("sub-delay", loaded_config.subtitle_delay_seconds);
+            let _ = mpv_static.set_property("sub-pos", loaded_config.subtitle_position_percent);
+            let _ = mpv_static.set_property("audio-delay", loaded_config.audio_delay_seconds);
             crate::platform::windows::sync_windows_jump_list(&loaded_config.recent_media);
 
             let (interop_tx, interop_rx) = std::sync::mpsc::channel();
@@ -593,8 +600,9 @@ fn main() -> eframe::Result {
                 video_surface_gesture: None,
                 show_sub_settings: loaded_config.workspace_session.dialogs.subtitles,
                 sub_visibility: true,
-                sub_font_size: 55.0,
-                sub_delay: 0.0,
+                sub_font_size: loaded_config.subtitle_font_size,
+                sub_delay: loaded_config.subtitle_delay_seconds,
+                sub_position_percent: loaded_config.subtitle_position_percent,
                 current_sid: "no".to_string(),
                 sub_tracks: Vec::new(),
                 subtitle_direction: loaded_config.subtitle_direction,
@@ -603,7 +611,7 @@ fn main() -> eframe::Result {
                 current_vid: "no".to_string(),
                 video_tracks: Vec::new(),
                 show_audio_settings: loaded_config.workspace_session.dialogs.audio,
-                audio_delay: 0.0,
+                audio_delay: loaded_config.audio_delay_seconds,
                 current_aid: "no".to_string(),
                 audio_tracks: Vec::new(),
                 media_tracks: Vec::new(),

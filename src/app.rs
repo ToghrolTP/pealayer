@@ -297,6 +297,7 @@ pub struct PealayerApp {
     pub(crate) sub_visibility: bool,
     pub(crate) sub_font_size: f64,
     pub(crate) sub_delay: f64,
+    pub(crate) sub_position_percent: f64,
     pub(crate) current_sid: String,
     pub(crate) sub_tracks: Vec<SubtitleTrack>,
     pub(crate) subtitle_direction: crate::subtitle::SubtitleDirection,
@@ -3481,6 +3482,10 @@ impl PealayerApp {
                         self.subtitle_text = v.to_string();
                         self.sync_subtitle_rendering();
                     }
+                    (20, PropertyData::Double(v)) => {
+                        self.sub_position_percent = v.clamp(0.0, 100.0);
+                        self.sync_subtitle_rendering();
+                    }
                     _ => {}
                 },
                 Some(Ok(Event::EndFile(reason))) => {
@@ -4287,6 +4292,7 @@ impl PealayerApp {
             &replaced,
             self.subtitle_direction,
             self.sub_font_size,
+            self.sub_position_percent,
         );
         let _ = self.mpv_client.command(
             "osd-overlay",
@@ -4765,8 +4771,12 @@ impl PealayerApp {
         cfg.click_player_to_toggle = self.click_player_to_toggle;
         cfg.playback_speed = self.configured_playback_speed;
         cfg.temporary_fast_forward_speed = self.temporary_fast_forward_speed;
+        cfg.subtitle_font_size = self.sub_font_size;
+        cfg.subtitle_delay_seconds = self.sub_delay;
+        cfg.subtitle_position_percent = self.sub_position_percent;
         cfg.subtitle_direction = self.subtitle_direction;
         cfg.subtitle_text_replacements = self.subtitle_text_replacements.clone();
+        cfg.audio_delay_seconds = self.audio_delay;
         cfg.show_subseconds = self.show_subseconds;
         cfg.quick_seek_seconds = self.quick_seek_seconds;
         cfg.frame_step_count = self.frame_step_count;
@@ -4933,6 +4943,10 @@ impl PealayerApp {
                 .set_property("speed", self.configured_playback_speed);
             self.playback_rate = self.configured_playback_speed;
         }
+        self.sub_font_size = config.subtitle_font_size;
+        self.sub_delay = config.subtitle_delay_seconds;
+        self.sub_position_percent = config.subtitle_position_percent;
+        self.audio_delay = config.audio_delay_seconds;
         self.subtitle_direction = config.subtitle_direction;
         self.subtitle_text_replacements = config.subtitle_text_replacements.clone();
         self.show_subseconds = config.show_subseconds;
@@ -4994,6 +5008,10 @@ impl PealayerApp {
 
         let _ = self.mpv.set_property("volume", self.volume);
         let _ = self.mpv.set_property("mute", self.is_muted);
+        let _ = self.mpv.set_property("sub-font-size", self.sub_font_size);
+        let _ = self.mpv.set_property("sub-delay", self.sub_delay);
+        let _ = self.mpv.set_property("sub-pos", self.sub_position_percent);
+        let _ = self.mpv.set_property("audio-delay", self.audio_delay);
         self.sync_subtitle_rendering();
         crate::mpv::proxy::apply_runtime(
             self.mpv,
@@ -5989,6 +6007,7 @@ impl Default for PealayerApp {
         let _ = mpv_client.observe_property("cache-buffering-state", libmpv2::Format::Int64, 16);
         let _ = mpv_client.observe_property("vid", libmpv2::Format::String, 18);
         let _ = mpv_client.observe_property("sub-text", libmpv2::Format::String, 19);
+        let _ = mpv_client.observe_property("sub-pos", libmpv2::Format::Double, 20);
         let (interop_tx, interop_rx) = std::sync::mpsc::channel();
         let (_controller_cmd_tx, controller_cmd_rx) =
             std::sync::mpsc::channel::<crate::platform::interop::ControllerDelivery>();
@@ -6046,6 +6065,7 @@ impl Default for PealayerApp {
             sub_visibility: true,
             sub_font_size: 55.0,
             sub_delay: 0.0,
+            sub_position_percent: 100.0,
             current_sid: "no".to_string(),
             sub_tracks: Vec::new(),
             subtitle_direction: crate::subtitle::SubtitleDirection::Auto,

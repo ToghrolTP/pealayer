@@ -736,6 +736,53 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Open Player Context Menu" => "باز کردن منوی زمینه‌ای پخش‌کننده",
         "Drop media file onto window to play" => "رسانه را برای پخش روی پنجره رها کنید",
         "Track:" => "ترک:",
+        "Render the selected subtitle track over the video" => {
+            "نمایش ترک زیرنویس انتخاب‌شده روی ویدئو"
+        }
+        "Enabled" => "فعال",
+        "Subtitle track" => "ترک زیرنویس",
+        "Choose an embedded or externally loaded track" => {
+            "انتخاب ترک داخلی یا بارگذاری‌شده از بیرون"
+        }
+        "Appearance and placement" => "ظاهر و جای‌گذاری",
+        "Text direction" => "جهت متن",
+        "Automatic, left-to-right, or right-to-left layout" => {
+            "چیدمان خودکار، چپ‌به‌راست یا راست‌به‌چپ"
+        }
+        "Font size" => "اندازهٔ قلم",
+        "Scale subtitle text without changing the video" => {
+            "تغییر اندازهٔ متن زیرنویس بدون تغییر ویدئو"
+        }
+        "Location offset" => "جابجایی مکان",
+        "0% places subtitles at the top; 100% places them at the bottom" => {
+            "۰٪ زیرنویس را بالا و ۱۰۰٪ آن را پایین قرار می‌دهد"
+        }
+        "Subtitle delay" => "تأخیر زیرنویس",
+        "Use negative values when subtitles appear too late" => {
+            "اگر زیرنویس دیر نمایش داده می‌شود، از مقدار منفی استفاده کنید"
+        }
+        "Reset timing" => "بازنشانی زمان‌بندی",
+        "External subtitle" => "زیرنویس بیرونی",
+        "Attach an SRT, VTT, ASS, or SSA file to the current media" => {
+            "افزودن فایل SRT، VTT، ASS یا SSA به رسانهٔ فعلی"
+        }
+        "Add subtitle file..." => "افزودن فایل زیرنویس…",
+        "Audio track" => "ترک صدا",
+        "Choose an embedded or externally loaded audio stream" => {
+            "انتخاب جریان صدای داخلی یا بارگذاری‌شده از بیرون"
+        }
+        "Sound" => "صدا",
+        "Temporarily silence playback without changing volume" => {
+            "بی‌صدا کردن موقت پخش بدون تغییر بلندی صدا"
+        }
+        "Adjust playback volume from 0% to 130%" => "تنظیم بلندی صدای پخش از ۰٪ تا ۱۳۰٪",
+        "Audio delay" => "تأخیر صدا",
+        "Use negative values when audio is heard too late" => {
+            "اگر صدا دیر شنیده می‌شود، از مقدار منفی استفاده کنید"
+        }
+        "External audio" => "صدای بیرونی",
+        "Attach an audio file to the current media" => "افزودن فایل صدا به رسانهٔ فعلی",
+        "Add audio file..." => "افزودن فایل صدا…",
         "Appearance" => "ظاهر",
         "Accent color" => "رنگ تأکیدی",
         "System accent" => "رنگ تأکیدی سامانه",

@@ -75,7 +75,12 @@ fn escape_ass_text(text: &str) -> String {
 /// Build the single ASS event used by Pealayer's processed subtitle overlay.
 /// libass still performs glyph shaping; the explicit Unicode embeddings and
 /// edge alignment only control the requested paragraph direction/layout.
-pub fn overlay_ass_event(text: &str, direction: SubtitleDirection, font_size: f64) -> String {
+pub fn overlay_ass_event(
+    text: &str,
+    direction: SubtitleDirection,
+    font_size: f64,
+    position_percent: f64,
+) -> String {
     let escaped = escape_ass_text(text);
     let (alignment, x, directed) = match direction {
         SubtitleDirection::Auto => (2, 640, escaped),
@@ -83,8 +88,11 @@ pub fn overlay_ass_event(text: &str, direction: SubtitleDirection, font_size: f6
         SubtitleDirection::Rtl => (3, 1248, format!("\u{202B}{escaped}\u{202C}")),
     };
     let font_size = font_size.clamp(10.0, 100.0);
+    // Keep a small safe-area at both edges while mapping mpv's familiar
+    // 0% (top) .. 100% (bottom) subtitle-position contract into ASS space.
+    let y = 40.0 + position_percent.clamp(0.0, 100.0) * 6.4;
     format!(
-        "{{\\an{alignment}\\pos({x},680)\\q2\\fn{SUBTITLE_FONT_FAMILY}\\fs{font_size:.1}\\1c&HFFFFFF&\\3c&H000000&\\bord2\\shad0}}{directed}"
+        "{{\\an{alignment}\\pos({x},{y:.0})\\q2\\fn{SUBTITLE_FONT_FAMILY}\\fs{font_size:.1}\\1c&HFFFFFF&\\3c&H000000&\\bord2\\shad0}}{directed}"
     )
 }
 
@@ -128,11 +136,23 @@ mod tests {
 
     #[test]
     fn overlay_uses_requested_direction_and_preserves_multiline_text() {
-        let rtl = overlay_ass_event("خط یک\nخط دو", SubtitleDirection::Rtl, 55.0);
+        let rtl = overlay_ass_event("خط یک\nخط دو", SubtitleDirection::Rtl, 55.0, 100.0);
         assert!(rtl.contains("\\an3\\pos(1248,680)"));
         assert!(rtl.contains(&format!("\\fn{SUBTITLE_FONT_FAMILY}")));
         assert!(rtl.contains('\u{202B}'));
         assert!(rtl.contains("\\N"));
         assert!(rtl.ends_with('\u{202C}'));
+    }
+
+    #[test]
+    fn overlay_position_uses_safe_area_and_clamps() {
+        assert!(
+            overlay_ass_event("Top", SubtitleDirection::Auto, 55.0, -10.0)
+                .contains("\\pos(640,40)")
+        );
+        assert!(
+            overlay_ass_event("Bottom", SubtitleDirection::Auto, 55.0, 150.0)
+                .contains("\\pos(640,680)")
+        );
     }
 }

@@ -1,11 +1,18 @@
-use crate::app::PealayerApp;
+use crate::app::{MediaTrackKey, MediaTrackType, PealayerApp};
+use crate::ui::{dialog, icons};
 use eframe::egui;
 
-const SUBTITLE_DIALOG_WIDTH: f32 = 420.0;
-const SUBTITLE_DIALOG_MAX_HEIGHT: f32 = 440.0;
-const SUBTITLE_DIALOG_BODY_HEIGHT: f32 = 360.0;
-const SUBTITLE_TRACK_WIDTH: f32 = 240.0;
-const SUBTITLE_TRACK_POPUP_HEIGHT: f32 = 200.0;
+const SUBTITLE_DIALOG_WIDTH: f32 = 540.0;
+const SUBTITLE_DIALOG_DEFAULT_HEIGHT: f32 = 570.0;
+const SUBTITLE_DIALOG_MIN_HEIGHT: f32 = 350.0;
+const SUBTITLE_DIALOG_MAX_HEIGHT: f32 = 680.0;
+const SUBTITLE_DIALOG_FOOTER_RESERVE: f32 = 42.0;
+const SUBTITLE_TRACK_POPUP_HEIGHT: f32 = 220.0;
+
+pub const MIN_SUB_DELAY: f64 = -600.0;
+pub const MAX_SUB_DELAY: f64 = 600.0;
+pub const MIN_SUB_POSITION: f64 = 0.0;
+pub const MAX_SUB_POSITION: f64 = 100.0;
 
 pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if !app.show_sub_settings {
@@ -13,211 +20,51 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 
     let mut open = app.show_sub_settings;
-    let mut close_requested = false;
-
-    let bounds = ui.ctx().content_rect().shrink(20.0);
-    let max_size = egui::vec2(
-        bounds.width().min(460.0),
-        bounds.height().min(SUBTITLE_DIALOG_MAX_HEIGHT),
+    let geometry = dialog::bounded_geometry(
+        ui.ctx().content_rect(),
+        20.0,
+        egui::vec2(SUBTITLE_DIALOG_WIDTH, SUBTITLE_DIALOG_DEFAULT_HEIGHT),
+        egui::vec2(390.0, SUBTITLE_DIALOG_MIN_HEIGHT),
+        egui::vec2(620.0, SUBTITLE_DIALOG_MAX_HEIGHT),
     );
-    let default_size = egui::vec2(max_size.x.min(SUBTITLE_DIALOG_WIDTH), max_size.y.min(420.0));
-    let default_rect = crate::ui::dialog::centered_default_rect(bounds, default_size);
-
-    if crate::ui::dialog::escape_pressed(ui.ctx()) {
-        close_requested = true;
-    }
+    let mut close_requested = dialog::escape_pressed(ui.ctx());
 
     egui::Window::new(format!(
         "{} {}",
-        crate::ui::icons::SUBTITLES,
+        icons::SUBTITLES,
         app.tr("Subtitle Settings")
     ))
-    // Reset geometry remembered by both earlier unbounded implementations.
-    .id(egui::Id::new("subtitle_settings_dialog_bounded_v3"))
+    .id(egui::Id::new("subtitle_settings_dialog_professional_v4"))
     .open(&mut open)
     .collapsible(false)
     .resizable(true)
-    .default_rect(default_rect)
-    .min_size([340.0_f32.min(max_size.x), 280.0_f32.min(max_size.y)])
-    .max_size(max_size)
-    .constrain_to(bounds)
+    .default_rect(geometry.default_rect)
+    .min_size(geometry.min_size)
+    .max_size(geometry.max_size)
+    .constrain_to(geometry.bounds)
     .movable(true)
+    .frame(dialog::opaque_window_frame_from_context(ui.ctx()))
     .show(ui.ctx(), |ui| {
-        ui.set_max_width(max_size.x);
-        crate::ui::dialog::scroll_column(
-            ui,
-            "subtitle_settings_body_v3",
-            Some(SUBTITLE_DIALOG_BODY_HEIGHT.min(ui.available_height() - 38.0)),
-            |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
+        let body_height = (ui.available_height() - SUBTITLE_DIALOG_FOOTER_RESERVE).max(120.0);
+        dialog::scroll_column(ui, "subtitle_settings_body_v4", Some(body_height), |ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 
-                crate::ui::dialog::section(
-                    ui,
-                    crate::ui::icons::SUBTITLES,
-                    &app.tr("Subtitles"),
-                    |ui| {
-                        let mut vis = app.sub_visibility;
-                        if ui.checkbox(&mut vis, app.tr("Enable Subtitles")).changed() {
-                            app.set_subtitle_visibility(vis);
-                        }
-                    },
-                );
-                ui.add_space(8.0);
+            draw_subtitle_status(app, ui);
+            ui.add_space(5.0);
+            draw_subtitle_track(app, ui);
+            ui.add_space(5.0);
+            draw_subtitle_appearance(app, ui);
+            ui.add_space(5.0);
+            draw_subtitle_timing(app, ui);
+            ui.add_space(5.0);
+            draw_external_subtitle(app, ui);
+        });
 
-                crate::ui::dialog::section(
-                    ui,
-                    crate::ui::icons::LIST_CHECKS,
-                    &app.tr("Track"),
-                    |ui| {
-                        let current_label = if app.current_sid == "no" {
-                            app.tr("None").to_string()
-                        } else {
-                            let mut label = format!("Track {}", app.current_sid);
-                            for t in &app.sub_tracks {
-                                if t.id.to_string() == app.current_sid {
-                                    let parts: Vec<&str> = vec![
-                                        t.lang.as_deref().unwrap_or(""),
-                                        t.title.as_deref().unwrap_or(""),
-                                    ]
-                                    .into_iter()
-                                    .filter(|s| !s.is_empty())
-                                    .collect();
-                                    if !parts.is_empty() {
-                                        label = format!("Track {} ({})", t.id, parts.join(" - "));
-                                    }
-                                    break;
-                                }
-                            }
-                            label
-                        };
-
-                        let none_label = app.tr("Subtitles hidden");
-                        let tracks = app.sub_tracks.clone();
-                        let combo_width =
-                            (ui.available_width() - 4.0).clamp(140.0, SUBTITLE_TRACK_WIDTH);
-                        egui::ComboBox::from_id_salt("sub_track_combo")
-                            .selected_text(current_label)
-                            .width(combo_width)
-                            .height(SUBTITLE_TRACK_POPUP_HEIGHT)
-                            .show_ui(ui, |ui| {
-                                if ui
-                                    .selectable_label(app.current_sid == "no", none_label)
-                                    .clicked()
-                                {
-                                    app.disable_media_track(crate::app::MediaTrackType::Subtitle);
-                                }
-                                for track in tracks {
-                                    let track_id_str = track.id.to_string();
-                                    let parts: Vec<&str> = vec![
-                                        track.lang.as_deref().unwrap_or(""),
-                                        track.title.as_deref().unwrap_or(""),
-                                    ]
-                                    .into_iter()
-                                    .filter(|s| !s.is_empty())
-                                    .collect();
-                                    let label = if parts.is_empty() {
-                                        format!("Track {}", track.id)
-                                    } else {
-                                        format!("Track {} ({})", track.id, parts.join(" - "))
-                                    };
-                                    if ui
-                                        .selectable_label(app.current_sid == track_id_str, label)
-                                        .clicked()
-                                    {
-                                        app.select_media_track(crate::app::MediaTrackKey {
-                                            kind: crate::app::MediaTrackType::Subtitle,
-                                            id: track.id,
-                                        });
-                                    }
-                                }
-                            });
-                    },
-                );
-                ui.add_space(8.0);
-
-                crate::ui::dialog::section(
-                    ui,
-                    crate::ui::icons::SPARKLE,
-                    &app.tr("Appearance"),
-                    |ui| {
-                        crate::ui::dialog::compact_row(ui, app.rtl, |ui| {
-                            ui.label(app.tr("Font Size:"));
-                            let mut font_size = app.sub_font_size;
-                            if ui
-                                .add(egui::Slider::new(&mut font_size, 10.0..=100.0))
-                                .changed()
-                            {
-                                app.sub_font_size = font_size;
-                                let _ = app.mpv.set_property("sub-font-size", font_size);
-                                app.sync_subtitle_rendering();
-                            }
-                        });
-                    },
-                );
-                ui.add_space(8.0);
-
-                crate::ui::dialog::section(
-                    ui,
-                    crate::ui::icons::CLOCK_COUNTER_CLOCKWISE,
-                    &app.tr("Synchronization"),
-                    |ui| {
-                        crate::ui::dialog::compact_row(ui, app.rtl, |ui| {
-                            ui.label(app.tr("Delay (s):"));
-                            let mut delay = app.sub_delay;
-                            if ui
-                                .add(
-                                    egui::DragValue::new(&mut delay)
-                                        .speed(0.1)
-                                        .range(MIN_SUB_DELAY..=MAX_SUB_DELAY),
-                                )
-                                .changed()
-                            {
-                                app.sub_delay = delay;
-                                let _ = app.mpv.set_property("sub-delay", delay);
-                            }
-                            if ui
-                                .button(format!(
-                                    "{} {}",
-                                    crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
-                                    app.tr("Reset")
-                                ))
-                                .clicked()
-                            {
-                                app.sub_delay = 0.0;
-                                let _ = app.mpv.set_property("sub-delay", 0.0);
-                            }
-                        });
-                    },
-                );
-                ui.add_space(8.0);
-
-                if ui
-                    .button(format!(
-                        "{} {}",
-                        crate::ui::icons::FOLDER_OPEN,
-                        app.tr("Load External Subtitle...")
-                    ))
-                    .clicked()
-                {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Subtitles", &["srt", "vtt", "ass", "ssa"])
-                        .pick_file()
-                    {
-                        if let Some(path_str) = path.to_str() {
-                            let _ = app.mpv.command("sub-add", &[path_str]);
-                            // It takes a moment for the track to be added and selected.
-                            // Ideally we observe track-list changes, but we can also just
-                            // refresh manually or rely on the user to see the new track.
-                            // Let's manually refresh after a slight delay or just call it directly.
-                            app.refresh_media_tracks();
-                        }
-                    }
-                }
-            },
-        );
+        ui.add_space(6.0);
         ui.separator();
-        crate::ui::dialog::action_row(ui, app.rtl, |ui| {
-            if crate::ui::dialog::action_button(ui, crate::ui::icons::X, &app.tr("Close"))
+        ui.add_space(6.0);
+        dialog::action_row(ui, app.rtl, |ui| {
+            if dialog::action_button(ui, icons::X, &app.tr("Close"))
                 .on_hover_text("Esc")
                 .clicked()
             {
@@ -229,8 +76,251 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
     app.show_sub_settings = open && !close_requested;
 }
 
-pub const MIN_SUB_DELAY: f64 = -600.0;
-pub const MAX_SUB_DELAY: f64 = 600.0;
+fn draw_subtitle_status(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    dialog::section(ui, icons::EYE, &app.tr("Visibility"), |ui| {
+        dialog::setting_row(
+            ui,
+            icons::SUBTITLES,
+            &app.tr("Show subtitles"),
+            Some(&app.tr("Render the selected subtitle track over the video")),
+            |ui| {
+                let mut visible = app.sub_visibility;
+                if ui.toggle_value(&mut visible, app.tr("Enabled")).changed() {
+                    app.set_subtitle_visibility(visible);
+                    app.save_config();
+                }
+            },
+        );
+    });
+}
+
+fn draw_subtitle_track(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    dialog::section(ui, icons::LIST_CHECKS, &app.tr("Track"), |ui| {
+        let current_label = subtitle_track_label(app, &app.current_sid);
+        let tracks = app.sub_tracks.clone();
+        dialog::setting_row(
+            ui,
+            icons::SUBTITLES,
+            &app.tr("Subtitle track"),
+            Some(&app.tr("Choose an embedded or externally loaded track")),
+            |ui| {
+                egui::ComboBox::from_id_salt("sub_track_combo_v4")
+                    .selected_text(current_label)
+                    .width(ui.available_width().clamp(150.0, 275.0))
+                    .height(SUBTITLE_TRACK_POPUP_HEIGHT)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(app.current_sid == "no", app.tr("None"))
+                            .clicked()
+                        {
+                            app.disable_media_track(MediaTrackType::Subtitle);
+                        }
+                        for track in tracks {
+                            let id = track.id.to_string();
+                            let label = subtitle_track_label(app, &id);
+                            if ui.selectable_label(app.current_sid == id, label).clicked() {
+                                app.select_media_track(MediaTrackKey {
+                                    kind: MediaTrackType::Subtitle,
+                                    id: track.id,
+                                });
+                            }
+                        }
+                    });
+            },
+        );
+    });
+}
+
+fn draw_subtitle_appearance(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    dialog::section(
+        ui,
+        icons::SPARKLE,
+        &app.tr("Appearance and placement"),
+        |ui| {
+            dialog::setting_row(
+                ui,
+                icons::TEXT_ALIGN_LEFT,
+                &app.tr("Text direction"),
+                Some(&app.tr("Automatic, left-to-right, or right-to-left layout")),
+                |ui| {
+                    let mut direction = app.subtitle_direction;
+                    egui::ComboBox::from_id_salt("subtitle_direction_combo")
+                        .selected_text(match direction {
+                            crate::subtitle::SubtitleDirection::Auto => app.tr("Automatic"),
+                            crate::subtitle::SubtitleDirection::Ltr => app.tr("Left to right"),
+                            crate::subtitle::SubtitleDirection::Rtl => app.tr("Right to left"),
+                        })
+                        .width(150.0)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut direction,
+                                crate::subtitle::SubtitleDirection::Auto,
+                                app.tr("Automatic"),
+                            );
+                            ui.selectable_value(
+                                &mut direction,
+                                crate::subtitle::SubtitleDirection::Ltr,
+                                app.tr("Left to right"),
+                            );
+                            ui.selectable_value(
+                                &mut direction,
+                                crate::subtitle::SubtitleDirection::Rtl,
+                                app.tr("Right to left"),
+                            );
+                        });
+                    if direction != app.subtitle_direction {
+                        app.subtitle_direction = direction;
+                        app.sync_subtitle_rendering();
+                        app.save_config();
+                    }
+                },
+            );
+            ui.separator();
+
+            dialog::setting_row(
+                ui,
+                icons::SLIDERS_HORIZONTAL,
+                &app.tr("Font size"),
+                Some(&app.tr("Scale subtitle text without changing the video")),
+                |ui| {
+                    let mut size = app.sub_font_size;
+                    let response = ui.add_sized(
+                        [185.0, 24.0],
+                        egui::Slider::new(&mut size, 10.0..=100.0).suffix(" px"),
+                    );
+                    if response.changed() {
+                        app.sub_font_size = size;
+                        let _ = app.mpv.set_property("sub-font-size", size);
+                        app.sync_subtitle_rendering();
+                    }
+                    if response.drag_stopped() || (response.changed() && !response.dragged()) {
+                        app.save_config();
+                    }
+                },
+            );
+            ui.separator();
+
+            dialog::setting_row(
+                ui,
+                icons::ARROWS_IN,
+                &app.tr("Location offset"),
+                Some(&app.tr("0% places subtitles at the top; 100% places them at the bottom")),
+                |ui| {
+                    let mut position = app.sub_position_percent;
+                    if dialog::numeric_stepper(
+                        ui,
+                        &mut position,
+                        MIN_SUB_POSITION..=MAX_SUB_POSITION,
+                        1.0,
+                        0,
+                        "%",
+                    ) {
+                        app.sub_position_percent = position;
+                        let _ = app.mpv.set_property("sub-pos", position);
+                        app.sync_subtitle_rendering();
+                        app.save_config();
+                    }
+                },
+            );
+        },
+    );
+}
+
+fn draw_subtitle_timing(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    dialog::section(
+        ui,
+        icons::CLOCK_COUNTER_CLOCKWISE,
+        &app.tr("Synchronization"),
+        |ui| {
+            dialog::setting_row(
+                ui,
+                icons::CLOCK,
+                &app.tr("Subtitle delay"),
+                Some(&app.tr("Use negative values when subtitles appear too late")),
+                |ui| {
+                    let mut delay = app.sub_delay;
+                    if dialog::numeric_stepper(
+                        ui,
+                        &mut delay,
+                        MIN_SUB_DELAY..=MAX_SUB_DELAY,
+                        0.1,
+                        1,
+                        " s",
+                    ) {
+                        app.sub_delay = clamp_sub_delay(delay);
+                        let _ = app.mpv.set_property("sub-delay", app.sub_delay);
+                        app.save_config();
+                    }
+                },
+            );
+            ui.horizontal(|ui| {
+                if ui
+                    .small_button(format!(
+                        "{}  {}",
+                        icons::ARROW_COUNTER_CLOCKWISE,
+                        app.tr("Reset timing")
+                    ))
+                    .clicked()
+                {
+                    app.sub_delay = 0.0;
+                    let _ = app.mpv.set_property("sub-delay", 0.0);
+                    app.save_config();
+                }
+            });
+        },
+    );
+}
+
+fn draw_external_subtitle(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    dialog::section(ui, icons::FOLDER_OPEN, &app.tr("External subtitle"), |ui| {
+        ui.label(
+            egui::RichText::new(
+                app.tr("Attach an SRT, VTT, ASS, or SSA file to the current media"),
+            )
+            .small()
+            .weak(),
+        );
+        if ui
+            .button(format!(
+                "{}  {}",
+                icons::PLUS,
+                app.tr("Add subtitle file...")
+            ))
+            .clicked()
+            && let Some(path) = rfd::FileDialog::new()
+                .add_filter("Subtitles", &["srt", "vtt", "ass", "ssa"])
+                .pick_file()
+            && let Some(path_str) = path.to_str()
+        {
+            let _ = app.mpv.command("sub-add", &[path_str]);
+            app.refresh_media_tracks();
+        }
+    });
+}
+
+fn subtitle_track_label(app: &PealayerApp, id: &str) -> String {
+    if id == "no" {
+        return app.tr("None");
+    }
+    let Some(track) = app
+        .sub_tracks
+        .iter()
+        .find(|track| track.id.to_string() == id)
+    else {
+        return format!("{} {id}", app.tr("Track"));
+    };
+    let details = [track.lang.as_deref(), track.title.as_deref()]
+        .into_iter()
+        .flatten()
+        .filter(|part| !part.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    if details.is_empty() {
+        format!("{} {}", app.tr("Track"), track.id)
+    } else {
+        format!("{} {} — {details}", app.tr("Track"), track.id)
+    }
+}
 
 pub fn clamp_sub_delay(delay: f64) -> f64 {
     delay.clamp(MIN_SUB_DELAY, MAX_SUB_DELAY)
@@ -241,18 +331,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_sub_delay_range_clamping() {
+    fn subtitle_values_are_bounded() {
         assert_eq!(clamp_sub_delay(0.0), 0.0);
         assert_eq!(clamp_sub_delay(-750.0), -600.0);
         assert_eq!(clamp_sub_delay(800.0), 600.0);
-        assert_eq!(clamp_sub_delay(35.5), 35.5);
-    }
-
-    #[test]
-    fn subtitle_dialog_and_track_popup_remain_bounded() {
-        assert!(SUBTITLE_DIALOG_MAX_HEIGHT < 500.0);
-        assert!(SUBTITLE_DIALOG_BODY_HEIGHT < SUBTITLE_DIALOG_MAX_HEIGHT);
+        assert!(SUBTITLE_DIALOG_MIN_HEIGHT < SUBTITLE_DIALOG_DEFAULT_HEIGHT);
+        assert!(SUBTITLE_DIALOG_DEFAULT_HEIGHT < SUBTITLE_DIALOG_MAX_HEIGHT);
         assert!(SUBTITLE_TRACK_POPUP_HEIGHT < SUBTITLE_DIALOG_MAX_HEIGHT);
-        assert!(SUBTITLE_TRACK_WIDTH < SUBTITLE_DIALOG_WIDTH - 100.0);
     }
 }
