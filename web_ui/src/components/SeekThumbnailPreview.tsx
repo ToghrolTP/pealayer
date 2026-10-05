@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 interface SeekThumbnailPreviewProps {
   enabled: boolean;
@@ -12,8 +13,12 @@ interface SeekThumbnailPreviewProps {
 
 interface HoverPosition {
   x: number;
+  bottom: number;
   second: number;
 }
+
+const PREVIEW_WIDTH = 172;
+const PREVIEW_EDGE_GAP = 8;
 
 const formatPreviewTime = (seconds: number) => {
   const whole = Math.max(0, Math.floor(seconds));
@@ -66,6 +71,34 @@ export const SeekThumbnailPreview: React.FC<SeekThumbnailPreviewProps> = ({
   const previewReady = hover && requestedSecond === hover.second && loadedSecond === hover.second;
   const previewFailed = hover && requestedSecond === hover.second && failedSecond === hover.second;
 
+  const preview = enabled && hover ? createPortal(
+    <div
+      className="seek-thumbnail-popover"
+      style={{ left: hover.x, bottom: hover.bottom }}
+      role="status"
+      aria-live="polite"
+    >
+      <div className="seek-thumbnail-popover__image">
+        {thumbnailUrl && (
+          <img
+            key={`${mediaIdentity || ''}:${requestedSecond}`}
+            src={thumbnailUrl}
+            className={previewReady ? 'is-ready' : ''}
+            alt=""
+            onLoad={(event) => {
+              if (event.currentTarget.naturalWidth > 0) setLoadedSecond(requestedSecond);
+            }}
+            onError={() => setFailedSecond(requestedSecond)}
+          />
+        )}
+        {!previewReady && !previewFailed && <span className="seek-thumbnail-popover__loading" />}
+        {previewFailed && <span className="seek-thumbnail-popover__unavailable">{unavailableLabel}</span>}
+      </div>
+      <strong>{formatPreviewTime(hover.second)}</strong>
+    </div>,
+    document.body,
+  ) : null;
+
   return (
     <div
       className={`seek-thumbnail-host${className ? ` ${className}` : ''}`}
@@ -75,35 +108,22 @@ export const SeekThumbnailPreview: React.FC<SeekThumbnailPreviewProps> = ({
         if (bounds.width <= 0) return;
         const fraction = Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
         const second = Math.floor(Math.min(duration * fraction, Math.max(0, duration - 0.001)));
-        const halfPreview = 106;
+        const halfPreview = PREVIEW_WIDTH / 2;
         const x = Math.min(
-          Math.max(event.clientX - bounds.left, halfPreview),
-          Math.max(halfPreview, bounds.width - halfPreview),
+          Math.max(event.clientX, halfPreview + PREVIEW_EDGE_GAP),
+          Math.max(halfPreview + PREVIEW_EDGE_GAP, window.innerWidth - halfPreview - PREVIEW_EDGE_GAP),
         );
-        setHover((current) => current?.second === second && current.x === x ? current : { x, second });
+        const bottom = Math.max(PREVIEW_EDGE_GAP, window.innerHeight - bounds.top + PREVIEW_EDGE_GAP);
+        setHover((current) => (
+          current?.second === second && current.x === x && current.bottom === bottom
+            ? current
+            : { x, bottom, second }
+        ));
       }}
       onPointerLeave={() => setHover(null)}
     >
       {children}
-      {enabled && hover && (
-        <div className="seek-thumbnail-popover" style={{ left: hover.x }} role="status" aria-live="polite">
-          <div className="seek-thumbnail-popover__image">
-            {thumbnailUrl && (
-              <img
-                key={`${mediaIdentity || ''}:${requestedSecond}`}
-                src={thumbnailUrl}
-                className={previewReady ? 'is-ready' : ''}
-                alt=""
-                onLoad={() => setLoadedSecond(requestedSecond)}
-                onError={() => setFailedSecond(requestedSecond)}
-              />
-            )}
-            {!previewReady && !previewFailed && <span className="seek-thumbnail-popover__loading" />}
-            {previewFailed && <span className="seek-thumbnail-popover__unavailable">{unavailableLabel}</span>}
-          </div>
-          <strong>{formatPreviewTime(hover.second)}</strong>
-        </div>
-      )}
+      {preview}
     </div>
   );
 };

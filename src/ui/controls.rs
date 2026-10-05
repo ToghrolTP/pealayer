@@ -734,10 +734,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 (buffered_until / app.duration).clamp(0.0, 1.0) as f32,
                             );
                         }
+                        let show_seek_preview = app.seekbar_hover_thumbnails;
                         crate::ui::seek_preview::draw(
                             app,
                             ui,
                             &response,
+                            show_seek_preview,
                             "simple-seekbar-preview",
                         );
                         // `changed` covers both dragging and a single click on

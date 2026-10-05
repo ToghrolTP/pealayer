@@ -7688,10 +7688,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 as f32,
                                         );
                                     }
+                                    let show_seek_preview =
+                                        self.app.nle_seekbar_hover_thumbnails;
                                     crate::ui::seek_preview::draw(
                                         self.app,
                                         ui,
                                         &response,
+                                        show_seek_preview,
                                         "nle-seekbar-preview",
                                     );
 

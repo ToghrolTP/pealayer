@@ -350,10 +350,9 @@ body {
 .seek-thumbnail-host { position: relative; min-width: 0; width: 100%; }
 .seek-thumbnail-host > .ant-slider { width: 100%; margin: 0; }
 .seek-thumbnail-popover {
-  position: absolute;
-  z-index: 80;
-  inset-block-end: calc(100% + 10px);
-  width: 212px;
+  position: fixed;
+  z-index: 1000;
+  width: 172px;
   overflow: hidden;
   padding: 6px;
   border: 1px solid var(--line-strong);
@@ -367,7 +366,7 @@ body {
 }
 .seek-thumbnail-popover__image {
   position: relative;
-  width: 200px;
+  width: 160px;
   aspect-ratio: 16 / 9;
   overflow: hidden;
   display: grid;

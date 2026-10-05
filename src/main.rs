@@ -787,6 +787,7 @@ fn main() -> eframe::Result {
                 click_player_to_toggle: loaded_config.click_player_to_toggle,
                 show_subseconds: loaded_config.show_subseconds,
                 seekbar_hover_thumbnails: loaded_config.seekbar_hover_thumbnails,
+                nle_seekbar_hover_thumbnails: loaded_config.nle_seekbar_hover_thumbnails,
                 seekbar_thumbnail_preview:
                     crate::ui::seek_preview::SeekbarThumbnailPreview::default(),
                 quick_seek_seconds: loaded_config.quick_seek_seconds,

@@ -330,10 +330,22 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             let mut control = PreferenceControl::boolean(
                 "seekbar_hover_thumbnails",
                 "playback",
-                "Player controls",
-                "Show a thumbnail when hovering over the seekbar",
+                "Seek preview",
+                "Show preview card in Simple workspace",
             );
-            control.description = Some("Shows the decoded frame for the hovered playback second");
+            control.description =
+                Some("Shows a compact decoded-frame card above the Simple player seekbar");
+            control
+        },
+        {
+            let mut control = PreferenceControl::boolean(
+                "nle_seekbar_hover_thumbnails",
+                "playback",
+                "Seek preview",
+                "Show preview card in NLE workspace",
+            );
+            control.description =
+                Some("Disabled by default so the NLE transport and timeline remain unobstructed");
             control
         },
         PreferenceControl::number(
@@ -946,17 +958,20 @@ mod tests {
     }
 
     #[test]
-    fn seekbar_thumbnail_preview_is_an_opt_in_shared_playback_preference() {
+    fn seekbar_thumbnail_preview_is_configurable_per_workspace() {
         let config = crate::config::AppConfig::default();
         assert!(!config.seekbar_hover_thumbnails);
+        assert!(!config.nle_seekbar_hover_thumbnails);
         let controls = preference_controls(&config);
-        let control = controls
-            .iter()
-            .find(|control| control.key == "seekbar_hover_thumbnails")
-            .expect("seekbar hover thumbnail preference");
-        assert!(matches!(control.kind, PreferenceControlKind::Boolean));
-        assert_eq!(control.section, "playback");
-        assert_eq!(control.group, "Player controls");
+        for key in ["seekbar_hover_thumbnails", "nle_seekbar_hover_thumbnails"] {
+            let control = controls
+                .iter()
+                .find(|control| control.key == key)
+                .expect("workspace seekbar hover thumbnail preference");
+            assert!(matches!(control.kind, PreferenceControlKind::Boolean));
+            assert_eq!(control.section, "playback");
+            assert_eq!(control.group, "Seek preview");
+        }
     }
 
     #[test]

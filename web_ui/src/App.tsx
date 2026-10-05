@@ -534,7 +534,7 @@ const App: React.FC = () => {
                 appName={runtime?.appName || 'Pealayer'}
                 quickSeekSeconds={quickSeekSeconds}
                 apiBaseUrl={apiBaseUrl}
-                seekbarHoverThumbnails={Boolean(appConfig?.seekbar_hover_thumbnails)}
+                seekbarHoverThumbnails={Boolean(appConfig?.nle_seekbar_hover_thumbnails)}
                 surface="timeline"
               />
             )}
