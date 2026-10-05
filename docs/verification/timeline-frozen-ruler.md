@@ -13,3 +13,12 @@
 - `cargo test --lib --locked --jobs 1 timeline_ -- --test-threads=1`: 96 passed, 0 failed. Includes new frozen-origin/horizontal alignment checks, actual egui ScrollArea viewport and separate painter clips at 0/120/420 px vertical offsets, wheel routing/priority/unit normalization, defaults and persistence, plus existing track alignment, pointer-anchored zoom, pan, keyframe, cue and drag regression checks.
 - TypeScript `tsc --noEmit` passed. Web production/PWA build and canonical optimized binary deployment results follow below.
 - Tests do not activate hardware outputs. No full suite or native visual acceptance is claimed.
+
+## Local deployment checkpoint
+
+- Optimized `scripts/package-windows.ps1 -SkipTests -NoUpx` succeeded, with existing deprecation/dead-code warnings. Embedded PWA `f0657027fc5304f0` verified 39 precached resources.
+- Old canonical Pealayer accepted IPC `quit` and exited before replacement; no forced termination. Canonical `C:\Users\David\AppData\Local\Programs\Pealayer\bin\pealayer.exe` relaunched, observed PID `10960`.
+- Live `/healthz`: `ok`; `/api/player/status`: `hardware_connected: true`. No hardware output activation was performed.
+- Live `/api/update/manifest`: commit `5340148a9e955953d6704e3f9e3c18e33a670d4f`, `git_dirty: false`, executable SHA-256 `042605bbfe6bc8362c62542fb9a1d4344c0ce3d31908f1980898857405931e0e`.
+- Live shared Preferences contract contains the new Input → Timeline navigation checkbox and runtime value `timeline_ctrl_wheel_vertical_scroll: true`. No user preference value was overwritten to obtain this default.
+- Cafe-PC `http://cafe-pc:8080/healthz` timed out after 5 seconds; no remote deployment is claimed. Use the peer updater when reachable. Source, embedded assets and this checkpoint are pushed to PR #46, which remains unmerged. This documentation-only checkpoint follows the deployed binary's commit.
