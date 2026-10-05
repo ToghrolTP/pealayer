@@ -4261,6 +4261,15 @@ fn hardware_header_widget<R>(
         .inner
 }
 
+/// Keep transformable card layers attached to their workspace panel rather
+/// than as independent Middle windows that can paint over floating dialogs.
+fn hardware_card_layer(ui: &egui::Ui, key: &str) -> egui::LayerId {
+    let parent = ui.layer_id();
+    let child = egui::LayerId::new(parent.order, egui::Id::new(("hardware-channel-card", parent.id, key)));
+    ui.ctx().set_sublayer(parent, child);
+    child
+}
+
 fn draw_compact_control_card(
     app: &mut PealayerApp,
     ui: &mut egui::Ui,
@@ -4289,10 +4298,7 @@ fn draw_compact_control_card(
     let card_outer_width = ui.available_width();
     let card_content_width = hardware_frame_content_width(card_outer_width, 9);
     ui.set_width(card_outer_width);
-    let layer_id = egui::LayerId::new(
-        egui::Order::Middle,
-        egui::Id::new(("hardware-channel-card", control.key.as_str())),
-    );
+    let layer_id = hardware_card_layer(ui, &control.key);
     let dragging_source = hardware_channel_is_dragging(ui, &control.key, HardwareChannelDragSurface::Monitor);
     let card = ui.scope_builder(egui::UiBuilder::new().layer_id(layer_id), |ui| {
         if dragging_source {
@@ -4605,10 +4611,7 @@ fn draw_control_card(
     let card_outer_width = ui.available_width();
     let card_content_width = hardware_frame_content_width(card_outer_width, 12);
     ui.set_width(card_outer_width);
-    let layer_id = egui::LayerId::new(
-        egui::Order::Middle,
-        egui::Id::new(("hardware-channel-card", control.key.as_str())),
-    );
+    let layer_id = hardware_card_layer(ui, &control.key);
     let dragging_source = hardware_channel_is_dragging(ui, &control.key, HardwareChannelDragSurface::Monitor);
     let card = ui
         .scope_builder(egui::UiBuilder::new().layer_id(layer_id), |ui| {
@@ -5737,6 +5740,43 @@ mod timeline_row_tests {
         assert!(content_height.get() > viewport_height.get());
         assert!(viewport_height.get() <= 300.0);
         assert!(offset.get() > 0.0, "wheel over a card did not scroll the Hardware Monitor");
+    }
+
+    #[test]
+    fn hardware_cards_paint_below_subtitle_settings_and_keep_panel_clip() {
+        for dark in [false, true] {
+            for compact in [false, true] {
+                let context = egui::Context::default();
+                context.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+                let mut app = PealayerApp::default();
+                app.show_sub_settings = true;
+                app.compact_hardware_controls = compact;
+                let capabilities = crate::four_d::controller::HardwareCapabilities::default();
+                let control = crate::four_d::controller::HardwareControl { key: "relay.5".into(), kind: "relay".into(), name: "Hardware sentinel".into(), ..Default::default() };
+                let clip = egui::Rect::from_min_max(egui::pos2(8.0, 8.0), egui::pos2(388.0, 160.0));
+                let mut final_output = None;
+                for _ in 0..3 {
+                    let mut output = context.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 800.0))), ..Default::default() }, |ui| {
+                        ui.scope(|ui| {
+                            ui.set_width(380.0);
+                            ui.set_clip_rect(clip);
+                            draw_control_card(&mut app, ui, &capabilities, &control);
+                        });
+                        crate::ui::subtitles::draw_settings_dialog(&mut app, ui);
+                    });
+                    output.textures_delta.clear();
+                    final_output = Some(output);
+                }
+                let output = final_output.unwrap();
+                let card_index = output.shapes.iter().position(|s| matches!(&s.shape, egui::epaint::Shape::Text(t) if t.galley.job.text == "Hardware sentinel")).expect("card not painted");
+                let dialog_index = output.shapes.iter().position(|s| matches!(&s.shape, egui::epaint::Shape::Text(t) if t.galley.job.text.contains("Visibility"))).expect("subtitle dialog not painted");
+                assert!(card_index < dialog_index, "hardware card paints over Subtitle settings; dark={dark}, compact={compact}");
+                assert!(clip.contains_rect(output.shapes[card_index].clip_rect), "card painting escaped the Hardware Monitor clip");
+                let dialog_rect = context.memory(|memory| memory.area_rect(egui::Id::new("subtitle_settings_dialog_professional_v4"))).expect("subtitle window bounds missing");
+                assert!(dialog_rect.expand(8.0).contains_rect(output.shapes[dialog_index].clip_rect), "subtitle contents escaped their window clip");
+                assert_eq!(context.layer_id_at(dialog_rect.center()).unwrap().order, egui::Order::Foreground, "workspace must not own dialog pointer interactions");
+            }
+        }
     }
 
     #[test]

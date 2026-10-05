@@ -35,6 +35,7 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
         app.tr("Subtitle Settings")
     ))
     .id(egui::Id::new("subtitle_settings_dialog_professional_v4"))
+    .order(egui::Order::Foreground)
     .open(&mut open)
     .collapsible(false)
     .resizable(true)
