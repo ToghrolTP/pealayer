@@ -121,6 +121,16 @@ fn timeline_track_row_top(timeline_top: f32, row_index: usize, track_row_height:
     timeline_top + TIMELINE_RULER_HEIGHT + row_index as f32 * track_row_height
 }
 
+/// Freeze only the ruler's vertical origin. Its horizontal origin remains tied
+/// to content, so ticks, markers and the playhead stay aligned while panning.
+fn timeline_frozen_ruler_rect(content: egui::Rect, viewport: egui::Rect) -> egui::Rect {
+    let top = content.top() + viewport.top();
+    egui::Rect::from_min_max(
+        egui::pos2(content.left(), top),
+        egui::pos2(content.right(), top + TIMELINE_RULER_HEIGHT),
+    )
+}
+
 fn timeline_content_height(
     track_rows: usize,
     analog_rows: usize,
@@ -451,6 +461,7 @@ fn pan_timeline_offset(
 enum TimelineWheelAction {
     Zoom(f32),
     HorizontalScroll(f32),
+    VerticalScroll(f32),
 }
 
 fn timeline_wheel_action(
@@ -459,6 +470,7 @@ fn timeline_wheel_action(
     command_or_ctrl: bool,
     plain_zoom: bool,
     ctrl_zoom: bool,
+    ctrl_vertical_scroll: bool,
     shift_horizontal_scroll: bool,
 ) -> Option<TimelineWheelAction> {
     let dominant_delta = if delta.y.abs() >= delta.x.abs() {
@@ -471,11 +483,30 @@ fn timeline_wheel_action(
     }
     if shift && shift_horizontal_scroll {
         Some(TimelineWheelAction::HorizontalScroll(dominant_delta))
+    } else if command_or_ctrl && ctrl_vertical_scroll && delta.y != 0.0 {
+        Some(TimelineWheelAction::VerticalScroll(delta.y))
     } else if (command_or_ctrl && ctrl_zoom) || (!command_or_ctrl && plain_zoom) {
         Some(TimelineWheelAction::Zoom(dominant_delta))
     } else {
         None
     }
+}
+
+// Egui turns Ctrl/Command wheel into a zoom delta instead of smooth_scroll_delta.
+// Read just those raw wheel events so timeline navigation still receives them.
+fn timeline_ctrl_wheel_delta(events: &[egui::Event], line_speed: f32, page_height: f32) -> egui::Vec2 {
+    events.iter().filter_map(|event| match event {
+        egui::Event::MouseWheel { unit, delta, modifiers, .. }
+            if modifiers.ctrl || modifiers.command => {
+                let scale = match unit {
+                    egui::MouseWheelUnit::Point => 1.0,
+                    egui::MouseWheelUnit::Line => line_speed,
+                    egui::MouseWheelUnit::Page => page_height,
+                };
+                Some(*delta * scale)
+            }
+        _ => None,
+    }).fold(egui::Vec2::ZERO, |sum, delta| sum + delta)
 }
 
 fn timeline_zoom_from_wheel(current_zoom: f32, wheel_delta: f32) -> f32 {
@@ -5343,17 +5374,82 @@ mod timeline_row_tests {
     fn timeline_wheel_modifiers_route_zoom_and_horizontal_scroll() {
         let delta = egui::vec2(0.0, 120.0);
         assert_eq!(
-            timeline_wheel_action(delta, false, false, true, true, true),
+            timeline_wheel_action(delta, false, false, true, true, true, true),
             Some(TimelineWheelAction::Zoom(120.0))
         );
         assert_eq!(
-            timeline_wheel_action(delta, false, true, true, true, true),
-            Some(TimelineWheelAction::Zoom(120.0))
+            timeline_wheel_action(delta, false, true, true, true, true, true),
+            Some(TimelineWheelAction::VerticalScroll(120.0))
         );
         assert_eq!(
-            timeline_wheel_action(delta, true, false, true, true, true),
+            timeline_wheel_action(delta, true, false, true, true, true, true),
             Some(TimelineWheelAction::HorizontalScroll(120.0))
         );
+        assert_eq!(timeline_wheel_action(delta, false, true, true, true, false, true), Some(TimelineWheelAction::Zoom(120.0)));
+        assert_eq!(timeline_wheel_action(delta, true, true, true, true, true, true), Some(TimelineWheelAction::HorizontalScroll(120.0)));
+        assert_eq!(timeline_wheel_action(egui::Vec2::ZERO, false, true, true, true, true, true), None);
+    }
+
+    #[test]
+    fn timeline_ctrl_wheel_uses_raw_events_with_native_units() {
+        let wheel = |unit, delta, modifiers| egui::Event::MouseWheel {
+            unit, delta, modifiers, phase: egui::TouchPhase::Move,
+        };
+        let events = [
+            wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, -3.0), egui::Modifiers::CTRL),
+            wheel(egui::MouseWheelUnit::Point, egui::vec2(0.0, -12.0), egui::Modifiers::COMMAND),
+            wheel(egui::MouseWheelUnit::Point, egui::vec2(0.0, -100.0), egui::Modifiers::NONE),
+        ];
+        assert_eq!(timeline_ctrl_wheel_delta(&events, 20.0, 200.0), egui::vec2(0.0, -72.0));
+        assert_eq!(timeline_ctrl_wheel_delta(&[wheel(egui::MouseWheelUnit::Page, egui::vec2(0.0, -1.0), egui::Modifiers::CTRL)], 20.0, 200.0), egui::vec2(0.0, -200.0));
+    }
+
+    #[test]
+    fn timeline_ruler_is_frozen_while_tracks_and_horizontal_origin_scroll() {
+        for offset in [egui::Vec2::ZERO, egui::vec2(140.0, 90.0), egui::vec2(400.0, 600.0)] {
+            let content = egui::Rect::from_min_size(egui::pos2(300.0, 80.0) - offset, egui::vec2(1800.0, 2000.0));
+            let viewport = egui::Rect::from_min_size(offset.to_pos2(), egui::vec2(500.0, 260.0));
+            let ruler = timeline_frozen_ruler_rect(content, viewport);
+            assert_eq!(ruler.top(), 80.0);
+            assert_eq!(ruler.bottom(), 80.0 + TIMELINE_RULER_HEIGHT);
+            assert_eq!(ruler.left(), 300.0 - offset.x);
+            assert_eq!(timeline_track_row_top(content.top(), 0, 40.0), 80.0 + TIMELINE_RULER_HEIGHT - offset.y);
+            assert!(ruler.contains(timeline_keyframe_marker_center(ruler, 350.0)));
+        }
+    }
+
+    #[test]
+    fn timeline_frozen_ruler_uses_real_scroll_viewport_and_separate_paint_clip() {
+        let context = egui::Context::default();
+        let mut observed = Vec::new();
+        for offset in [0.0, 120.0, 420.0] {
+            let output = context.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 240.0))),
+                ..Default::default()
+            }, |ui| {
+                let scroll = egui::ScrollArea::both()
+                    .id_salt("test-frozen-timeline")
+                    .content_margin(egui::Margin::ZERO)
+                    .vertical_scroll_offset(offset)
+                    .show_viewport(ui, |ui, viewport| {
+                        let (_, content) = ui.allocate_space(egui::vec2(1400.0, 1600.0));
+                        let ruler = timeline_frozen_ruler_rect(content, viewport);
+                        let clip = ui.clip_rect();
+                        let body_clip = egui::Rect::from_min_max(egui::pos2(clip.left(), ruler.bottom()), clip.max).intersect(clip);
+                        let body_painter = ui.painter().with_clip_rect(body_clip);
+                        let ruler_painter = ui.painter().with_clip_rect(ruler.intersect(clip));
+                        assert!(ruler_painter.clip_rect().height() > 0.0);
+                        assert!(body_painter.clip_rect().top() >= ruler.bottom());
+                        observed.push((ruler.top(), timeline_track_row_top(content.top(), 0, 40.0)));
+                    });
+                assert_eq!(scroll.state.offset.y, offset);
+            });
+            discard_ui_output(output);
+        }
+        assert_eq!(observed[0].0, observed[1].0);
+        assert_eq!(observed[1].0, observed[2].0);
+        assert_eq!(observed[0].1 - observed[1].1, 120.0);
+        assert_eq!(observed[0].1 - observed[2].1, 420.0);
     }
 
     #[test]
@@ -10791,6 +10887,16 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     ))
                                     .vertical_scroll_offset(synced_vertical_offset)
                                     .show(ui, |ui| {
+                                if self.app.timeline_ctrl_wheel_vertical_scroll
+                                    && ui.ctx().pointer_latest_pos().is_some_and(|pos| ui.clip_rect().contains(pos))
+                                {
+                                    let line_speed = ui.ctx().options(|options| options.input_options.line_scroll_speed);
+                                    let delta = ui.input(|input| timeline_ctrl_wheel_delta(&input.events, line_speed, ui.clip_rect().height()));
+                                    if delta.y != 0.0 {
+                                        ui.scroll_with_delta(egui::vec2(0.0, delta.y));
+                                        ui.ctx().input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
+                                    }
+                                }
                                 ui.set_width(TIMELINE_TRACK_HEADER_WIDTH);
                                 ui.spacing_mut().item_spacing.y = 0.0;
                                 let rename_key_id = egui::Id::new("timeline_track_rename_key");
@@ -11817,7 +11923,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             });
 
                             // 2. Right column: Scrollable Timeline Grid
-                            let scroll_delta = ui.input(|i| i.smooth_scroll_delta);
+                            let line_speed = ui.ctx().options(|options| options.input_options.line_scroll_speed);
+                            let scroll_delta = ui.input(|input| {
+                                if input.modifiers.ctrl || input.modifiers.command {
+                                    timeline_ctrl_wheel_delta(&input.events, line_speed, ui.available_height())
+                                } else { input.smooth_scroll_delta }
+                            });
                             let scroll_modifiers = ui.input(|i| i.modifiers);
                             let mut pending_timeline_wheel = None;
                             let zoom = self.app.timeline_zoom;
@@ -11844,8 +11955,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let mut keyframe_context_owned = false;
                             let timeline_scroll = egui::ScrollArea::both()
                                 .id_salt("timeline_scroll")
+                                .content_margin(egui::Margin::ZERO)
                                 .vertical_scroll_offset(timeline_header_offset_y)
-                                .show(ui, |ui| {
+                                .show_viewport(ui, |ui, viewport| {
                                         let size = egui::vec2(total_width, total_height);
                                         let (_, rect) = ui.allocate_space(size);
                                         // Keyboard focus must target the real canvas widget. A
@@ -11857,18 +11969,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             egui::Sense::click_and_drag(),
                                         );
 
-                                        let painter = ui.painter();
+                                        let viewport_clip = ui.clip_rect();
+                                        let ruler_rect = timeline_frozen_ruler_rect(rect, viewport);
+                                        let track_clip = egui::Rect::from_min_max(
+                                            egui::pos2(viewport_clip.left(), ruler_rect.bottom()),
+                                            viewport_clip.max,
+                                        ).intersect(viewport_clip);
+                                        let painter = ui.painter().with_clip_rect(track_clip);
+                                        let ruler_painter = ui.painter().with_clip_rect(ruler_rect.intersect(viewport_clip));
 
                                         // Draw timeline tracks background
                                         painter.rect_filled(rect, 0.0, ui.visuals().panel_fill);
 
                                         let tracks_top = rect.min.y + TIMELINE_RULER_HEIGHT;
 
-                                        // Allocate top 26px band of the timeline grid canvas as dedicated time ruler
-                                        let ruler_rect = egui::Rect::from_min_max(
-                                            egui::pos2(rect.min.x, rect.min.y),
-                                            egui::pos2(rect.max.x, tracks_top),
-                                        );
+                                        // The ruler stays at the viewport top; track geometry
+                                        // still scrolls with content and is clipped below it.
 
                                         let pointer_pos = ui.ctx().pointer_latest_pos();
 
@@ -11887,7 +12003,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     bottom - keyframe.value * (timeline_analog_height - 8.0)),
                                             )));
                                         }
-                                        keyframe_candidates.retain(|(_, center)| center.x >= rect.left() && center.x <= rect.right());
+                                        keyframe_candidates.retain(|(target, center)| match target {
+                                            TimelineKeyframeTarget::Marker(_) => ruler_rect.intersect(viewport_clip).contains(*center),
+                                            TimelineKeyframeTarget::Analog(_, _) => track_clip.contains(*center),
+                                        });
                                         let nearest_keyframe = nearest_timeline_keyframe(
                                             pointer_pos.filter(|pos| ui.clip_rect().contains(*pos)), &keyframe_candidates,
                                         );
@@ -11896,7 +12015,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             .any(|(target, _)| egui::Popup::is_id_open(ui.ctx(), target.menu_id()));
 
                                         if let Some(pos) = pointer_pos {
-                                            if rect.contains(pos)
+                                            if viewport_clip.contains(pos) && rect.contains(pos)
                                                 && let Some(action) = timeline_wheel_action(
                                                     scroll_delta,
                                                     scroll_modifiers.shift,
@@ -11904,6 +12023,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         || scroll_modifiers.command,
                                                     self.app.timeline_plain_wheel_zoom,
                                                     self.app.timeline_ctrl_wheel_zoom,
+                                                    self.app.timeline_ctrl_wheel_vertical_scroll,
                                                     self.app
                                                         .timeline_shift_wheel_horizontal_scroll,
                                                 )
@@ -12140,6 +12260,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             let current_target = self.app.seek_pos.unwrap_or(self.app.playback_time);
                                             self.app.finish_scrub(current_target);
                                         }
+
+                                        // Scrolled lane widgets must neither paint over nor steal
+                                        // clicks from the frozen ruler/keyframes/chapter controls.
+                                        ui.set_clip_rect(track_clip);
 
                                         // Draw grid lines
                                         // Major grid lines every second (zoom px)
@@ -13371,8 +13495,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
 
                                         // Render Dedicated Time Ruler Bar Header
-                                        painter.rect_filled(ruler_rect, 0.0, ui.visuals().panel_fill);
-                                        painter.line_segment(
+                                        ruler_painter.rect_filled(ruler_rect, 0.0, ui.visuals().panel_fill);
+                                        ruler_painter.line_segment(
                                             [egui::pos2(ruler_rect.min.x, ruler_rect.max.y), egui::pos2(ruler_rect.max.x, ruler_rect.max.y)],
                                             egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(50, 50, 50)),
                                         );
@@ -13389,7 +13513,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             let grid_x = rect.min.x + (i as f32 * zoom);
                                             if grid_x <= rect.max.x - 8.0 {
                                                 // Major second tick
-                                                painter.line_segment(
+                                                ruler_painter.line_segment(
                                                     [egui::pos2(grid_x, ruler_rect.max.y - 8.0), egui::pos2(grid_x, ruler_rect.max.y)],
                                                     egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(100, 100, 100)),
                                                 );
@@ -13399,7 +13523,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         let sub_x = grid_x + (sub as f32 * (zoom / 10.0));
                                                         if sub_x <= rect.max.x - 8.0 {
                                                             let notch_h = if sub == 5 { 5.0 } else { 3.0 };
-                                                            painter.line_segment(
+                                                            ruler_painter.line_segment(
                                                                 [egui::pos2(sub_x, ruler_rect.max.y - notch_h), egui::pos2(sub_x, ruler_rect.max.y)],
                                                                 egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(60, 60, 60)),
                                                             );
@@ -13413,7 +13537,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     if label_x + 20.0 > rect.max.x - 8.0 {
                                                         label_x = rect.max.x - 28.0;
                                                     }
-                                                    painter.text(
+                                                    ruler_painter.text(
                                                         egui::pos2(label_x, ruler_rect.min.y + 13.0),
                                                         egui::Align2::LEFT_CENTER,
                                                         format!("{}s", i),
@@ -13451,7 +13575,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     color.gamma_multiply(if active { 0.8 } else { 0.45 }),
                                                 ),
                                             );
-                                            painter.add(egui::Shape::convex_polygon(
+                                            ruler_painter.add(egui::Shape::convex_polygon(
                                                 vec![
                                                     egui::pos2(marker_x, ruler_rect.min.y + 3.0),
                                                     egui::pos2(marker_x + 9.0, ruler_rect.min.y + 6.5),
@@ -13499,7 +13623,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 egui::pos2(center.x, center.y + 5.0),
                                                 egui::pos2(center.x - 5.0, center.y),
                                             ];
-                                            painter.add(egui::Shape::convex_polygon(
+                                            ruler_painter.add(egui::Shape::convex_polygon(
                                                 diamond,
                                                 color,
                                                 egui::Stroke::new(
@@ -13523,11 +13647,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             // Downward handle terminating exactly at the bottom of
                                             // the ruler, immediately above the first track.
                                             let points = vec![
-                                                egui::pos2(playhead_x - 7.0, tracks_top - 12.0),
-                                                egui::pos2(playhead_x + 7.0, tracks_top - 12.0),
-                                                egui::pos2(playhead_x, tracks_top),
+                                                egui::pos2(playhead_x - 7.0, ruler_rect.bottom() - 12.0),
+                                                egui::pos2(playhead_x + 7.0, ruler_rect.bottom() - 12.0),
+                                                egui::pos2(playhead_x, ruler_rect.bottom()),
                                             ];
-                                            painter.add(egui::Shape::convex_polygon(points, egui::Color32::RED, egui::Stroke::NONE));
+                                            ruler_painter.add(egui::Shape::convex_polygon(points, egui::Color32::RED, egui::Stroke::NONE));
                                         }
 
                                         // Draw Snap line if active
@@ -13787,6 +13911,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 .clamp(0.0, max_offset);
                                         timeline_scroll_changed = true;
                                     }
+                                    TimelineWheelAction::VerticalScroll(delta) => {
+                                        let max_offset = (timeline_content_size.y
+                                            - timeline_viewport.height()).max(0.0);
+                                        timeline_scroll_state.offset.y =
+                                            (timeline_scroll_state.offset.y - delta).clamp(0.0, max_offset);
+                                        timeline_scroll_changed = true;
+                                    }
                                 }
                             }
 
@@ -13899,7 +14030,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             // Successful drop logic
                             if let Some(payload) = take_effect_drop_on_rect(ui.ctx(), rect) {
                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
-                                    if rect.contains(mouse_pos) {
+                                    if rect.contains(mouse_pos) && mouse_pos.y >= timeline_viewport.top() + TIMELINE_RULER_HEIGHT {
                                         let relative_y = mouse_pos.y - tracks_top;
                                         let visible_row =
                                             (relative_y / timeline_track_height).floor() as i32;
@@ -13912,7 +14043,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                             // Background click, seek, or lasso selection logic
-                            let ruler_bottom = tracks_top;
+                            let ruler_bottom = timeline_viewport.top() + TIMELINE_RULER_HEIGHT;
 
                             if response.drag_started_by(egui::PointerButton::Primary)
                                 && !clicked_any_clip

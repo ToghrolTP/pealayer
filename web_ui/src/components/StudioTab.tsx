@@ -36,6 +36,7 @@ interface StudioTabProps {
   apiBaseUrl: string;
   seekbarHoverThumbnails: boolean;
   surface?: 'studio' | 'timeline';
+  ctrlWheelVerticalScroll?: boolean;
 }
 
 const formatTime = (seconds = 0, showMilliseconds = true) => {
@@ -75,7 +76,20 @@ const workspaceGlyph = (icon?: string) => {
   }
 };
 
-export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl, seekbarHoverThumbnails, surface = 'studio' }) => {
+export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl, seekbarHoverThumbnails, surface = 'studio', ctrlWheelVerticalScroll = true }) => {
+  const timelineGridRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const grid = timelineGridRef.current;
+    if (!grid || !ctrlWheelVerticalScroll) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.deltaY === 0) return;
+      event.preventDefault(); // Do not zoom the entire browser page.
+      const scale = event.deltaMode === 1 ? 20 : event.deltaMode === 2 ? grid.clientHeight : 1;
+      grid.scrollTop += event.deltaY * scale;
+    };
+    grid.addEventListener('wheel', onWheel, { passive: false });
+    return () => grid.removeEventListener('wheel', onWheel);
+  }, [ctrlWheelVerticalScroll]);
   const [selectedEffect, setSelectedEffect] = useState<string | null>(null);
   const [effectEditorOpen, setEffectEditorOpen] = useState(false);
   const [effectDraft, setEffectDraft] = useState<Record<string, any> | null>(null);
@@ -639,6 +653,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
 
         <div
           className="timeline-grid"
+          ref={timelineGridRef}
           onDragOver={(event) => {
             if (event.dataTransfer.types.includes('application/x-pealayer-effect')) {
               event.preventDefault();

@@ -565,6 +565,16 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Timeline navigation",
             "Use Ctrl or Command plus wheel to zoom",
         ),
+        {
+        let mut control = PreferenceControl::boolean(
+            "timeline_ctrl_wheel_vertical_scroll",
+            "input",
+            "Timeline navigation",
+            "Use Ctrl or Command plus wheel to scroll tracks vertically",
+        );
+        control.description = Some("Takes priority over Ctrl or Command plus wheel zoom; Shift plus wheel still scrolls horizontally");
+        control
+        },
         PreferenceControl::boolean(
             "timeline_shift_wheel_horizontal_scroll",
             "input",
@@ -1324,9 +1334,14 @@ mod tests {
     #[test]
     fn timeline_navigation_gestures_are_shared_persistent_preferences() {
         let config = crate::config::AppConfig::default();
+        let previous: crate::config::AppConfig = serde_json::from_str(r#"{"timeline_ctrl_wheel_zoom":true}"#).unwrap();
+        assert!(previous.timeline_ctrl_wheel_vertical_scroll, "existing configs receive the new default");
+        let serialized = serde_json::to_string(&crate::config::AppConfig { timeline_ctrl_wheel_vertical_scroll: false, ..config.clone() }).unwrap();
+        assert!(!serde_json::from_str::<crate::config::AppConfig>(&serialized).unwrap().timeline_ctrl_wheel_vertical_scroll);
         assert!(config.timeline_header_wheel_vertical_scroll);
         assert!(config.timeline_plain_wheel_zoom);
         assert!(config.timeline_ctrl_wheel_zoom);
+        assert!(config.timeline_ctrl_wheel_vertical_scroll);
         assert!(config.timeline_shift_wheel_horizontal_scroll);
         assert!(config.timeline_middle_button_pan);
         assert!(config.timeline_middle_axis_lock_modifiers);
@@ -1338,6 +1353,7 @@ mod tests {
             "timeline_header_wheel_vertical_scroll",
             "timeline_plain_wheel_zoom",
             "timeline_ctrl_wheel_zoom",
+            "timeline_ctrl_wheel_vertical_scroll",
             "timeline_shift_wheel_horizontal_scroll",
             "timeline_middle_button_pan",
             "timeline_middle_axis_lock_modifiers",

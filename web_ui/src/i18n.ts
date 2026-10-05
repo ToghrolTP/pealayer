@@ -1,6 +1,8 @@
 export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
+  'Use Ctrl or Command plus wheel to scroll tracks vertically': 'پیمایش عمودی ترک‌ها با Ctrl یا Command و چرخ ماوس',
+  'Takes priority over Ctrl or Command plus wheel zoom; Shift plus wheel still scrolls horizontally': 'بر بزرگ‌نمایی با Ctrl یا Command اولویت دارد؛ Shift و چرخ ماوس همچنان پیمایش افقی است',
   'Player': 'پخش‌کننده',
   'Timeline': 'خط زمانی',
   'Effects Library': 'کتابخانهٔ افکت‌ها',

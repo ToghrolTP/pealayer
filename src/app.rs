@@ -459,6 +459,7 @@ pub struct PealayerApp {
     pub(crate) timeline_header_wheel_vertical_scroll: bool,
     pub(crate) timeline_plain_wheel_zoom: bool,
     pub(crate) timeline_ctrl_wheel_zoom: bool,
+    pub(crate) timeline_ctrl_wheel_vertical_scroll: bool,
     pub(crate) timeline_shift_wheel_horizontal_scroll: bool,
     pub(crate) timeline_middle_button_pan: bool,
     pub(crate) timeline_middle_axis_lock_modifiers: bool,
@@ -5066,6 +5067,7 @@ impl PealayerApp {
         cfg.timeline_header_wheel_vertical_scroll = self.timeline_header_wheel_vertical_scroll;
         cfg.timeline_plain_wheel_zoom = self.timeline_plain_wheel_zoom;
         cfg.timeline_ctrl_wheel_zoom = self.timeline_ctrl_wheel_zoom;
+        cfg.timeline_ctrl_wheel_vertical_scroll = self.timeline_ctrl_wheel_vertical_scroll;
         cfg.timeline_shift_wheel_horizontal_scroll = self.timeline_shift_wheel_horizontal_scroll;
         cfg.timeline_middle_button_pan = self.timeline_middle_button_pan;
         cfg.timeline_middle_axis_lock_modifiers = self.timeline_middle_axis_lock_modifiers;
@@ -5265,6 +5267,7 @@ impl PealayerApp {
         self.timeline_header_wheel_vertical_scroll = config.timeline_header_wheel_vertical_scroll;
         self.timeline_plain_wheel_zoom = config.timeline_plain_wheel_zoom;
         self.timeline_ctrl_wheel_zoom = config.timeline_ctrl_wheel_zoom;
+        self.timeline_ctrl_wheel_vertical_scroll = config.timeline_ctrl_wheel_vertical_scroll;
         self.timeline_shift_wheel_horizontal_scroll = config.timeline_shift_wheel_horizontal_scroll;
         self.timeline_middle_button_pan = config.timeline_middle_button_pan;
         self.timeline_middle_axis_lock_modifiers = config.timeline_middle_axis_lock_modifiers;
@@ -6582,6 +6585,7 @@ impl Default for PealayerApp {
             timeline_header_wheel_vertical_scroll: true,
             timeline_plain_wheel_zoom: true,
             timeline_ctrl_wheel_zoom: true,
+            timeline_ctrl_wheel_vertical_scroll: true,
             timeline_shift_wheel_horizontal_scroll: true,
             timeline_middle_button_pan: true,
             timeline_middle_axis_lock_modifiers: true,

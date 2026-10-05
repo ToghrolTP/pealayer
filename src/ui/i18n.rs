@@ -1007,8 +1007,14 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Add Keyframe\nInserts a keyframe at the current playhead position." => {
             "افزودن فریم کلیدی\nیک فریم کلیدی در موقعیت کنونی نشانگر درج می‌کند."
         }
-        "Timeline Ruler\nClick or drag to scrub playhead. Ctrl+Scroll to zoom time." => {
-            "خط‌کش خط زمانی\nبرای پیمایش کلیک یا درگ کنید؛ برای بزرگ‌نمایی Ctrl+اسکرول کنید."
+        "Use Ctrl or Command plus wheel to scroll tracks vertically" => {
+            "پیمایش عمودی ترک‌ها با Ctrl یا Command و چرخ ماوس"
+        }
+        "Takes priority over Ctrl or Command plus wheel zoom; Shift plus wheel still scrolls horizontally" => {
+            "بر بزرگ‌نمایی با Ctrl یا Command اولویت دارد؛ Shift و چرخ ماوس همچنان پیمایش افقی است"
+        }
+        "Timeline Ruler\nClick or drag to scrub playhead. Scroll to zoom time." => {
+            "خط‌کش خط زمانی\nبرای پیمایش کلیک یا درگ کنید؛ برای بزرگ‌نمایی چرخ ماوس را بچرخانید."
         }
         _ => english,
     };
