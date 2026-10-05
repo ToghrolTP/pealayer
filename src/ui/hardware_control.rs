@@ -2339,18 +2339,7 @@ fn channel_option_toggle(
 }
 
 fn channel_color_editor(ui: &mut egui::Ui, draft: &mut String, fallback: [u8; 3]) {
-    ui.horizontal(|ui| {
-        let mut rgb = crate::config::parse_rgb_hex(draft).unwrap_or(fallback);
-        if ui.color_edit_button_srgb(&mut rgb).changed() {
-            *draft = format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
-        }
-        ui.add_sized(
-            [104.0, 28.0],
-            egui::TextEdit::singleline(draft)
-                .char_limit(7)
-                .hint_text("#38D27A"),
-        );
-    });
+    crate::ui::color_picker::color_field(ui, draft, fallback, 124.0);
 }
 
 fn save_channel_presentation(

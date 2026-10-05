@@ -930,6 +930,7 @@ fn render_contract_control(
                         egui::ComboBox::from_id_salt(("preference-accent", control.key))
                             .width(ui.available_width().max(108.0))
                             .selected_text(selected_label)
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                             .show_ui(ui, |ui| {
                                 ui.set_min_width(310.0);
                                 for option in &control.options {
@@ -961,26 +962,11 @@ fn render_contract_control(
 
                                         if is_custom {
                                             ui.add_space(6.0);
-                                            let mut rgb = crate::config::parse_rgb_hex(&custom_hex)
-                                                .unwrap_or([0, 120, 212]);
-                                            if ui.color_edit_button_srgb(&mut rgb).changed() {
-                                                custom_hex = format!(
-                                                    "#{:02X}{:02X}{:02X}",
-                                                    rgb[0], rgb[1], rgb[2]
-                                                );
-                                                companion_changed |= set_value_at_path(
-                                                    values,
-                                                    custom_key,
-                                                    serde_json::Value::String(custom_hex.clone()),
-                                                )
-                                                .is_ok();
-                                                replacement = Some(option.value.clone());
-                                            }
-                                            let response = ui.add(
-                                                egui::TextEdit::singleline(&mut custom_hex)
-                                                    .desired_width(84.0)
-                                                    .char_limit(7)
-                                                    .hint_text("#0078D4"),
+                                            let response = crate::ui::color_picker::color_field(
+                                                ui,
+                                                &mut custom_hex,
+                                                [0, 120, 212],
+                                                124.0,
                                             );
                                             if response.changed() {
                                                 companion_changed |= set_value_at_path(

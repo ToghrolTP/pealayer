@@ -113,6 +113,10 @@ fn icon_popup_width(requested: f32, screen_width: f32) -> f32 {
         .min((screen_width - 24.0).max(180.0))
 }
 
+fn icon_combobox_popup_width(requested: f32, screen_width: f32) -> f32 {
+    requested.max(280.0).min((screen_width - 24.0).max(180.0))
+}
+
 fn icon_match_ranges(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
     let query = query
         .chars()
@@ -169,15 +173,19 @@ fn icon_result_text(
 ) -> eframe::egui::text::LayoutJob {
     use eframe::egui;
     let mut job = egui::text::LayoutJob::default();
-    let normal = egui::TextFormat {
+    let mut normal = egui::TextFormat {
         font_id: egui::TextStyle::Button.resolve(ui.style()),
         color: ui.visuals().text_color(),
         valign: egui::Align::Center,
         ..Default::default()
     };
+    if grid {
+        normal.font_id.size = 11.0;
+        job.wrap.max_rows = 2;
+    }
     let mut icon_format = normal.clone();
     if grid {
-        icon_format.font_id.size = 23.0;
+        icon_format.font_id.size = 18.0;
         job.halign = egui::Align::Center;
     }
     job.append(glyph, 0.0, icon_format);
@@ -228,7 +236,7 @@ pub fn searchable_icon_picker_contents(
             ui.label(egui::RichText::new(MAGNIFYING_GLASS).color(ui.visuals().weak_text_color()));
             let switch_width = 26.0;
             let search_width =
-                (ui.available_width() - switch_width * 2.0 - ui.spacing().item_spacing.x * 2.0)
+                (ui.available_width() - switch_width * 2.0 - 20.0 - ui.spacing().item_spacing.x * 3.0)
                     .max(70.0);
             let search_response = ui.add_sized(
                 [search_width, ui.spacing().interact_size.y],
@@ -293,13 +301,15 @@ pub fn searchable_icon_picker_contents(
         .iter()
         .filter(|(key, label, _)| icon_preset_matches(key, label, search))
         .collect();
-    let columns = ((ui.available_width() + 6.0) / 86.0).floor().max(1.0) as usize;
-    let cell_width = (ui.available_width() - 6.0 * (columns - 1) as f32) / columns as f32;
     let mut selected = None;
     egui::ScrollArea::vertical()
         .max_height(260.0)
         .show(ui, |ui| {
             if grid {
+                // Calculate after ScrollArea reserves its gutter, not from the
+                // wider parent. Each tile has a bounded two-line label.
+                let columns = ((ui.available_width() + 6.0) / 82.0).floor().max(1.0) as usize;
+                let cell_width = (ui.available_width() - 6.0 * (columns - 1) as f32) / columns as f32;
                 egui::Grid::new(search_id.with("results-grid"))
                     .num_columns(columns)
                     .min_col_width(cell_width)
@@ -310,10 +320,11 @@ pub fn searchable_icon_picker_contents(
                             let text = icon_result_text(ui, glyph, label, search, true);
                             if ui
                                 .add_sized(
-                                    [cell_width, 62.0],
+                                    [cell_width, 54.0],
                                     egui::Button::new(text)
                                         .selected(value.eq_ignore_ascii_case(key))
-                                        .truncate(),
+                                        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                                        .wrap(),
                                 )
                                 .on_hover_text(*label)
                                 .clicked()
@@ -405,7 +416,7 @@ pub fn searchable_icon_picker(
         .selected_text(selected_text)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show_ui(ui, |ui| {
-            ui.set_width(icon_popup_width(
+            ui.set_width(icon_combobox_popup_width(
                 config.width,
                 ui.ctx().content_rect().width(),
             ));
@@ -609,6 +620,46 @@ mod tests {
         assert!(icon_preset_matches("lightbulb", "Light bulb", "LIGHT"));
         assert!(!icon_preset_matches("seat", "Seat", "lamp"));
         assert!(icon_preset_matches("timeline", "Timeline", "time"));
+    }
+
+    #[test]
+    fn grid_tiles_render_two_small_lines_with_borders_and_combobox_width_is_not_capped() {
+        use eframe::egui;
+        assert_eq!(icon_combobox_popup_width(480.0, 1000.0), 480.0);
+        assert_eq!(icon_popup_width(480.0, 1000.0), 320.0);
+        assert_eq!(icon_combobox_popup_width(800.0, 600.0), 576.0);
+        for dark in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+            ctx.data_mut(|data| data.insert_persisted(egui::Id::new(ICON_PICKER_GRID_ID), true));
+            let mut value = "sparkle".to_owned();
+            let mut search = String::new();
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.set_width(320.0);
+                searchable_icon_picker_contents(ui, &mut value, &mut search, egui::Id::new("grid-test"), false, IconPickerConfig {
+                    language: crate::config::AppLanguage::English,
+                    presets: CONTROL_ICON_PRESETS,
+                    fallback_glyph: SPARKLE,
+                    fallback_name: "Sparkle",
+                    width: 320.0,
+                    show_selected_name: true,
+                    search_hint: "Search icons...",
+                    presets_label: "Presets",
+                    no_matches_label: "No matching icons",
+                    clear_label: None,
+                });
+            });
+            output.textures_delta.clear();
+            let tile = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == format!("{LAMP}\nLamp") => Some(text),
+                _ => None,
+            }).expect("tile has separate icon and caption lines");
+            assert_eq!(tile.galley.rows.len(), 2);
+            assert_eq!(tile.galley.job.sections[0].format.font_id.size, 18.0);
+            assert_eq!(tile.galley.job.sections.last().unwrap().format.font_id.size, 11.0);
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::epaint::Shape::Rect(rect) if (rect.rect.height() - 54.0).abs() < 0.1 && rect.stroke.width > 0.0)));
+        }
     }
 
     #[test]
