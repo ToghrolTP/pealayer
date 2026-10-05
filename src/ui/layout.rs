@@ -45,6 +45,19 @@ fn drag_translation(
     pointer - source_min - grab_offset
 }
 
+fn hardware_monitor_scroll<R>(
+    ui: &mut egui::Ui,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::scroll_area::ScrollAreaOutput<R> {
+    // Dock scrolling is disabled for this panel: it owns one bounded vertical
+    // viewport so cards cannot grow the panel or strand lower sections.
+    egui::ScrollArea::vertical()
+        .id_salt("hardware-monitor-scroll")
+        .max_height(ui.available_height())
+        .auto_shrink([false, false])
+        .show(ui, body)
+}
+
 pub(crate) fn left_aligned_click_label(
     ui: &mut egui::Ui,
     text: &str,
@@ -239,14 +252,32 @@ fn clear_released_timeline_track_drag(ui: &mut egui::Ui) {
     }
 }
 
-fn hardware_channel_drag_id() -> egui::Id {
-    egui::Id::new("hardware-channel-drag")
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(crate) enum HardwareChannelDragSurface {
+    Monitor,
+    Manager,
 }
 
-pub(crate) fn clear_released_hardware_channel_drag(ui: &mut egui::Ui) {
-    if ui.input(|input| input.pointer.any_released()) {
+fn hardware_channel_drag_id(ui: &egui::Ui, surface: HardwareChannelDragSurface) -> egui::Id {
+    egui::Id::new(("hardware-channel-drag", surface, ui.ctx().viewport_id()))
+}
+
+fn hardware_channel_source_rect_id(
+    ui: &egui::Ui,
+    surface: HardwareChannelDragSurface,
+    key: &str,
+) -> egui::Id {
+    egui::Id::new(("hardware-channel-source-rect", surface, ui.ctx().viewport_id(), key))
+}
+
+pub(crate) fn clear_released_hardware_channel_drag(
+    ui: &mut egui::Ui,
+    surface: HardwareChannelDragSurface,
+) {
+    if ui.input(|input| input.pointer.button_released(egui::PointerButton::Primary)) {
+        let id = hardware_channel_drag_id(ui, surface);
         ui.data_mut(|data| {
-            data.remove_temp::<HardwareChannelDrag>(hardware_channel_drag_id());
+            data.remove_temp::<HardwareChannelDrag>(id);
         });
     }
 }
@@ -264,8 +295,13 @@ fn hardware_channel_handle_hovered(
         })
 }
 
-pub(crate) fn hardware_channel_is_dragging(ui: &mut egui::Ui, key: &str) -> bool {
-    ui.data_mut(|data| data.get_temp::<HardwareChannelDrag>(hardware_channel_drag_id()))
+pub(crate) fn hardware_channel_is_dragging(
+    ui: &mut egui::Ui,
+    key: &str,
+    surface: HardwareChannelDragSurface,
+) -> bool {
+    let id = hardware_channel_drag_id(ui, surface);
+    ui.data_mut(|data| data.get_temp::<HardwareChannelDrag>(id))
         .is_some_and(|drag| drag.key == key)
 }
 
@@ -273,10 +309,12 @@ pub(crate) fn hardware_channel_drag_handle(
     app: &PealayerApp,
     ui: &mut egui::Ui,
     control: &crate::four_d::controller::HardwareControl,
+    surface: HardwareChannelDragSurface,
 ) -> egui::Response {
-    let source_rect_id = egui::Id::new(("hardware-channel-source-rect", control.key.as_str()));
+    let source_rect_id = hardware_channel_source_rect_id(ui, surface, &control.key);
+    let drag_id = hardware_channel_drag_id(ui, surface);
     let active = ui
-        .data_mut(|data| data.get_temp::<HardwareChannelDrag>(hardware_channel_drag_id()))
+        .data_mut(|data| data.get_temp::<HardwareChannelDrag>(drag_id))
         .is_some_and(|drag| drag.key == control.key);
     // `ui.max_rect()` inside a horizontal row begins at the current cursor and
     // therefore excludes the icon/indicator area that users naturally hover.
@@ -287,7 +325,7 @@ pub(crate) fn hardware_channel_drag_handle(
     let pointer = ui.ctx().pointer_hover_pos();
     let hovered = hardware_channel_handle_hovered(pointer, source_rect, ui.max_rect(), active);
     let alpha = ui.ctx().animate_bool_with_time(
-        egui::Id::new(("hardware-channel-handle-visible", control.key.as_str())),
+        source_rect_id.with("handle-visible"),
         hovered,
         0.12,
     );
@@ -312,7 +350,7 @@ pub(crate) fn hardware_channel_drag_handle(
             - source_rect.min;
         ui.data_mut(|data| {
             data.insert_temp(
-                hardware_channel_drag_id(),
+                drag_id,
                 HardwareChannelDrag {
                     key: control.key.clone(),
                     kind: control.kind.clone(),
@@ -332,10 +370,12 @@ pub(crate) fn finish_hardware_channel_card(
     control: &crate::four_d::controller::HardwareControl,
     card_rect: egui::Rect,
     layer_id: egui::LayerId,
+    surface: HardwareChannelDragSurface,
 ) {
-    let source_rect_id = egui::Id::new(("hardware-channel-source-rect", control.key.as_str()));
+    let source_rect_id = hardware_channel_source_rect_id(ui, surface, &control.key);
+    let drag_id = hardware_channel_drag_id(ui, surface);
     ui.data_mut(|data| data.insert_temp(source_rect_id, card_rect));
-    let drag = ui.data_mut(|data| data.get_temp::<HardwareChannelDrag>(hardware_channel_drag_id()));
+    let drag = ui.data_mut(|data| data.get_temp::<HardwareChannelDrag>(drag_id));
     if let Some(drag) = drag.filter(|drag| drag.key == control.key)
         && let Some(pointer) = ui.ctx().pointer_interact_pos()
     {
@@ -352,9 +392,11 @@ pub(crate) fn hardware_channel_drop_target(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     control: &crate::four_d::controller::HardwareControl,
+    surface: HardwareChannelDragSurface,
 ) -> Option<HardwareChannelDrop> {
+    let drag_id = hardware_channel_drag_id(ui, surface);
     let drag =
-        ui.data_mut(|data| data.get_temp::<HardwareChannelDrag>(hardware_channel_drag_id()))?;
+        ui.data_mut(|data| data.get_temp::<HardwareChannelDrag>(drag_id))?;
     if drag.key == control.key || drag.kind != control.kind {
         return None;
     }
@@ -372,9 +414,9 @@ pub(crate) fn hardware_channel_drop_target(
         egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
     );
     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-    if ui.input(|input| input.pointer.any_released()) {
+    if ui.input(|input| input.pointer.button_released(egui::PointerButton::Primary)) {
         ui.data_mut(|data| {
-            data.remove_temp::<HardwareChannelDrag>(hardware_channel_drag_id());
+            data.remove_temp::<HardwareChannelDrag>(drag_id);
         });
         return Some(HardwareChannelDrop {
             source_key: drag.key,
@@ -4128,9 +4170,7 @@ fn draw_compact_control_card(
         egui::Order::Middle,
         egui::Id::new(("hardware-channel-card", control.key.as_str())),
     );
-    let dragging_source = ui
-        .data_mut(|data| data.get_temp::<HardwareChannelDrag>(hardware_channel_drag_id()))
-        .is_some_and(|drag| drag.key == control.key);
+    let dragging_source = hardware_channel_is_dragging(ui, &control.key, HardwareChannelDragSurface::Monitor);
     let card = ui.scope_builder(egui::UiBuilder::new().layer_id(layer_id), |ui| {
         if dragging_source {
             ui.set_opacity(0.58);
@@ -4183,7 +4223,7 @@ fn draw_compact_control_card(
                     ui.label(egui::RichText::new(crate::ui::icons::LOCK).weak())
                         .on_hover_text(app.tr("Channel is locked in PCController"));
                 }
-				hardware_channel_drag_handle(app, ui, control);
+				hardware_channel_drag_handle(app, ui, control, HardwareChannelDragSurface::Monitor);
 
                 let editing = ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
                 let editing_group = ui
@@ -4393,8 +4433,8 @@ fn draw_compact_control_card(
         })
     }).inner;
 
-    finish_hardware_channel_card(ui, control, card.response.rect, layer_id);
-    let drop = hardware_channel_drop_target(ui, card.response.rect, control);
+    finish_hardware_channel_card(ui, control, card.response.rect, layer_id, HardwareChannelDragSurface::Monitor);
+    let drop = hardware_channel_drop_target(ui, card.response.rect, control, HardwareChannelDragSurface::Monitor);
     control_context_popup(
         app,
         ui,
@@ -4446,9 +4486,7 @@ fn draw_control_card(
         egui::Order::Middle,
         egui::Id::new(("hardware-channel-card", control.key.as_str())),
     );
-    let dragging_source = ui
-        .data_mut(|data| data.get_temp::<HardwareChannelDrag>(hardware_channel_drag_id()))
-        .is_some_and(|drag| drag.key == control.key);
+    let dragging_source = hardware_channel_is_dragging(ui, &control.key, HardwareChannelDragSurface::Monitor);
     let card = ui
         .scope_builder(egui::UiBuilder::new().layer_id(layer_id), |ui| {
             if dragging_source {
@@ -4510,7 +4548,7 @@ fn draw_control_card(
                             ui.label(egui::RichText::new(crate::ui::icons::LOCK).weak())
                                 .on_hover_text(app.tr("Channel is locked in PCController"));
                         }
-                        hardware_channel_drag_handle(app, ui, control);
+                        hardware_channel_drag_handle(app, ui, control, HardwareChannelDragSurface::Monitor);
 
                         if editing {
                             let mut draft = ui.data_mut(|data| {
@@ -4828,8 +4866,8 @@ fn draw_control_card(
         })
         .inner;
 
-    finish_hardware_channel_card(ui, control, card.response.rect, layer_id);
-    let drop = hardware_channel_drop_target(ui, card.response.rect, control);
+    finish_hardware_channel_card(ui, control, card.response.rect, layer_id, HardwareChannelDragSurface::Monitor);
+    let drop = hardware_channel_drop_target(ui, card.response.rect, control, HardwareChannelDragSurface::Monitor);
     control_context_popup(
         app,
         ui,
@@ -4891,7 +4929,7 @@ fn draw_compact_relay_group(
                                 egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(34, 197, 94)),
                             );
                         }
-                        let handle = hardware_channel_drag_handle(app, ui, control);
+                        let handle = hardware_channel_drag_handle(app, ui, control, HardwareChannelDragSurface::Monitor);
                         let response = ui
                             .add_enabled(!app.estop_active && !control.locked, button)
                             .on_hover_text(format!(
@@ -4912,6 +4950,7 @@ fn draw_compact_relay_group(
                             ui,
                             handle.rect.union(response.rect),
                             control,
+                            HardwareChannelDragSurface::Monitor,
                         ) {
                             pending_drop = Some(drop);
                         }
@@ -5175,7 +5214,7 @@ fn draw_control_card_grid(
     if let Some(drop) = pending_drop {
         persist_channel_drop(app, capabilities, drop);
     } else {
-        clear_released_hardware_channel_drag(ui);
+        clear_released_hardware_channel_drag(ui, HardwareChannelDragSurface::Monitor);
     }
 }
 
@@ -5462,6 +5501,193 @@ mod timeline_row_tests {
             remaining_row,
             true,
         ));
+    }
+
+    #[test]
+    fn hardware_monitor_scroll_reaches_lower_cards() {
+        let context = egui::Context::default();
+        let mut app = PealayerApp::default();
+        let capabilities = crate::four_d::controller::HardwareCapabilities::default();
+        let offset = std::cell::Cell::new(0.0);
+        let viewport_height = std::cell::Cell::new(0.0);
+        let content_height = std::cell::Cell::new(0.0);
+        let first_card = std::cell::Cell::new(egui::Rect::NOTHING);
+        let mut render = |events| {
+            let output = context.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(420.0, 300.0))),
+                events,
+                ..Default::default()
+            }, |ui| {
+                let scroll = hardware_monitor_scroll(ui, |ui| {
+                    for relay in 1..=14 {
+                        let control = crate::four_d::controller::HardwareControl {
+                            key: format!("relay.{relay}"), kind: "relay".to_string(),
+                            name: format!("Channel {relay}"), ..Default::default()
+                        };
+                        let top = ui.next_widget_position();
+                        draw_control_card(&mut app, ui, &capabilities, &control);
+                        if relay == 1 {
+                            first_card.set(egui::Rect::from_min_size(top, egui::vec2(300.0, 40.0)));
+                        }
+                        ui.add_space(8.0);
+                    }
+                });
+                offset.set(scroll.state.offset.y);
+                viewport_height.set(scroll.inner_rect.height());
+                content_height.set(scroll.content_size.y);
+            });
+            discard_ui_output(output);
+        };
+        render(Vec::new());
+        render(vec![egui::Event::PointerMoved(first_card.get().center())]);
+        render(vec![egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            phase: egui::TouchPhase::Move,
+            delta: egui::vec2(0.0, -100.0), modifiers: egui::Modifiers::NONE,
+        }]);
+        for _ in 0..8 { render(Vec::new()); }
+        assert!(content_height.get() > viewport_height.get());
+        assert!(viewport_height.get() <= 300.0);
+        assert!(offset.get() > 0.0, "wheel over a card did not scroll the Hardware Monitor");
+    }
+
+    #[test]
+    fn hardware_drag_manager_coordinates_and_release_are_not_owned_by_monitor() {
+        let context = egui::Context::default();
+        let monitor_rect = egui::Rect::from_min_size(egui::pos2(12.0, 20.0), egui::vec2(280.0, 80.0));
+        let manager_rect = egui::Rect::from_min_size(egui::pos2(350.0, 150.0), egui::vec2(540.0, 36.0));
+        let control = crate::four_d::controller::HardwareControl {
+            key: "relay.5".to_string(), kind: "relay".to_string(), ..Default::default()
+        };
+        let target = crate::four_d::controller::HardwareControl {
+            key: "relay.6".to_string(), kind: "relay".to_string(), ..Default::default()
+        };
+        let target_rect = manager_rect.translate(egui::vec2(0.0, 60.0));
+        let grab_offset = egui::vec2(46.0, 18.0);
+        let output = context.run_ui(egui::RawInput::default(), |ui| {
+            let empty_layer = egui::LayerId::new(egui::Order::Middle, egui::Id::new("test-drag-layer"));
+            finish_hardware_channel_card(ui, &control, monitor_rect, empty_layer, HardwareChannelDragSurface::Monitor);
+            finish_hardware_channel_card(ui, &control, manager_rect, empty_layer, HardwareChannelDragSurface::Manager);
+            let monitor_id = hardware_channel_source_rect_id(ui, HardwareChannelDragSurface::Monitor, &control.key);
+            let manager_id = hardware_channel_source_rect_id(ui, HardwareChannelDragSurface::Manager, &control.key);
+            assert_ne!(monitor_id, manager_id);
+            assert_eq!(ui.data_mut(|data| data.get_temp::<egui::Rect>(monitor_id)), Some(monitor_rect));
+            assert_eq!(ui.data_mut(|data| data.get_temp::<egui::Rect>(manager_id)), Some(manager_rect));
+            let drag_id = hardware_channel_drag_id(ui, HardwareChannelDragSurface::Manager);
+            ui.data_mut(|data| data.insert_temp(drag_id, HardwareChannelDrag {
+                key: control.key.clone(), kind: control.kind.clone(), grab_offset,
+            }));
+        });
+        discard_ui_output(output);
+        // A real primary release is rendered by the panel before the modal.
+        let point = target_rect.center();
+        let output = context.run_ui(egui::RawInput {
+            events: vec![egui::Event::PointerMoved(point), egui::Event::PointerButton {
+                pos: point, button: egui::PointerButton::Primary, pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }], ..Default::default()
+        }, |_| {});
+        discard_ui_output(output);
+        let output = context.run_ui(egui::RawInput {
+            events: vec![egui::Event::PointerButton {
+                pos: point, button: egui::PointerButton::Primary, pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }], ..Default::default()
+        }, |ui| {
+            assert!(!hardware_channel_is_dragging(ui, &control.key, HardwareChannelDragSurface::Monitor));
+            assert!(hardware_channel_drop_target(ui, target_rect, &target, HardwareChannelDragSurface::Monitor).is_none());
+            clear_released_hardware_channel_drag(ui, HardwareChannelDragSurface::Monitor);
+            assert!(hardware_channel_is_dragging(ui, &control.key, HardwareChannelDragSurface::Manager));
+            let drag_id = hardware_channel_drag_id(ui, HardwareChannelDragSurface::Manager);
+            let drag = ui.data_mut(|data| data.get_temp::<HardwareChannelDrag>(drag_id)).unwrap();
+            assert_eq!(drag_translation(manager_rect.min + grab_offset, manager_rect.min, drag.grab_offset), egui::Vec2::ZERO);
+            let drop = hardware_channel_drop_target(ui, target_rect, &target, HardwareChannelDragSurface::Manager).unwrap();
+            assert_eq!(drop.source_key, control.key);
+            assert_eq!(drop.target_key, target.key);
+            assert!(!hardware_channel_is_dragging(ui, &control.key, HardwareChannelDragSurface::Manager));
+        });
+        discard_ui_output(output);
+    }
+
+    #[test]
+    fn hardware_drag_pointer_start_and_drop_work_in_each_surface() {
+        use std::cell::{Cell, RefCell};
+        for origin in [HardwareChannelDragSurface::Monitor, HardwareChannelDragSurface::Manager] {
+            let context = egui::Context::default();
+            let app = PealayerApp::default();
+            let control = crate::four_d::controller::HardwareControl {
+                key: "relay.5".to_string(), kind: "relay".to_string(), ..Default::default()
+            };
+            let target = crate::four_d::controller::HardwareControl {
+                key: "relay.6".to_string(), kind: "relay".to_string(), ..Default::default()
+            };
+            let source_handle = Cell::new(egui::Rect::NOTHING);
+            let source_rect = Cell::new(egui::Rect::NOTHING);
+            let drop_rect = Cell::new(egui::Rect::NOTHING);
+            let started_drag = RefCell::new(None::<HardwareChannelDrag>);
+            let dropped = Cell::new(false);
+            let render = |events| {
+                let output = context.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(780.0, 400.0))),
+                    events, ..Default::default()
+                }, |ui| {
+                    ui.horizontal_top(|ui| {
+                        for surface in [HardwareChannelDragSurface::Monitor, HardwareChannelDragSurface::Manager] {
+                            ui.push_id(surface, |ui| {
+                                ui.allocate_ui(egui::vec2(300.0, 250.0), |ui| {
+                                    for row in [&control, &target] {
+                                        let frame = egui::Frame::group(ui.style()).show(ui, |ui| {
+                                            ui.set_width(260.0);
+                                            // Distinct card and modal geometry deliberately
+                                            // shares the same underlying channel stable key.
+                                            if surface == HardwareChannelDragSurface::Manager { ui.add_space(12.0); }
+                                            ui.horizontal(|ui| {
+                                                let handle = hardware_channel_drag_handle(&app, ui, row, surface);
+                                                if surface == origin && row.key == control.key {
+                                                    source_handle.set(handle.rect);
+                                                    if handle.drag_started() {
+                                                        let id = hardware_channel_drag_id(ui, surface);
+                                                        *started_drag.borrow_mut() = ui.data_mut(|data| data.get_temp::<HardwareChannelDrag>(id));
+                                                    }
+                                                }
+                                                ui.label(&row.key);
+                                            });
+                                        });
+                                        if surface == origin && row.key == control.key { source_rect.set(frame.response.rect); }
+                                        if surface == origin && row.key == target.key { drop_rect.set(frame.response.rect); }
+                                        let empty_layer = egui::LayerId::new(egui::Order::Middle, egui::Id::new(("test-empty-drag-layer", surface, &row.key)));
+                                        finish_hardware_channel_card(ui, row, frame.response.rect, empty_layer, surface);
+                                        if let Some(drop) = hardware_channel_drop_target(ui, frame.response.rect, row, surface) {
+                                            assert_eq!(surface, origin);
+                                            assert_eq!(drop.source_key, control.key);
+                                            assert_eq!(drop.target_key, target.key);
+                                            dropped.set(true);
+                                        }
+                                    }
+                                    clear_released_hardware_channel_drag(ui, surface);
+                                });
+                            });
+                        }
+                    });
+                });
+                discard_ui_output(output);
+            };
+            render(Vec::new());
+            let press = source_handle.get().center();
+            let start = press + egui::vec2(18.0, 2.0);
+            render(vec![egui::Event::PointerMoved(press), egui::Event::PointerButton {
+                pos: press, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE,
+            }]);
+            render(vec![egui::Event::PointerMoved(start)]);
+            let captured = started_drag.borrow().clone().expect("hardware drag did not start from its handle");
+            assert_eq!(captured.grab_offset, start - source_rect.get().min, "grab offset came from the other surface");
+            let destination = drop_rect.get().center();
+            render(vec![egui::Event::PointerMoved(destination)]);
+            render(vec![egui::Event::PointerButton {
+                pos: destination, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE,
+            }]);
+            assert!(dropped.get(), "hardware drag did not drop in {origin:?}");
+        }
     }
 
     #[test]
@@ -9737,6 +9963,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         });
                         ui.add_space(8.0);
 
+                        hardware_monitor_scroll(ui, |ui| {
                         if self.app.estop_active {
                             ui.horizontal(|ui| {
                                 let time = ui.input(|i| i.time);
@@ -10117,6 +10344,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                         }
+
+                        });
 
                         // mpv's render callback requests frames while video is
                         // advancing. An unconditional repaint here turned the

@@ -1247,7 +1247,11 @@ fn draw_channel_manager_page(
                     egui::Id::new(("manager-order-visible", &control.key)),
                     row_hovered || order_focused,
                 );
-                let dragging = crate::ui::layout::hardware_channel_is_dragging(ui, &control.key);
+                let dragging = crate::ui::layout::hardware_channel_is_dragging(
+                    ui,
+                    &control.key,
+                    crate::ui::layout::HardwareChannelDragSurface::Manager,
+                );
                 // Ordinary rows must stay on the modal's own layer. Painting
                 // them on `Order::Middle` puts them behind this foreground
                 // window, producing a list made only of blank separators.
@@ -1308,7 +1312,12 @@ fn draw_channel_manager_page(
                             ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
                         ui.painter()
                             .circle_filled(indicator_rect.center(), 4.5, indicator_color);
-                        crate::ui::layout::hardware_channel_drag_handle(app, ui, control);
+                        crate::ui::layout::hardware_channel_drag_handle(
+                            app,
+                            ui,
+                            control,
+                            crate::ui::layout::HardwareChannelDragSurface::Manager,
+                        );
                         ui.label(crate::ui::icons::control(&control.kind, &control.icon));
                         ui.add_sized(
                             [38.0, 25.0],
@@ -1654,10 +1663,14 @@ fn draw_channel_manager_page(
                     control,
                     row_rect,
                     transform_layer_id,
+                    crate::ui::layout::HardwareChannelDragSurface::Manager,
                 );
-                if let Some(drop) =
-                    crate::ui::layout::hardware_channel_drop_target(ui, row_rect, control)
-                {
+                if let Some(drop) = crate::ui::layout::hardware_channel_drop_target(
+                    ui,
+                    row_rect,
+                    control,
+                    crate::ui::layout::HardwareChannelDragSurface::Manager,
+                ) {
                     crate::ui::layout::persist_channel_drop(app, &capabilities, drop);
                 }
                 ui.add(egui::Separator::default().spacing(0.0));
@@ -1668,7 +1681,10 @@ fn draw_channel_manager_page(
     // incompatible channel is not a drop. Clear the transient drag in all of
     // those cases so a cancelled drag cannot leave a transformed layer above
     // the row controls and make subsequent actions appear dead.
-    crate::ui::layout::clear_released_hardware_channel_drag(ui);
+    crate::ui::layout::clear_released_hardware_channel_drag(
+        ui,
+        crate::ui::layout::HardwareChannelDragSurface::Manager,
+    );
 }
 
 fn channel_detail_section(
