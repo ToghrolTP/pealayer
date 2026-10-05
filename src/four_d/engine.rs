@@ -1114,7 +1114,7 @@ pub fn spawn_engine() -> EngineHandle {
                                 if let (Some(current), Some(ref mut refreshed)) =
                                     (guard.as_ref(), capabilities.as_mut())
                                 {
-                                    refreshed.preserve_newer_live_led_from(current);
+                                    refreshed.preserve_newer_live_state_from(current);
                                 }
                                 *guard = capabilities;
                             }

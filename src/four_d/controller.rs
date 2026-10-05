@@ -70,6 +70,20 @@ pub struct HardwareBoardProfile {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HardwareMotionSide {
+    pub requested: String,
+    pub applied: String,
+    pub transitioning: bool,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HardwareMotionState {
+    pub left: HardwareMotionSide,
+    pub right: HardwareMotionSide,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HardwareCapabilities {
     pub board_connected: bool,
     pub board_name: String,
@@ -78,6 +92,7 @@ pub struct HardwareCapabilities {
     pub host_instance_id: String,
     pub capability_bits: u32,
     pub active_relays: std::collections::BTreeSet<u8>,
+    pub motion: Option<HardwareMotionState>,
     pub board_profile: Option<HardwareBoardProfile>,
     pub controls: Vec<HardwareControl>,
     pub peripheral_names: std::collections::BTreeMap<String, String>,
@@ -660,6 +675,46 @@ impl HardwareCapabilities {
                     true
                 }
             }
+            Some("motion.changed") => {
+                let Some(metadata) = event.get("metadata").filter(|value| value.is_object()) else {
+                    return false;
+                };
+                let side = metadata
+                    .get("side")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .map(str::to_ascii_lowercase);
+                let (Some(requested), Some(applied), Some(transitioning)) = (
+                    metadata.get("requested").and_then(motion_name),
+                    metadata.get("applied").and_then(motion_name),
+                    metadata.get("transitioning").and_then(value_as_bool),
+                ) else {
+                    return false;
+                };
+                let revision = metadata.get("revision").and_then(value_as_u64).unwrap_or(0);
+                let is_left = match side.as_deref() {
+                    Some("left") => true,
+                    Some("right") => false,
+                    _ => return false,
+                };
+                let motion = self.motion.get_or_insert_with(HardwareMotionState::default);
+                let target = if is_left { &mut motion.left } else { &mut motion.right };
+                if revision > 0 && target.revision > 0 && revision <= target.revision {
+                    return false;
+                }
+                let next = HardwareMotionSide {
+                    requested,
+                    applied,
+                    transitioning,
+                    revision,
+                };
+                if *target == next {
+                    false
+                } else {
+                    *target = next;
+                    true
+                }
+            }
             Some("relay") => {
                 let Some(device) = event.get("device").filter(|value| value.is_object()) else {
                     return false;
@@ -682,7 +737,7 @@ impl HardwareCapabilities {
         }
     }
 
-    pub(crate) fn preserve_newer_live_led_from(&mut self, current: &Self) {
+    pub(crate) fn preserve_newer_live_state_from(&mut self, current: &Self) {
         let same_host = self.host_instance_id.is_empty()
             || current.host_instance_id.is_empty()
             || self.host_instance_id == current.host_instance_id;
@@ -694,6 +749,20 @@ impl HardwareCapabilities {
         {
             self.status_led = current.status_led.clone();
             self.status_led_revision = current.status_led_revision;
+        }
+        if self.board_connected && same_host {
+            match (&mut self.motion, &current.motion) {
+                (Some(refreshed), Some(live)) => {
+                    if live.left.revision > 0 && live.left.revision >= refreshed.left.revision {
+                        refreshed.left = live.left.clone();
+                    }
+                    if live.right.revision > 0 && live.right.revision >= refreshed.right.revision {
+                        refreshed.right = live.right.clone();
+                    }
+                }
+                (slot @ None, Some(live)) => *slot = Some(live.clone()),
+                _ => {}
+            }
         }
         // `controller.snapshot` deliberately does not perform a synchronous
         // serial front-panel read. Preserve the latest exact read/event frame
@@ -719,11 +788,13 @@ impl HardwareCapabilities {
     pub(crate) fn mark_board_disconnected(&mut self) -> bool {
         let changed = self.board_connected
             || !self.active_relays.is_empty()
+            || self.motion.is_some()
             || self.status_led.is_some()
             || self.front_panel.is_some()
             || self.telemetry != HardwareTelemetry::default();
         self.board_connected = false;
         self.active_relays.clear();
+        self.motion = None;
         self.status_led = None;
         self.front_panel = None;
         self.telemetry = HardwareTelemetry::default();
@@ -735,6 +806,36 @@ fn value_as_u64(value: &Value) -> Option<u64> {
     value
         .as_u64()
         .or_else(|| value.as_str()?.trim().parse::<u64>().ok())
+}
+
+fn value_as_bool(value: &Value) -> Option<bool> {
+    value.as_bool().or_else(|| match value.as_str()?.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" => Some(true),
+        "false" | "0" => Some(false),
+        _ => None,
+    })
+}
+
+fn motion_name(value: &Value) -> Option<String> {
+    let value = value.as_str()?.trim().to_ascii_lowercase();
+    matches!(value.as_str(), "stop" | "up" | "down").then_some(value)
+}
+
+fn hardware_motion_side(value: &Value) -> Option<HardwareMotionSide> {
+    Some(HardwareMotionSide {
+        requested: motion_name(value.get("requested")?)?,
+        applied: motion_name(value.get("applied")?)?,
+        transitioning: value.get("transitioning").and_then(value_as_bool).unwrap_or(false),
+        revision: value.get("revision").and_then(value_as_u64).unwrap_or(0),
+    })
+}
+
+fn hardware_motion_state(snapshot: &Value) -> Option<HardwareMotionState> {
+    let motion = snapshot.get("motion")?;
+    Some(HardwareMotionState {
+        left: hardware_motion_side(motion.get("left")?)?,
+        right: hardware_motion_side(motion.get("right")?)?,
+    })
 }
 
 fn parse_raw_segments(value: Option<&Value>) -> Option<Vec<u8>> {
@@ -1516,6 +1617,9 @@ fn parse_hardware_capabilities_with_front_panel(
         .pointer("/status/active_relays")
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let motion = board_connected
+        .then(|| hardware_motion_state(snapshot))
+        .flatten();
     let custom_names = catalog.get("peripheral_names").and_then(Value::as_object);
     let peripheral_names = custom_names
         .into_iter()
@@ -2200,6 +2304,7 @@ fn parse_hardware_capabilities_with_front_panel(
         host_instance_id,
         capability_bits,
         active_relays,
+        motion,
         board_profile,
         controls,
         peripheral_names,
@@ -3138,6 +3243,47 @@ mod tests {
     }
 
     #[test]
+    fn semantic_motion_snapshot_and_events_track_requested_and_applied_state() {
+        let mut capabilities = parse_hardware_capabilities(
+            &json!({
+                "connected": true,
+                "motion": {
+                    "left": {"requested":"up", "applied":"up", "transitioning":false, "revision":7},
+                    "right": {"requested":"stop", "applied":"stop", "transitioning":false, "revision":6}
+                }
+            }),
+            &json!({}),
+        );
+        let left = &capabilities.motion.as_ref().unwrap().left;
+        assert_eq!(left.requested, "up");
+        assert_eq!(left.applied, "up");
+        assert!(!left.transitioning);
+        assert_eq!(left.revision, 7);
+
+        assert!(capabilities.apply_state_notification(&json!({
+            "kind": "motion.changed",
+            "metadata": {
+                "side": "left", "requested": "down", "applied": "stop",
+                "transitioning": "true", "revision": "8"
+            }
+        })));
+        let left = &capabilities.motion.as_ref().unwrap().left;
+        assert_eq!(left.requested, "down");
+        assert_eq!(left.applied, "stop");
+        assert!(left.transitioning);
+        assert_eq!(left.revision, 8);
+
+        assert!(!capabilities.apply_state_notification(&json!({
+            "kind": "motion.changed",
+            "metadata": {
+                "side": "left", "requested": "up", "applied": "up",
+                "transitioning": "false", "revision": "7"
+            }
+        })));
+        assert_eq!(capabilities.motion.as_ref().unwrap().left.requested, "down");
+    }
+
+    #[test]
     fn pushed_pwm_state_updates_every_sampled_channel() {
         let mut capabilities = HardwareCapabilities::default();
         let metadata = (0..16)
@@ -3169,10 +3315,20 @@ mod tests {
     fn controller_error_clears_live_board_state() {
         let mut capabilities = live_capabilities();
         capabilities.active_relays = [5].into_iter().collect();
+        capabilities.motion = Some(HardwareMotionState {
+            left: HardwareMotionSide {
+                requested: "up".into(),
+                applied: "stop".into(),
+                transitioning: true,
+                revision: 3,
+            },
+            ..Default::default()
+        });
         capabilities.telemetry.supply_mv = Some(12_000);
         assert!(capabilities.mark_board_disconnected());
         assert!(!capabilities.board_connected);
         assert!(capabilities.active_relays.is_empty());
+        assert!(capabilities.motion.is_none());
         assert!(capabilities.status_led.is_none());
         assert_eq!(capabilities.telemetry, HardwareTelemetry::default());
         assert!(!capabilities.mark_board_disconnected());
@@ -3201,19 +3357,40 @@ mod tests {
             effect: 1,
             condition: 2,
         });
+        current.motion = Some(HardwareMotionState {
+            left: HardwareMotionSide {
+                requested: "down".into(),
+                applied: "stop".into(),
+                transitioning: true,
+                revision: 14,
+            },
+            ..Default::default()
+        });
         let mut stale = live_capabilities();
         stale.host_instance_id = "host-a".to_string();
         stale.status_led_revision = 11;
         stale.status_led = Some(HardwareStatusLed::default());
-        stale.preserve_newer_live_led_from(&current);
+        stale.motion = Some(HardwareMotionState {
+            left: HardwareMotionSide {
+                requested: "up".into(),
+                applied: "up".into(),
+                revision: 13,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        stale.preserve_newer_live_state_from(&current);
         assert_eq!(stale.status_led_revision, 12);
         assert_eq!(stale.status_led, current.status_led);
+        assert_eq!(stale.motion, current.motion);
 
         let mut restarted = live_capabilities();
         restarted.host_instance_id = "host-b".to_string();
         restarted.status_led_revision = 1;
         restarted.status_led = Some(HardwareStatusLed::default());
-        restarted.preserve_newer_live_led_from(&current);
+        restarted.motion = Some(HardwareMotionState::default());
+        restarted.preserve_newer_live_state_from(&current);
         assert_eq!(restarted.status_led_revision, 1);
+        assert_eq!(restarted.motion, Some(HardwareMotionState::default()));
     }
 }

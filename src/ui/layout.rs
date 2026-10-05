@@ -2380,15 +2380,34 @@ pub(crate) fn motion_control_direction(
     }
     let key = control.key.to_ascii_lowercase();
     let side = if key.contains("left") || key.ends_with(".a") {
-        Some((1_u8, 2_u8, ["left", "motion-a", "seat-a"]))
+        Some((1_u8, 2_u8, ["left", "motion-a", "seat-a"], true))
     } else if key.contains("right") || key.ends_with(".b") {
-        Some((3_u8, 4_u8, ["right", "motion-b", "seat-b"]))
+        Some((3_u8, 4_u8, ["right", "motion-b", "seat-b"], false))
     } else {
         None
     };
-    let Some((direction_relay, enable_relay, aliases)) = side else {
+    let Some((direction_relay, enable_relay, aliases, is_left)) = side else {
         return MotionDirectionState::Unknown;
     };
+
+    // PCController owns semantic intent and reconciles it with every physical
+    // relay edge. During the board's mandatory break-before-make interval,
+    // display the requested direction while retaining raw relay feedback for
+    // diagnostics, recording, and compatibility with older coordinators.
+    if let Some(motion) = &capabilities.motion {
+        let state = if is_left { &motion.left } else { &motion.right };
+        let presented = if state.transitioning {
+            state.requested.as_str()
+        } else {
+            state.applied.as_str()
+        };
+        match presented {
+            "up" => return MotionDirectionState::Up,
+            "down" => return MotionDirectionState::Down,
+            "stop" => return MotionDirectionState::Stopped,
+            _ => {}
+        }
+    }
 
     let mut up = false;
     let mut down = false;
@@ -7051,6 +7070,42 @@ mod timeline_row_tests {
         assert_eq!(
             motion_direction_color(&control, MotionDirectionState::Down),
             egui::Color32::from_rgb(0, 136, 255)
+        );
+    }
+
+    #[test]
+    fn seat_indicator_keeps_requested_direction_during_safe_reversal() {
+        let control = crate::four_d::controller::HardwareControl {
+            key: "seat.a".into(),
+            kind: "seat".into(),
+            ..Default::default()
+        };
+        let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
+        capabilities.motion = Some(crate::four_d::controller::HardwareMotionState {
+            left: crate::four_d::controller::HardwareMotionSide {
+                requested: "down".into(),
+                applied: "stop".into(),
+                transitioning: true,
+                revision: 12,
+            },
+            ..Default::default()
+        });
+
+        // The raw enable relay is deliberately off during break-before-make,
+        // but the indicator must remain on the coordinator-confirmed intent.
+        assert!(capabilities.active_relays.is_empty());
+        assert_eq!(
+            motion_control_direction(&capabilities, &control),
+            MotionDirectionState::Down
+        );
+
+        let left = &mut capabilities.motion.as_mut().unwrap().left;
+        left.applied = "down".into();
+        left.transitioning = false;
+        left.revision += 1;
+        assert_eq!(
+            motion_control_direction(&capabilities, &control),
+            MotionDirectionState::Down
         );
     }
 
