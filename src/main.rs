@@ -361,6 +361,8 @@ fn main() -> eframe::Result {
                     init.set_property("sub-fonts-dir", font_dir_str)?;
                 }
                 init.set_property("sub-font", crate::subtitle::SUBTITLE_FONT_FAMILY)?;
+                init.set_property("sub-align-x", loaded_config.subtitle_alignment.mpv_value())?;
+                init.set_property("sub-justify", loaded_config.subtitle_alignment.mpv_value())?;
                 // Processed Persian captions are rendered through
                 // `osd-overlay ass-events`, whose default face comes from the
                 // OSD renderer rather than the subtitle renderer.
@@ -630,6 +632,7 @@ fn main() -> eframe::Result {
                 current_sid: "no".to_string(),
                 sub_tracks: Vec::new(),
                 subtitle_direction: loaded_config.subtitle_direction,
+                subtitle_alignment: loaded_config.subtitle_alignment,
                 subtitle_text_replacements: loaded_config.subtitle_text_replacements.clone(),
                 subtitle_text: String::new(),
                 current_vid: "no".to_string(),

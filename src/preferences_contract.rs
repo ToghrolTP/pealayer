@@ -423,13 +423,24 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "subtitle_direction",
             "playback",
             "Subtitles",
-            "Subtitle layout",
+            "Text direction",
             &[
                 ("auto", "Automatic"),
                 ("ltr", "Left to right"),
                 ("rtl", "Right to left"),
             ],
         ),
+        {
+            let mut control = PreferenceControl::select(
+                "subtitle_alignment",
+                "playback",
+                "Subtitles",
+                "Text alignment",
+                &[("left", "Left"), ("center", "Center"), ("right", "Right"), ("subtitle_style", "Subtitle style")],
+            );
+            control.description = Some("Horizontal placement is independent of text direction; subtitle style preserves native styling without text processing");
+            control
+        },
         {
             let mut control = PreferenceControl::replacement_list(
                 "subtitle_text_replacements",
@@ -1060,6 +1071,16 @@ mod tests {
             .expect("subtitle direction control");
         assert!(matches!(direction.kind, PreferenceControlKind::Select));
         assert_eq!(direction.section, "playback");
+
+        let alignment = controls.iter().find(|control| control.key == "subtitle_alignment")
+            .expect("subtitle alignment control");
+        assert!(matches!(alignment.kind, PreferenceControlKind::Select));
+        assert_eq!(alignment.options.iter().map(|option| option.value.as_str().unwrap()).collect::<Vec<_>>(),
+            vec!["left", "center", "right", "subtitle_style"]);
+        let contract = preferences_contract(&config);
+        assert_eq!(contract.values["subtitle_alignment"], "center");
+        assert_eq!(contract.defaults["subtitle_alignment"], "center");
+        assert!(crate::config::AppConfig::validate_patch_shape(&serde_json::json!({"subtitle_alignment":"right"})).is_ok());
 
         let replacements = controls
             .iter()

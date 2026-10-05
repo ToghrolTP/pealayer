@@ -179,6 +179,45 @@ fn draw_subtitle_appearance(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
             dialog::setting_row(
                 ui,
+                icons::TEXT_ALIGN_CENTER,
+                &app.tr("Text alignment"),
+                Some(&app.tr("Horizontal placement is independent of text direction")),
+                |ui| {
+                    use crate::subtitle::SubtitleAlignment;
+                    let mut alignment = app.subtitle_alignment;
+                    let label = match alignment {
+                        SubtitleAlignment::Left => "Left",
+                        SubtitleAlignment::Center => "Center",
+                        SubtitleAlignment::Right => "Right",
+                        SubtitleAlignment::SubtitleStyle => "Subtitle style",
+                    };
+                    egui::ComboBox::from_id_salt("subtitle_alignment_combo")
+                        .selected_text(app.tr(label))
+                        .width(150.0)
+                        .show_ui(ui, |ui| {
+                            for (value, label, icon) in [
+                                (SubtitleAlignment::Left, "Left", icons::TEXT_ALIGN_LEFT),
+                                (SubtitleAlignment::Center, "Center", icons::TEXT_ALIGN_CENTER),
+                                (SubtitleAlignment::Right, "Right", icons::TEXT_ALIGN_RIGHT),
+                                (SubtitleAlignment::SubtitleStyle, "Subtitle style", icons::SUBTITLES),
+                            ] {
+                                let response = ui.selectable_value(&mut alignment, value, format!("{icon}  {}", app.tr(label)));
+                                if value == SubtitleAlignment::SubtitleStyle {
+                                    response.on_hover_text(app.tr("Preserve subtitle styling without text processing; processed text stays centered"));
+                                }
+                            }
+                        });
+                    if alignment != app.subtitle_alignment {
+                        app.subtitle_alignment = alignment;
+                        app.sync_subtitle_rendering();
+                        app.save_config();
+                    }
+                },
+            );
+            ui.separator();
+
+            dialog::setting_row(
+                ui,
                 icons::SLIDERS_HORIZONTAL,
                 &app.tr("Font size"),
                 Some(&app.tr("Scale subtitle text without changing the video")),

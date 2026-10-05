@@ -306,6 +306,7 @@ pub struct PealayerApp {
     pub(crate) current_sid: String,
     pub(crate) sub_tracks: Vec<SubtitleTrack>,
     pub(crate) subtitle_direction: crate::subtitle::SubtitleDirection,
+    pub(crate) subtitle_alignment: crate::subtitle::SubtitleAlignment,
     pub(crate) subtitle_text_replacements: Vec<crate::subtitle::SubtitleReplacement>,
     pub(crate) subtitle_text: String,
 
@@ -4506,6 +4507,7 @@ impl PealayerApp {
         }
         crate::subtitle::requires_processed_overlay(
             self.subtitle_direction,
+            self.subtitle_alignment,
             &self.subtitle_text_replacements,
         )
     }
@@ -4519,6 +4521,10 @@ impl PealayerApp {
     /// Synchronize logical subtitle visibility with either mpv's native
     /// renderer (bitmap/unmodified subtitles) or Pealayer's processed overlay.
     pub(crate) fn sync_subtitle_rendering(&mut self) {
+        // Native plain-text/bitmap fallback must not retain a previous choice
+        // when switching renderer or tracks. Bitmap alignment is mpv-owned.
+        let _ = self.mpv.set_property("sub-align-x", self.subtitle_alignment.mpv_value());
+        let _ = self.mpv.set_property("sub-justify", self.subtitle_alignment.mpv_value());
         if !self.uses_processed_subtitle_overlay() {
             self.clear_subtitle_overlay();
             let _ = self.mpv.set_property("sub-visibility", self.sub_visibility);
@@ -4539,6 +4545,7 @@ impl PealayerApp {
         let event = crate::subtitle::overlay_ass_event(
             &replaced,
             self.subtitle_direction,
+            self.subtitle_alignment,
             self.sub_font_size,
             self.sub_position_percent,
         );
@@ -5034,6 +5041,7 @@ impl PealayerApp {
         cfg.subtitle_delay_seconds = self.sub_delay;
         cfg.subtitle_position_percent = self.sub_position_percent;
         cfg.subtitle_direction = self.subtitle_direction;
+        cfg.subtitle_alignment = self.subtitle_alignment;
         cfg.subtitle_text_replacements = self.subtitle_text_replacements.clone();
         cfg.audio_delay_seconds = self.audio_delay;
         cfg.show_subseconds = self.show_subseconds;
@@ -5226,6 +5234,7 @@ impl PealayerApp {
         self.sub_position_percent = config.subtitle_position_percent;
         self.audio_delay = config.audio_delay_seconds;
         self.subtitle_direction = config.subtitle_direction;
+        self.subtitle_alignment = config.subtitle_alignment;
         self.subtitle_text_replacements = config.subtitle_text_replacements.clone();
         self.show_subseconds = config.show_subseconds;
         self.seekbar_hover_thumbnails = config.seekbar_hover_thumbnails;
@@ -6426,6 +6435,7 @@ impl Default for PealayerApp {
             current_sid: "no".to_string(),
             sub_tracks: Vec::new(),
             subtitle_direction: crate::subtitle::SubtitleDirection::Auto,
+            subtitle_alignment: crate::subtitle::SubtitleAlignment::Center,
             subtitle_text_replacements: crate::subtitle::default_text_replacements(),
             subtitle_text: String::new(),
             current_vid: "no".to_string(),
