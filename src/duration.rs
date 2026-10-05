@@ -40,6 +40,26 @@ pub fn format_time_value_ms(duration_ms: u64) -> String {
     format!("{minutes}m {}s", seconds_text(remainder_ms))
 }
 
+/// Compact timeline clock: omit zero leading hours/minutes, but retain zero
+/// fields inside the clock (one hour is `1:00:00`, not `1`). Storage stays in ms.
+pub fn format_timeline_time_ms(time_ms: u64, show_subseconds: bool) -> String {
+    let seconds = time_ms / 1_000;
+    let hours = seconds / 3_600;
+    let minutes = seconds / 60 % 60;
+    let mut clock = if hours > 0 {
+        format!("{hours}:{minutes:02}:{:02}", seconds % 60)
+    } else if minutes > 0 {
+        format!("{minutes}:{:02}", seconds % 60)
+    } else {
+        (seconds % 60).to_string()
+    };
+    let milliseconds = time_ms % 1_000;
+    if show_subseconds && milliseconds > 0 {
+        clock.push_str(&format!(".{milliseconds:03}"));
+    }
+    clock
+}
+
 /// Parses the editable counterpart of [`format_time_value_ms`]. Bare numbers
 /// remain milliseconds so pasted values from the living PCController contract
 /// retain their exact meaning. Operators may also enter `250ms`, `5s`,
@@ -149,6 +169,20 @@ fn seconds_text(duration_ms: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn timeline_clock_strips_only_leading_zero_units() {
+        for (milliseconds, expected) in [
+            (0, "0"), (5_000, "5"), (59_000, "59"), (60_000, "1:00"),
+            (65_000, "1:05"), (3_600_000, "1:00:00"),
+            (3_661_000, "1:01:01"), (360_000_000, "100:00:00"),
+        ] {
+            assert_eq!(super::format_timeline_time_ms(milliseconds, false), expected);
+            assert_eq!(super::format_timeline_time_ms(milliseconds, true), expected);
+        }
+        assert_eq!(super::format_timeline_time_ms(500, true), "0.500");
+        assert_eq!(super::format_timeline_time_ms(65_125, true), "1:05.125");
+        assert_eq!(super::format_timeline_time_ms(65_999, false), "1:05");
+    }
     use super::{
         format_effect_duration, format_effect_duration_for_language, format_time_value_ms,
         parse_time_value_ms,

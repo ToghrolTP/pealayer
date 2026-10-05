@@ -925,7 +925,7 @@ fn draw_sequence_timeline(
                         painter.text(
                             egui::pos2(x + 4.0, canvas.top() + 12.0),
                             egui::Align2::LEFT_CENTER,
-                            crate::duration::format_time_value_ms(tick),
+                            crate::duration::format_timeline_time_ms(tick, major_ms < 1_000),
                             egui::FontId::proportional(10.5),
                             visuals.weak_text_color(),
                         );

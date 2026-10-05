@@ -25,6 +25,7 @@ import { tr, UiLocale } from '../i18n';
 import { EffectIconPicker, effectGlyph as configuredEffectGlyph } from '../effectIcons';
 import { EffectRecorder } from './EffectRecorder';
 import { mediaBasename } from '../mediaLabel';
+import { formatTimelineTime } from '../timelineTime';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
 import { defaultTimelineWheelPreferences, timelineWheelAction, timelineZoomAtPointer } from '../timelineWheel';
 import type { TimelineWheelPreferences } from '../timelineWheel';
@@ -662,11 +663,11 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         <div className="timeline-grid" ref={timelineGridRef}>
         <div className="timeline-content" style={{ width: `${timelineZoom * 100}%` }}>
         <div className="timeline-ruler">
-          <span>{formatTime(0, false)}</span>
-          <span>{formatTime((timelineDurationMs / 1000) * .25, false)}</span>
-          <span>{formatTime((timelineDurationMs / 1000) * .5, false)}</span>
-          <span>{formatTime((timelineDurationMs / 1000) * .75, false)}</span>
-          <span>{formatTime(timelineDurationMs / 1000, false)}</span>
+          <span>{formatTimelineTime(0)}</span>
+          <span>{formatTimelineTime((timelineDurationMs / 1000) * .25)}</span>
+          <span>{formatTimelineTime((timelineDurationMs / 1000) * .5)}</span>
+          <span>{formatTimelineTime((timelineDurationMs / 1000) * .75)}</span>
+          <span>{formatTimelineTime(timelineDurationMs / 1000)}</span>
         </div>
 
         <div

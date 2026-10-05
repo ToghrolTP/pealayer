@@ -5,6 +5,7 @@ import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
 import { GroupSelect } from './GroupSelect';
 import { EffectGroupDialog } from './EffectGroupDialog';
+import { formatTimelineTime } from '../timelineTime';
 import recordingColors from '../../../assets/themes/recording-colors.json';
 
 interface EffectRecorderProps {
@@ -86,7 +87,7 @@ export const EffectRecorder: React.FC<EffectRecorderProps> = ({ state, sendCmd, 
                 ? step.text.replace(/\n/g, ' · ')
                 : [step.target === undefined ? '' : `target ${step.target}`, step.value === undefined ? '' : `value ${step.value}`].filter(Boolean).join(' · ');
             return <li key={`${step.at_us}-${index}`}>
-              <time>{(step.at_us / 1_000_000).toFixed(3)}s</time>
+              <time>{formatTimelineTime(step.at_us / 1_000_000, true)}</time>
               <b>{step.kind}</b>
               {detail && <span>{detail}</span>}
             </li>;

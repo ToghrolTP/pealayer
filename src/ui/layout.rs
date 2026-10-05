@@ -13665,13 +13665,21 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(50, 50, 50)),
                                         );
 
-                                        let label_step = if zoom < 30.0 {
+                                        let label_step: i32 = if zoom < 30.0 {
                                             5
                                         } else if zoom < 60.0 {
                                             2
                                         } else {
                                             1
                                         };
+                                        // Clock labels grow after minute/hour boundaries. Keep
+                                        // them apart rather than retaining seconds-only widths.
+                                        let longest_label = ruler_painter.layout_no_wrap(
+                                            crate::duration::format_timeline_time_ms(total_seconds.ceil().max(0.0) as u64 * 1_000, false),
+                                            egui::FontId::monospace(9.0),
+                                            egui::Color32::from_rgb(140, 140, 140),
+                                        );
+                                        let label_step = label_step.max(((longest_label.size().x + 10.0) / zoom).ceil().max(1.0) as i32);
 
                                         for i in 0..=(total_seconds.ceil() as i32) {
                                             let grid_x = rect.min.x + (i as f32 * zoom);
@@ -13696,18 +13704,18 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 }
                                                 // Time label inside ruler
                                                 if i % label_step == 0 {
-                                                    let mut label_x = grid_x + 4.0;
-                                                    // Ensure label doesn't clip against right margin
-                                                    if label_x + 20.0 > rect.max.x - 8.0 {
-                                                        label_x = rect.max.x - 28.0;
-                                                    }
-                                                    ruler_painter.text(
-                                                        egui::pos2(label_x, ruler_rect.min.y + 13.0),
-                                                        egui::Align2::LEFT_CENTER,
-                                                        format!("{}s", i),
+                                                    let label = ruler_painter.layout_no_wrap(
+                                                        crate::duration::format_timeline_time_ms(i as u64 * 1_000, false),
                                                         egui::FontId::monospace(9.0),
                                                         egui::Color32::from_rgb(140, 140, 140),
                                                     );
+                                                    if grid_x + 4.0 + label.size().x <= rect.max.x - 8.0 {
+                                                        ruler_painter.galley(
+                                                            egui::pos2(grid_x + 4.0, ruler_rect.min.y + 13.0 - label.size().y / 2.0),
+                                                            label,
+                                                            egui::Color32::from_rgb(140, 140, 140),
+                                                        );
+                                                    }
                                                 }
                                             }
                                         }
@@ -15009,12 +15017,7 @@ pub fn reveal_and_focus_tab(
 }
 
 fn format_timecode(t: f64) -> String {
-    let secs = t.floor() as i64;
-    let h = secs / 3600;
-    let m = (secs % 3600) / 60;
-    let s = secs % 60;
-    let f = ((t - t.floor()) * 24.0).round() as i64;
-    format!("{:02}:{:02}:{:02}:{:02}", h, m, s, f)
+    crate::duration::format_timeline_time_ms((t.max(0.0) * 1_000.0).round() as u64, true)
 }
 
 impl PealayerApp {
