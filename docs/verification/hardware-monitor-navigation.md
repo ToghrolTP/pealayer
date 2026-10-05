@@ -28,3 +28,13 @@ Full test-suite execution is not required for packaging this focused repair. Nat
 2. Drag a channel by its handle onto a compatible channel in Hardware Monitor. Confirm the existing grab behavior and persisted order.
 3. Open Manage channels while the panel remains visible. Drag a row by its handle onto another compatible row. The panel's duplicate card must not move, the row must retain its own grab geometry, and releasing must persist its order.
 4. Repeat with a detached native manager window and cancel a drag over empty space. Right click must remain a context-menu gesture rather than completing a primary-button drag.
+
+## Deployment checkpoint
+
+- Code commit: `ebe4c98558ed1c3f4d9dec8d01b59e627750b607`, pushed to draft PR #46; not merged.
+- Canonical packaging: `scripts/package-windows.ps1 -SkipTests -NoUpx` completed, including TypeScript/Vite and PWA validation. Packaging did not run the full suite; the 33 focused checks above ran separately.
+- Previous canonical process accepted `{"command":"quit"}` through `/api/ipc` and exited before replacement. New canonical executable launched as PID `39132` on DAVID-PC.
+- Executable: `%LOCALAPPDATA%\Programs\Pealayer\bin\pealayer.exe`, SHA-256 `353ea366070af2a1f800824238648e9cdfc3388c717b5c64969fd7b3dfc307d7`.
+- Live `/api/update/manifest` matched the code commit and hash with `git_dirty: false`; `/healthz` returned `ok`; `/api/player/status` reported `hardware_connected: true`. The native window restored the previous media title.
+- Native capture retry after launch still failed with Windows Graphics Capture `0x8007041D`; no screenshot or manual mouse acceptance is claimed.
+- Cafe-PC's `http://cafe-pc:8080/healthz` timed out. No Cafe deployment is claimed; use Pealayer's peer updater when the receiver returns.
