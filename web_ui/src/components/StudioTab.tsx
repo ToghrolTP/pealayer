@@ -26,6 +26,8 @@ import { EffectIconPicker, effectGlyph as configuredEffectGlyph } from '../effec
 import { EffectRecorder } from './EffectRecorder';
 import { mediaBasename } from '../mediaLabel';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
+import { defaultTimelineWheelPreferences, timelineWheelAction, timelineZoomAtPointer } from '../timelineWheel';
+import type { TimelineWheelPreferences } from '../timelineWheel';
 
 interface StudioTabProps {
   state: PlayerState;
@@ -36,7 +38,7 @@ interface StudioTabProps {
   apiBaseUrl: string;
   seekbarHoverThumbnails: boolean;
   surface?: 'studio' | 'timeline';
-  ctrlWheelVerticalScroll?: boolean;
+  timelineWheelPreferences?: TimelineWheelPreferences;
 }
 
 const formatTime = (seconds = 0, showMilliseconds = true) => {
@@ -76,20 +78,34 @@ const workspaceGlyph = (icon?: string) => {
   }
 };
 
-export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl, seekbarHoverThumbnails, surface = 'studio', ctrlWheelVerticalScroll = true }) => {
+export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl, seekbarHoverThumbnails, surface = 'studio', timelineWheelPreferences = defaultTimelineWheelPreferences }) => {
   const timelineGridRef = useRef<HTMLDivElement | null>(null);
+  const [timelineZoom, setTimelineZoom] = useState(1);
+  const timelineZoomRef = useRef(1);
   useEffect(() => {
     const grid = timelineGridRef.current;
-    if (!grid || !ctrlWheelVerticalScroll) return;
+    if (!grid) return;
     const onWheel = (event: WheelEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.deltaY === 0) return;
-      event.preventDefault(); // Do not zoom the entire browser page.
+      // The listener covers labels, cues, ruler, and empty space, not just a child.
+      event.preventDefault(); // Suppress browser zoom and duplicate native scrolling.
       const scale = event.deltaMode === 1 ? 20 : event.deltaMode === 2 ? grid.clientHeight : 1;
-      grid.scrollTop += event.deltaY * scale;
+      const { action, delta } = timelineWheelAction(event, timelineWheelPreferences);
+      if (action === 'horizontal_scroll') grid.scrollLeft += delta * scale;
+      else if (action === 'vertical_scroll') grid.scrollTop += delta * scale;
+      else if (action === 'zoom' && delta !== 0) {
+        const pointerX = Math.max(0, event.clientX - grid.getBoundingClientRect().left);
+        const next = timelineZoomAtPointer(timelineZoomRef.current, delta * scale, grid.scrollLeft, pointerX);
+        timelineZoomRef.current = next.zoom;
+        // Apply width before scrollLeft so the browser does not clamp to the old extent.
+        const content = grid.firstElementChild as HTMLElement | null;
+        if (content) content.style.width = `${next.zoom * 100}%`;
+        grid.scrollLeft = next.scrollLeft;
+        setTimelineZoom(next.zoom);
+      }
     };
     grid.addEventListener('wheel', onWheel, { passive: false });
     return () => grid.removeEventListener('wheel', onWheel);
-  }, [ctrlWheelVerticalScroll]);
+  }, [timelineWheelPreferences]);
   const [selectedEffect, setSelectedEffect] = useState<string | null>(null);
   const [effectEditorOpen, setEffectEditorOpen] = useState(false);
   const [effectDraft, setEffectDraft] = useState<Record<string, any> | null>(null);
@@ -643,6 +659,8 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
           </div>
         </header>
 
+        <div className="timeline-grid" ref={timelineGridRef}>
+        <div className="timeline-content" style={{ width: `${timelineZoom * 100}%` }}>
         <div className="timeline-ruler">
           <span>{formatTime(0, false)}</span>
           <span>{formatTime((timelineDurationMs / 1000) * .25, false)}</span>
@@ -652,8 +670,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         </div>
 
         <div
-          className="timeline-grid"
-          ref={timelineGridRef}
+          className="timeline-tracks"
           onDragOver={(event) => {
             if (event.dataTransfer.types.includes('application/x-pealayer-effect')) {
               event.preventDefault();
@@ -761,6 +778,8 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
               </div>
             );
           })}
+        </div>
+        </div>
         </div>
       </section>
     </div>

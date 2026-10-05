@@ -816,11 +816,10 @@ fn main() -> eframe::Result {
                 compact_timeline_tracks: loaded_config.compact_timeline_tracks,
                 timeline_header_wheel_vertical_scroll: loaded_config
                     .timeline_header_wheel_vertical_scroll,
-                timeline_plain_wheel_zoom: loaded_config.timeline_plain_wheel_zoom,
-                timeline_ctrl_wheel_zoom: loaded_config.timeline_ctrl_wheel_zoom,
-                timeline_ctrl_wheel_vertical_scroll: loaded_config.timeline_ctrl_wheel_vertical_scroll,
-                timeline_shift_wheel_horizontal_scroll: loaded_config
-                    .timeline_shift_wheel_horizontal_scroll,
+                timeline_plain_wheel_action: loaded_config.timeline_plain_wheel_action,
+                timeline_ctrl_wheel_action: loaded_config.timeline_ctrl_wheel_action,
+                timeline_shift_wheel_action: loaded_config.timeline_shift_wheel_action,
+                timeline_alt_wheel_action: loaded_config.timeline_alt_wheel_action,
                 timeline_middle_button_pan: loaded_config.timeline_middle_button_pan,
                 timeline_middle_axis_lock_modifiers: loaded_config
                     .timeline_middle_axis_lock_modifiers,

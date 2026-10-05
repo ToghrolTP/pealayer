@@ -457,10 +457,10 @@ pub struct PealayerApp {
     pub(crate) compact_hardware_controls: bool,
     pub(crate) compact_timeline_tracks: bool,
     pub(crate) timeline_header_wheel_vertical_scroll: bool,
-    pub(crate) timeline_plain_wheel_zoom: bool,
-    pub(crate) timeline_ctrl_wheel_zoom: bool,
-    pub(crate) timeline_ctrl_wheel_vertical_scroll: bool,
-    pub(crate) timeline_shift_wheel_horizontal_scroll: bool,
+    pub(crate) timeline_plain_wheel_action: crate::config::TimelineWheelBehavior,
+    pub(crate) timeline_ctrl_wheel_action: crate::config::TimelineWheelBehavior,
+    pub(crate) timeline_shift_wheel_action: crate::config::TimelineWheelBehavior,
+    pub(crate) timeline_alt_wheel_action: crate::config::TimelineWheelBehavior,
     pub(crate) timeline_middle_button_pan: bool,
     pub(crate) timeline_middle_axis_lock_modifiers: bool,
     pub(crate) timeline_animated_navigation: bool,
@@ -5065,10 +5065,10 @@ impl PealayerApp {
         cfg.compact_hardware_controls = self.compact_hardware_controls;
         cfg.compact_timeline_tracks = self.compact_timeline_tracks;
         cfg.timeline_header_wheel_vertical_scroll = self.timeline_header_wheel_vertical_scroll;
-        cfg.timeline_plain_wheel_zoom = self.timeline_plain_wheel_zoom;
-        cfg.timeline_ctrl_wheel_zoom = self.timeline_ctrl_wheel_zoom;
-        cfg.timeline_ctrl_wheel_vertical_scroll = self.timeline_ctrl_wheel_vertical_scroll;
-        cfg.timeline_shift_wheel_horizontal_scroll = self.timeline_shift_wheel_horizontal_scroll;
+        cfg.timeline_plain_wheel_action = self.timeline_plain_wheel_action;
+        cfg.timeline_ctrl_wheel_action = self.timeline_ctrl_wheel_action;
+        cfg.timeline_shift_wheel_action = self.timeline_shift_wheel_action;
+        cfg.timeline_alt_wheel_action = self.timeline_alt_wheel_action;
         cfg.timeline_middle_button_pan = self.timeline_middle_button_pan;
         cfg.timeline_middle_axis_lock_modifiers = self.timeline_middle_axis_lock_modifiers;
         cfg.timeline_animated_navigation = self.timeline_animated_navigation;
@@ -5265,10 +5265,10 @@ impl PealayerApp {
         self.compact_hardware_controls = config.compact_hardware_controls;
         self.compact_timeline_tracks = config.compact_timeline_tracks;
         self.timeline_header_wheel_vertical_scroll = config.timeline_header_wheel_vertical_scroll;
-        self.timeline_plain_wheel_zoom = config.timeline_plain_wheel_zoom;
-        self.timeline_ctrl_wheel_zoom = config.timeline_ctrl_wheel_zoom;
-        self.timeline_ctrl_wheel_vertical_scroll = config.timeline_ctrl_wheel_vertical_scroll;
-        self.timeline_shift_wheel_horizontal_scroll = config.timeline_shift_wheel_horizontal_scroll;
+        self.timeline_plain_wheel_action = config.timeline_plain_wheel_action;
+        self.timeline_ctrl_wheel_action = config.timeline_ctrl_wheel_action;
+        self.timeline_shift_wheel_action = config.timeline_shift_wheel_action;
+        self.timeline_alt_wheel_action = config.timeline_alt_wheel_action;
         self.timeline_middle_button_pan = config.timeline_middle_button_pan;
         self.timeline_middle_axis_lock_modifiers = config.timeline_middle_axis_lock_modifiers;
         self.timeline_animated_navigation = config.timeline_animated_navigation;
@@ -6583,10 +6583,10 @@ impl Default for PealayerApp {
             compact_hardware_controls: false,
             compact_timeline_tracks: true,
             timeline_header_wheel_vertical_scroll: true,
-            timeline_plain_wheel_zoom: true,
-            timeline_ctrl_wheel_zoom: true,
-            timeline_ctrl_wheel_vertical_scroll: true,
-            timeline_shift_wheel_horizontal_scroll: true,
+            timeline_plain_wheel_action: crate::config::TimelineWheelBehavior::Zoom,
+            timeline_ctrl_wheel_action: crate::config::TimelineWheelBehavior::VerticalScroll,
+            timeline_shift_wheel_action: crate::config::TimelineWheelBehavior::HorizontalScroll,
+            timeline_alt_wheel_action: crate::config::TimelineWheelBehavior::Zoom,
             timeline_middle_button_pan: true,
             timeline_middle_axis_lock_modifiers: true,
             timeline_animated_navigation: true,

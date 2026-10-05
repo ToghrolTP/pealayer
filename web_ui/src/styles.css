@@ -429,11 +429,13 @@ body {
 }
 .volume-icon { color: var(--muted); }
 
-.timeline-panel-web { grid-column: 1 / -1; display: grid; grid-template-rows: auto 28px minmax(0, 1fr); }
+.timeline-panel-web { grid-column: 1 / -1; display: grid; grid-template-rows: auto minmax(0, 1fr); }
 .timeline-toolbar { min-height: 60px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
 .timeline-toolbar__actions { display: flex; align-items: center; gap: 7px; }
-.timeline-ruler { padding-inline: 180px 82px; display: flex; align-items: center; justify-content: space-between; color: var(--subtle); background: var(--surface-0); border-bottom: 1px solid var(--line); font: 10px ui-monospace, monospace; }
-.timeline-grid { position: relative; min-height: 0; overflow: auto; padding-block: 8px; background-image: repeating-linear-gradient(90deg, transparent 0, transparent calc(5% - 1px), color-mix(in srgb, var(--line) 38%, transparent) 5%); background-size: calc(100% - 262px) 100%; background-position: 180px 0; background-repeat: repeat-y; }
+.timeline-ruler { position: sticky; top: 0; z-index: 3; height: 28px; padding-inline: 180px 82px; display: flex; align-items: center; justify-content: space-between; color: var(--subtle); background: var(--surface-0); border-bottom: 1px solid var(--line); font: 10px ui-monospace, monospace; }
+.timeline-grid { position: relative; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.timeline-content { min-width: 100%; }
+.timeline-tracks { position: relative; min-height: 80px; padding-block: 8px; background-image: repeating-linear-gradient(90deg, transparent 0, transparent calc(5% - 1px), color-mix(in srgb, var(--line) 38%, transparent) 5%); background-size: calc(100% - 262px) 100%; background-position: 180px 0; background-repeat: repeat-y; }
 .timeline-row { min-width: 680px; height: 42px; display: grid; grid-template-columns: 180px minmax(400px, 1fr) 82px; align-items: center; }
 .timeline-row__label { min-width: 0; padding-inline: 14px; display: flex; align-items: center; gap: 8px; color: var(--text); }
 .timeline-row__label > span { color: var(--green); }

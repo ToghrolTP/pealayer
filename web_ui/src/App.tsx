@@ -551,7 +551,12 @@ const App: React.FC = () => {
                 apiBaseUrl={apiBaseUrl}
                 seekbarHoverThumbnails={Boolean(appConfig?.nle_seekbar_hover_thumbnails)}
                 surface="timeline"
-                ctrlWheelVerticalScroll={appConfig?.timeline_ctrl_wheel_vertical_scroll !== false}
+                timelineWheelPreferences={{
+                  plain: appConfig?.timeline_plain_wheel_action ?? 'zoom',
+                  ctrl: appConfig?.timeline_ctrl_wheel_action ?? 'vertical_scroll',
+                  shift: appConfig?.timeline_shift_wheel_action ?? 'horizontal_scroll',
+                  alt: appConfig?.timeline_alt_wheel_action ?? 'zoom',
+                }}
               />
             )}
             {activeTab === 'player' && (

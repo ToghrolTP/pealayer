@@ -475,38 +475,51 @@ enum TimelineWheelAction {
 
 fn timeline_wheel_action(
     delta: egui::Vec2,
-    shift: bool,
-    command_or_ctrl: bool,
-    plain_zoom: bool,
-    ctrl_zoom: bool,
-    ctrl_vertical_scroll: bool,
-    shift_horizontal_scroll: bool,
+    behavior: crate::config::TimelineWheelBehavior,
 ) -> Option<TimelineWheelAction> {
-    let dominant_delta = if delta.y.abs() >= delta.x.abs() {
-        delta.y
-    } else {
-        delta.x
-    };
-    if dominant_delta == 0.0 {
-        return None;
+    // Never reinterpret a physical horizontal gesture as zoom, even with modifiers.
+    if delta.x != 0.0 {
+        return Some(TimelineWheelAction::HorizontalScroll(delta.x));
     }
-    if shift && shift_horizontal_scroll {
-        Some(TimelineWheelAction::HorizontalScroll(dominant_delta))
-    } else if command_or_ctrl && ctrl_vertical_scroll && delta.y != 0.0 {
-        Some(TimelineWheelAction::VerticalScroll(delta.y))
-    } else if (command_or_ctrl && ctrl_zoom) || (!command_or_ctrl && plain_zoom) {
-        Some(TimelineWheelAction::Zoom(dominant_delta))
-    } else {
-        None
+    if delta.y == 0.0 { return None; }
+    match behavior {
+        crate::config::TimelineWheelBehavior::Zoom => Some(TimelineWheelAction::Zoom(delta.y)),
+        crate::config::TimelineWheelBehavior::HorizontalScroll => Some(TimelineWheelAction::HorizontalScroll(delta.y)),
+        crate::config::TimelineWheelBehavior::VerticalScroll => Some(TimelineWheelAction::VerticalScroll(delta.y)),
+        crate::config::TimelineWheelBehavior::None => None,
     }
 }
 
-// Egui turns Ctrl/Command wheel into a zoom delta instead of smooth_scroll_delta.
-// Read just those raw wheel events so timeline navigation still receives them.
-fn timeline_ctrl_wheel_delta(events: &[egui::Event], line_speed: f32, page_height: f32) -> egui::Vec2 {
+fn timeline_wheel_behavior(app: &PealayerApp, modifiers: egui::Modifiers) -> crate::config::TimelineWheelBehavior {
+    if modifiers.shift { app.timeline_shift_wheel_action }
+    else if modifiers.ctrl || modifiers.command { app.timeline_ctrl_wheel_action }
+    else if modifiers.alt { app.timeline_alt_wheel_action }
+    else { app.timeline_plain_wheel_action }
+}
+
+fn timeline_wheel_modifiers(input: &egui::InputState) -> egui::Modifiers {
+    input.events.iter().rev().find_map(|event| match event {
+        egui::Event::MouseWheel { modifiers, .. } => Some(*modifiers),
+        _ => None,
+    }).unwrap_or(input.modifiers)
+}
+
+fn timeline_wheel_over_surface(ui: &egui::Ui, surface: egui::Rect,
+    behavior: crate::config::TimelineWheelBehavior) -> Option<(TimelineWheelAction, f32)> {
+    if !ui.rect_contains_pointer(surface) { return None; }
+    let line_speed = ui.ctx().options(|options| options.input_options.line_scroll_speed);
+    let delta = ui.input(|input| timeline_wheel_delta(&input.events, line_speed, surface.height()));
+    // None also consumes the gesture, rather than falling through to ScrollArea.
+    ui.ctx().input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
+    timeline_wheel_action(delta, behavior).map(|action| (action,
+        ui.ctx().pointer_latest_pos().map_or(surface.left(), |pos| pos.x)))
+}
+
+// Read the original axes for every modifier: egui otherwise converts Ctrl to zoom
+// and Shift to horizontal scrolling before configurable routing can inspect it.
+fn timeline_wheel_delta(events: &[egui::Event], line_speed: f32, page_height: f32) -> egui::Vec2 {
     events.iter().filter_map(|event| match event {
-        egui::Event::MouseWheel { unit, delta, modifiers, .. }
-            if modifiers.ctrl || modifiers.command => {
+        egui::Event::MouseWheel { unit, delta, .. } => {
                 let scale = match unit {
                     egui::MouseWheelUnit::Point => 1.0,
                     egui::MouseWheelUnit::Line => line_speed,
@@ -5394,26 +5407,58 @@ mod timeline_row_tests {
 
     #[test]
     fn timeline_wheel_modifiers_route_zoom_and_horizontal_scroll() {
+        use crate::config::TimelineWheelBehavior as Wheel;
         let delta = egui::vec2(0.0, 120.0);
-        assert_eq!(
-            timeline_wheel_action(delta, false, false, true, true, true, true),
-            Some(TimelineWheelAction::Zoom(120.0))
-        );
-        assert_eq!(
-            timeline_wheel_action(delta, false, true, true, true, true, true),
-            Some(TimelineWheelAction::VerticalScroll(120.0))
-        );
-        assert_eq!(
-            timeline_wheel_action(delta, true, false, true, true, true, true),
-            Some(TimelineWheelAction::HorizontalScroll(120.0))
-        );
-        assert_eq!(timeline_wheel_action(delta, false, true, true, true, false, true), Some(TimelineWheelAction::Zoom(120.0)));
-        assert_eq!(timeline_wheel_action(delta, true, true, true, true, true, true), Some(TimelineWheelAction::HorizontalScroll(120.0)));
-        assert_eq!(timeline_wheel_action(egui::Vec2::ZERO, false, true, true, true, true, true), None);
+        assert_eq!(timeline_wheel_action(delta, Wheel::Zoom), Some(TimelineWheelAction::Zoom(120.0)));
+        assert_eq!(timeline_wheel_action(delta, Wheel::VerticalScroll), Some(TimelineWheelAction::VerticalScroll(120.0)));
+        assert_eq!(timeline_wheel_action(delta, Wheel::HorizontalScroll), Some(TimelineWheelAction::HorizontalScroll(120.0)));
+        assert_eq!(timeline_wheel_action(delta, Wheel::None), None);
+        assert_eq!(timeline_wheel_action(egui::Vec2::ZERO, Wheel::Zoom), None);
+        for behavior in [Wheel::Zoom, Wheel::VerticalScroll, Wheel::HorizontalScroll, Wheel::None] {
+            for delta in [egui::vec2(-45.0, 0.0), egui::vec2(-45.0, 120.0)] {
+                assert_eq!(timeline_wheel_action(delta, behavior), Some(TimelineWheelAction::HorizontalScroll(-45.0)));
+            }
+        }
     }
 
     #[test]
-    fn timeline_ctrl_wheel_uses_raw_events_with_native_units() {
+    fn timeline_wheel_reaches_empty_surface_and_consumes_ctrl_zoom_input() {
+        use crate::config::TimelineWheelBehavior as Wheel;
+        for (modifiers, delta, behavior, expected) in [
+            (egui::Modifiers::CTRL, egui::vec2(0.0, -80.0), Wheel::VerticalScroll, Some(TimelineWheelAction::VerticalScroll(-80.0))),
+            (egui::Modifiers::SHIFT, egui::vec2(-50.0, 0.0), Wheel::Zoom, Some(TimelineWheelAction::HorizontalScroll(-50.0))),
+            (egui::Modifiers::ALT, egui::vec2(0.0, -40.0), Wheel::HorizontalScroll, Some(TimelineWheelAction::HorizontalScroll(-40.0))),
+            (egui::Modifiers::NONE, egui::vec2(0.0, -40.0), Wheel::None, None),
+        ] {
+            let context = egui::Context::default();
+            // Warm up hit testing, then send an actual egui raw wheel event over
+            // empty space well below a small child widget (the previous exclusion).
+            for frame in 0..2 {
+                let output = context.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 300.0))),
+                    events: if frame == 0 { vec![] } else { vec![
+                        egui::Event::PointerMoved(egui::pos2(240.0, 230.0)),
+                        egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta,
+                            modifiers, phase: egui::TouchPhase::Move },
+                    ] },
+                    ..Default::default()
+                }, |ui| {
+                    let surface = ui.clip_rect();
+                    let (_, child) = ui.allocate_space(egui::vec2(40.0, 20.0));
+                    if frame == 1 {
+                        assert!(!child.contains(egui::pos2(240.0, 230.0)));
+                        assert_eq!(ui.input(timeline_wheel_modifiers), modifiers);
+                        assert_eq!(timeline_wheel_over_surface(ui, surface, behavior).map(|(action, _)| action), expected);
+                        assert_eq!(ui.input(|input| input.smooth_scroll_delta), egui::Vec2::ZERO);
+                    }
+                });
+                discard_ui_output(output);
+            }
+        }
+    }
+
+    #[test]
+    fn timeline_wheel_uses_original_axes_and_native_units_for_all_modifiers() {
         let wheel = |unit, delta, modifiers| egui::Event::MouseWheel {
             unit, delta, modifiers, phase: egui::TouchPhase::Move,
         };
@@ -5422,8 +5467,9 @@ mod timeline_row_tests {
             wheel(egui::MouseWheelUnit::Point, egui::vec2(0.0, -12.0), egui::Modifiers::COMMAND),
             wheel(egui::MouseWheelUnit::Point, egui::vec2(0.0, -100.0), egui::Modifiers::NONE),
         ];
-        assert_eq!(timeline_ctrl_wheel_delta(&events, 20.0, 200.0), egui::vec2(0.0, -72.0));
-        assert_eq!(timeline_ctrl_wheel_delta(&[wheel(egui::MouseWheelUnit::Page, egui::vec2(0.0, -1.0), egui::Modifiers::CTRL)], 20.0, 200.0), egui::vec2(0.0, -200.0));
+        assert_eq!(timeline_wheel_delta(&events, 20.0, 200.0), egui::vec2(0.0, -172.0));
+        assert_eq!(timeline_wheel_delta(&[wheel(egui::MouseWheelUnit::Page, egui::vec2(0.0, -1.0), egui::Modifiers::CTRL)], 20.0, 200.0), egui::vec2(0.0, -200.0));
+        assert_eq!(timeline_wheel_delta(&[wheel(egui::MouseWheelUnit::Line, egui::vec2(2.0, 0.0), egui::Modifiers::ALT)], 20.0, 200.0), egui::vec2(40.0, 0.0));
     }
 
     #[test]
@@ -10809,10 +10855,23 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         });
                         let mut timeline_header_scroll_id = None;
                         let mut timeline_header_offset_y = synced_vertical_offset;
+                        let mut pending_timeline_wheel = None;
                         ui.horizontal_top(|ui| {
                             // 1. Left column: Fixed Track Headers
                             ui.vertical(|ui| {
                                 ui.set_width(TIMELINE_TRACK_HEADER_WIDTH);
+                                let header_rect = egui::Rect::from_min_size(ui.cursor().min,
+                                    egui::vec2(TIMELINE_TRACK_HEADER_WIDTH, ui.available_height()));
+                                if ui.rect_contains_pointer(header_rect) {
+                                    let modifiers = ui.input(timeline_wheel_modifiers);
+                                    let behavior = if modifiers.is_none() {
+                                        if self.app.timeline_header_wheel_vertical_scroll {
+                                            crate::config::TimelineWheelBehavior::VerticalScroll
+                                        } else { crate::config::TimelineWheelBehavior::None }
+                                    } else { timeline_wheel_behavior(self.app, modifiers) };
+                                    pending_timeline_wheel = timeline_wheel_over_surface(ui, header_rect, behavior)
+                                        .map(|(action, _)| (action, header_rect.right()));
+                                }
                                 // The canvas paints contiguous bands. Remove egui's default
                                 // inter-widget gap so the fixed header rows have the exact same
                                 // top/bottom coordinates instead of drifting farther on every row.
@@ -10960,14 +11019,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     header_ui.ctx().request_repaint();
                                 }
 
-                                let header_wheel_multiplier = if self
-                                    .app
-                                    .timeline_header_wheel_vertical_scroll
-                                {
-                                    1.0
-                                } else {
-                                    0.0
-                                };
                                 let header_scroll = egui::ScrollArea::vertical()
                                     .id_salt("timeline_header_scroll")
                                     .max_height(ui.available_height())
@@ -10977,20 +11028,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     )
                                     .wheel_scroll_multiplier(egui::vec2(
                                         0.0,
-                                        header_wheel_multiplier,
+                                        0.0,
                                     ))
                                     .vertical_scroll_offset(synced_vertical_offset)
                                     .show(ui, |ui| {
-                                if self.app.timeline_ctrl_wheel_vertical_scroll
-                                    && ui.ctx().pointer_latest_pos().is_some_and(|pos| ui.clip_rect().contains(pos))
-                                {
-                                    let line_speed = ui.ctx().options(|options| options.input_options.line_scroll_speed);
-                                    let delta = ui.input(|input| timeline_ctrl_wheel_delta(&input.events, line_speed, ui.clip_rect().height()));
-                                    if delta.y != 0.0 {
-                                        ui.scroll_with_delta(egui::vec2(0.0, delta.y));
-                                        ui.ctx().input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
-                                    }
-                                }
                                 ui.set_width(TIMELINE_TRACK_HEADER_WIDTH);
                                 ui.spacing_mut().item_spacing.y = 0.0;
                                 let rename_key_id = egui::Id::new("timeline_track_rename_key");
@@ -12017,14 +12058,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             });
 
                             // 2. Right column: Scrollable Timeline Grid
-                            let line_speed = ui.ctx().options(|options| options.input_options.line_scroll_speed);
-                            let scroll_delta = ui.input(|input| {
-                                if input.modifiers.ctrl || input.modifiers.command {
-                                    timeline_ctrl_wheel_delta(&input.events, line_speed, ui.available_height())
-                                } else { input.smooth_scroll_delta }
-                            });
-                            let scroll_modifiers = ui.input(|i| i.modifiers);
-                            let mut pending_timeline_wheel = None;
+                            let scroll_modifiers = ui.input(timeline_wheel_modifiers);
                             let zoom = self.app.timeline_zoom;
                             let px_per_ms = zoom / 1000.0;
                             let total_seconds = if self.app.duration > 0.0 { self.app.duration } else { 60.0 };
@@ -12108,28 +12142,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         keyframe_context_owned = keyframe_hit || keyframe_candidates.iter()
                                             .any(|(target, _)| egui::Popup::is_id_open(ui.ctx(), target.menu_id()));
 
-                                        if let Some(pos) = pointer_pos {
-                                            if viewport_clip.contains(pos) && rect.contains(pos)
-                                                && let Some(action) = timeline_wheel_action(
-                                                    scroll_delta,
-                                                    scroll_modifiers.shift,
-                                                    scroll_modifiers.ctrl
-                                                        || scroll_modifiers.command,
-                                                    self.app.timeline_plain_wheel_zoom,
-                                                    self.app.timeline_ctrl_wheel_zoom,
-                                                    self.app.timeline_ctrl_wheel_vertical_scroll,
-                                                    self.app
-                                                        .timeline_shift_wheel_horizontal_scroll,
-                                                )
-                                            {
-                                                pending_timeline_wheel = Some((action, pos.x));
-                                                // This gesture is handled after the ScrollArea has
-                                                // reported its exact viewport and offset. Prevent
-                                                // egui from applying the same wheel event again.
-                                                ui.ctx().input_mut(|input| {
-                                                    input.smooth_scroll_delta = egui::Vec2::ZERO;
-                                                });
-                                            }
+                                        if ui.rect_contains_pointer(viewport_clip) {
+                                            pending_timeline_wheel = timeline_wheel_over_surface(ui, viewport_clip,
+                                                timeline_wheel_behavior(self.app, scroll_modifiers));
                                         }
 
                                         let ruler_response = ui.interact(ruler_rect, egui::Id::new("timeline_ruler"), egui::Sense::click_and_drag())

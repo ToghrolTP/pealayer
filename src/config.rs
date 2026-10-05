@@ -6,6 +6,16 @@ use std::sync::mpsc::{Receiver, channel};
 pub const DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 50;
 pub const MAX_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 500;
 
+/// Vertical wheel policy. Physical horizontal wheel input always pans X.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineWheelBehavior {
+    Zoom,
+    HorizontalScroll,
+    VerticalScroll,
+    None,
+}
+
 /// Per-field adjustment sizes shared by native controls and configuration clients.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct NumericInputSteps {
@@ -485,10 +495,10 @@ pub struct AppConfig {
     pub compact_hardware_controls: bool,
     pub compact_timeline_tracks: bool,
     pub timeline_header_wheel_vertical_scroll: bool,
-    pub timeline_plain_wheel_zoom: bool,
-    pub timeline_ctrl_wheel_zoom: bool,
-    pub timeline_ctrl_wheel_vertical_scroll: bool,
-    pub timeline_shift_wheel_horizontal_scroll: bool,
+    pub timeline_plain_wheel_action: TimelineWheelBehavior,
+    pub timeline_ctrl_wheel_action: TimelineWheelBehavior,
+    pub timeline_shift_wheel_action: TimelineWheelBehavior,
+    pub timeline_alt_wheel_action: TimelineWheelBehavior,
     pub timeline_middle_button_pan: bool,
     pub timeline_middle_axis_lock_modifiers: bool,
     pub timeline_animated_navigation: bool,
@@ -647,10 +657,10 @@ impl Default for AppConfig {
             compact_hardware_controls: false,
             compact_timeline_tracks: true,
             timeline_header_wheel_vertical_scroll: true,
-            timeline_plain_wheel_zoom: true,
-            timeline_ctrl_wheel_zoom: true,
-            timeline_ctrl_wheel_vertical_scroll: true,
-            timeline_shift_wheel_horizontal_scroll: true,
+            timeline_plain_wheel_action: TimelineWheelBehavior::Zoom,
+            timeline_ctrl_wheel_action: TimelineWheelBehavior::VerticalScroll,
+            timeline_shift_wheel_action: TimelineWheelBehavior::HorizontalScroll,
+            timeline_alt_wheel_action: TimelineWheelBehavior::Zoom,
             timeline_middle_button_pan: true,
             timeline_middle_axis_lock_modifiers: true,
             timeline_animated_navigation: true,

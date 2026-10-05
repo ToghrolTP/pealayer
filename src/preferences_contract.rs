@@ -1,5 +1,16 @@
 use serde::Serialize;
 
+fn timeline_wheel_control(key: &'static str, label: &'static str) -> PreferenceControl {
+    let mut control = PreferenceControl::select(key, "input", "Timeline navigation", label, &[
+        ("zoom", "Zoom"),
+        ("vertical_scroll", "Scroll vertically"),
+        ("horizontal_scroll", "Scroll horizontally"),
+        ("none", "No action"),
+    ]);
+    control.description = Some("Vertical wheel action. Horizontal wheel always pans horizontally. Combined modifiers use Shift, then Ctrl / Command, then Alt.");
+    control
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -553,34 +564,10 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Timeline navigation",
             "Scroll track headers vertically with the mouse wheel",
         ),
-        PreferenceControl::boolean(
-            "timeline_plain_wheel_zoom",
-            "input",
-            "Timeline navigation",
-            "Zoom the timeline when scrolling over its canvas",
-        ),
-        PreferenceControl::boolean(
-            "timeline_ctrl_wheel_zoom",
-            "input",
-            "Timeline navigation",
-            "Use Ctrl or Command plus wheel to zoom",
-        ),
-        {
-        let mut control = PreferenceControl::boolean(
-            "timeline_ctrl_wheel_vertical_scroll",
-            "input",
-            "Timeline navigation",
-            "Use Ctrl or Command plus wheel to scroll tracks vertically",
-        );
-        control.description = Some("Takes priority over Ctrl or Command plus wheel zoom; Shift plus wheel still scrolls horizontally");
-        control
-        },
-        PreferenceControl::boolean(
-            "timeline_shift_wheel_horizontal_scroll",
-            "input",
-            "Timeline navigation",
-            "Use Shift plus wheel to scroll horizontally",
-        ),
+        timeline_wheel_control("timeline_plain_wheel_action", "Mouse wheel"),
+        timeline_wheel_control("timeline_ctrl_wheel_action", "Ctrl / Command + mouse wheel"),
+        timeline_wheel_control("timeline_shift_wheel_action", "Shift + mouse wheel"),
+        timeline_wheel_control("timeline_alt_wheel_action", "Alt + mouse wheel"),
         PreferenceControl::boolean(
             "timeline_middle_button_pan",
             "input",
@@ -1335,14 +1322,27 @@ mod tests {
     fn timeline_navigation_gestures_are_shared_persistent_preferences() {
         let config = crate::config::AppConfig::default();
         let previous: crate::config::AppConfig = serde_json::from_str(r#"{"timeline_ctrl_wheel_zoom":true}"#).unwrap();
-        assert!(previous.timeline_ctrl_wheel_vertical_scroll, "existing configs receive the new default");
-        let serialized = serde_json::to_string(&crate::config::AppConfig { timeline_ctrl_wheel_vertical_scroll: false, ..config.clone() }).unwrap();
-        assert!(!serde_json::from_str::<crate::config::AppConfig>(&serialized).unwrap().timeline_ctrl_wheel_vertical_scroll);
+        use crate::config::TimelineWheelBehavior as Wheel;
+        assert_eq!(previous.timeline_ctrl_wheel_action, Wheel::VerticalScroll);
+        let changed = crate::config::AppConfig {
+            timeline_plain_wheel_action: Wheel::VerticalScroll,
+            timeline_ctrl_wheel_action: Wheel::Zoom,
+            timeline_shift_wheel_action: Wheel::None,
+            timeline_alt_wheel_action: Wheel::HorizontalScroll,
+            ..config.clone()
+        };
+        let serialized = serde_json::to_string(&changed).unwrap();
+        let reloaded: crate::config::AppConfig = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(reloaded, changed);
+        assert!(crate::config::AppConfig::validate_patch_shape(&serde_json::json!({
+            "timeline_ctrl_wheel_action": "zoom", "timeline_alt_wheel_action": "horizontal_scroll"
+        })).is_ok());
+        assert!(serde_json::from_str::<crate::config::AppConfig>(r#"{"timeline_alt_wheel_action":"invalid"}"#).is_err());
         assert!(config.timeline_header_wheel_vertical_scroll);
-        assert!(config.timeline_plain_wheel_zoom);
-        assert!(config.timeline_ctrl_wheel_zoom);
-        assert!(config.timeline_ctrl_wheel_vertical_scroll);
-        assert!(config.timeline_shift_wheel_horizontal_scroll);
+        assert_eq!(config.timeline_plain_wheel_action, Wheel::Zoom);
+        assert_eq!(config.timeline_ctrl_wheel_action, Wheel::VerticalScroll);
+        assert_eq!(config.timeline_shift_wheel_action, Wheel::HorizontalScroll);
+        assert_eq!(config.timeline_alt_wheel_action, Wheel::Zoom);
         assert!(config.timeline_middle_button_pan);
         assert!(config.timeline_middle_axis_lock_modifiers);
         assert!(config.timeline_animated_navigation);
@@ -1351,10 +1351,6 @@ mod tests {
         let controls = preference_controls(&config);
         for key in [
             "timeline_header_wheel_vertical_scroll",
-            "timeline_plain_wheel_zoom",
-            "timeline_ctrl_wheel_zoom",
-            "timeline_ctrl_wheel_vertical_scroll",
-            "timeline_shift_wheel_horizontal_scroll",
             "timeline_middle_button_pan",
             "timeline_middle_axis_lock_modifiers",
             "timeline_animated_navigation",
@@ -1366,6 +1362,14 @@ mod tests {
             assert!(matches!(control.kind, PreferenceControlKind::Boolean));
             assert_eq!(control.section, "input");
             assert_eq!(control.group, "Timeline navigation");
+        }
+
+        for key in ["timeline_plain_wheel_action", "timeline_ctrl_wheel_action", "timeline_shift_wheel_action", "timeline_alt_wheel_action"] {
+            let control = controls.iter().find(|control| control.key == key).unwrap();
+            assert!(matches!(control.kind, PreferenceControlKind::Select));
+            assert_eq!(control.options.len(), 4);
+            assert_eq!(control.group, "Timeline navigation");
+            assert_eq!(control.section, "input");
         }
 
         let transition = controls
