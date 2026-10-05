@@ -555,6 +555,7 @@ fn main() -> eframe::Result {
                 crate::cli::resolved_instance_identity(),
             );
             let (_web_cmd_tx, web_cmd_rx) = std::sync::mpsc::channel();
+            let (media_cmd_tx, media_cmd_rx) = std::sync::mpsc::channel();
             let engine_handle = crate::four_d::engine::spawn_engine();
             let controller_cmd_rx = crate::platform::interop::spawn_pccontroller_action_bridge(
                 cc.egui_ctx.clone(),
@@ -774,6 +775,7 @@ fn main() -> eframe::Result {
                 hardware_control_down_color_draft: String::new(),
                 hardware_control_pwm_percent: 0.0,
                 keyboard_shortcuts_enabled: loaded_config.keyboard_shortcuts_enabled,
+                media_keys_enabled: loaded_config.media_keys_enabled,
                 application_shortcuts: loaded_config.application_shortcuts.clone(),
                 global_hardware_hotkeys_enabled: loaded_config.global_hardware_hotkeys_enabled,
                 hardware_key_bindings: loaded_config.hardware_key_bindings.clone(),
@@ -866,7 +868,8 @@ fn main() -> eframe::Result {
                 web_cmd_rx,
                 last_web_broadcast: None,
                 media_controls: None,
-                media_cmd_tx: interop_tx,
+                media_cmd_tx,
+                media_cmd_rx,
                 window_handle: None,
                 shell_initialized: false,
                 last_taskbar_state: None,

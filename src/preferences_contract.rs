@@ -607,6 +607,14 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Keyboard shortcuts",
             "Allow hardware hotkeys while Pealayer is in the background",
         ),
+        {
+            let mut control = PreferenceControl::boolean(
+                "media_keys_enabled", "input", "Keyboard shortcuts",
+                "Respond to keyboard media controls",
+            );
+            control.description = Some("Play, pause, stop, next/previous and seek through the OS media session, even in the background. Independent of in-app shortcuts and hardware hotkeys.");
+            control
+        },
         PreferenceControl::text("application_shortcuts.fullscreen", "input", "Application shortcuts", "Toggle fullscreen", "F11 (empty disables)"),
         PreferenceControl::text("application_shortcuts.media_information", "input", "Application shortcuts", "Media information", "Shift+F10"),
         PreferenceControl::text("application_shortcuts.media_folder", "input", "Application shortcuts", "Open media containing folder", "Ctrl+Shift+F10"),
@@ -1403,11 +1411,13 @@ mod tests {
     fn keyboard_and_global_hotkey_policies_are_shared_preferences() {
         let config = crate::config::AppConfig::default();
         assert!(config.keyboard_shortcuts_enabled);
+        assert!(config.media_keys_enabled);
         assert!(config.global_hardware_hotkeys_enabled);
 
         let controls = preference_controls(&config);
         for key in [
             "keyboard_shortcuts_enabled",
+            "media_keys_enabled",
             "global_hardware_hotkeys_enabled",
         ] {
             let control = controls
@@ -1418,6 +1428,26 @@ mod tests {
             assert_eq!(control.section, "input");
             assert_eq!(control.group, "Keyboard shortcuts");
         }
+    }
+
+    #[test]
+    fn media_key_policy_defaults_to_enabled_and_is_persistent_and_api_configurable() {
+        let old: crate::config::AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(old.media_keys_enabled);
+        let disabled = old.apply_patch(&serde_json::json!({"media_keys_enabled": false})).unwrap();
+        assert!(!disabled.media_keys_enabled);
+        // OS media controls do not depend on local shortcuts or hardware hotkeys.
+        assert!(disabled.keyboard_shortcuts_enabled);
+        assert!(disabled.global_hardware_hotkeys_enabled);
+        let restored: crate::config::AppConfig = serde_json::from_str(
+            &serde_json::to_string(&disabled).unwrap(),
+        ).unwrap();
+        assert!(!restored.media_keys_enabled);
+        let contract = preferences_contract(&restored);
+        assert_eq!(contract.defaults["media_keys_enabled"], true);
+        assert_eq!(contract.values["media_keys_enabled"], false);
+        assert!(old.apply_patch(&serde_json::json!({"media_keys_enabled": "off"})).is_err());
+        assert!(disabled.apply_patch(&serde_json::json!({"media_keys_enabled": true})).unwrap().media_keys_enabled);
     }
 
     #[test]

@@ -418,6 +418,7 @@ pub struct PealayerApp {
     pub(crate) hardware_control_down_color_draft: String,
     pub(crate) hardware_control_pwm_percent: f64,
     pub(crate) keyboard_shortcuts_enabled: bool,
+    pub(crate) media_keys_enabled: bool,
     pub(crate) application_shortcuts: crate::application_shortcuts::ApplicationShortcuts,
     pub(crate) global_hardware_hotkeys_enabled: bool,
     pub(crate) hardware_key_bindings: Vec<crate::config::HardwareKeyBinding>,
@@ -502,7 +503,8 @@ pub struct PealayerApp {
     pub(crate) web_cmd_rx: std::sync::mpsc::Receiver<crate::platform::interop::InteropCommand>,
     pub(crate) last_web_broadcast: Option<std::time::Instant>,
     pub(crate) media_controls: Option<crate::platform::media_controls::MediaControlsManager>,
-    pub(crate) media_cmd_tx: std::sync::mpsc::Sender<crate::platform::interop::InteropCommand>,
+    pub(crate) media_cmd_tx: std::sync::mpsc::Sender<souvlaki::MediaControlEvent>,
+    pub(crate) media_cmd_rx: std::sync::mpsc::Receiver<souvlaki::MediaControlEvent>,
     pub window_handle: Option<isize>,
     pub shell_initialized: bool,
     pub(crate) last_taskbar_state: Option<crate::platform::windows::TaskbarState>,
@@ -693,15 +695,26 @@ impl eframe::App for PealayerApp {
             );
         }
 
-        if self.media_controls.is_none() {
+        if !self.media_keys_enabled {
+            // Drop unregisters the native session and invalidates old callbacks.
+            self.media_controls = None;
+        } else if self.media_controls.is_none() {
             let hwnd = self
                 .window_handle
                 .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
-            self.media_controls = Some(crate::platform::media_controls::MediaControlsManager::new(
-                hwnd,
-                self.media_cmd_tx.clone(),
-                ui.ctx().clone(),
-            ));
+            // Windows requires a real HWND; initialization before registration
+            // would panic inside the OS-media-controls library.
+            if !cfg!(target_os = "windows") || hwnd != 0 {
+                let mut controls = crate::platform::media_controls::MediaControlsManager::new(
+                    hwnd,
+                    self.media_cmd_tx.clone(),
+                    ui.ctx().clone(),
+                );
+                let title = self.current_video_path.as_deref()
+                    .map(|path| crate::media::media_target_label(&path.to_string_lossy()));
+                controls.update_metadata(title.as_deref());
+                self.media_controls = Some(controls);
+            }
         }
 
         // Track active window/panel drag operations safely without lock nesting
@@ -745,11 +758,26 @@ impl eframe::App for PealayerApp {
         while let Ok(command) = self.web_cmd_rx.try_recv() {
             inbound_commands.push(("Web UI", command));
         }
+        while let Ok(event) = self.media_cmd_rx.try_recv() {
+            if self.media_keys_enabled
+                && let Some(command) = crate::platform::media_controls::map_media_control_event(
+                    event,
+                    self.quick_seek_seconds,
+                )
+            {
+                inbound_commands.push(("Media controls", command));
+            }
+        }
         while let Ok(delivery) = self.controller_cmd_rx.try_recv() {
             self.apply_interop_command(ui.ctx(), delivery.command.clone(), "PCController");
             delivery.acknowledge_applied();
         }
         for (source, command) in inbound_commands {
+            // A preceding IPC/config command can disable media keys during
+            // this same frame. Do not apply already-queued OS actions then.
+            if source == "Media controls" && !self.media_keys_enabled {
+                continue;
+            }
             self.apply_interop_command(ui.ctx(), command, source);
         }
 
@@ -1151,7 +1179,13 @@ impl eframe::App for PealayerApp {
         }
         self.update_shell_state();
         if let Some(ref mut mc) = self.media_controls {
-            mc.update_playback(self.is_paused, self.playback_time, self.duration);
+            mc.update_playback(
+                self.current_video_path.is_some(),
+                self.is_paused,
+                self.playback_time,
+                self.duration,
+            );
+            mc.update_volume(self.volume as f64 / 100.0);
         }
 
         // Connection loss and retry are normal runtime states. Surface them in
@@ -5010,7 +5044,7 @@ impl PealayerApp {
         self.is_paused = false;
         if let Some(ref mut mc) = self.media_controls {
             mc.update_metadata(None);
-            mc.update_playback(false, 0.0, 0.0);
+            mc.update_playback(false, false, 0.0, 0.0);
         }
         self.set_osd("Video Closed".to_string());
         self.save_config();
@@ -5094,6 +5128,7 @@ impl PealayerApp {
         cfg.live_pwm_updates = self.live_pwm_updates;
         cfg.hardware_actions_on_press = self.hardware_actions_on_press;
         cfg.keyboard_shortcuts_enabled = self.keyboard_shortcuts_enabled;
+        cfg.media_keys_enabled = self.media_keys_enabled;
         cfg.application_shortcuts = self.application_shortcuts.clone();
         cfg.global_hardware_hotkeys_enabled = self.global_hardware_hotkeys_enabled;
         cfg.hardware_key_bindings = self.hardware_key_bindings.clone();
@@ -5302,6 +5337,10 @@ impl PealayerApp {
             self.release_active_hardware_bindings();
         }
         self.keyboard_shortcuts_enabled = config.keyboard_shortcuts_enabled;
+        self.media_keys_enabled = config.media_keys_enabled;
+        if !self.media_keys_enabled {
+            self.media_controls = None;
+        }
         self.application_shortcuts = config.application_shortcuts.clone();
         self.global_hardware_hotkeys_enabled = config.global_hardware_hotkeys_enabled;
         self.hardware_key_bindings = config.hardware_key_bindings.clone();
@@ -6388,11 +6427,12 @@ impl Default for PealayerApp {
         let _ = mpv_client.observe_property("sub-text", libmpv2::Format::String, 19);
         let _ = mpv_client.observe_property("sub-pos", libmpv2::Format::Double, 20);
         let _ = mpv_client.observe_property("video-out-params/aspect", libmpv2::Format::Double, 21);
-        let (interop_tx, interop_rx) = std::sync::mpsc::channel();
+        let (_interop_tx, interop_rx) = std::sync::mpsc::channel();
         let (_controller_cmd_tx, controller_cmd_rx) =
             std::sync::mpsc::channel::<crate::platform::interop::ControllerDelivery>();
         let (web_state_tx, _web_state_rx) = std::sync::mpsc::channel();
         let (_web_cmd_tx, web_cmd_rx) = std::sync::mpsc::channel();
+        let (media_cmd_tx, media_cmd_rx) = std::sync::mpsc::channel();
 
         Self {
             web_only: false,
@@ -6559,6 +6599,7 @@ impl Default for PealayerApp {
             hardware_control_down_color_draft: String::new(),
             hardware_control_pwm_percent: 0.0,
             keyboard_shortcuts_enabled: true,
+            media_keys_enabled: true,
             application_shortcuts: crate::application_shortcuts::ApplicationShortcuts::default(),
             global_hardware_hotkeys_enabled: true,
             hardware_key_bindings: Vec::new(),
@@ -6646,7 +6687,8 @@ impl Default for PealayerApp {
             web_cmd_rx,
             last_web_broadcast: None,
             media_controls: None,
-            media_cmd_tx: interop_tx,
+            media_cmd_tx,
+            media_cmd_rx,
             window_handle: None,
             shell_initialized: false,
             last_taskbar_state: None,
