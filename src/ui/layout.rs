@@ -70,7 +70,8 @@ pub(crate) fn left_aligned_click_label(
 }
 
 const EFFECTS_PANEL_RIGHT_GUTTER: f32 = 10.0;
-const EFFECT_CARD_MIN_WIDTH: f32 = 140.0;
+// Grip, icon, three compact actions and a readable title need this minimum.
+const EFFECT_CARD_MIN_WIDTH: f32 = 160.0;
 const EFFECT_CARD_HORIZONTAL_MARGIN: i8 = 9;
 const EFFECT_CARD_STROKE_WIDTH: f32 = 1.0;
 const EFFECT_CARD_ACTION_GUTTER: f32 = 100.0;
@@ -653,6 +654,121 @@ fn effect_card_header_widths(available_after_icon: f32, item_spacing: f32) -> (f
     let actions_width = EFFECT_CARD_ACTION_BUTTONS_WIDTH + item_spacing * 2.0;
     let title_width = (available_after_icon - actions_width - item_spacing).max(1.0);
     (title_width, actions_width)
+}
+
+struct EffectCardHeaderResponse {
+    grip: egui::Response,
+    icon: egui::Response,
+    title: egui::Response,
+    run: egui::Response,
+    place: egui::Response,
+    more: egui::Response,
+}
+
+fn effect_library_card_header(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    icon: &str,
+    title: &str,
+    tooltips: [&str; 6],
+) -> EffectCardHeaderResponse {
+    ui.horizontal(|ui| {
+        // Compact spacing is local to a narrow card, never a global theme change.
+        if ui.available_width() < 180.0 {
+            ui.spacing_mut().item_spacing.x = ui.spacing().item_spacing.x.min(2.0);
+        }
+        let source_rect = ui.data(|data| data.get_temp::<egui::Rect>(id.with("source-rect")));
+        let hovered = hardware_channel_handle_hovered(
+            ui.ctx().pointer_hover_pos(),
+            source_rect,
+            ui.max_rect(),
+            primary_effect_drag_active(ui.ctx(), id),
+        );
+        let hover = ui
+            .ctx()
+            .animate_bool_with_time(id.with("grip-hover"), hovered, 0.12);
+        // Discoverable even at rest; hover emphasis must not change row geometry.
+        let grip = ui
+            .add_sized(
+                [14.0, 24.0],
+                egui::Label::new(
+                    egui::RichText::new(crate::ui::icons::DOTS_SIX_VERTICAL)
+                        .size(14.0)
+                        .color(
+                            ui.visuals()
+                                .weak_text_color()
+                                .gamma_multiply(0.45 + 0.55 * hover),
+                        ),
+                )
+                .sense(egui::Sense::hover()),
+            )
+            .on_hover_text(tooltips[0])
+            .on_hover_cursor(egui::CursorIcon::Grab);
+        // The existing whole-card primary drag surface owns the gesture; adding
+        // a competing drag ID on this glyph would break payload/offset handling.
+        let icon = ui
+            .add_sized(
+                [20.0, 24.0],
+                egui::Button::new(egui::RichText::new(icon).size(16.0)).frame(false),
+            )
+            .on_hover_text(tooltips[1]);
+        let (title_width, actions_width) =
+            effect_card_header_widths(ui.available_width(), ui.spacing().item_spacing.x);
+        let title = ui
+            .allocate_ui_with_layout(
+                egui::vec2(title_width, 24.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    // allocate_ui_with_layout is content-sized unless we hold this
+                    // slot open. A short caption otherwise pulls all actions left.
+                    ui.set_min_width(title_width);
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(title).strong())
+                            .truncate()
+                            .sense(egui::Sense::click()),
+                    )
+                },
+            )
+            .inner
+            .on_hover_text(tooltips[2]);
+        let (more, place, run) = ui
+            .allocate_ui_with_layout(
+                egui::vec2(actions_width, 24.0),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    ui.set_min_width(actions_width);
+                    let more = ui
+                        .add_sized(
+                            [24.0, 24.0],
+                            egui::Button::new(crate::ui::icons::DOTS_THREE).frame(false),
+                        )
+                        .on_hover_text(tooltips[5]);
+                    let place = ui
+                        .add_sized(
+                            [24.0, 24.0],
+                            egui::Button::new(crate::ui::icons::PLUS).frame(false),
+                        )
+                        .on_hover_text(tooltips[4]);
+                    let run = ui
+                        .add_sized(
+                            [24.0, 24.0],
+                            egui::Button::new(crate::ui::icons::PLAY).frame(false),
+                        )
+                        .on_hover_text(tooltips[3]);
+                    (more, place, run)
+                },
+            )
+            .inner;
+        EffectCardHeaderResponse {
+            grip,
+            icon,
+            title,
+            run,
+            place,
+            more,
+        }
+    })
+    .inner
 }
 
 fn effect_card<R>(
@@ -6798,6 +6914,73 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn effect_library_header_actions_anchor_right_for_short_and_long_titles() {
+        for dark in [false, true] {
+            for width in [EFFECT_CARD_MIN_WIDTH, 180.0, 320.0, 520.0] {
+                let context = egui::Context::default();
+                context.set_visuals(if dark {
+                    egui::Visuals::dark()
+                } else {
+                    egui::Visuals::light()
+                });
+                let geometry = std::cell::Cell::new((
+                    egui::Rect::NOTHING,
+                    egui::Rect::NOTHING,
+                    egui::Rect::NOTHING,
+                    0.0,
+                ));
+                for title in [
+                    "FX",
+                    "An unusually long effect title that must truncate rather than move its actions",
+                ] {
+                    let output = context.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(700.0, 160.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            effect_card(ui, width, |ui| {
+                                let end = ui.max_rect().right();
+                                let header = effect_library_card_header(
+                                    ui,
+                                    egui::Id::new("header-anchor"),
+                                    crate::ui::icons::SPARKLE,
+                                    title,
+                                    ["Drag", "Icon", "Rename", "Run", "Place", "More"],
+                                );
+                                geometry.set((
+                                    header.grip.rect,
+                                    header.run.rect,
+                                    header.more.rect,
+                                    end,
+                                ));
+                            });
+                        },
+                    );
+                    discard_ui_output(output);
+                    let (grip, run, more, end) = geometry.get();
+                    assert!(
+                        grip.is_positive(),
+                        "drag indicator must occupy its own stable slot"
+                    );
+                    assert!(
+                        grip.right() < run.left(),
+                        "grip must not overlap action buttons"
+                    );
+                    assert!(
+                        (more.right() - end).abs() < 0.1,
+                        "actions must reach the card's trailing edge: width={width}, title={title:?}, actual={}, expected={end}",
+                        more.right()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn production_effect_action_row_stays_within_the_card_width() {
         let spacing = 8.0;
         for available in [112.0, 180.0, 297.0] {
@@ -6937,81 +7120,169 @@ mod timeline_row_tests {
 
     #[test]
     fn effect_card_action_click_survives_the_drag_surface() {
+        for action in 0..3 {
+            let context = egui::Context::default();
+            let payload = EffectDragPayload {
+                name: "Seat rise".to_string(),
+                icon: String::new(),
+                duration_ms: 750,
+                target: crate::four_d::models::HardwareTarget::ControllerMacro,
+                actions: Vec::new(),
+                controller_macro: None,
+                controller_strip_effect: None,
+                controller_lane: None,
+            };
+            let action_rect = std::cell::Cell::new(egui::Rect::NOTHING);
+            let activated = std::cell::Cell::new(false);
+            let render = |events: Vec<egui::Event>| {
+                let output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(360.0, 180.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let mut button_response = None;
+                        effect_drag_source_with_action_gutter(
+                            ui,
+                            egui::Id::new("effect-card-with-action"),
+                            payload.clone(),
+                            EFFECT_CARD_ACTION_GUTTER,
+                            |ui| {
+                                effect_card(ui, 260.0, |ui| {
+                                    let header = effect_library_card_header(
+                                        ui,
+                                        egui::Id::new("effect-card-with-action"),
+                                        crate::ui::icons::SPARKLE,
+                                        "Seat rise",
+                                        ["Drag", "Icon", "Rename", "Run", "Place", "More"],
+                                    );
+                                    let button = match action {
+                                        0 => header.run,
+                                        1 => header.place,
+                                        _ => header.more,
+                                    };
+                                    action_rect.set(button.rect);
+                                    button_response = Some(button);
+                                })
+                            },
+                        );
+                        activated.set(
+                            activated.get()
+                                || button_response
+                                    .as_ref()
+                                    .is_some_and(egui::Response::clicked),
+                        );
+                    },
+                );
+                discard_ui_output(output);
+            };
+
+            render(Vec::new());
+            let point = action_rect.get().center();
+            render(vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+            render(vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+
+            assert!(
+                activated.get(),
+                "the card drag surface swallowed its action click"
+            );
+            assert!(egui::DragAndDrop::payload::<EffectDragPayload>(&context).is_none());
+        }
+    }
+
+    #[test]
+    fn effect_library_grip_starts_the_existing_drag_without_a_grab_offset_jump() {
         let context = egui::Context::default();
+        let id = egui::Id::new("production-library-grip");
         let payload = EffectDragPayload {
-            name: "Seat rise".to_string(),
+            name: "Grip fixture".into(),
             icon: String::new(),
-            duration_ms: 750,
+            duration_ms: 1000,
             target: crate::four_d::models::HardwareTarget::ControllerMacro,
             actions: Vec::new(),
             controller_macro: None,
             controller_strip_effect: None,
             controller_lane: None,
         };
-        let action_rect = std::cell::Cell::new(egui::Rect::NOTHING);
-        let activated = std::cell::Cell::new(false);
-        let render = |events: Vec<egui::Event>| {
+        let geometry = std::cell::Cell::new((egui::Rect::NOTHING, egui::Rect::NOTHING));
+        let render = |events| {
             let output = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
-                        egui::vec2(360.0, 180.0),
+                        egui::vec2(440.0, 200.0),
                     )),
                     events,
                     ..Default::default()
                 },
                 |ui| {
-                    let mut button_response = None;
-                    effect_drag_source_with_action_gutter(
+                    let response = effect_drag_source_with_action_gutter(
                         ui,
-                        egui::Id::new("effect-card-with-action"),
+                        id,
                         payload.clone(),
-                        110.0,
+                        EFFECT_CARD_ACTION_GUTTER,
                         |ui| {
-                            effect_card(ui, 260.0, |ui| {
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        let button = ui.button("More");
-                                        action_rect.set(button.rect);
-                                        button_response = Some(button);
-                                    },
-                                );
+                            effect_card(ui, 320.0, |ui| {
+                                effect_library_card_header(
+                                    ui,
+                                    id,
+                                    crate::ui::icons::SPARKLE,
+                                    "Grip fixture",
+                                    ["Drag", "Icon", "Rename", "Run", "Place", "More"],
+                                )
                             })
                         },
                     );
-                    activated.set(
-                        activated.get()
-                            || button_response
-                                .as_ref()
-                                .is_some_and(egui::Response::clicked),
-                    );
+                    geometry.set((response.response.rect, response.inner.inner.grip.rect));
                 },
             );
             discard_ui_output(output);
         };
-
-        render(Vec::new());
-        let point = action_rect.get().center();
+        render(vec![]);
+        let (card, grip) = geometry.get();
+        let press = grip.center();
         render(vec![
-            egui::Event::PointerMoved(point),
+            egui::Event::PointerMoved(press),
             egui::Event::PointerButton {
-                pos: point,
+                pos: press,
                 button: egui::PointerButton::Primary,
                 pressed: true,
                 modifiers: egui::Modifiers::NONE,
             },
         ]);
-        render(vec![egui::Event::PointerButton {
-            pos: point,
-            button: egui::PointerButton::Primary,
-            pressed: false,
-            modifiers: egui::Modifiers::NONE,
-        }]);
-
+        let expected_offset = press - card.min;
+        assert_eq!(
+            context.data(|data| data.get_temp::<egui::Vec2>(id.with("pointer-offset"))),
+            Some(expected_offset)
+        );
+        render(vec![egui::Event::PointerMoved(
+            press + egui::vec2(48.0, 20.0),
+        )]);
+        render(vec![]);
         assert!(
-            activated.get(),
-            "the card drag surface swallowed its action click"
+            egui::DragAndDrop::payload::<EffectDragPayload>(&context).is_some(),
+            "grip must start the real effect drag"
+        );
+        assert_eq!(
+            context.data(|data| data.get_temp::<egui::Vec2>(id.with("pointer-offset"))),
+            Some(expected_offset)
         );
     }
 
@@ -9142,86 +9413,24 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                     }
                                                                 });
                                                             } else {
-                                                                ui.horizontal(|ui| {
-                                                                    let icon_response = ui.add_sized(
-                                                                        [20.0, 24.0],
-                                                                        egui::Button::new(
-                                                                        egui::RichText::new(&preset.effect.icon)
-                                                                        .size(16.0),
-                                                                        )
-                                                                        .frame(false),
-                                                                    )
-                                                                    .on_hover_text(self.app.tr("Change icon"));
-                                                                    begin_inline_edit |= icon_response.clicked();
-                                                                    let action_spacing = ui.spacing().item_spacing.x;
-                                                                    let (title_width, reserved_actions) =
-                                                                        effect_card_header_widths(
-                                                                            ui.available_width(),
-                                                                            action_spacing,
-                                                                        );
-                                                                    let title_response = ui
-                                                                        .allocate_ui_with_layout(
-                                                                            egui::vec2(title_width, 24.0),
-                                                                            egui::Layout::left_to_right(
-                                                                                egui::Align::Center,
-                                                                            ),
-                                                                            |ui| {
-                                                                                ui.add(
-                                                                                    egui::Label::new(
-                                                                                        egui::RichText::new(
-                                                                                            &displayed_effect_name,
-                                                                                        )
-                                                                                        .strong(),
-                                                                                    )
-                                                                                    .truncate()
-                                                                                    .sense(egui::Sense::click()),
-                                                                                )
-                                                                            },
-                                                                        )
-                                                                        .inner
-                                                                        .on_hover_text(self.app.tr("Rename"));
-                                                                    begin_inline_edit |= title_response.clicked();
-                                                                    ui.allocate_ui_with_layout(
-                                                                        egui::vec2(reserved_actions, 24.0),
-                                                                        egui::Layout::right_to_left(egui::Align::Center),
-                                                                        |ui| {
-                                                                            let more = ui
-                                                                                .add_sized(
-                                                                                    [24.0, 24.0],
-                                                                                    egui::Button::new(
-                                                                                        crate::ui::icons::DOTS_THREE,
-                                                                                    )
-                                                                                    .frame(false),
-                                                                                )
-                                                                                .on_hover_text(
-                                                                                    self.app.tr("More actions"),
-                                                                                );
-                                                                            more_response = Some(more);
-                                                                            let place = ui
-                                                                                .add_sized(
-                                                                                    [24.0, 24.0],
-                                                                                    egui::Button::new(
-                                                                                        crate::ui::icons::PLUS,
-                                                                                    )
-                                                                                    .frame(false),
-                                                                                )
-                                                                                .on_hover_text(
-                                                                                    self.app.tr("Place at playhead"),
-                                                                                );
-                                                                            place_at_playhead = place.clicked();
-                                                                            let run = ui
-                                                                                .add_sized(
-                                                                                    [24.0, 24.0],
-                                                                                    egui::Button::new(
-                                                                                        crate::ui::icons::PLAY,
-                                                                                    )
-                                                                                    .frame(false),
-                                                                                )
-                                                                                .on_hover_text(self.app.tr("Run now"));
-                                                                            run_now = run.clicked();
-                                                                        },
-                                                                    );
-                                                                });
+                                                                let header = effect_library_card_header(
+                                                                    ui,
+                                                                    item_id,
+                                                                    &preset.effect.icon,
+                                                                    &displayed_effect_name,
+                                                                    [
+                                                                        &self.app.tr("Drag effect to timeline"),
+                                                                        &self.app.tr("Change icon"),
+                                                                        &self.app.tr("Rename"),
+                                                                        &self.app.tr("Run now"),
+                                                                        &self.app.tr("Place at playhead"),
+                                                                        &self.app.tr("More actions"),
+                                                                    ],
+                                                                );
+                                                                begin_inline_edit |= header.icon.clicked() || header.title.clicked();
+                                                                run_now = header.run.clicked();
+                                                                place_at_playhead = header.place.clicked();
+                                                                more_response = Some(header.more);
                                                             }
                                                                 ui.add_space(5.0);
                                                                 effect_library_metadata(
