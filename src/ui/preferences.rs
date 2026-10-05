@@ -1338,7 +1338,7 @@ fn draw_config_file_actions(
             .button(format!(
                 "{}  {}",
                 crate::ui::icons::FOLDER_OPEN,
-                tr("Import configuration")
+                tr("Import")
             ))
             .clicked()
             && let Some(import_path) = rfd::FileDialog::new()
@@ -1360,7 +1360,7 @@ fn draw_config_file_actions(
             .button(format!(
                 "{}  {}",
                 crate::ui::icons::ARROW_SQUARE_OUT,
-                tr("Export configuration")
+                tr("Export")
             ))
             .clicked()
             && let Some(export_path) = rfd::FileDialog::new()
@@ -1843,8 +1843,8 @@ mod tests {
         assert!(source.contains("ConfigPathAction::Edit"));
         assert!(source.contains("ConfigPathAction::OpenContainingFolder"));
         assert!(source.contains("Copy full path"));
-        assert!(source.contains("Import configuration"));
-        assert!(source.contains("Export configuration"));
+        assert!(source.contains("tr(\"Import\")"));
+        assert!(source.contains("tr(\"Export\")"));
         assert!(source.contains("add_enabled_ui(draft.is_dirty()"));
     }
 }

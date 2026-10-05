@@ -614,8 +614,8 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Open containing folder" => "باز کردن پوشهٔ پرونده",
         "Copy full path" => "رونوشت مسیر کامل",
         "Configuration path copied" => "مسیر کامل پیکربندی رونویسی شد",
-        "Import configuration" => "درون‌ریزی پیکربندی",
-        "Export configuration" => "برون‌ریزی پیکربندی",
+        "Import" => "درون‌ریزی",
+        "Export" => "برون‌ریزی",
         "Configuration imported; review and save" => {
             "پیکربندی درون‌ریزی شد؛ آن را بررسی و ذخیره کنید"
         }
