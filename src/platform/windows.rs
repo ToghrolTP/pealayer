@@ -154,6 +154,9 @@ static SHELL_COMMAND: AtomicU32 = AtomicU32::new(0);
 static SHELL_PAUSED: AtomicBool = AtomicBool::new(true);
 static SHELL_MUTED: AtomicBool = AtomicBool::new(false);
 static SHELL_HAS_MEDIA: AtomicBool = AtomicBool::new(false);
+static SHELL_REINITIALIZE: AtomicBool = AtomicBool::new(false);
+static TASKBAR_BUTTON_CREATED_MESSAGE: AtomicU32 = AtomicU32::new(0);
+static TASKBAR_THUMBNAIL_CLIP: Mutex<Option<(isize, Option<[i32; 4]>)>> = Mutex::new(None);
 
 #[cfg(target_os = "windows")]
 pub struct GuiOwnershipGuard(windows::Win32::Foundation::HANDLE);
@@ -1333,8 +1336,140 @@ pub fn update_windows_taskbar_state(_progress: f64, _duration: f64, _is_paused: 
     // No-op on non-Windows platforms
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowsQuickAction {
+    pub title: &'static str,
+    pub arguments: &'static str,
+}
+
+pub const WINDOWS_QUICK_ACTIONS: [WindowsQuickAction; 7] = [
+    WindowsQuickAction {
+        title: "Play / Pause",
+        arguments: "--toggle-pause",
+    },
+    WindowsQuickAction {
+        title: "Previous chapter",
+        arguments: "--chapter-previous",
+    },
+    WindowsQuickAction {
+        title: "Next chapter",
+        arguments: "--chapter-next",
+    },
+    WindowsQuickAction {
+        title: "Mute / Unmute",
+        arguments: "--toggle-mute",
+    },
+    WindowsQuickAction {
+        title: "Toggle fullscreen",
+        arguments: "--toggle-fullscreen",
+    },
+    WindowsQuickAction {
+        title: "Preferences",
+        arguments: "--preferences",
+    },
+    WindowsQuickAction {
+        title: "Exit Pealayer",
+        arguments: "--quit",
+    },
+];
+
 #[cfg(target_os = "windows")]
-pub fn sync_windows_jump_list(recent_media: &[std::path::PathBuf]) {
+fn build_windows_jump_list(include_quick_actions: bool) -> Result<(), String> {
+    use windows::Win32::Foundation::PROPERTYKEY;
+    use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+    };
+    use windows::Win32::UI::Shell::Common::{IObjectArray, IObjectCollection};
+    use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+    use windows::Win32::UI::Shell::{
+        DestinationList, EnumerableObjectCollection, ICustomDestinationList, IShellLinkW,
+        KDC_RECENT, ShellLink,
+    };
+    use windows::core::{GUID, Interface, PCWSTR};
+
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("resolve executable for Windows quick actions: {error}"))?;
+    let executable_wide = wide_null_path(&executable);
+    const PKEY_TITLE: PROPERTYKEY = PROPERTYKEY {
+        fmtid: GUID::from_u128(0xf29f85e0_4ff9_1068_ab91_08002b27b3d9),
+        pid: 2,
+    };
+
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let destination_list: ICustomDestinationList =
+            CoCreateInstance(&DestinationList, None, CLSCTX_INPROC_SERVER)
+                .map_err(|error| format!("create Windows Jump List: {error}"))?;
+        let mut minimum_slots = 0;
+        let _: IObjectArray = destination_list
+            .BeginList(&mut minimum_slots)
+            .map_err(|error| format!("begin Windows Jump List: {error}"))?;
+
+        if include_quick_actions {
+            let collection: IObjectCollection =
+                CoCreateInstance(&EnumerableObjectCollection, None, CLSCTX_INPROC_SERVER)
+                    .map_err(|error| format!("create Windows quick-action collection: {error}"))?;
+
+            for action in WINDOWS_QUICK_ACTIONS {
+                let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
+                    .map_err(|error| format!("create Windows quick action: {error}"))?;
+                let arguments = action
+                    .arguments
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect::<Vec<_>>();
+                let description = action
+                    .title
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect::<Vec<_>>();
+                link.SetPath(PCWSTR(executable_wide.as_ptr()))
+                    .map_err(|error| format!("set Windows quick-action executable: {error}"))?;
+                link.SetArguments(PCWSTR(arguments.as_ptr()))
+                    .map_err(|error| format!("set Windows quick-action arguments: {error}"))?;
+                link.SetDescription(PCWSTR(description.as_ptr()))
+                    .map_err(|error| format!("set Windows quick-action description: {error}"))?;
+                link.SetIconLocation(PCWSTR(executable_wide.as_ptr()), 0)
+                    .map_err(|error| format!("set Windows quick-action icon: {error}"))?;
+
+                let properties: IPropertyStore = link
+                    .cast()
+                    .map_err(|error| format!("open Windows quick-action properties: {error}"))?;
+                let title = PROPVARIANT::from(action.title);
+                properties
+                    .SetValue(&PKEY_TITLE, &title)
+                    .map_err(|error| format!("set Windows quick-action title: {error}"))?;
+                properties
+                    .Commit()
+                    .map_err(|error| format!("commit Windows quick-action title: {error}"))?;
+                collection
+                    .AddObject(&link)
+                    .map_err(|error| format!("append Windows quick action: {error}"))?;
+            }
+            let tasks: IObjectArray = collection
+                .cast()
+                .map_err(|error| format!("finalize Windows quick-action collection: {error}"))?;
+            destination_list
+                .AddUserTasks(&tasks)
+                .map_err(|error| format!("publish Windows quick actions: {error}"))?;
+        }
+
+        destination_list
+            .AppendKnownCategory(KDC_RECENT)
+            .map_err(|error| format!("publish Windows recent-media category: {error}"))?;
+        destination_list
+            .CommitList()
+            .map_err(|error| format!("commit Windows Jump List: {error}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub fn sync_windows_jump_list_with_options(
+    recent_media: &[std::path::PathBuf],
+    include_quick_actions: bool,
+) {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::UI::Shell::{SHARD_PATHW, SHAddToRecentDocs};
@@ -1357,15 +1492,31 @@ pub fn sync_windows_jump_list(recent_media: &[std::path::PathBuf]) {
             }
         }
     }
+
+    if let Err(error) = build_windows_jump_list(include_quick_actions) {
+        log::warn!("Could not synchronize Windows quick actions: {error}");
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn sync_windows_jump_list(recent_media: &[std::path::PathBuf]) {
+    sync_windows_jump_list_with_options(recent_media, true);
 }
 
 pub const THUMB_BUTTON_PREV: u32 = 1001;
 pub const THUMB_BUTTON_PLAYPAUSE: u32 = 1002;
 pub const THUMB_BUTTON_NEXT: u32 = 1003;
+pub const THUMB_BUTTON_MUTE: u32 = 1004;
+pub const THUMB_BUTTON_FULLSCREEN: u32 = 1005;
 
-pub fn thumbnail_button_tooltip(button_id: u32, is_paused: bool) -> &'static str {
+pub fn thumbnail_button_tooltip(
+    button_id: u32,
+    is_paused: bool,
+    is_muted: bool,
+    is_fullscreen: bool,
+) -> &'static str {
     match button_id {
-        THUMB_BUTTON_PREV => "Previous",
+        THUMB_BUTTON_PREV => "Back 10 seconds",
         THUMB_BUTTON_PLAYPAUSE => {
             if is_paused {
                 "Play"
@@ -1373,7 +1524,21 @@ pub fn thumbnail_button_tooltip(button_id: u32, is_paused: bool) -> &'static str
                 "Pause"
             }
         }
-        THUMB_BUTTON_NEXT => "Next",
+        THUMB_BUTTON_NEXT => "Forward 10 seconds",
+        THUMB_BUTTON_MUTE => {
+            if is_muted {
+                "Unmute"
+            } else {
+                "Mute"
+            }
+        }
+        THUMB_BUTTON_FULLSCREEN => {
+            if is_fullscreen {
+                "Exit fullscreen"
+            } else {
+                "Fullscreen"
+            }
+        }
         _ => "",
     }
 }
@@ -1388,15 +1553,206 @@ fn str_to_u16_buf_260(text: &str) -> [u16; 260] {
 }
 
 #[cfg(target_os = "windows")]
-pub fn init_taskbar_thumbnail_toolbar(hwnd_raw: isize) -> Result<(), String> {
+#[derive(Clone, Copy)]
+enum ThumbnailGlyph {
+    Back,
+    Play,
+    Pause,
+    Forward,
+    Mute,
+    Unmute,
+    Fullscreen,
+    Restore,
+}
+
+#[cfg(target_os = "windows")]
+fn create_thumbnail_button_icon(
+    glyph: ThumbnailGlyph,
+) -> windows::core::Result<windows::Win32::UI::WindowsAndMessaging::HICON> {
+    use windows::Win32::UI::WindowsAndMessaging::CreateIcon;
+
+    const SIZE: usize = 16;
+    const BYTES_PER_ROW: usize = 2;
+    let mut and_mask = [0xffu8; SIZE * BYTES_PER_ROW];
+    let mut xor_mask = [0u8; SIZE * BYTES_PER_ROW];
+    let mut plot = |x: usize, y: usize| {
+        if x >= SIZE || y >= SIZE {
+            return;
+        }
+        let byte = y * BYTES_PER_ROW + x / 8;
+        let bit = 0x80 >> (x % 8);
+        and_mask[byte] &= !bit;
+        xor_mask[byte] |= bit;
+    };
+    let mut line = |mut x0: i32, mut y0: i32, x1: i32, y1: i32| {
+        let dx = (x1 - x0).abs();
+        let sx = if x0 < x1 { 1 } else { -1 };
+        let dy = -(y1 - y0).abs();
+        let sy = if y0 < y1 { 1 } else { -1 };
+        let mut error = dx + dy;
+        loop {
+            if x0 >= 0 && y0 >= 0 {
+                plot(x0 as usize, y0 as usize);
+            }
+            if x0 == x1 && y0 == y1 {
+                break;
+            }
+            let twice = 2 * error;
+            if twice >= dy {
+                error += dy;
+                x0 += sx;
+            }
+            if twice <= dx {
+                error += dx;
+                y0 += sy;
+            }
+        }
+    };
+
+    match glyph {
+        ThumbnailGlyph::Back | ThumbnailGlyph::Forward => {
+            let forward = matches!(glyph, ThumbnailGlyph::Forward);
+            let (tip, edge) = if forward { (11, 5) } else { (4, 10) };
+            for y in 4..=11 {
+                line(edge, 7, tip, y);
+            }
+            let bar = if forward { 12 } else { 3 };
+            line(bar, 4, bar, 11);
+        }
+        ThumbnailGlyph::Play => {
+            for y in 3..=12 {
+                line(5, 7, 5 + (y - 3) / 2, y);
+            }
+        }
+        ThumbnailGlyph::Pause => {
+            for x in [5, 6, 9, 10] {
+                line(x, 4, x, 11);
+            }
+        }
+        ThumbnailGlyph::Mute | ThumbnailGlyph::Unmute => {
+            line(3, 6, 5, 6);
+            line(3, 9, 5, 9);
+            line(5, 6, 8, 3);
+            line(5, 9, 8, 12);
+            line(8, 3, 8, 12);
+            if matches!(glyph, ThumbnailGlyph::Mute) {
+                line(10, 5, 13, 10);
+                line(13, 5, 10, 10);
+            } else {
+                line(10, 5, 12, 7);
+                line(12, 7, 10, 10);
+            }
+        }
+        ThumbnailGlyph::Fullscreen | ThumbnailGlyph::Restore => {
+            let inset = if matches!(glyph, ThumbnailGlyph::Restore) {
+                2
+            } else {
+                0
+            };
+            let lo = 3 + inset;
+            let hi = 12 - inset;
+            line(lo, lo, lo + 3, lo);
+            line(lo, lo, lo, lo + 3);
+            line(hi - 3, lo, hi, lo);
+            line(hi, lo, hi, lo + 3);
+            line(lo, hi - 3, lo, hi);
+            line(lo, hi, lo + 3, hi);
+            line(hi - 3, hi, hi, hi);
+            line(hi, hi - 3, hi, hi);
+        }
+    }
+
+    unsafe { CreateIcon(None, 16, 16, 1, 1, and_mask.as_ptr(), xor_mask.as_ptr()) }
+}
+
+#[cfg(target_os = "windows")]
+fn taskbar_thumbnail_buttons(
+    is_paused: bool,
+    is_muted: bool,
+    is_fullscreen: bool,
+    has_media: bool,
+    enabled: bool,
+) -> Result<
+    (
+        Vec<windows::Win32::UI::Shell::THUMBBUTTON>,
+        Vec<windows::Win32::UI::WindowsAndMessaging::HICON>,
+    ),
+    String,
+> {
+    use windows::Win32::UI::Shell::{
+        THB_FLAGS, THB_ICON, THB_TOOLTIP, THBF_DISABLED, THBF_ENABLED, THBF_HIDDEN, THUMBBUTTON,
+    };
+
+    let flags = if !enabled {
+        THBF_HIDDEN
+    } else if has_media {
+        THBF_ENABLED
+    } else {
+        THBF_DISABLED
+    };
+    let specs = [
+        (THUMB_BUTTON_PREV, ThumbnailGlyph::Back),
+        (
+            THUMB_BUTTON_PLAYPAUSE,
+            if is_paused {
+                ThumbnailGlyph::Play
+            } else {
+                ThumbnailGlyph::Pause
+            },
+        ),
+        (THUMB_BUTTON_NEXT, ThumbnailGlyph::Forward),
+        (
+            THUMB_BUTTON_MUTE,
+            if is_muted {
+                ThumbnailGlyph::Unmute
+            } else {
+                ThumbnailGlyph::Mute
+            },
+        ),
+        (
+            THUMB_BUTTON_FULLSCREEN,
+            if is_fullscreen {
+                ThumbnailGlyph::Restore
+            } else {
+                ThumbnailGlyph::Fullscreen
+            },
+        ),
+    ];
+    let icons = specs
+        .iter()
+        .map(|(_, glyph)| {
+            create_thumbnail_button_icon(*glyph)
+                .map_err(|error| format!("create thumbnail-toolbar icon: {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let buttons = specs
+        .iter()
+        .zip(icons.iter())
+        .map(|((id, _), icon)| THUMBBUTTON {
+            dwMask: THB_FLAGS | THB_TOOLTIP | THB_ICON,
+            iId: *id,
+            iBitmap: 0,
+            hIcon: *icon,
+            szTip: str_to_u16_buf_260(thumbnail_button_tooltip(
+                *id,
+                is_paused,
+                is_muted,
+                is_fullscreen,
+            )),
+            dwFlags: flags,
+        })
+        .collect();
+    Ok((buttons, icons))
+}
+
+#[cfg(target_os = "windows")]
+pub fn init_taskbar_thumbnail_toolbar(hwnd_raw: isize, enabled: bool) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     };
-    use windows::Win32::UI::Shell::{
-        ITaskbarList3, THB_FLAGS, THB_TOOLTIP, THBF_ENABLED, THUMBBUTTON, TaskbarList,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::HICON;
+    use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList};
+    use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
@@ -1407,44 +1763,22 @@ pub fn init_taskbar_thumbnail_toolbar(hwnd_raw: isize) -> Result<(), String> {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         let taskbar: ITaskbarList3 = CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER)
             .map_err(|e| format!("failed to instantiate ITaskbarList3: {e}"))?;
-
-        let buttons = [
-            THUMBBUTTON {
-                dwMask: THB_FLAGS | THB_TOOLTIP,
-                iId: THUMB_BUTTON_PREV,
-                iBitmap: 0,
-                hIcon: HICON(std::ptr::null_mut()),
-                szTip: str_to_u16_buf_260(thumbnail_button_tooltip(THUMB_BUTTON_PREV, false)),
-                dwFlags: THBF_ENABLED,
-            },
-            THUMBBUTTON {
-                dwMask: THB_FLAGS | THB_TOOLTIP,
-                iId: THUMB_BUTTON_PLAYPAUSE,
-                iBitmap: 0,
-                hIcon: HICON(std::ptr::null_mut()),
-                szTip: str_to_u16_buf_260(thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, true)),
-                dwFlags: THBF_ENABLED,
-            },
-            THUMBBUTTON {
-                dwMask: THB_FLAGS | THB_TOOLTIP,
-                iId: THUMB_BUTTON_NEXT,
-                iBitmap: 0,
-                hIcon: HICON(std::ptr::null_mut()),
-                szTip: str_to_u16_buf_260(thumbnail_button_tooltip(THUMB_BUTTON_NEXT, false)),
-                dwFlags: THBF_ENABLED,
-            },
-        ];
-
         taskbar
+            .HrInit()
+            .map_err(|e| format!("ITaskbarList3::HrInit failed: {e}"))?;
+        let (buttons, icons) = taskbar_thumbnail_buttons(true, false, false, false, enabled)?;
+        let result = taskbar
             .ThumbBarAddButtons(hwnd, &buttons)
-            .map_err(|e| format!("ThumbBarAddButtons failed: {e}"))?;
-
-        Ok(())
+            .map_err(|e| format!("ThumbBarAddButtons failed: {e}"));
+        for icon in icons {
+            let _ = DestroyIcon(icon);
+        }
+        result
     }
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn init_taskbar_thumbnail_toolbar(_hwnd_raw: isize) -> Result<(), String> {
+pub fn init_taskbar_thumbnail_toolbar(_hwnd_raw: isize, _enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
@@ -1452,69 +1786,39 @@ pub fn init_taskbar_thumbnail_toolbar(_hwnd_raw: isize) -> Result<(), String> {
 pub fn update_taskbar_thumbnail_buttons(
     hwnd_raw: isize,
     is_paused: bool,
+    is_muted: bool,
+    is_fullscreen: bool,
     has_media: bool,
+    enabled: bool,
 ) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     };
-    use windows::Win32::UI::Shell::{
-        ITaskbarList3, THB_FLAGS, THB_TOOLTIP, THBF_DISABLED, THBF_ENABLED, THUMBBUTTON,
-        TaskbarList,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::HICON;
+    use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList};
+    use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
     }
     let hwnd = HWND(hwnd_raw as *mut _);
 
-    let flags = if has_media {
-        THBF_ENABLED
-    } else {
-        THBF_DISABLED
-    };
-
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         let taskbar: ITaskbarList3 = CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER)
             .map_err(|e| format!("failed to instantiate ITaskbarList3: {e}"))?;
-
-        let buttons = [
-            THUMBBUTTON {
-                dwMask: THB_FLAGS | THB_TOOLTIP,
-                iId: THUMB_BUTTON_PREV,
-                iBitmap: 0,
-                hIcon: HICON(std::ptr::null_mut()),
-                szTip: str_to_u16_buf_260(thumbnail_button_tooltip(THUMB_BUTTON_PREV, is_paused)),
-                dwFlags: flags,
-            },
-            THUMBBUTTON {
-                dwMask: THB_FLAGS | THB_TOOLTIP,
-                iId: THUMB_BUTTON_PLAYPAUSE,
-                iBitmap: 0,
-                hIcon: HICON(std::ptr::null_mut()),
-                szTip: str_to_u16_buf_260(thumbnail_button_tooltip(
-                    THUMB_BUTTON_PLAYPAUSE,
-                    is_paused,
-                )),
-                dwFlags: flags,
-            },
-            THUMBBUTTON {
-                dwMask: THB_FLAGS | THB_TOOLTIP,
-                iId: THUMB_BUTTON_NEXT,
-                iBitmap: 0,
-                hIcon: HICON(std::ptr::null_mut()),
-                szTip: str_to_u16_buf_260(thumbnail_button_tooltip(THUMB_BUTTON_NEXT, is_paused)),
-                dwFlags: flags,
-            },
-        ];
-
         taskbar
+            .HrInit()
+            .map_err(|e| format!("ITaskbarList3::HrInit failed: {e}"))?;
+        let (buttons, icons) =
+            taskbar_thumbnail_buttons(is_paused, is_muted, is_fullscreen, has_media, enabled)?;
+        let result = taskbar
             .ThumbBarUpdateButtons(hwnd, &buttons)
-            .map_err(|e| format!("ThumbBarUpdateButtons failed: {e}"))?;
-
-        Ok(())
+            .map_err(|e| format!("ThumbBarUpdateButtons failed: {e}"));
+        for icon in icons {
+            let _ = DestroyIcon(icon);
+        }
+        result
     }
 }
 
@@ -1522,7 +1826,10 @@ pub fn update_taskbar_thumbnail_buttons(
 pub fn update_taskbar_thumbnail_buttons(
     _hwnd_raw: isize,
     _is_paused: bool,
+    _is_muted: bool,
+    _is_fullscreen: bool,
     _has_media: bool,
+    _enabled: bool,
 ) -> Result<(), String> {
     Ok(())
 }
@@ -1558,31 +1865,73 @@ pub fn compute_thumbnail_clip_ratio(
 
 #[cfg(target_os = "windows")]
 pub fn configure_video_taskbar_thumbnail(hwnd_raw: isize) -> Result<(), String> {
+    update_video_taskbar_thumbnail(hwnd_raw, None)
+}
+
+/// Crops Windows' live DWM taskbar preview to the current video surface. A
+/// `None` rectangle restores the ordinary full-window thumbnail. The shell is
+/// only called when the effective rectangle changes, so publishing the video
+/// layout every frame does not add idle COM traffic.
+#[cfg(target_os = "windows")]
+pub fn update_video_taskbar_thumbnail(
+    hwnd_raw: isize,
+    video_rect: Option<[i32; 4]>,
+) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::Graphics::Dwm::{DWMWA_FORCE_ICONIC_REPRESENTATION, DwmSetWindowAttribute};
-    use windows::core::BOOL;
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+    };
+    use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList};
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
     }
+    let normalized = video_rect.filter(|rect| rect[2] > rect[0] && rect[3] > rect[1]);
+    if TASKBAR_THUMBNAIL_CLIP
+        .lock()
+        .is_ok_and(|cached| *cached == Some((hwnd_raw, normalized)))
+    {
+        return Ok(());
+    }
     let hwnd = HWND(hwnd_raw as *mut _);
-    let enable = BOOL::from(true);
     unsafe {
-        DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_FORCE_ICONIC_REPRESENTATION,
-            &enable as *const _ as *const _,
-            std::mem::size_of::<BOOL>() as u32,
-        )
-        .map_err(|e| {
-            format!("DwmSetWindowAttribute DWMWA_FORCE_ICONIC_REPRESENTATION failed: {e}")
-        })?;
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let taskbar: ITaskbarList3 = CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER)
+            .map_err(|error| format!("create taskbar thumbnail service: {error}"))?;
+        taskbar
+            .HrInit()
+            .map_err(|error| format!("initialize taskbar thumbnail service: {error}"))?;
+        let rect = normalized.map(|rect| RECT {
+            left: rect[0],
+            top: rect[1],
+            right: rect[2],
+            bottom: rect[3],
+        });
+        taskbar
+            .SetThumbnailClip(
+                hwnd,
+                rect.as_ref()
+                    .map_or(std::ptr::null(), |rect| rect as *const RECT),
+            )
+            .map_err(|error| format!("set taskbar video thumbnail crop: {error}"))?;
+    }
+    if let Ok(mut cached) = TASKBAR_THUMBNAIL_CLIP.lock() {
+        *cached = Some((hwnd_raw, normalized));
     }
     Ok(())
 }
 
 #[cfg(not(target_os = "windows"))]
 pub fn configure_video_taskbar_thumbnail(_hwnd_raw: isize) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn update_video_taskbar_thumbnail(
+    _hwnd_raw: isize,
+    _video_rect: Option<[i32; 4]>,
+) -> Result<(), String> {
     Ok(())
 }
 
@@ -1630,6 +1979,11 @@ unsafe extern "system" fn shell_window_proc(
 
     observe_native_window_message(message);
 
+    let taskbar_created = TASKBAR_BUTTON_CREATED_MESSAGE.load(Ordering::Acquire);
+    if taskbar_created != 0 && message == taskbar_created {
+        SHELL_REINITIALIZE.store(true, Ordering::Release);
+    }
+
     if message == WM_MOVING_VALUE
         && unsafe { constrain_native_moving_rect(hwnd.0 as isize, lparam.0) }
     {
@@ -1668,7 +2022,11 @@ unsafe extern "system" fn shell_window_proc(
         if notification == THBN_CLICKED
             && matches!(
                 command,
-                THUMB_BUTTON_PREV | THUMB_BUTTON_PLAYPAUSE | THUMB_BUTTON_NEXT
+                THUMB_BUTTON_PREV
+                    | THUMB_BUTTON_PLAYPAUSE
+                    | THUMB_BUTTON_NEXT
+                    | THUMB_BUTTON_MUTE
+                    | THUMB_BUTTON_FULLSCREEN
             )
         {
             SHELL_COMMAND.store(command, Ordering::Release);
@@ -1690,7 +2048,10 @@ unsafe extern "system" fn shell_window_proc(
 #[cfg(target_os = "windows")]
 pub fn install_shell_message_hook(hwnd_raw: isize) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{GWLP_WNDPROC, SetWindowLongPtrW};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GWLP_WNDPROC, RegisterWindowMessageW, SetWindowLongPtrW,
+    };
+    use windows::core::w;
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
@@ -1698,6 +2059,11 @@ pub fn install_shell_message_hook(hwnd_raw: isize) -> Result<(), String> {
     if ORIGINAL_WINDOW_PROC.load(Ordering::Acquire) != 0 {
         return Ok(());
     }
+    let taskbar_created = unsafe { RegisterWindowMessageW(w!("TaskbarButtonCreated")) };
+    if taskbar_created == 0 {
+        return Err("RegisterWindowMessageW TaskbarButtonCreated failed".to_string());
+    }
+    TASKBAR_BUTTON_CREATED_MESSAGE.store(taskbar_created, Ordering::Release);
     let previous = unsafe {
         SetWindowLongPtrW(
             HWND(hwnd_raw as *mut _),
@@ -1726,6 +2092,14 @@ pub fn update_shell_command_state(is_paused: bool, is_muted: bool, has_media: bo
 pub fn take_shell_command() -> Option<u32> {
     let command = SHELL_COMMAND.swap(0, Ordering::AcqRel);
     (command != 0).then_some(command)
+}
+
+pub fn take_shell_reinitialize_request() -> bool {
+    let requested = SHELL_REINITIALIZE.swap(false, Ordering::AcqRel);
+    if requested && let Ok(mut cached) = TASKBAR_THUMBNAIL_CLIP.lock() {
+        *cached = None;
+    }
+    requested
 }
 
 #[cfg(target_os = "windows")]
@@ -2182,6 +2556,14 @@ pub fn sync_windows_jump_list(_recent_media: &[std::path::PathBuf]) {
     // No-op on non-Windows platforms
 }
 
+#[cfg(not(target_os = "windows"))]
+pub fn sync_windows_jump_list_with_options(
+    _recent_media: &[std::path::PathBuf],
+    _include_quick_actions: bool,
+) {
+    // No-op on non-Windows platforms
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2275,18 +2657,53 @@ mod tests {
     #[test]
     fn test_thumbnail_button_tooltips() {
         assert_eq!(
-            thumbnail_button_tooltip(THUMB_BUTTON_PREV, false),
-            "Previous"
+            thumbnail_button_tooltip(THUMB_BUTTON_PREV, false, false, false),
+            "Back 10 seconds"
         );
         assert_eq!(
-            thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, true),
+            thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, true, false, false),
             "Play"
         );
         assert_eq!(
-            thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, false),
+            thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, false, false, false),
             "Pause"
         );
-        assert_eq!(thumbnail_button_tooltip(THUMB_BUTTON_NEXT, false), "Next");
+        assert_eq!(
+            thumbnail_button_tooltip(THUMB_BUTTON_NEXT, false, false, false),
+            "Forward 10 seconds"
+        );
+        assert_eq!(
+            thumbnail_button_tooltip(THUMB_BUTTON_MUTE, false, false, false),
+            "Mute"
+        );
+        assert_eq!(
+            thumbnail_button_tooltip(THUMB_BUTTON_MUTE, false, true, false),
+            "Unmute"
+        );
+        assert_eq!(
+            thumbnail_button_tooltip(THUMB_BUTTON_FULLSCREEN, false, false, false),
+            "Fullscreen"
+        );
+        assert_eq!(
+            thumbnail_button_tooltip(THUMB_BUTTON_FULLSCREEN, false, false, true),
+            "Exit fullscreen"
+        );
+    }
+
+    #[test]
+    fn windows_quick_actions_use_supported_unified_cli_switches() {
+        assert!(WINDOWS_QUICK_ACTIONS.len() >= 5);
+        for action in WINDOWS_QUICK_ACTIONS {
+            let args = std::iter::once("pealayer".to_string())
+                .chain(action.arguments.split_whitespace().map(str::to_string))
+                .collect::<Vec<_>>();
+            assert!(
+                crate::cli::parse_cli_args(args).is_ok(),
+                "{} uses unsupported arguments {}",
+                action.title,
+                action.arguments
+            );
+        }
     }
 
     #[test]

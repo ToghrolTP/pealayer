@@ -76,6 +76,7 @@ PLAYER OPTIONS:
   --activate                Activate and focus the window
   --minimize | --maximize   Change the window state
   --restore                 Restore and focus the window
+  --preferences             Open Preferences
   --message <TEXT>          Show a message in the OSD and status bar
   --hide-osd                Hide the currently displayed OSD message
   --quit                    Close the running application
@@ -186,6 +187,7 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
             "--minimize" => commands.push(InteropCommand::Minimize),
             "--maximize" => commands.push(InteropCommand::Maximize),
             "--restore" => commands.push(InteropCommand::Restore),
+            "--preferences" => commands.push(InteropCommand::OpenPreferences),
             "--message" => {
                 let message = args_iter.next().ok_or("Option '--message' requires text")?;
                 let command = InteropCommand::ShowMessage { message };

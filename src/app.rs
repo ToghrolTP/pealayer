@@ -470,6 +470,9 @@ pub struct PealayerApp {
     pub(crate) window_magnetic_snap_distance: u32,
     pub(crate) windows_mica_backdrop: bool,
     pub(crate) windows_dwm_theming: bool,
+    pub(crate) windows_video_taskbar_thumbnail: bool,
+    pub(crate) windows_thumbnail_toolbar: bool,
+    pub(crate) windows_jump_list_quick_actions: bool,
     pub(crate) opengl_vsync: bool,
     pub(crate) live_video_during_window_move: bool,
     pub(crate) compositor_paced_window_move: bool,
@@ -499,7 +502,7 @@ pub struct PealayerApp {
     pub window_handle: Option<isize>,
     pub shell_initialized: bool,
     pub(crate) last_taskbar_state: Option<crate::platform::windows::TaskbarState>,
-    pub(crate) last_thumbnail_button_state: Option<(bool, bool)>,
+    pub(crate) last_thumbnail_button_state: Option<(bool, bool, bool, bool, bool)>,
     pub(crate) last_update_notice_state: Option<String>,
 }
 
@@ -1923,13 +1926,22 @@ impl PealayerApp {
     /// Ensures Windows Shell components (thumbnail toolbar and system tray icon)
     /// are initialized once a valid window handle is registered.
     pub fn ensure_shell_initialized(&mut self) {
+        if crate::platform::windows::take_shell_reinitialize_request() {
+            self.shell_initialized = false;
+            self.last_thumbnail_button_state = None;
+        }
         if !self.shell_initialized {
             let hwnd = self
                 .window_handle
                 .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
             if hwnd != 0 {
                 let result = crate::platform::windows::install_shell_message_hook(hwnd)
-                    .and_then(|_| crate::platform::windows::init_taskbar_thumbnail_toolbar(hwnd))
+                    .and_then(|_| {
+                        crate::platform::windows::init_taskbar_thumbnail_toolbar(
+                            hwnd,
+                            self.windows_thumbnail_toolbar,
+                        )
+                    })
                     .and_then(|_| {
                         crate::platform::windows::register_system_tray_icon(hwnd, &self.app_name)
                     });
@@ -1959,6 +1971,12 @@ impl PealayerApp {
                 crate::platform::windows::THUMB_BUTTON_PLAYPAUSE
                 | crate::platform::windows::TRAY_CMD_PLAYPAUSE => self.toggle_playback(),
                 crate::platform::windows::THUMB_BUTTON_NEXT => self.seek_relative(10.0),
+                crate::platform::windows::THUMB_BUTTON_MUTE => {
+                    self.toggle_audio_muted();
+                }
+                crate::platform::windows::THUMB_BUTTON_FULLSCREEN => {
+                    self.toggle_fullscreen(ctx);
+                }
                 crate::platform::windows::TRAY_CMD_MUTE => {
                     self.toggle_audio_muted();
                 }
@@ -2004,7 +2022,17 @@ impl PealayerApp {
         let hwnd = self
             .window_handle
             .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
-        let thumbnail_state = (self.is_paused, self.current_video_path.is_some());
+        if hwnd != 0 && (!self.windows_video_taskbar_thumbnail || self.current_video_path.is_none())
+        {
+            let _ = crate::platform::windows::update_video_taskbar_thumbnail(hwnd, None);
+        }
+        let thumbnail_state = (
+            self.is_paused,
+            self.is_muted,
+            self.was_fullscreen,
+            self.current_video_path.is_some(),
+            self.windows_thumbnail_toolbar,
+        );
         if self.shell_initialized
             && hwnd != 0
             && self.last_thumbnail_button_state != Some(thumbnail_state)
@@ -2012,6 +2040,9 @@ impl PealayerApp {
                 hwnd,
                 thumbnail_state.0,
                 thumbnail_state.1,
+                thumbnail_state.2,
+                thumbnail_state.3,
+                thumbnail_state.4,
             )
             .is_ok()
         {
@@ -4894,6 +4925,9 @@ impl PealayerApp {
         cfg.window_magnetic_snap_distance = self.window_magnetic_snap_distance;
         cfg.windows_mica_backdrop = self.windows_mica_backdrop;
         cfg.windows_dwm_theming = self.windows_dwm_theming;
+        cfg.windows_video_taskbar_thumbnail = self.windows_video_taskbar_thumbnail;
+        cfg.windows_thumbnail_toolbar = self.windows_thumbnail_toolbar;
+        cfg.windows_jump_list_quick_actions = self.windows_jump_list_quick_actions;
         cfg.opengl_vsync = self.opengl_vsync;
         cfg.live_video_during_window_move = self.live_video_during_window_move;
         cfg.compositor_paced_window_move = self.compositor_paced_window_move;
@@ -5094,6 +5128,11 @@ impl PealayerApp {
         self.window_magnetic_snap_distance = config.window_magnetic_snap_distance;
         self.windows_mica_backdrop = config.windows_mica_backdrop;
         self.windows_dwm_theming = config.windows_dwm_theming;
+        self.windows_video_taskbar_thumbnail = config.windows_video_taskbar_thumbnail;
+        self.windows_thumbnail_toolbar = config.windows_thumbnail_toolbar;
+        let jump_list_changed =
+            self.windows_jump_list_quick_actions != config.windows_jump_list_quick_actions;
+        self.windows_jump_list_quick_actions = config.windows_jump_list_quick_actions;
         self.opengl_vsync = config.opengl_vsync;
         self.live_video_during_window_move = config.live_video_during_window_move;
         self.compositor_paced_window_move = config.compositor_paced_window_move;
@@ -5119,6 +5158,12 @@ impl PealayerApp {
         crate::platform::windows::configure_compositor_paced_window_move(
             self.compositor_paced_window_move,
         );
+        if jump_list_changed {
+            crate::platform::windows::sync_windows_jump_list_with_options(
+                &self.recent_media,
+                self.windows_jump_list_quick_actions,
+            );
+        }
         if let Some(layout_json) = config.workspace_dock_layout.as_deref()
             && let Ok(mut dock_state) = serde_json::from_str::<
                 egui_dock::DockState<crate::ui::layout::PealayerTab>,
@@ -5140,7 +5185,10 @@ impl PealayerApp {
             self.open_url_use_proxy,
             &self.open_url_proxy_url,
         )?;
-        crate::platform::windows::sync_windows_jump_list(&self.recent_media);
+        crate::platform::windows::sync_windows_jump_list_with_options(
+            &self.recent_media,
+            self.windows_jump_list_quick_actions,
+        );
         self.prune_recent_remote_thumbnail_cache();
         crate::ui::i18n::configure_ui_fonts(
             ctx,
@@ -5336,14 +5384,20 @@ impl PealayerApp {
         if self.recent_media.len() > 10 {
             self.recent_media.truncate(10);
         }
-        crate::platform::windows::sync_windows_jump_list(&self.recent_media);
+        crate::platform::windows::sync_windows_jump_list_with_options(
+            &self.recent_media,
+            self.windows_jump_list_quick_actions,
+        );
         self.prune_recent_remote_thumbnail_cache();
         self.save_config();
     }
 
     pub fn clear_recent_media(&mut self) {
         self.recent_media.clear();
-        crate::platform::windows::sync_windows_jump_list(&[]);
+        crate::platform::windows::sync_windows_jump_list_with_options(
+            &[],
+            self.windows_jump_list_quick_actions,
+        );
         self.prune_recent_remote_thumbnail_cache();
         self.save_config();
     }
@@ -5351,7 +5405,10 @@ impl PealayerApp {
     pub fn remove_recent_media(&mut self, target: &str) {
         self.recent_media
             .retain(|path| path.to_string_lossy() != target);
-        crate::platform::windows::sync_windows_jump_list(&self.recent_media);
+        crate::platform::windows::sync_windows_jump_list_with_options(
+            &self.recent_media,
+            self.windows_jump_list_quick_actions,
+        );
         self.prune_recent_remote_thumbnail_cache();
         self.save_config();
     }
@@ -5359,7 +5416,10 @@ impl PealayerApp {
     pub fn clear_recent_remote_media(&mut self) {
         self.recent_media
             .retain(|path| !crate::media::is_remote_media_target(&path.to_string_lossy()));
-        crate::platform::windows::sync_windows_jump_list(&self.recent_media);
+        crate::platform::windows::sync_windows_jump_list_with_options(
+            &self.recent_media,
+            self.windows_jump_list_quick_actions,
+        );
         self.prune_recent_remote_thumbnail_cache();
         self.save_config();
     }
@@ -6355,6 +6415,9 @@ impl Default for PealayerApp {
             window_magnetic_snap_distance: 16,
             windows_mica_backdrop: false,
             windows_dwm_theming: true,
+            windows_video_taskbar_thumbnail: true,
+            windows_thumbnail_toolbar: true,
+            windows_jump_list_quick_actions: true,
             opengl_vsync: false,
             live_video_during_window_move: true,
             compositor_paced_window_move: true,

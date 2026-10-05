@@ -478,6 +478,14 @@ pub struct AppConfig {
     pub window_magnetic_snap_distance: u32,
     pub windows_mica_backdrop: bool,
     pub windows_dwm_theming: bool,
+    /// Crop the Windows taskbar preview to the live video surface instead of
+    /// showing the complete application chrome.
+    pub windows_video_taskbar_thumbnail: bool,
+    /// Show native playback actions below the Windows taskbar preview.
+    pub windows_thumbnail_toolbar: bool,
+    /// Publish persistent Windows Jump List tasks for the taskbar and Start
+    /// menu.
+    pub windows_jump_list_quick_actions: bool,
     pub opengl_vsync: bool,
     /// Keep libmpv frames repainting while Windows runs its modal title-bar
     /// move/resize loop. Disable this only as a compatibility fallback for a
@@ -614,6 +622,9 @@ impl Default for AppConfig {
             window_magnetic_snap_distance: 16,
             windows_mica_backdrop: false,
             windows_dwm_theming: true,
+            windows_video_taskbar_thumbnail: true,
+            windows_thumbnail_toolbar: true,
+            windows_jump_list_quick_actions: true,
             // Reactive egui rendering does not require a continuously synced
             // swap loop. Some Windows OpenGL drivers flicker with V-Sync, so
             // keep it opt-in while retaining the persisted preference.

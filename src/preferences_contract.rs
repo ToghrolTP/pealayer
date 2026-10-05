@@ -841,6 +841,24 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Use Mica backdrop",
         ),
         PreferenceControl::boolean(
+            "windows_video_taskbar_thumbnail",
+            "advanced",
+            "Windows shell",
+            "Show the video in the taskbar thumbnail",
+        ),
+        PreferenceControl::boolean(
+            "windows_thumbnail_toolbar",
+            "advanced",
+            "Windows shell",
+            "Show playback actions below the taskbar thumbnail",
+        ),
+        PreferenceControl::boolean(
+            "windows_jump_list_quick_actions",
+            "advanced",
+            "Windows shell",
+            "Show quick actions in the taskbar and Start menu",
+        ),
+        PreferenceControl::boolean(
             "opengl_vsync",
             "advanced",
             "Windows graphics and composition",
@@ -1216,6 +1234,28 @@ mod tests {
             .expect("compositor-paced movement preference");
         assert!(matches!(pacing.kind, PreferenceControlKind::Boolean));
         assert_eq!(pacing.group, "Windows graphics and composition");
+    }
+
+    #[test]
+    fn windows_taskbar_media_surfaces_are_enabled_and_configurable() {
+        let config = crate::config::AppConfig::default();
+        assert!(config.windows_video_taskbar_thumbnail);
+        assert!(config.windows_thumbnail_toolbar);
+        assert!(config.windows_jump_list_quick_actions);
+        let controls = preference_controls(&config);
+        for key in [
+            "windows_video_taskbar_thumbnail",
+            "windows_thumbnail_toolbar",
+            "windows_jump_list_quick_actions",
+        ] {
+            let control = controls
+                .iter()
+                .find(|control| control.key == key)
+                .unwrap_or_else(|| panic!("missing {key} preference"));
+            assert!(matches!(control.kind, PreferenceControlKind::Boolean));
+            assert_eq!(control.section, "advanced");
+            assert_eq!(control.group, "Windows shell");
+        }
     }
 
     #[test]

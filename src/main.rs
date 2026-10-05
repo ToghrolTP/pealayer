@@ -530,7 +530,10 @@ fn main() -> eframe::Result {
             let _ = mpv_static.set_property("sub-delay", loaded_config.subtitle_delay_seconds);
             let _ = mpv_static.set_property("sub-pos", loaded_config.subtitle_position_percent);
             let _ = mpv_static.set_property("audio-delay", loaded_config.audio_delay_seconds);
-            crate::platform::windows::sync_windows_jump_list(&loaded_config.recent_media);
+            crate::platform::windows::sync_windows_jump_list_with_options(
+                &loaded_config.recent_media,
+                loaded_config.windows_jump_list_quick_actions,
+            );
 
             let (interop_tx, interop_rx) = std::sync::mpsc::channel();
             crate::platform::interop::spawn_interop_listener(
@@ -839,6 +842,9 @@ fn main() -> eframe::Result {
                 window_magnetic_snap_distance: loaded_config.window_magnetic_snap_distance,
                 windows_mica_backdrop: loaded_config.windows_mica_backdrop,
                 windows_dwm_theming: loaded_config.windows_dwm_theming,
+                windows_video_taskbar_thumbnail: loaded_config.windows_video_taskbar_thumbnail,
+                windows_thumbnail_toolbar: loaded_config.windows_thumbnail_toolbar,
+                windows_jump_list_quick_actions: loaded_config.windows_jump_list_quick_actions,
                 opengl_vsync: loaded_config.opengl_vsync,
                 live_video_during_window_move: loaded_config.live_video_during_window_move,
                 compositor_paced_window_move: loaded_config.compositor_paced_window_move,

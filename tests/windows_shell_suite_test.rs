@@ -1,6 +1,6 @@
 use pealayer::app::PealayerApp;
 use pealayer::platform::windows::{
-    THUMB_BUTTON_PLAYPAUSE, TRAY_CMD_PLAYPAUSE, TaskbarProgressFlag,
+    THUMB_BUTTON_PLAYPAUSE, TRAY_CMD_PLAYPAUSE, TaskbarProgressFlag, WINDOWS_QUICK_ACTIONS,
     compute_taskbar_state_with_error, thumbnail_button_tooltip, tray_menu_label,
 };
 
@@ -12,17 +12,22 @@ fn test_windows_shell_suite_end_to_end_states() {
 
     // 2. Toolbar tooltips
     assert_eq!(
-        thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, true),
+        thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, true, false, false),
         "Play"
     );
     assert_eq!(
-        thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, false),
+        thumbnail_button_tooltip(THUMB_BUTTON_PLAYPAUSE, false, false, false),
         "Pause"
     );
 
     // 3. Tray menu labels
     assert_eq!(tray_menu_label(TRAY_CMD_PLAYPAUSE, true), "Play");
     assert_eq!(tray_menu_label(TRAY_CMD_PLAYPAUSE, false), "Pause");
+    assert!(
+        WINDOWS_QUICK_ACTIONS
+            .iter()
+            .any(|action| action.title == "Preferences")
+    );
 }
 
 #[test]
