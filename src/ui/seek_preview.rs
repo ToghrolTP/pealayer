@@ -6,7 +6,20 @@ use eframe::egui;
 const PREVIEW_DEBOUNCE: Duration = Duration::from_millis(120);
 const PREVIEW_SIZE: egui::Vec2 = egui::vec2(160.0, 90.0);
 const PREVIEW_GAP: f32 = 8.0;
+const PREVIEW_CAPTION_GAP: f32 = 3.0;
 const TIMECODE_ROW_HEIGHT: f32 = 18.0;
+const PREVIEW_FRAME_MARGIN: f32 = 6.0;
+
+fn preview_content_size() -> egui::Vec2 {
+    egui::vec2(
+        PREVIEW_SIZE.x,
+        PREVIEW_SIZE.y + PREVIEW_CAPTION_GAP + TIMECODE_ROW_HEIGHT,
+    )
+}
+
+fn preview_popup_size() -> egui::Vec2 {
+    preview_content_size() + egui::Vec2::splat(PREVIEW_FRAME_MARGIN * 2.0)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PreviewKey {
@@ -196,9 +209,9 @@ pub fn draw(
     app.seekbar_thumbnail_preview.request(key.clone(), ui.ctx());
 
     let frame = egui::Frame::popup(ui.style())
-        .inner_margin(egui::Margin::same(6))
+        .inner_margin(egui::Margin::same(PREVIEW_FRAME_MARGIN as i8))
         .corner_radius(7.0);
-    let popup_size = PREVIEW_SIZE + egui::vec2(12.0, TIMECODE_ROW_HEIGHT + 15.0);
+    let popup_size = preview_popup_size();
     let bounds = ui.ctx().content_rect();
     let x = (pointer.x - popup_size.x / 2.0).clamp(
         bounds.left() + 8.0,
@@ -213,8 +226,23 @@ pub fn draw(
         .interactable(false)
         .show(ui.ctx(), |ui| {
             frame.show(ui, |ui| {
-                ui.set_min_width(PREVIEW_SIZE.x);
-                ui.set_max_width(PREVIEW_SIZE.x);
+                // Reserve the complete image + caption geometry before
+                // painting either state. Image widgets, spinners, errors, and
+                // decoded textures are all placed into these same rectangles,
+                // so an image becoming ready cannot reflow the card or move
+                // the timecode from inside the viewport to beneath it.
+                let (content_rect, _) =
+                    ui.allocate_exact_size(preview_content_size(), egui::Sense::hover());
+                let image_rect = egui::Rect::from_min_size(content_rect.min, PREVIEW_SIZE);
+                let caption_rect = egui::Rect::from_min_size(
+                    egui::pos2(
+                        content_rect.left(),
+                        image_rect.bottom() + PREVIEW_CAPTION_GAP,
+                    ),
+                    egui::vec2(PREVIEW_SIZE.x, TIMECODE_ROW_HEIGHT),
+                );
+                ui.painter()
+                    .rect_filled(image_rect, 4.0, ui.visuals().extreme_bg_color);
                 if let Some((loaded, texture)) = app
                     .seekbar_thumbnail_preview
                     .texture
@@ -222,14 +250,14 @@ pub fn draw(
                     .filter(|(loaded, _)| loaded == &key)
                 {
                     debug_assert_eq!(loaded.second, key.second);
-                    ui.add(egui::Image::new(texture).fit_to_exact_size(PREVIEW_SIZE));
+                    ui.put(
+                        image_rect,
+                        egui::Image::new(texture).fit_to_exact_size(PREVIEW_SIZE),
+                    );
                 } else {
-                    let (rect, _) = ui.allocate_exact_size(PREVIEW_SIZE, egui::Sense::hover());
-                    ui.painter()
-                        .rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
                     if app.seekbar_thumbnail_preview.failed.as_ref() == Some(&key) {
                         ui.painter().text(
-                            rect.center(),
+                            image_rect.center(),
                             egui::Align2::CENTER_CENTER,
                             app.tr("Preview unavailable"),
                             egui::FontId::proportional(12.0),
@@ -237,27 +265,20 @@ pub fn draw(
                         );
                     } else {
                         ui.put(
-                            egui::Rect::from_center_size(rect.center(), egui::vec2(20.0, 20.0)),
+                            egui::Rect::from_center_size(
+                                image_rect.center(),
+                                egui::vec2(20.0, 20.0),
+                            ),
                             egui::Spinner::new().size(18.0),
                         );
                     }
                 }
-                ui.add_space(3.0);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(PREVIEW_SIZE.x, TIMECODE_ROW_HEIGHT),
-                    egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                    |ui| {
-                        ui.label(
-                            crate::ui::controls::timecode_text(
-                                crate::ui::controls::format_player_time(
-                                    seconds,
-                                    app.duration >= 3600.0,
-                                    false,
-                                ),
-                            )
-                            .strong(),
-                        );
-                    },
+                ui.painter().text(
+                    caption_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    crate::ui::controls::format_player_time(seconds, app.duration >= 3600.0, false),
+                    egui::FontId::monospace(11.0),
+                    ui.visuals().strong_text_color(),
                 );
             });
         });
@@ -286,8 +307,22 @@ mod tests {
 
     #[test]
     fn preview_is_anchored_entirely_above_seekbar() {
-        let popup_height = PREVIEW_SIZE.y + TIMECODE_ROW_HEIGHT + 15.0;
+        let popup_height = preview_popup_size().y;
         let top = preview_top(220.0, popup_height);
         assert_eq!(top + popup_height + PREVIEW_GAP, 220.0);
+    }
+
+    #[test]
+    fn preview_geometry_reserves_image_and_caption_before_loading() {
+        let content = preview_content_size();
+        assert_eq!(content.x, PREVIEW_SIZE.x);
+        assert_eq!(
+            content.y,
+            PREVIEW_SIZE.y + PREVIEW_CAPTION_GAP + TIMECODE_ROW_HEIGHT
+        );
+        assert_eq!(
+            preview_popup_size(),
+            content + egui::Vec2::splat(PREVIEW_FRAME_MARGIN * 2.0)
+        );
     }
 }

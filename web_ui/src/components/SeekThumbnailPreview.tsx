@@ -17,7 +17,7 @@ interface HoverPosition {
   second: number;
 }
 
-const PREVIEW_WIDTH = 172;
+const PREVIEW_WIDTH = 174;
 const PREVIEW_EDGE_GAP = 8;
 
 const formatPreviewTime = (seconds: number) => {
@@ -94,7 +94,7 @@ export const SeekThumbnailPreview: React.FC<SeekThumbnailPreviewProps> = ({
         {!previewReady && !previewFailed && <span className="seek-thumbnail-popover__loading" />}
         {previewFailed && <span className="seek-thumbnail-popover__unavailable">{unavailableLabel}</span>}
       </div>
-      <strong>{formatPreviewTime(hover.second)}</strong>
+      <strong className="seek-thumbnail-popover__caption">{formatPreviewTime(hover.second)}</strong>
     </div>,
     document.body,
   ) : null;

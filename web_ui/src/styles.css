@@ -352,8 +352,12 @@ body {
 .seek-thumbnail-popover {
   position: fixed;
   z-index: 1000;
-  width: 172px;
+  width: 174px;
+  height: 125px;
   overflow: hidden;
+  display: grid;
+  grid-template-rows: 90px 18px;
+  row-gap: 3px;
   padding: 6px;
   border: 1px solid var(--line-strong);
   border-radius: 9px;
@@ -367,7 +371,7 @@ body {
 .seek-thumbnail-popover__image {
   position: relative;
   width: 160px;
-  aspect-ratio: 16 / 9;
+  height: 90px;
   overflow: hidden;
   display: grid;
   place-items: center;
@@ -386,7 +390,19 @@ body {
   animation: seek-thumbnail-spin .7s linear infinite;
 }
 .seek-thumbnail-popover__unavailable { position: absolute; color: var(--muted); font: 600 11px var(--font-sans); }
-.seek-thumbnail-popover > strong { display: block; padding: 5px 2px 0; text-align: center; font: 650 11px var(--font-mono); }
+.seek-thumbnail-popover__caption {
+  width: 160px;
+  height: 18px;
+  min-height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0 2px;
+  text-align: center;
+  font: 650 11px var(--font-mono);
+  line-height: 18px;
+}
 @keyframes seek-thumbnail-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
   .seek-thumbnail-popover__image img { transition: none; }
