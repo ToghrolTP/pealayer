@@ -722,7 +722,7 @@ fn effect_group_action_header(
                     )
                     .size()
                     .x
-            }) + 14.0;
+            }) + 16.0;
             let title_width = (ui.available_width() - 24.0 - count_width - spacing * 2.0).max(1.0);
             let title_response = ui
                 .allocate_ui_with_layout(
@@ -746,7 +746,8 @@ fn effect_group_action_header(
                 .add_sized([24.0, 24.0], egui::Button::new(crate::ui::icons::PLUS))
                 .on_hover_text(add_tooltip);
             egui::Frame::new()
-                .fill(ui.visuals().selection.bg_fill.gamma_multiply(0.22))
+                .fill(ui.visuals().widgets.inactive.weak_bg_fill)
+                .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
                 .corner_radius(9.0)
                 .inner_margin(egui::Margin::symmetric(7, 2))
                 .show(ui, |ui| {
@@ -755,6 +756,61 @@ fn effect_group_action_header(
             (title_response, add_response)
         })
         .inner
+    })
+    .inner
+}
+
+/// Neutral metadata never inherits the accent selection fill. Reserve the
+/// duration first so changing labels cannot move it away from the card's edge.
+fn effect_library_metadata(
+    ui: &mut egui::Ui,
+    kind: &str,
+    duration: &str,
+) -> (egui::Rect, egui::Rect) {
+    ui.horizontal(|ui| {
+        let duration_text = format!("{} {duration}", crate::ui::icons::CLOCK);
+        let duration_width = ui.fonts_mut(|fonts| {
+            fonts
+                .layout_no_wrap(
+                    duration_text.clone(),
+                    egui::TextStyle::Small.resolve(ui.style()),
+                    ui.visuals().weak_text_color(),
+                )
+                .size()
+                .x
+        });
+        let kind_width =
+            (ui.available_width() - duration_width - ui.spacing().item_spacing.x).max(1.0);
+        let kind_rect = ui
+            .allocate_ui_with_layout(
+                egui::vec2(kind_width, 22.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_min_width(kind_width);
+                    egui::Frame::new()
+                        .fill(ui.visuals().widgets.inactive.weak_bg_fill)
+                        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                        .corner_radius(11.0)
+                        .inner_margin(egui::Margin::symmetric(7, 2))
+                        .show(ui, |ui| {
+                            ui.set_max_width((kind_width - 16.0).max(1.0));
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(kind).small().weak())
+                                    .truncate(),
+                            );
+                        })
+                        .response
+                        .rect
+                },
+            )
+            .inner;
+        let duration_rect = ui
+            .add_sized(
+                [duration_width, 22.0],
+                egui::Label::new(egui::RichText::new(duration_text).small().weak()),
+            )
+            .rect;
+        (kind_rect, duration_rect)
     })
     .inner
 }
@@ -6348,6 +6404,72 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn effect_library_metadata_is_neutral_right_aligned_and_stable() {
+        for dark in [false, true] {
+            for width in [220.0, 340.0] {
+                let context = egui::Context::default();
+                context.set_visuals(if dark {
+                    egui::Visuals::dark()
+                } else {
+                    egui::Visuals::light()
+                });
+                let mut previous_sizes = None;
+                for _ in 0..3 {
+                    let mut sizes = Vec::new();
+                    let mut badge_fill = egui::Color32::TRANSPARENT;
+                    let output = context.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(500.0, 260.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            badge_fill = ui.visuals().widgets.inactive.weak_bg_fill;
+                            ui.set_width(width);
+                            for kind in
+                                ["Timed sequence", "A long user-facing effect classification"]
+                            {
+                                let card = effect_card(ui, width, |ui| {
+                                    let right = ui.max_rect().right();
+                                    let (badge, duration) =
+                                        effect_library_metadata(ui, kind, "1 min 5 sec");
+                                    assert!(
+                                        (duration.right() - right).abs() < 0.1,
+                                        "duration={duration:?}, right={right}, badge={badge:?}"
+                                    );
+                                    assert!(badge.right() < duration.left());
+                                });
+                                assert!((card.response.rect.width() - width).abs() < 0.1);
+                                sizes.push(card.response.rect.size());
+                            }
+                        },
+                    );
+                    assert_eq!(sizes[0], sizes[1]);
+                    if let Some(previous) = previous_sizes.as_ref() {
+                        assert_eq!(&sizes, previous);
+                    }
+                    previous_sizes = Some(sizes);
+                    let mut rects = Vec::new();
+                    for shape in &output.shapes {
+                        if let egui::Shape::Rect(rect) = &shape.shape {
+                            rects.push(rect);
+                        }
+                    }
+                    let badges: Vec<_> = rects
+                        .iter()
+                        .filter(|rect| rect.corner_radius.nw == 11)
+                        .collect();
+                    assert_eq!(badges.len(), 2);
+                    assert!(badges.iter().all(|rect| rect.fill == badge_fill));
+                    discard_ui_output(output);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn effect_cards_keep_identical_geometry_across_rows_and_frames() {
         let context = egui::Context::default();
         let payload = EffectDragPayload {
@@ -8938,33 +9060,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 });
                                                             }
                                                                 ui.add_space(5.0);
-                                                                ui.horizontal_wrapped(|ui| {
-                                                                    for text in [
-                                                                        target_label.clone(),
-                                                                        crate::duration::format_effect_duration_for_language(
-                                                                            display_language,
-                                                                            preset.effect.duration_ms,
-                                                                        ),
-                                                                    ] {
-                                                                        egui::Frame::new()
-                                                                            .fill(
-                                                                                ui.visuals()
-                                                                                    .selection
-                                                                                    .bg_fill
-                                                                                    .gamma_multiply(0.18),
-                                                                            )
-                                                                            .corner_radius(8.0)
-                                                                            .inner_margin(
-                                                                                egui::Margin::symmetric(7, 2),
-                                                                            )
-                                                                            .show(ui, |ui| {
-                                                                                ui.label(
-                                                                                    egui::RichText::new(text)
-                                                                                        .small(),
-                                                                                );
-                                                                            });
-                                                                    }
-                                                                });
+                                                                effect_library_metadata(
+                                                                    ui,
+                                                                    &target_label,
+                                                                    &crate::duration::format_effect_duration_for_language(
+                                                                        display_language,
+                                                                        preset.effect.duration_ms,
+                                                                    ),
+                                                                );
                                                             })
                                                     },
                                                 );

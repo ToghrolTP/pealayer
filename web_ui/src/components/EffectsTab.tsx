@@ -21,6 +21,7 @@ import {
   ArrowDownOutlined,
   ArrowUpOutlined,
   CheckOutlined,
+  ClockCircleOutlined,
   DeleteOutlined,
   EditOutlined,
   FolderAddOutlined,
@@ -29,6 +30,7 @@ import {
   PlusOutlined,
   SaveOutlined,
   StopOutlined,
+  UnorderedListOutlined,
 } from '@ant-design/icons';
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
@@ -226,7 +228,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
     {effects.length === 0 ? <Card className="surface-card"><Empty description={tr(locale, 'No effects')}><Space wrap><Button type="primary" icon={<PlusOutlined />} onClick={() => openEditor()}>{tr(locale, 'Create effect')}</Button><Button icon={<FolderAddOutlined />} onClick={() => setNewGroupName('')}>{tr(locale, 'New group')}</Button></Space></Empty></Card> :
       <Collapse className="effect-groups" defaultActiveKey={grouped.map(([group]) => group)} items={grouped.map(([group, items]) => ({
         key: group,
-        label: <span className="effect-group-title"><strong>{group}</strong><Tag>{items.length}</Tag></span>,
+        label: <span className="effect-group-title"><strong>{group}</strong><span className="effect-group-count">{items.length}</span></span>,
         extra: <Tooltip title={tr(locale, 'New effect in this group')}><Button type="text" size="small" icon={<PlusOutlined />} aria-label={tr(locale, 'New effect in this group')} onClick={(event) => { event.stopPropagation(); openEditor(undefined, group); }} /></Tooltip>,
         children: <div className="effect-card-grid">{items.map((effect) => {
           const actions = [
@@ -282,13 +284,19 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
               </Tooltip>
               <button type="button" className="effect-card__caption" onClick={(event) => { event.stopPropagation(); beginInlineEdit(); }}>
                 <strong>{effect.name}</strong>
-                <span>{effect.lane} · {effect.action_count} {tr(locale, 'actions')} · {effect.duration_display}</span>
               </button>
               <Tooltip title={tr(locale, 'Play effect')}><Button type="text" icon={<PlayCircleOutlined />} onClick={(event) => { event.stopPropagation(); run('play'); }} /></Tooltip>
               <Dropdown menu={{ items: actions, onClick: ({ key }) => run(key) }} trigger={['click']}>
                 <Button type="text" icon={<MoreOutlined />} onClick={(event) => event.stopPropagation()} aria-label={tr(locale, 'Actions')} />
               </Dropdown>
             </>}
+            <div className="effect-card__metadata">
+              <div className="effect-card__badges">
+                {effect.lane && <span className="effect-card__badge effect-card__kind" title={effect.lane}>{effect.lane}</span>}
+                <span className="effect-card__badge" title={tr(locale, 'Actions')}><UnorderedListOutlined /><span>{effect.action_count} {tr(locale, effect.action_count === 1 ? 'action' : 'actions')}</span></span>
+              </div>
+              <span className="effect-card__duration" title={tr(locale, 'Total duration')}><ClockCircleOutlined /><span>{effect.duration_display}</span></span>
+            </div>
           </article>;
         })}</div>,
       }))} />}

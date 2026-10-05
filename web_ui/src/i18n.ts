@@ -5,6 +5,8 @@ const fa: Record<string, string> = {
   'Timeline': 'خط زمانی',
   'Effects Library': 'کتابخانهٔ افکت‌ها',
   'New group': 'گروه جدید',
+  'action': 'عملیات',
+  'Total duration': 'مدت کل',
   'Color palette': 'پالت رنگ',
   'Neutral': 'خنثی',
   'Expand navigation': 'باز کردن ناوبری',
