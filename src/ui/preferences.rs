@@ -1550,6 +1550,7 @@ fn group_icon(group: &str) -> &'static str {
         "Open Location / URL" => crate::ui::icons::LINK_SIMPLE,
         "Connection" => crate::ui::icons::PLUG,
         "Motion controls" => crate::ui::icons::SEAT,
+        "Keyboard shortcuts" => crate::ui::icons::KEYBOARD,
         "Video surface" => crate::ui::icons::SELECTION_ALL,
         "Status bar" => crate::ui::icons::GAUGE,
         "Windows graphics and composition" | "Dialog windows" => crate::ui::icons::APP_WINDOW,
@@ -1562,7 +1563,7 @@ fn section_heading(section: &str) -> &'static str {
         "appearance" => "Appearance and language",
         "playback" => "Playback behavior",
         "hardware" => "PCController and hardware",
-        "input" => "Mouse and gesture bindings",
+        "input" => "Keyboard, mouse, and gesture bindings",
         _ => "Configuration",
     }
 }

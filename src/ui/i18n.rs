@@ -487,6 +487,14 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
             "در حالت تغییر وضعیت، جهت تا انتخاب فرمان بعدی فعال می‌ماند. در حالت نگه‌داشتن، با رهاکردن دکمه فرمان توقف فرستاده می‌شود."
         }
         "Video surface" => "سطح ویدئو",
+        "Keyboard shortcuts" => "میان‌برهای صفحه‌کلید",
+        "Enable in-app keyboard shortcuts and hardware bindings" => {
+            "فعال‌سازی میان‌برها و کلیدهای سخت‌افزاری داخل برنامه"
+        }
+        "Allow hardware hotkeys while Pealayer is in the background" => {
+            "فعال‌سازی کلیدهای سراسری سخت‌افزار هنگامی که پی‌لیر در پس‌زمینه است"
+        }
+        "Keyboard, mouse, and gesture bindings" => "کلیدها، ماوس و حرکت‌های ورودی",
         "Left-button hold / drag while paused" => "نگه‌داشتن یا کشیدن دکمهٔ چپ هنگام مکث",
         "Left-button hold / drag while playing" => "نگه‌داشتن یا کشیدن دکمهٔ چپ هنگام پخش",
         "Middle-button click" => "کلیک دکمهٔ میانی",

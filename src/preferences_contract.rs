@@ -509,6 +509,18 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             2_000.0,
             10.0,
         ),
+        PreferenceControl::boolean(
+            "keyboard_shortcuts_enabled",
+            "input",
+            "Keyboard shortcuts",
+            "Enable in-app keyboard shortcuts and hardware bindings",
+        ),
+        PreferenceControl::boolean(
+            "global_hardware_hotkeys_enabled",
+            "input",
+            "Keyboard shortcuts",
+            "Allow hardware hotkeys while Pealayer is in the background",
+        ),
         PreferenceControl::select(
             "non_user_control_visibility",
             "hardware",
@@ -927,6 +939,27 @@ mod tests {
         assert_eq!(transition.minimum, Some(50.0));
         assert_eq!(transition.maximum, Some(2_000.0));
         assert_eq!(transition.step, Some(10.0));
+    }
+
+    #[test]
+    fn keyboard_and_global_hotkey_policies_are_shared_preferences() {
+        let config = crate::config::AppConfig::default();
+        assert!(config.keyboard_shortcuts_enabled);
+        assert!(config.global_hardware_hotkeys_enabled);
+
+        let controls = preference_controls(&config);
+        for key in [
+            "keyboard_shortcuts_enabled",
+            "global_hardware_hotkeys_enabled",
+        ] {
+            let control = controls
+                .iter()
+                .find(|control| control.key == key)
+                .unwrap_or_else(|| panic!("missing {key} preference"));
+            assert!(matches!(control.kind, PreferenceControlKind::Boolean));
+            assert_eq!(control.section, "input");
+            assert_eq!(control.group, "Keyboard shortcuts");
+        }
     }
 
     #[test]

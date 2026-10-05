@@ -412,6 +412,8 @@ pub struct PealayerApp {
     pub(crate) hardware_control_up_color_draft: String,
     pub(crate) hardware_control_down_color_draft: String,
     pub(crate) hardware_control_pwm_percent: f64,
+    pub(crate) keyboard_shortcuts_enabled: bool,
+    pub(crate) global_hardware_hotkeys_enabled: bool,
     pub(crate) hardware_key_bindings: Vec<crate::config::HardwareKeyBinding>,
     pub(crate) hardware_binding_dialog_channel: Option<String>,
     pub(crate) hardware_binding_draft: Option<crate::config::HardwareKeyBinding>,
@@ -1202,8 +1204,9 @@ impl eframe::App for PealayerApp {
         // Handle Keyboard Shortcuts
         let timeline_keyboard_active =
             ctx.memory(|memory| memory.has_focus(crate::ui::layout::timeline_keyboard_focus_id()));
-        let transport_shortcuts_enabled =
-            !ctx.egui_wants_keyboard_input() && !timeline_keyboard_active;
+        let transport_shortcuts_enabled = self.keyboard_shortcuts_enabled
+            && !ctx.egui_wants_keyboard_input()
+            && !timeline_keyboard_active;
         self.process_hardware_key_bindings(
             &ctx,
             transport_shortcuts_enabled && self.hardware_binding_dialog_channel.is_none(),
@@ -1266,7 +1269,10 @@ impl eframe::App for PealayerApp {
         let mut timeline_dirty = false;
 
         for (index, key) in MACRO_KEYS.into_iter().enumerate() {
-            if ctx.input(|i| i.key_pressed(key)) && !self.recording_keys.contains_key(&key) {
+            if transport_shortcuts_enabled
+                && ctx.input(|i| i.key_pressed(key))
+                && !self.recording_keys.contains_key(&key)
+            {
                 let Some(relay) = shortcut_relays.get(index) else {
                     continue;
                 };
@@ -1837,8 +1843,13 @@ impl PealayerApp {
     }
 
     fn process_hardware_key_bindings(&mut self, ctx: &egui::Context, allow_local: bool) {
-        self.hardware_hotkey_runtime
-            .sync(&self.hardware_key_bindings);
+        let global_bindings =
+            if self.keyboard_shortcuts_enabled && self.global_hardware_hotkeys_enabled {
+                self.hardware_key_bindings.as_slice()
+            } else {
+                &[]
+            };
+        self.hardware_hotkey_runtime.sync(global_bindings);
         let global_events = self.hardware_hotkey_runtime.drain_events();
         for event in global_events {
             // Recording a new chord must never trigger another binding, but a
@@ -1847,6 +1858,10 @@ impl PealayerApp {
             if !event.pressed || !self.hardware_binding_capturing {
                 self.dispatch_hardware_binding(&event.binding_id, event.pressed);
             }
+        }
+
+        if !self.keyboard_shortcuts_enabled {
+            return;
         }
 
         let events = ctx.input(|input| input.events.clone());
@@ -4809,6 +4824,8 @@ impl PealayerApp {
         cfg.prefix_relay_identifiers = self.prefix_relay_identifiers;
         cfg.live_pwm_updates = self.live_pwm_updates;
         cfg.hardware_actions_on_press = self.hardware_actions_on_press;
+        cfg.keyboard_shortcuts_enabled = self.keyboard_shortcuts_enabled;
+        cfg.global_hardware_hotkeys_enabled = self.global_hardware_hotkeys_enabled;
         cfg.hardware_key_bindings = self.hardware_key_bindings.clone();
         cfg.show_estop_control = self.show_estop_control;
         cfg.confirm_estop_release = self.confirm_estop_release;
@@ -4985,12 +5002,17 @@ impl PealayerApp {
         self.prefix_relay_identifiers = config.prefix_relay_identifiers;
         self.live_pwm_updates = config.live_pwm_updates;
         self.hardware_actions_on_press = config.hardware_actions_on_press;
-        if self.hardware_key_bindings != config.hardware_key_bindings {
+        if self.hardware_key_bindings != config.hardware_key_bindings
+            || self.keyboard_shortcuts_enabled != config.keyboard_shortcuts_enabled
+            || self.global_hardware_hotkeys_enabled != config.global_hardware_hotkeys_enabled
+        {
             // A file-watcher/API update may unregister or alter a held global
             // shortcut. Release against the old contract before replacing it.
             self.release_active_hardware_bindings();
-            self.hardware_key_bindings = config.hardware_key_bindings.clone();
         }
+        self.keyboard_shortcuts_enabled = config.keyboard_shortcuts_enabled;
+        self.global_hardware_hotkeys_enabled = config.global_hardware_hotkeys_enabled;
+        self.hardware_key_bindings = config.hardware_key_bindings.clone();
         self.show_estop_control = config.show_estop_control;
         self.confirm_estop_release = config.confirm_estop_release;
         self.single_instance = config.single_instance;
@@ -6185,6 +6207,8 @@ impl Default for PealayerApp {
             hardware_control_up_color_draft: String::new(),
             hardware_control_down_color_draft: String::new(),
             hardware_control_pwm_percent: 0.0,
+            keyboard_shortcuts_enabled: true,
+            global_hardware_hotkeys_enabled: true,
             hardware_key_bindings: Vec::new(),
             hardware_binding_dialog_channel: None,
             hardware_binding_draft: None,

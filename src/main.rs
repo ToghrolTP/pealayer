@@ -747,6 +747,8 @@ fn main() -> eframe::Result {
                 hardware_control_up_color_draft: String::new(),
                 hardware_control_down_color_draft: String::new(),
                 hardware_control_pwm_percent: 0.0,
+                keyboard_shortcuts_enabled: loaded_config.keyboard_shortcuts_enabled,
+                global_hardware_hotkeys_enabled: loaded_config.global_hardware_hotkeys_enabled,
                 hardware_key_bindings: loaded_config.hardware_key_bindings.clone(),
                 hardware_binding_dialog_channel: None,
                 hardware_binding_draft: None,

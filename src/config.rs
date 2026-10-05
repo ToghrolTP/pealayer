@@ -442,6 +442,12 @@ pub struct AppConfig {
     pub prefix_relay_identifiers: bool,
     pub live_pwm_updates: bool,
     pub hardware_actions_on_press: bool,
+    /// Master policy for built-in transport shortcuts and local hardware
+    /// bindings while the Pealayer window has keyboard focus.
+    pub keyboard_shortcuts_enabled: bool,
+    /// Allows bindings explicitly marked global to be registered with the OS
+    /// and invoked while another application has focus.
+    pub global_hardware_hotkeys_enabled: bool,
     pub hardware_key_bindings: Vec<HardwareKeyBinding>,
     pub show_estop_control: bool,
     pub confirm_estop_release: bool,
@@ -552,6 +558,8 @@ impl Default for AppConfig {
             prefix_relay_identifiers: true,
             live_pwm_updates: true,
             hardware_actions_on_press: true,
+            keyboard_shortcuts_enabled: true,
+            global_hardware_hotkeys_enabled: true,
             hardware_key_bindings: Vec::new(),
             show_estop_control: true,
             confirm_estop_release: true,
