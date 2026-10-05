@@ -792,18 +792,15 @@ fn draw_contract_section(
     let mut clear_remote_history = false;
     let mut clear_playback_positions = false;
     let groups = unique_preference_groups(&controls, section.id);
-    let section_controls = controls
-        .iter()
-        .filter(|control| control.section == section.id)
-        .collect::<Vec<_>>();
-    let label_width = preference_label_column_width(ui, &section_controls, tr);
     for group in groups {
+        let group_controls = controls
+            .iter()
+            .filter(|control| control.section == section.id && control.group == group)
+            .collect::<Vec<_>>();
+        let label_width = preference_label_column_width(ui, &group_controls, tr);
         preference_section(ui, group_icon(group), &tr(group), |ui| {
             ui.spacing_mut().item_spacing.y = PREFERENCE_ROW_GAP;
-            for control in controls
-                .iter()
-                .filter(|control| control.section == section.id && control.group == group)
-            {
+            for control in group_controls {
                 changed |=
                     render_contract_control(ui, control, &mut values, tr, label_width, rtl_ui);
             }
@@ -1444,6 +1441,7 @@ fn preference_row<R>(
                     egui::vec2(label_width, PREFERENCE_ROW_HEIGHT),
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
+                        ui.set_width(label_width);
                         ui.add_space(6.0);
                         ui.label(
                             egui::RichText::new(icon)
@@ -1514,12 +1512,18 @@ fn preference_multiline_row<R>(
             ui.allocate_ui_with_layout(
                 egui::vec2(label_width, body_height),
                 egui::Layout::top_down(egui::Align::Min),
-                |ui| draw_label(ui),
+                |ui| {
+                    ui.set_width(label_width);
+                    draw_label(ui);
+                },
             );
             ui.allocate_ui_with_layout(
                 egui::vec2(control_width, body_height),
                 egui::Layout::top_down(egui::Align::Min),
-                body,
+                |ui| {
+                    ui.set_width(control_width);
+                    body(ui)
+                },
             )
             .inner
         },
@@ -1573,7 +1577,7 @@ fn preference_label_column_width(
     });
     // Left inset + icon + icon/text gap. The value is content-derived, not a
     // clipping width, so localized captions stay readable and all controls in
-    // the active section still begin on the same vertical guide.
+    // the active preference card still begin on the same vertical guide.
     (text_width + 34.0).max(128.0)
 }
 
