@@ -784,15 +784,7 @@ fn draw_contract_section(
     let mut changed = false;
     let mut clear_remote_history = false;
     let mut clear_playback_positions = false;
-    let mut groups = Vec::new();
-    for control in controls
-        .iter()
-        .filter(|control| control.section == section.id)
-    {
-        if groups.last().copied() != Some(control.group) {
-            groups.push(control.group);
-        }
-    }
+    let groups = unique_preference_groups(&controls, section.id);
     let section_controls = controls
         .iter()
         .filter(|control| control.section == section.id)
@@ -877,6 +869,16 @@ fn draw_contract_section(
         draw_advanced_actions(draft, ui, tr);
     }
     changed
+}
+
+fn unique_preference_groups(controls: &[PreferenceControl], section: &str) -> Vec<&'static str> {
+    let mut groups = Vec::new();
+    for control in controls.iter().filter(|control| control.section == section) {
+        if !groups.contains(&control.group) {
+            groups.push(control.group);
+        }
+    }
+    groups
 }
 
 fn render_contract_control(
@@ -1623,6 +1625,49 @@ mod tests {
     fn preference_captions_expand_for_content_and_stack_before_clipping() {
         assert_eq!(inline_preference_label_width(700.0, 286.0), Some(286.0));
         assert_eq!(inline_preference_label_width(420.0, 286.0), None);
+    }
+
+    #[test]
+    fn non_contiguous_preference_groups_render_one_card_each() {
+        let controls = preference_controls(&AppConfig::default());
+        for section in preference_sections() {
+            let groups = unique_preference_groups(&controls, section.id);
+            let unique = groups
+                .iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>();
+            assert_eq!(
+                groups.len(),
+                unique.len(),
+                "duplicate card in {}",
+                section.id
+            );
+        }
+
+        let playback = unique_preference_groups(&controls, "playback");
+        assert_eq!(
+            playback
+                .iter()
+                .filter(|group| **group == "Subtitles")
+                .count(),
+            1
+        );
+        assert_eq!(
+            playback
+                .iter()
+                .filter(|group| **group == "Open Location / URL")
+                .count(),
+            1
+        );
+
+        let hardware = unique_preference_groups(&controls, "hardware");
+        assert_eq!(
+            hardware
+                .iter()
+                .filter(|group| **group == "Motion controls")
+                .count(),
+            1
+        );
     }
 
     #[test]
