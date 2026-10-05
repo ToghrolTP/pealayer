@@ -106,7 +106,7 @@ impl HardwareTransport {
         &mut self,
     ) -> Result<Option<crate::four_d::controller::HardwareCapabilities>, String> {
         match self {
-            Self::Controller(client) => client.hardware_capabilities().map(Some),
+            Self::Controller(client) => client.isolated_hardware_capabilities().map(Some),
             Self::DirectSerial { .. } => Ok(None),
         }
     }
@@ -428,6 +428,17 @@ impl ControllerPushTarget {
         if matches!(method, "controller.state" | "controller.event")
             && params.get("kind").and_then(serde_json::Value::as_str) == Some("peripherals.changed")
         {
+            if let Some(refresh) = self.catalog_refresh_requested.upgrade() {
+                refresh.store(true, Ordering::Relaxed);
+                return true;
+            }
+        }
+        if matches!(method, "controller.state" | "controller.event")
+            && params.get("kind").and_then(serde_json::Value::as_str) == Some("macro.recording")
+        {
+            // The event is edge-triggered; the authoritative sequence preview
+            // lives in controller.snapshot. Coalesce bursts through the
+            // existing refresh flag instead of opening another transport.
             if let Some(refresh) = self.catalog_refresh_requested.upgrade() {
                 refresh.store(true, Ordering::Relaxed);
                 return true;
@@ -1092,7 +1103,6 @@ pub fn spawn_engine() -> EngineHandle {
                     .is_some_and(|transport| !transport.is_direct_serial())
             {
                 last_capability_refresh = std::time::Instant::now();
-                let mut refresh_failed = false;
                 if let Some(ref mut transport) = active_transport {
                     match transport.refresh_capabilities() {
                         Ok(capabilities) => {
@@ -1119,20 +1129,7 @@ pub fn spawn_engine() -> EngineHandle {
                                 *guard =
                                     Some(format!("refresh PCController capabilities: {error}"));
                             }
-                            engine_connected.store(false, Ordering::Relaxed);
-                            refresh_failed = true;
                         }
-                    }
-                }
-                if refresh_failed {
-                    // A timed-out request leaves a persistent JSON-RPC stream
-                    // ambiguous. Drop it immediately so the normal one-second
-                    // retry opens a clean transport instead of repeatedly
-                    // publishing a half-connected state.
-                    active_transport = None;
-                    connected = false;
-                    if let Ok(mut guard) = engine_transport_description.lock() {
-                        *guard = None;
                     }
                 }
             }
@@ -2052,6 +2049,22 @@ mod tests {
         assert!(target.apply_notification(
             "controller.state",
             &serde_json::json!({"kind": "peripherals.changed", "action": "refresh"}),
+        ));
+        assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn recording_event_requests_authoritative_live_preview_refresh() {
+        let handle = spawn_engine();
+        let target = handle.controller_push_target();
+        assert!(!handle.catalog_refresh_requested.load(Ordering::Relaxed));
+        assert!(target.apply_notification(
+            "controller.event",
+            &serde_json::json!({
+                "kind": "macro.recording",
+                "lifecycle": "captured",
+                "metadata": {"steps": "3"}
+            }),
         ));
         assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
     }

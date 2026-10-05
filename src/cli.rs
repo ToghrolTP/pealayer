@@ -405,17 +405,39 @@ mod tests {
 
     #[test]
     fn application_shortcut_actions_have_cli_and_ipc_parity() {
-        let args = vec!["pealayer".to_owned(), "--media-info".to_owned(), "--media-folder".to_owned(), "--edit-config".to_owned()];
-        let CliAction::RunGui(parsed) = parse_cli_args(args).unwrap() else { panic!("GUI command request expected") };
-        assert_eq!(parsed.commands, vec![InteropCommand::OpenMediaInformation, InteropCommand::OpenMediaFolder, InteropCommand::EditConfiguration]);
+        let args = vec![
+            "pealayer".to_owned(),
+            "--media-info".to_owned(),
+            "--media-folder".to_owned(),
+            "--edit-config".to_owned(),
+        ];
+        let CliAction::RunGui(parsed) = parse_cli_args(args).unwrap() else {
+            panic!("GUI command request expected")
+        };
+        assert_eq!(
+            parsed.commands,
+            vec![
+                InteropCommand::OpenMediaInformation,
+                InteropCommand::OpenMediaFolder,
+                InteropCommand::EditConfiguration
+            ]
+        );
         for (name, expected) in [
             ("media_information", InteropCommand::OpenMediaInformation),
             ("media_folder", InteropCommand::OpenMediaFolder),
             ("edit_config", InteropCommand::EditConfiguration),
         ] {
-            assert_eq!(crate::platform::interop::parse_text_command(name).unwrap(), expected);
+            assert_eq!(
+                crate::platform::interop::parse_text_command(name).unwrap(),
+                expected
+            );
             let request = serde_json::json!({"jsonrpc":"2.0", "id":1, "method":name, "params":{}});
-            assert_eq!(crate::platform::interop::parse_interop_request(&request.to_string()).unwrap().1, expected);
+            assert_eq!(
+                crate::platform::interop::parse_interop_request(&request.to_string())
+                    .unwrap()
+                    .1,
+                expected
+            );
         }
     }
 

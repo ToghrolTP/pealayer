@@ -595,11 +595,41 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Keyboard shortcuts",
             "Allow hardware hotkeys while Pealayer is in the background",
         ),
-        PreferenceControl::text("application_shortcuts.fullscreen", "input", "Application shortcuts", "Toggle fullscreen", "F11 (empty disables)"),
-        PreferenceControl::text("application_shortcuts.media_information", "input", "Application shortcuts", "Media information", "Shift+F10"),
-        PreferenceControl::text("application_shortcuts.media_folder", "input", "Application shortcuts", "Open media containing folder", "Ctrl+Shift+F10"),
-        PreferenceControl::text("application_shortcuts.preferences", "input", "Application shortcuts", "Open Preferences", "Ctrl+, / Cmd+,"),
-        PreferenceControl::text("application_shortcuts.edit_config", "input", "Application shortcuts", "Edit configuration file", "Ctrl+Shift+, / Cmd+Shift+,"),
+        PreferenceControl::text(
+            "application_shortcuts.fullscreen",
+            "input",
+            "Application shortcuts",
+            "Toggle fullscreen",
+            "F11 (empty disables)",
+        ),
+        PreferenceControl::text(
+            "application_shortcuts.media_information",
+            "input",
+            "Application shortcuts",
+            "Media information",
+            "Shift+F10",
+        ),
+        PreferenceControl::text(
+            "application_shortcuts.media_folder",
+            "input",
+            "Application shortcuts",
+            "Open media containing folder",
+            "Ctrl+Shift+F10",
+        ),
+        PreferenceControl::text(
+            "application_shortcuts.preferences",
+            "input",
+            "Application shortcuts",
+            "Open Preferences",
+            "Ctrl+, / Cmd+,",
+        ),
+        PreferenceControl::text(
+            "application_shortcuts.edit_config",
+            "input",
+            "Application shortcuts",
+            "Edit configuration file",
+            "Ctrl+Shift+, / Cmd+Shift+,",
+        ),
         PreferenceControl::select(
             "non_user_control_visibility",
             "hardware",
@@ -1011,15 +1041,30 @@ mod tests {
     fn application_shortcuts_are_shared_editable_controls() {
         let config = crate::config::AppConfig::default();
         let contract = preferences_contract(&config);
-        for key in ["fullscreen", "media_information", "media_folder", "preferences", "edit_config"] {
+        for key in [
+            "fullscreen",
+            "media_information",
+            "media_folder",
+            "preferences",
+            "edit_config",
+        ] {
             let path = format!("application_shortcuts.{key}");
-            let control = contract.controls.iter().find(|control| control.key == path).unwrap();
+            let control = contract
+                .controls
+                .iter()
+                .find(|control| control.key == path)
+                .unwrap();
             assert!(matches!(control.kind, PreferenceControlKind::Text));
             assert_eq!(control.section, "input");
             assert!(value_at_path(&contract.values, &path).unwrap().is_string());
         }
         let mut values = contract.values;
-        set_value_at_path(&mut values, "application_shortcuts.fullscreen", serde_json::json!("Alt+Enter")).unwrap();
+        set_value_at_path(
+            &mut values,
+            "application_shortcuts.fullscreen",
+            serde_json::json!("Alt+Enter"),
+        )
+        .unwrap();
         let restored: crate::config::AppConfig = serde_json::from_value(values).unwrap();
         restored.validate().unwrap();
         assert_eq!(restored.application_shortcuts.fullscreen, "Alt+Enter");

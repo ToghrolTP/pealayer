@@ -2683,7 +2683,10 @@ fn draw_channel_detail_page(
                                         ui,
                                         ("channel-group", &control.key),
                                         &mut app.hardware_control_group_draft,
-                                        capabilities.controls.iter().map(|item| item.group.as_str()),
+                                        capabilities
+                                            .controls
+                                            .iter()
+                                            .map(|item| item.group.as_str()),
                                         field_width,
                                         app.language,
                                     );

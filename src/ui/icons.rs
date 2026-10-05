@@ -235,9 +235,11 @@ pub fn searchable_icon_picker_contents(
         .horizontal(|ui| {
             ui.label(egui::RichText::new(MAGNIFYING_GLASS).color(ui.visuals().weak_text_color()));
             let switch_width = 26.0;
-            let search_width =
-                (ui.available_width() - switch_width * 2.0 - 20.0 - ui.spacing().item_spacing.x * 3.0)
-                    .max(70.0);
+            let search_width = (ui.available_width()
+                - switch_width * 2.0
+                - 20.0
+                - ui.spacing().item_spacing.x * 3.0)
+                .max(70.0);
             let search_response = ui.add_sized(
                 [search_width, ui.spacing().interact_size.y],
                 egui::TextEdit::singleline(search)
@@ -309,7 +311,8 @@ pub fn searchable_icon_picker_contents(
                 // Calculate after ScrollArea reserves its gutter, not from the
                 // wider parent. Each tile has a bounded two-line label.
                 let columns = ((ui.available_width() + 6.0) / 82.0).floor().max(1.0) as usize;
-                let cell_width = (ui.available_width() - 6.0 * (columns - 1) as f32) / columns as f32;
+                let cell_width =
+                    (ui.available_width() - 6.0 * (columns - 1) as f32) / columns as f32;
                 egui::Grid::new(search_id.with("results-grid"))
                     .num_columns(columns)
                     .min_col_width(cell_width)
@@ -630,33 +633,55 @@ mod tests {
         assert_eq!(icon_combobox_popup_width(800.0, 600.0), 576.0);
         for dark in [false, true] {
             let ctx = egui::Context::default();
-            ctx.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+            ctx.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
             ctx.data_mut(|data| data.insert_persisted(egui::Id::new(ICON_PICKER_GRID_ID), true));
             let mut value = "sparkle".to_owned();
             let mut search = String::new();
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 ui.set_width(320.0);
-                searchable_icon_picker_contents(ui, &mut value, &mut search, egui::Id::new("grid-test"), false, IconPickerConfig {
-                    language: crate::config::AppLanguage::English,
-                    presets: CONTROL_ICON_PRESETS,
-                    fallback_glyph: SPARKLE,
-                    fallback_name: "Sparkle",
-                    width: 320.0,
-                    show_selected_name: true,
-                    search_hint: "Search icons...",
-                    presets_label: "Presets",
-                    no_matches_label: "No matching icons",
-                    clear_label: None,
-                });
+                searchable_icon_picker_contents(
+                    ui,
+                    &mut value,
+                    &mut search,
+                    egui::Id::new("grid-test"),
+                    false,
+                    IconPickerConfig {
+                        language: crate::config::AppLanguage::English,
+                        presets: CONTROL_ICON_PRESETS,
+                        fallback_glyph: SPARKLE,
+                        fallback_name: "Sparkle",
+                        width: 320.0,
+                        show_selected_name: true,
+                        search_hint: "Search icons...",
+                        presets_label: "Presets",
+                        no_matches_label: "No matching icons",
+                        clear_label: None,
+                    },
+                );
             });
             output.textures_delta.clear();
-            let tile = output.shapes.iter().find_map(|shape| match &shape.shape {
-                egui::epaint::Shape::Text(text) if text.galley.job.text == format!("{LAMP}\nLamp") => Some(text),
-                _ => None,
-            }).expect("tile has separate icon and caption lines");
+            let tile = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(text)
+                        if text.galley.job.text == format!("{LAMP}\nLamp") =>
+                    {
+                        Some(text)
+                    }
+                    _ => None,
+                })
+                .expect("tile has separate icon and caption lines");
             assert_eq!(tile.galley.rows.len(), 2);
             assert_eq!(tile.galley.job.sections[0].format.font_id.size, 18.0);
-            assert_eq!(tile.galley.job.sections.last().unwrap().format.font_id.size, 11.0);
+            assert_eq!(
+                tile.galley.job.sections.last().unwrap().format.font_id.size,
+                11.0
+            );
             assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
                 egui::epaint::Shape::Rect(rect) if (rect.rect.height() - 54.0).abs() < 0.1 && rect.stroke.width > 0.0)));
         }

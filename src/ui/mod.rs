@@ -1,8 +1,8 @@
 pub mod about;
 pub mod audio;
 pub mod board_info;
-pub mod controls;
 pub mod color_picker;
+pub mod controls;
 pub mod dialog;
 pub mod effects_library;
 pub mod error;

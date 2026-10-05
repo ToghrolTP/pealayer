@@ -281,14 +281,31 @@ pub(crate) fn begin_new_group(app: &mut PealayerApp) {
     });
 }
 
-pub(crate) fn empty_library_context_menu(app: &mut PealayerApp, ui: &mut egui::Ui) -> egui::Response {
+pub(crate) fn empty_library_context_menu(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+) -> egui::Response {
     let response = ui.allocate_rect(ui.available_rect_before_wrap(), egui::Sense::click());
     response.context_menu(|ui| {
-        if ui.button(format!("{} {}", crate::ui::icons::PLUS, app.tr("New effect"))).clicked() {
+        if ui
+            .button(format!(
+                "{} {}",
+                crate::ui::icons::PLUS,
+                app.tr("New effect")
+            ))
+            .clicked()
+        {
             begin_new_effect(app, None);
             ui.close();
         }
-        if ui.button(format!("{} {}", crate::ui::icons::FOLDER_OPEN, app.tr("New group"))).clicked() {
+        if ui
+            .button(format!(
+                "{} {}",
+                crate::ui::icons::FOLDER_OPEN,
+                app.tr("New group")
+            ))
+            .clicked()
+        {
             begin_new_group(app);
             ui.close();
         }
@@ -1640,9 +1657,25 @@ fn draw_sequence_step_editor(
     draft.duration_ms = sequence_duration_ms(&draft.steps);
 }
 
+fn recording_preview_detail(step: &crate::four_d::controller::HardwareMacroStep) -> String {
+    if !step.action_ids.is_empty() {
+        return step.action_ids.join(" · ");
+    }
+    match (step.target, step.value) {
+        (Some(target), Some(value)) => format!("target {target} · value {value}"),
+        (Some(target), None) => format!("target {target}"),
+        (None, Some(value)) => format!("value {value}"),
+        (None, None) if !step.text.trim().is_empty() => step.text.replace('\n', " · "),
+        _ => String::new(),
+    }
+}
+
 pub(crate) fn draw_effect_recording_panel(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let hardware = app.advertised_hardware();
-    let groups = hardware.as_ref().map(|hardware| hardware.effect_groups.clone()).unwrap_or_default();
+    let groups = hardware
+        .as_ref()
+        .map(|hardware| hardware.effect_groups.clone())
+        .unwrap_or_default();
     let connected = hardware
         .as_ref()
         .is_some_and(|hardware| hardware.board_connected);
@@ -1777,6 +1810,43 @@ pub(crate) fn draw_effect_recording_panel(app: &mut PealayerApp, ui: &mut egui::
                 if !recording.last_error.trim().is_empty() {
                     ui.colored_label(ui.visuals().error_fg_color, &recording.last_error);
                 }
+                ui.add_space(7.0);
+                ui.label(egui::RichText::new("Live sequence").small().strong());
+                if recording.preview.is_empty() {
+                    ui.label(
+                        egui::RichText::new("Waiting for the first captured action…")
+                            .small()
+                            .weak(),
+                    );
+                } else {
+                    egui::ScrollArea::vertical()
+                        .id_salt("effect_recording_live_preview")
+                        .max_height(190.0)
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            for (index, step) in recording.preview.iter().enumerate() {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!("#{:02}", index + 1))
+                                            .monospace()
+                                            .weak(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{:>8.3}s",
+                                            step.at_us as f64 / 1_000_000.0
+                                        ))
+                                        .monospace(),
+                                    );
+                                    ui.strong(&step.kind);
+                                    let detail = recording_preview_detail(step);
+                                    if !detail.is_empty() {
+                                        ui.label(egui::RichText::new(detail).small().weak());
+                                    }
+                                });
+                            }
+                        });
+                }
             }
             ui.add_space(7.0);
             ui.horizontal_wrapped(|ui| {
@@ -1856,7 +1926,10 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .as_ref()
         .map(|value| value.strip_effects.clone())
         .unwrap_or_default();
-    let groups = capabilities.as_ref().map(|hardware| hardware.effect_groups.clone()).unwrap_or_default();
+    let groups = capabilities
+        .as_ref()
+        .map(|hardware| hardware.effect_groups.clone())
+        .unwrap_or_default();
     let mut new_group_requested = false;
     let geometry = crate::ui::dialog::bounded_geometry(
         ui.ctx().content_rect(),
@@ -2257,8 +2330,9 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 );
                             }
                             ui.add_space(12.0);
-                            let saved = !app.effect_library_draft.is_new;
                             let reference = app.effect_library_draft.reference.clone();
+                            let saved = !app.effect_library_draft.is_new;
+                            let published = app.controller_effect_is_advertised(&reference);
                             let controller_reachable = app
                                 .engine_handle
                                 .is_connected
@@ -2292,7 +2366,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 }
                                 if ui
                                     .add_enabled(
-                                        saved,
+                                        published,
                                         egui::Button::new(format!(
                                             "{} {}",
                                             crate::ui::icons::PLAY,
@@ -2320,7 +2394,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 }
                                 if ui
                                     .add_enabled(
-                                        saved,
+                                        published,
                                         egui::Button::new(format!(
                                             "{} {}",
                                             crate::ui::icons::TRASH,
@@ -2334,6 +2408,15 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     }
                                 }
                             });
+                            if saved && !published {
+                                ui.label(
+                                    egui::RichText::new(
+                                        "This local draft is not currently published in PCController. Publish it to restore Run and Delete.",
+                                    )
+                                    .small()
+                                    .weak(),
+                                );
+                            }
                             if !app.hardware_effect_authoring.status.is_empty() {
                                 ui.add_space(8.0);
                                 ui.label(
@@ -2354,9 +2437,14 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
         app.save_config();
     }
     app.show_effect_library_editor = open;
-    if new_group_requested { begin_new_group(app); }
+    if new_group_requested {
+        begin_new_group(app);
+    }
     if app.effect_group_draft.is_some() {
-        ui.ctx().move_to_top(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("effect_group_editor")));
+        ui.ctx().move_to_top(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("effect_group_editor"),
+        ));
     }
 }
 

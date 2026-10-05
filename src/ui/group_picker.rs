@@ -151,9 +151,16 @@ pub(crate) fn effect_group_picker(
         .show_ui(ui, |ui| {
             ui.set_width(width.min((ui.ctx().content_rect().width() - 24.0).max(80.0)));
             for group in groups {
-                if ui.add_sized([ui.available_width(), 26.0], egui::Button::new(
-                    crate::ui::i18n::visual_text(language, &group.name))
-                    .selected(*value == group.name).truncate()).on_hover_text(&group.name).clicked() {
+                if ui
+                    .add_sized(
+                        [ui.available_width(), 26.0],
+                        egui::Button::new(crate::ui::i18n::visual_text(language, &group.name))
+                            .selected(*value == group.name)
+                            .truncate(),
+                    )
+                    .on_hover_text(&group.name)
+                    .clicked()
+                {
                     *value = group.name.clone();
                     ui.close();
                 }
