@@ -274,6 +274,8 @@ pub struct PealayerApp {
     pub(crate) cache_buffering_percent: Option<f64>,
     pub(crate) media_fps: f64,
     pub(crate) video_aspect_ratio: f64,
+    pub(crate) consistent_video_aspect_ratio: bool,
+    pub(crate) pending_video_aspect_resize: bool,
     pub is_paused: bool,
     pub is_eof: bool,
     pub(crate) volume: f64,
@@ -762,7 +764,7 @@ impl eframe::App for PealayerApp {
             }
         }
         self.observe_fullscreen_state(is_fullscreen);
-        if self.show_four_d_editor || is_fullscreen {
+        if !self.consistent_video_aspect_ratio || self.show_four_d_editor || is_fullscreen {
             crate::platform::windows::set_simple_video_aspect_constraint(
                 false,
                 self.video_aspect_ratio,
@@ -3528,6 +3530,9 @@ impl PealayerApp {
                     }
                     (21, PropertyData::Double(v)) => {
                         if v.is_finite() && (0.05..=20.0).contains(&v) {
+                            if (self.video_aspect_ratio - v).abs() > f64::EPSILON {
+                                self.pending_video_aspect_resize = true;
+                            }
                             self.video_aspect_ratio = v;
                         }
                     }
@@ -3590,6 +3595,11 @@ impl PealayerApp {
                         && (0.05..=20.0).contains(&aspect_ratio)
                     {
                         self.video_aspect_ratio = aspect_ratio;
+                        // A different file or selected video stream can have the
+                        // same numerical aspect as its predecessor. FileLoaded is
+                        // still a semantic video change and must re-apply the
+                        // configured Simple-workspace window geometry.
+                        self.pending_video_aspect_resize = true;
                     }
                     if let Some(position) = self.pending_resume_position.take() {
                         if self.is_seekable {
@@ -4523,6 +4533,11 @@ impl PealayerApp {
             }
         };
         if applied.is_ok() {
+            if selection.kind == MediaTrackType::Video {
+                // Switching video streams is a video change even when the new
+                // stream happens to share the previous stream's aspect value.
+                self.pending_video_aspect_resize = true;
+            }
             for track in &mut self.media_tracks {
                 if track.kind == selection.kind {
                     track.selected = Some(track.id == selection.id);
@@ -4833,6 +4848,7 @@ impl PealayerApp {
         cfg.audio_delay_seconds = self.audio_delay;
         cfg.show_subseconds = self.show_subseconds;
         cfg.seekbar_hover_thumbnails = self.seekbar_hover_thumbnails;
+        cfg.consistent_video_aspect_ratio = self.consistent_video_aspect_ratio;
         cfg.quick_seek_seconds = self.quick_seek_seconds;
         cfg.frame_step_count = self.frame_step_count;
         cfg.wheel_seek_seconds = self.wheel_seek_seconds;
@@ -5014,6 +5030,14 @@ impl PealayerApp {
         self.subtitle_text_replacements = config.subtitle_text_replacements.clone();
         self.show_subseconds = config.show_subseconds;
         self.seekbar_hover_thumbnails = config.seekbar_hover_thumbnails;
+        let aspect_lock_enabled =
+            !self.consistent_video_aspect_ratio && config.consistent_video_aspect_ratio;
+        self.consistent_video_aspect_ratio = config.consistent_video_aspect_ratio;
+        if aspect_lock_enabled && self.current_video_path.is_some() {
+            self.pending_video_aspect_resize = true;
+        } else if !self.consistent_video_aspect_ratio {
+            self.pending_video_aspect_resize = false;
+        }
         self.quick_seek_seconds = config.quick_seek_seconds;
         self.frame_step_count = config.frame_step_count;
         self.wheel_seek_seconds = config.wheel_seek_seconds;
@@ -6124,6 +6148,8 @@ impl Default for PealayerApp {
             cache_buffering_percent: None,
             media_fps: 0.0,
             video_aspect_ratio: 16.0 / 9.0,
+            consistent_video_aspect_ratio: true,
+            pending_video_aspect_resize: false,
             is_paused: false,
             is_eof: false,
             volume: 100.0,

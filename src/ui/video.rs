@@ -13,6 +13,48 @@ fn resolved_video_aspect_ratio(aspect_ratio: f64) -> f32 {
     }
 }
 
+fn aspect_matched_inner_size(
+    current_inner_size: egui::Vec2,
+    current_video_size: egui::Vec2,
+    monitor_size: Option<egui::Vec2>,
+    aspect_ratio: f32,
+) -> Option<egui::Vec2> {
+    if !current_inner_size.is_finite()
+        || !current_video_size.is_finite()
+        || !aspect_ratio.is_finite()
+        || current_inner_size.x <= 0.0
+        || current_inner_size.y <= 0.0
+        || current_video_size.x <= 0.0
+        || current_video_size.y <= 0.0
+        || !(0.05..=20.0).contains(&aspect_ratio)
+    {
+        return None;
+    }
+
+    let chrome = (current_inner_size - current_video_size).max(egui::Vec2::ZERO);
+    let mut target = egui::vec2(
+        current_inner_size.x,
+        chrome.y + current_video_size.x / aspect_ratio,
+    );
+
+    // Preserve the current video width whenever practical. Extremely tall or
+    // wide media is fitted to the monitor instead of producing an unreachable
+    // window. eframe performs the final platform work-area clamp as well.
+    if let Some(monitor) = monitor_size.filter(|size| size.x > 0.0 && size.y > 0.0) {
+        let maximum = egui::vec2((monitor.x - 48.0).max(320.0), (monitor.y - 96.0).max(240.0));
+        if target.y > maximum.y {
+            let video_height = (maximum.y - chrome.y).max(1.0);
+            target = egui::vec2(chrome.x + video_height * aspect_ratio, maximum.y);
+        }
+        if target.x > maximum.x {
+            let video_width = (maximum.x - chrome.x).max(1.0);
+            target = egui::vec2(maximum.x, chrome.y + video_width / aspect_ratio);
+        }
+    }
+
+    Some(target.max(egui::vec2(320.0, 240.0)))
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct VideoSurfaceGesture {
     pub(crate) button: egui::PointerButton,
@@ -163,7 +205,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let (rect, response) = ui.allocate_exact_size(video_size, egui::Sense::click_and_drag());
     let aspect_ratio = resolved_video_aspect_ratio(app.video_aspect_ratio);
     let is_fullscreen = app.fullscreen_intent(ui.ctx());
-    let simple_aspect_lock = !app.show_four_d_editor && !is_fullscreen;
+    let simple_aspect_lock =
+        app.consistent_video_aspect_ratio && !app.show_four_d_editor && !is_fullscreen;
     let pixels_per_point = ui.ctx().pixels_per_point();
     let viewport = ui.input(|input| input.viewport().clone());
     if simple_aspect_lock {
@@ -193,6 +236,31 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             0,
             0,
         );
+    }
+
+    if simple_aspect_lock
+        && app.pending_video_aspect_resize
+        && app.current_video_path.is_some()
+        && !viewport.maximized.unwrap_or(false)
+        && !viewport.minimized.unwrap_or(false)
+        && !crate::platform::windows::native_window_operation_active()
+        && let Some(inner_rect) = viewport.inner_rect
+        && let Some(target_size) = aspect_matched_inner_size(
+            inner_rect.size(),
+            rect.size(),
+            viewport.monitor_size,
+            aspect_ratio,
+        )
+    {
+        // Avoid a redundant OS resize (and its visual layout work) when the
+        // current surface is already within one logical pixel of the target.
+        if (target_size.y - inner_rect.height()).abs() > 1.0
+            || (target_size.x - inner_rect.width()).abs() > 1.0
+        {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::InnerSize(target_size));
+        }
+        app.pending_video_aspect_resize = false;
     }
 
     const GESTURE_BUTTONS: [egui::PointerButton; 3] = [
@@ -964,6 +1032,43 @@ mod tests {
             resolved_video_aspect_ratio(0.0),
             DEFAULT_VIDEO_ASPECT_RATIO as f32
         );
+    }
+
+    #[test]
+    fn automatic_aspect_resize_preserves_video_width_and_non_video_chrome() {
+        let target = aspect_matched_inner_size(
+            egui::vec2(1_000.0, 700.0),
+            egui::vec2(900.0, 550.0),
+            Some(egui::vec2(1_920.0, 1_080.0)),
+            4.0 / 3.0,
+        )
+        .unwrap();
+        assert_eq!(target.x, 1_000.0);
+        assert!((target.y - 825.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn automatic_aspect_resize_fits_portrait_video_to_monitor() {
+        let target = aspect_matched_inner_size(
+            egui::vec2(1_000.0, 700.0),
+            egui::vec2(900.0, 550.0),
+            Some(egui::vec2(1_920.0, 1_080.0)),
+            9.0 / 16.0,
+        )
+        .unwrap();
+        assert!(target.y <= 984.0);
+        assert!(target.x < 1_000.0);
+    }
+
+    #[test]
+    fn automatic_aspect_resize_rejects_invalid_geometry() {
+        assert!(aspect_matched_inner_size(
+            egui::Vec2::ZERO,
+            egui::vec2(900.0, 550.0),
+            None,
+            16.0 / 9.0,
+        )
+        .is_none());
     }
 
     #[test]

@@ -607,6 +607,8 @@ fn main() -> eframe::Result {
                 cache_buffering_percent: None,
                 media_fps: 0.0,
                 video_aspect_ratio: 16.0 / 9.0,
+                consistent_video_aspect_ratio: loaded_config.consistent_video_aspect_ratio,
+                pending_video_aspect_resize: false,
                 is_paused: false,
                 is_eof: false,
                 volume: initial_volume,

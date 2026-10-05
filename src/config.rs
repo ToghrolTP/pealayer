@@ -415,6 +415,7 @@ pub struct AppConfig {
     pub audio_delay_seconds: f64,
     pub show_subseconds: bool,
     pub seekbar_hover_thumbnails: bool,
+    pub consistent_video_aspect_ratio: bool,
     pub quick_seek_seconds: f64,
     pub frame_step_count: u32,
     pub wheel_seek_seconds: f64,
@@ -535,6 +536,7 @@ impl Default for AppConfig {
             audio_delay_seconds: 0.0,
             show_subseconds: true,
             seekbar_hover_thumbnails: false,
+            consistent_video_aspect_ratio: true,
             quick_seek_seconds: 10.0,
             frame_step_count: 1,
             wheel_seek_seconds: 5.0,
@@ -1638,6 +1640,7 @@ mod tests {
         assert_eq!(cfg.playback_speed, 1.0);
         assert_eq!(cfg.temporary_fast_forward_speed, 2.0);
         assert!(!cfg.seekbar_hover_thumbnails);
+        assert!(cfg.consistent_video_aspect_ratio);
         assert!(cfg.native_dialog_windows);
         assert!(cfg.auto_reload_config);
         assert_eq!(cfg.active_workspace_profile.as_deref(), Some("nle"));
@@ -1752,6 +1755,7 @@ mod tests {
         cfg.open_url_use_proxy = false;
         cfg.open_url_proxy_url = Some("http://127.0.0.1:8080".to_string());
         cfg.seekbar_hover_thumbnails = true;
+        cfg.consistent_video_aspect_ratio = false;
         cfg.native_dialog_windows = true;
         cfg.recent_media.push(PathBuf::from("/test/file.mp4"));
         cfg.last_media_target = Some(PathBuf::from("/test/file.mp4"));
@@ -1824,6 +1828,7 @@ mod tests {
             Some("http://127.0.0.1:8080")
         );
         assert!(loaded.seekbar_hover_thumbnails);
+        assert!(!loaded.consistent_video_aspect_ratio);
         assert_eq!(loaded.recent_media.len(), 1);
         assert_eq!(loaded.recent_media[0], PathBuf::from("/test/file.mp4"));
         assert_eq!(

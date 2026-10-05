@@ -258,6 +258,18 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 ("theme", "Use app theme"),
             ],
         ),
+        {
+            let mut control = PreferenceControl::boolean(
+                "consistent_video_aspect_ratio",
+                "appearance",
+                "Window",
+                "Match window to video aspect ratio",
+            );
+            control.description = Some(
+                "In the Simple workspace, resizes the window when MPV loads a video or changes the active video stream",
+            );
+            control
+        },
         PreferenceControl::select(
             "osd_position",
             "appearance",
@@ -945,6 +957,20 @@ mod tests {
         assert!(matches!(control.kind, PreferenceControlKind::Boolean));
         assert_eq!(control.section, "playback");
         assert_eq!(control.group, "Player controls");
+    }
+
+    #[test]
+    fn consistent_video_aspect_ratio_is_enabled_in_shared_window_preferences() {
+        let config = crate::config::AppConfig::default();
+        assert!(config.consistent_video_aspect_ratio);
+        let controls = preference_controls(&config);
+        let control = controls
+            .iter()
+            .find(|control| control.key == "consistent_video_aspect_ratio")
+            .expect("consistent video aspect ratio preference");
+        assert!(matches!(control.kind, PreferenceControlKind::Boolean));
+        assert_eq!(control.section, "appearance");
+        assert_eq!(control.group, "Window");
     }
 
     #[test]
