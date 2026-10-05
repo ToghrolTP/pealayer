@@ -1,18 +1,18 @@
 # Group selectors
 
-Channel management, inline channel grouping, effect properties and recording setup
-use searchable single-value comboboxes instead of free-text group/category fields.
-The egui and Web interfaces share the same behavior within their renderer.
+Channel management and inline channel grouping use searchable single-value
+comboboxes. Effects use a selection-only Group dropdown and explicit creation,
+as described below. Neither presents a plain free-text assignment field.
 
-## Use
+## Channel grouping
 
-1. Open Manage for a channel and expand the Group dropdown (or an effect's Category).
+1. Open Manage for a channel and expand the Group dropdown.
 2. Choose an existing group, or type to filter the live choices.
 3. To create a new group, type its name and choose **Create group**. In egui,
    Enter also accepts the name. Choose **Ungrouped** to clear the assignment.
 4. Native channel dialogs retain **Save presentation**; inline channel edits retain
    their Save button. The Web channel dialog applies selections using
-   `hardware.presentation.update`. Effect edits retain their existing save flow.
+   `hardware.presentation.update`.
 
 Channel choices come from PCController's current channel catalog, with the current
 draft retained even if absent from the latest catalog. No sample group names or
