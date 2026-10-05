@@ -11,6 +11,8 @@ import {
 } from '@ant-design/icons';
 import { HeaderBar } from './components/HeaderBar';
 import { SharedToasts } from './components/SharedToasts';
+import { RemoteLocationDialog } from './components/RemoteLocationDialog';
+import './remote-location.css';
 import type { PlayerState } from './components/RemoteControlTab';
 import { tr } from './i18n';
 import { useWebPlatform } from './webPlatform';
@@ -49,7 +51,7 @@ function readStoredJson<T>(key: string, fallback: T): T {
 function persistJson(key: string, value: unknown): void {
   // Never resurrect transient notifications from offline storage.
   if (key === STORAGE.state && value && typeof value === 'object') {
-    const { messages: _messages, ...snapshot } = value as PlayerState;
+    const { messages: _messages, remote_browser: _remoteBrowser, ...snapshot } = value as PlayerState;
     value = snapshot;
   }
   try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* Storage can be disabled or full. */ }
@@ -491,6 +493,7 @@ const App: React.FC = () => {
       }}
     >
       <SharedToasts snapshot={state.messages} connected={connected} dismiss={id => sendCmd('pealayer.toast.dismiss', { id })} />
+      <RemoteLocationDialog state={state.remote_browser} connected={connected} base={apiBaseUrl} sendCmd={sendCmd} />
       <Layout className="app-shell">
         <HeaderBar
           collapsed={collapsed}
@@ -503,6 +506,7 @@ const App: React.FC = () => {
           connectionTarget={connectionTarget}
           onConnectionTargetChange={changeConnectionTarget}
           platform={platform}
+          onBrowseRemote={() => sendCmd('pealayer.remote.browse', { target: '' })}
         />
 
         {!connected && (

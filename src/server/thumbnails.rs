@@ -133,17 +133,18 @@ pub fn get_or_generate_remote_thumbnail(
     std::fs::create_dir_all(&cache_dir)
         .map_err(|error| format!("Could not create the thumbnail cache: {error}"))?;
 
-    let position_seconds = probe_remote_duration(media_url, use_proxy, proxy_url)
-        .filter(|duration| duration.is_finite() && *duration > 0.0)
-        .map(|duration| duration * 0.20);
     let cache_key = remote_thumbnail_cache_key(media_url);
     let thumb_path = cache_dir.join(format!("{cache_key}.jpg"));
     if thumb_path.exists() {
         return Ok(RemoteThumbnailFile {
             path: thumb_path,
-            position_seconds,
+            position_seconds: None,
         });
     }
+
+    let position_seconds = probe_remote_duration(media_url, use_proxy, proxy_url)
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+        .map(|duration| duration * 0.20);
 
     let staged_path = cache_dir.join(format!("{cache_key}.tmp.jpg"));
     let _ = std::fs::remove_file(&staged_path);
@@ -152,6 +153,7 @@ pub fn get_or_generate_remote_thumbnail(
 
     let mut ffmpeg = silent_command("ffmpeg");
     configure_remote_proxy(&mut ffmpeg, use_proxy, proxy_url);
+    ffmpeg.args(["-user_agent", crate::remote_location::USER_AGENT]);
     let ffmpeg_ok = ffmpeg
         .args([
             "-hide_banner",
@@ -185,6 +187,7 @@ pub fn get_or_generate_remote_thumbnail(
         let start_arg = format!("--start={seek}");
         let mut mpv = silent_command("mpv");
         configure_remote_proxy(&mut mpv, use_proxy, proxy_url);
+        mpv.arg(format!("--user-agent={}", crate::remote_location::USER_AGENT));
         mpv.args([
             media_url,
             "--no-config",
@@ -230,6 +233,7 @@ pub fn get_or_generate_seek_thumbnail(
     proxy_url: Option<&str>,
 ) -> Result<PathBuf, String> {
     let second = seek_preview_second(position_seconds)?;
+    let use_proxy = crate::remote_location::playback_proxy_for(media_target).unwrap_or(use_proxy);
     let target = media_target.trim();
     if target.is_empty() {
         return Err("No media target is available for seek preview".to_string());
@@ -261,6 +265,7 @@ pub fn get_or_generate_seek_thumbnail(
     let mut ffmpeg = silent_command("ffmpeg");
     if remote {
         configure_remote_proxy(&mut ffmpeg, use_proxy, proxy_url);
+        ffmpeg.args(["-user_agent", crate::remote_location::USER_AGENT]);
     }
     let ffmpeg_ok = ffmpeg
         .args([
@@ -396,6 +401,7 @@ fn probe_remote_duration(media_url: &str, use_proxy: bool, proxy_url: Option<&st
     let mut command = silent_command("ffprobe");
     command.stdout(Stdio::piped());
     configure_remote_proxy(&mut command, use_proxy, proxy_url);
+    command.args(["-user_agent", crate::remote_location::USER_AGENT]);
     let output = command
         .args([
             "-v",

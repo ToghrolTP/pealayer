@@ -1,0 +1,12 @@
+.remote-location-address { display: flex; gap: 8px; }
+.remote-location-address .ant-input-affix-wrapper { flex: 1; min-width: 0; }
+.remote-location-options { margin: 12px 0; }
+.remote-file-filter { margin-bottom: 12px; }
+.remote-file-name { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.remote-file-name .ant-typography { min-width: 0; }
+.remote-file-thumbnail { width: 64px; height: 38px; display: flex; align-items: center; justify-content: center; flex: 0 0 64px; border-radius: 6px; overflow: hidden; background: var(--surface-raised, rgba(128,128,128,.1)); color: var(--text-secondary); font-size: 22px; }
+.remote-file-thumbnail img { width: 100%; height: 100%; object-fit: contain; }
+.remote-file-selected td { background: var(--accent-soft, rgba(128,128,128,.15)) !important; }
+.remote-file-info { margin-top: 12px; }
+.remote-location-modal .ant-table-row { cursor: pointer; }
+@media (max-width: 600px) { .remote-location-options { gap: 6px !important; } .remote-location-modal .ant-modal-body { max-height: calc(100dvh - 190px) !important; } }

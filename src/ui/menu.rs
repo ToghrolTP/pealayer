@@ -204,6 +204,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         ui.close();
                         app.show_open_url_dialog = true;
                     }
+                    if ui.button(format!("{}  Browse remote folder...", crate::ui::icons::FOLDER_OPEN)).clicked() {
+                        let _ = crate::remote_location::request("", None, false, ui.ctx());
+                        ui.close();
+                    }
 
                     crate::ui::icons::submenu(ui, app.tr("Open Recent"), |ui| {
                         if app.recent_media.is_empty() {

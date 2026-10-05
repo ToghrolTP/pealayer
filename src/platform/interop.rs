@@ -159,6 +159,10 @@ pub enum InteropCommand {
         #[serde(alias = "path")]
         target: String,
     },
+    BrowseRemote { #[serde(default)] target: String, #[serde(default)] use_proxy: Option<bool> },
+    SelectRemote { target: String, #[serde(default)] play: bool },
+    SortRemote { by: crate::remote_location::SortBy, #[serde(default)] descending: bool },
+    CloseRemoteBrowser,
     SetFullscreen {
         enabled: bool,
     },
@@ -537,6 +541,8 @@ impl InteropCommand {
             }
             Self::ShowOsd { options, .. } => options.validate(),
             Self::PublishToast { toast } => toast.validate(),
+            Self::BrowseRemote { target, .. } if !target.is_empty() => crate::remote_location::normalize(target).map(|_| ()),
+            Self::SelectRemote { target, .. } => crate::remote_location::normalize(target).map(|_| ()),
             Self::DismissToast { id } if !crate::messaging::valid_id(id) => Err("invalid toast ID".into()),
             Self::SetWorkspace { profile }
             | Self::DeleteWorkspaceProfile { id: profile }
@@ -574,8 +580,10 @@ pub fn command_catalog() -> Value {
         "contract": "pealayer.control",
         "transports": ["native", "http", "json-rpc", "websocket"],
         "messaging": { "contract": "pealayer.messages.v1", "snapshot": "/api/messages", "subscription": "/ws", "publish": "pealayer.toast.show", "dismiss": "pealayer.toast.dismiss", "state": "pealayer.messages.state", "surfaces": ["egui", "web", "terminal"], "persistent_timeout_ms": 0 },
+        "remote_folders": { "browse": "pealayer.remote.browse", "select": "pealayer.remote.select", "sort": "pealayer.remote.sort", "close": "pealayer.remote.close", "state": "/api/remote/state", "thumbnail": "/api/remote/thumbnail", "subscription": "/ws" },
         "commands": [
             "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
+            "browse_remote", "select_remote", "sort_remote", "close_remote_browser",
             "chapter_previous", "chapter_next", "set_chapter",
             "seek", "seek_to", "seek_abs", "set_volume", "set_mute", "toggle_mute",
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
@@ -683,6 +691,8 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "open" => InteropCommand::Open {
             target: argument.to_string(),
         },
+        "browse_remote" => InteropCommand::BrowseRemote { target: argument.into(), use_proxy: None },
+        "close_remote_browser" => InteropCommand::CloseRemoteBrowser,
         "fullscreen" | "set_fullscreen" | "set-fullscreen" => InteropCommand::SetFullscreen {
             enabled: boolean()?,
         },
@@ -761,6 +771,8 @@ impl AppearanceState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerStatusResponse {
+    #[serde(default)]
+    pub remote_browser: crate::remote_location::BrowserState,
     #[serde(default)]
     pub messages: crate::messaging::MessageSnapshot,
     pub status: String,
@@ -995,6 +1007,7 @@ impl Default for PlayerStatusResponse {
         Self {
             status: String::new(),
             messages: crate::messaging::MessageSnapshot::default(),
+            remote_browser: crate::remote_location::BrowserState::default(),
             appearance: None,
             timeline_wheel_preferences: None,
             playing: false,
@@ -1147,6 +1160,10 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 target: string(&["target", "path"])?,
             })
         }
+        "browse_remote" | "pealayer.remote.browse" => Some(InteropCommand::BrowseRemote { target: request.params.get("target").and_then(Value::as_str).unwrap_or_default().into(), use_proxy: request.params.get("use_proxy").and_then(Value::as_bool) }),
+        "select_remote" | "pealayer.remote.select" => Some(InteropCommand::SelectRemote { target: string(&["target"])? , play: request.params.get("play").and_then(Value::as_bool).unwrap_or(false) }),
+        "sort_remote" | "pealayer.remote.sort" => Some(InteropCommand::SortRemote { by: serde_json::from_value(request.params.get("by").cloned().unwrap_or(Value::String("name".into()))).map_err(|_| "sort must be name, date or size".to_string())?, descending: request.params.get("descending").and_then(Value::as_bool).unwrap_or(false) }),
+        "close_remote_browser" | "pealayer.remote.close" => Some(InteropCommand::CloseRemoteBrowser),
         "fullscreen"
         | "set_fullscreen"
         | "pealayer.fullscreen.set"
@@ -1494,6 +1511,12 @@ pub fn set_live_status(status: PlayerStatusResponse) {
     if let Ok(mut lock) = LIVE_STATUS.write() {
         *lock = Some(status);
     }
+}
+pub fn get_live_message_snapshot() -> crate::messaging::MessageSnapshot {
+    LIVE_STATUS.read().ok().and_then(|status|status.as_ref().map(|s|s.messages.clone())).unwrap_or_default()
+}
+pub fn get_live_remote_revision() -> u64 {
+    LIVE_STATUS.read().ok().and_then(|status|status.as_ref().map(|s|s.remote_browser.revision)).unwrap_or_default()
 }
 
 /// Avoid cloning the timeline and hardware snapshot on every video frame just
@@ -2373,6 +2396,18 @@ pub fn spawn_pccontroller_action_bridge(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_folder_json_rpc_ipc_parity() {
+        let target = "https://files.invalid/folder/";
+        let expected = InteropCommand::BrowseRemote { target: target.into(), use_proxy: Some(false) };
+        let json = serde_json::to_string(&expected).unwrap();
+        assert_eq!(parse_interop_request(&json).unwrap().1, expected);
+        let rpc = JsonRpcRequest { jsonrpc: Some("2.0".into()), id: Value::Null, method: "pealayer.remote.browse".into(), params: serde_json::json!({"target":target,"use_proxy":false}) };
+        assert_eq!(command_from_json_rpc(&rpc).unwrap(), Some(expected));
+        assert!(parse_text_command("browse_remote javascript:bad").is_err());
+        assert!(matches!(parse_text_command("browse_remote").unwrap(), InteropCommand::BrowseRemote { .. }));
+    }
 
     #[test]
     fn test_parse_interop_commands() {

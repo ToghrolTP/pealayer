@@ -424,6 +424,7 @@ fn handle_websocket_text(state: &ControlState, text: &str) -> Option<String> {
         if let Err(error) = command.validate() {
             return Some(crate::platform::interop::format_interop_error(None, -32602, &error));
         }
+        if let Some(error) = remote_command_permission(&command) { return Some(crate::platform::interop::format_interop_error(None, -32003, error)); }
         if !crate::platform::interop::get_live_config().web_allow_control {
             return Some(crate::platform::interop::format_interop_error(
                 None,
@@ -458,6 +459,7 @@ fn handle_websocket_text(state: &ControlState, text: &str) -> Option<String> {
         } else {
             match crate::platform::interop::command_from_json_rpc(&request) {
                 Ok(Some(command)) => {
+                    if let Some(error) = remote_command_permission(&command) { return Some(crate::platform::interop::json_rpc_error(&request.id, -32003, error)); }
                     if !crate::platform::interop::get_live_config().web_allow_control {
                         return Some(crate::platform::interop::json_rpc_error(
                             &request.id,
@@ -724,6 +726,14 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
             }
         }
         ("GET", "/api/messages") => HttpResponse::json(200, "OK", serde_json::to_string(&crate::messaging::snapshot()).unwrap_or_default()),
+        ("GET", "/api/remote/state") => HttpResponse::json(200, "OK", serde_json::to_string(&crate::remote_location::snapshot()).unwrap_or_default()),
+        ("GET", "/api/remote/thumbnail") => {
+            match query_value(&request.target, "url").ok_or_else(|| "A listed URL is required".to_string()).and_then(|url| crate::remote_location::thumbnail(&url, &state.egui_ctx)) {
+                Ok(Some(path)) => match std::fs::read(path) { Ok(bytes) => HttpResponse::bytes(200,"OK","image/jpeg",bytes), Err(e) => HttpResponse::json(404,"Not Found",serde_json::json!({"error":e.to_string()}).to_string()) },
+                Ok(None) => HttpResponse::json(202,"Accepted",r#"{"status":"pending"}"#),
+                Err(error) => HttpResponse::json(400,"Bad Request",serde_json::json!({"error":error}).to_string()),
+            }
+        }
         ("POST", "/api/messages") => {
             match serde_json::from_slice::<crate::messaging::ToastRequest>(&request.body) {
                 Ok(toast) => {
@@ -790,7 +800,7 @@ fn denied_web_capability(
             | ("POST", "/api/player/command")
             | ("POST", "/api/ipc")
     );
-    let file_route = path.starts_with("/api/fs/")
+    let file_route = path.starts_with("/api/fs/") || path.starts_with("/api/remote/")
         || matches!(path, "/api/player/frame" | "/api/player/seek-thumbnail");
     let update_route = path.starts_with("/api/update/");
     if configuration_route && !web.web_allow_configuration {
@@ -818,6 +828,16 @@ fn permission_denied(capability: &str) -> HttpResponse {
         })
         .to_string(),
     )
+}
+
+fn remote_command_permission(command: &crate::platform::interop::InteropCommand) -> Option<&'static str> {
+    use crate::platform::interop::InteropCommand;
+    if crate::platform::interop::get_live_config().web_allow_file_access { return None; }
+    match command {
+        InteropCommand::BrowseRemote { .. } | InteropCommand::SelectRemote { .. } | InteropCommand::Open { .. } => Some("Web host file access permission is disabled"),
+        InteropCommand::Launch { request } => if request.target.is_some() || request.commands.iter().any(|c| remote_command_permission(c).is_some()) { Some("Web host file access permission is disabled") } else { None },
+        _ => None,
+    }
 }
 
 fn update_status_response(
@@ -955,6 +975,7 @@ fn json_rpc_response(body: &[u8], state: &ControlState) -> HttpResponse {
         }
         Ok(request) => match crate::platform::interop::command_from_json_rpc(&request) {
             Ok(Some(command)) => {
+                if let Some(error) = remote_command_permission(&command) { return HttpResponse::json(403,"Forbidden",crate::platform::interop::json_rpc_error(&request.id,-32003,error)); }
                 if !crate::platform::interop::get_live_config().web_allow_control {
                     return HttpResponse::json(
                         403,
@@ -1028,6 +1049,7 @@ fn config_update_response(body: &[u8], state: &ControlState) -> HttpResponse {
 
 fn player_command_response(body: &[u8], state: &ControlState) -> HttpResponse {
     match parse_player_command(body) {
+        Ok(command) if remote_command_permission(&command).is_some() => permission_denied("host file access"),
         Ok(command) => match command.validate() {
             Err(error) => HttpResponse::json(
                 400,
@@ -1137,6 +1159,7 @@ fn dispatch_ipc_payload(state: &ControlState, payload: &str) -> String {
         Ok(parsed) => parsed,
         Err(error) => return crate::platform::interop::format_interop_error(None, -32600, &error),
     };
+    if let Some(error) = remote_command_permission(&command) { return crate::platform::interop::format_interop_error(id, -32003, error); }
     if matches!(command, InteropCommand::GetStatus) {
         let value = serde_json::to_value(crate::platform::interop::get_live_status())
             .unwrap_or_else(|_| serde_json::json!({"status":"initializing"}));
@@ -1387,25 +1410,7 @@ fn query_value(target: &str, name: &str) -> Option<String> {
 }
 
 fn urlencoding_decode(value: &str) -> String {
-    let mut result = String::new();
-    let mut chars = value.chars().peekable();
-    while let Some(character) = chars.next() {
-        if character == '%' {
-            let hex = format!(
-                "{}{}",
-                chars.next().unwrap_or_default(),
-                chars.next().unwrap_or_default()
-            );
-            if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                result.push(byte as char);
-            }
-        } else if character == '+' {
-            result.push(' ');
-        } else {
-            result.push(character);
-        }
-    }
-    result
+    crate::remote_location::decoded(&value.replace('+', " "))
 }
 
 fn mime_for_path(path: &std::path::Path) -> &'static str {
@@ -1427,6 +1432,16 @@ fn mime_for_path(path: &std::path::Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_query_urls_preserve_unicode_and_encoded_separators() {
+        let url = "https://files.invalid/فارسی +%20.mkv";
+        let query = url::form_urlencoded::Serializer::new(String::new()).append_pair("url", url).finish();
+        assert_eq!(query_value(&format!("/api/remote/thumbnail?{query}"), "url").as_deref(), Some(url));
+        let config = crate::config::AppConfig { web_allow_file_access: false, ..Default::default() };
+        assert_eq!(denied_web_capability("GET", "/api/remote/thumbnail", &config), Some("host file access"));
+        assert_eq!(denied_web_capability("GET", "/api/remote/state", &config), Some("host file access"));
+    }
 
     #[test]
     fn web_server_defaults_are_explicit_loopback_settings() {

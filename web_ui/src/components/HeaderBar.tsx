@@ -7,6 +7,7 @@ import {
   CheckCircleOutlined,
   DisconnectOutlined,
   FullscreenOutlined,
+  FolderOpenOutlined,
   GlobalOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -33,6 +34,7 @@ interface HeaderBarProps {
   connectionTarget: string;
   onConnectionTargetChange: (target: string) => void;
   platform: WebPlatformController;
+  onBrowseRemote: () => void;
 }
 
 export const HeaderBar: React.FC<HeaderBarProps> = ({
@@ -46,6 +48,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   connectionTarget,
   onConnectionTargetChange,
   platform,
+  onBrowseRemote,
 }) => {
   const [connectionOpen, setConnectionOpen] = React.useState(false);
   const [draftTarget, setDraftTarget] = React.useState(connectionTarget);
@@ -77,6 +80,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
       </div>
 
       <div className="connection-cluster" aria-live="polite">
+        <Tooltip title="Browse remote folder"><Button type="text" icon={<FolderOpenOutlined />} disabled={!connected} onClick={onBrowseRemote} aria-label="Browse remote folder" /></Tooltip>
         <Tooltip title={tr(locale, 'Connect to another Pealayer')}>
           <Button
             type="text"

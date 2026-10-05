@@ -18,6 +18,7 @@ import type { AppearanceState } from '../appearance';
 import type { TimelineWheelPreferences } from '../timelineWheel';
 
 export interface PlayerState {
+  remote_browser?: import('./RemoteLocationDialog').RemoteBrowser;
   status?: string;
   messages?: import('../messaging').ToastSnapshot;
   appearance?: AppearanceState;
@@ -250,6 +251,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
       </div>
 
       <div className="remote-player__controls">
+        {(state.remote_browser?.previous_file || state.remote_browser?.next_file) && <Tooltip title="Previous file"><Button shape="circle" icon={<StepBackwardOutlined />} disabled={!state.remote_browser.previous_file} onClick={() => sendCmd('previous')} /></Tooltip>}
         <Tooltip title={`${tr(locale, 'Seek backward')} ${quickSeekSeconds}s`}>
           <Button shape="circle" icon={<FastBackwardOutlined />} onClick={() => sendCmd('seek', { seconds: -quickSeekSeconds })} />
         </Tooltip>
@@ -264,6 +266,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
         <Tooltip title={`${tr(locale, 'Seek forward')} ${quickSeekSeconds}s`}>
           <Button shape="circle" icon={<FastForwardOutlined />} onClick={() => sendCmd('seek', { seconds: quickSeekSeconds })} />
         </Tooltip>
+        {(state.remote_browser?.previous_file || state.remote_browser?.next_file) && <Tooltip title="Next file"><Button shape="circle" icon={<StepForwardOutlined />} disabled={!state.remote_browser.next_file} onClick={() => sendCmd('next')} /></Tooltip>}
       </div>
 
       {(state.chapters?.length ?? 0) > 0 && (

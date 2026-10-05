@@ -400,6 +400,16 @@ pub fn transport_context_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let quick = app.quick_seek_seconds;
     let quick_text = compact_number(quick);
     let frames = app.frame_step_count;
+    if let Some(target) = app.current_video_path.as_ref().and_then(|path| path.to_str()) {
+        if crate::remote_location::playback_proxy_for(target).is_some() {
+            let can_previous = crate::remote_location::step(target,-1,false).is_some();
+            let can_next = crate::remote_location::step(target,1,false).is_some();
+            for (enabled,icon,label,command) in [(can_previous,crate::ui::icons::SKIP_BACK,"Previous file",crate::platform::interop::InteropCommand::Previous),(can_next,crate::ui::icons::SKIP_FORWARD,"Next file",crate::platform::interop::InteropCommand::Next)] {
+                if ui.add_enabled(enabled,egui::Button::new(format!("{icon} {label}"))).clicked() { let ctx=ui.ctx().clone();app.apply_interop_command(&ctx,command,"Transport menu");ui.close(); }
+            }
+            ui.separator();
+        }
+    }
 
     ui.add_enabled_ui(has_video, |ui| {
         if ui

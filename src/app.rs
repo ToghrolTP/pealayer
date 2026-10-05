@@ -782,6 +782,9 @@ impl eframe::App for PealayerApp {
         }
 
         // Reconcile the workspace with the viewport before publishing status.
+        crate::remote_location::install_context(ui.ctx());
+        if let Some(playback) = crate::remote_location::take_playback() { self.play_remote_location(playback); }
+        crate::remote_location::set_current(self.current_video_path.as_ref().and_then(|path|path.to_str()));
         // A fullscreen request can be observed in this same frame; preserving
         // the already-staged workspace prevents that observation from replacing
         // an NLE restore target with the forced Simple workspace.
@@ -824,8 +827,10 @@ impl eframe::App for PealayerApp {
         let appearance_changed =
             crate::platform::interop::get_live_appearance().as_ref() != Some(&appearance);
         let messages = crate::messaging::snapshot();
-        let messages_changed = crate::platform::interop::get_live_status().messages != messages;
-        let should_broadcast = appearance_changed || messages_changed
+        crate::remote_location::sync_options(web_config.remote_folder_auto_next, web_config.remote_folder_thumbnails);
+        let remote_changed = crate::platform::interop::get_live_remote_revision() != crate::remote_location::revision();
+        let messages_changed = crate::platform::interop::get_live_message_snapshot() != messages;
+        let should_broadcast = appearance_changed || messages_changed || remote_changed
             || match self.last_web_broadcast {
                 Some(last) => now.duration_since(last) >= web_sync_interval,
                 None => true,
@@ -916,6 +921,7 @@ impl eframe::App for PealayerApp {
             let chapters = self.media_chapters();
             let current_chapter_index = self.active_media_chapter().map(|chapter| chapter.index);
             let status_resp = crate::platform::interop::PlayerStatusResponse {
+                remote_browser: crate::remote_location::snapshot(),
                 messages,
                 appearance: Some(appearance),
                 timeline_wheel_preferences: Some(crate::config::TimelineWheelPreferences {
@@ -1674,6 +1680,7 @@ impl eframe::App for PealayerApp {
                 }
             });
         crate::ui::toasts::draw(ui.ctx());
+        crate::ui::remote_location::draw(self, ui.ctx());
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
@@ -3068,10 +3075,12 @@ impl PealayerApp {
             InteropCommand::TogglePause => self.toggle_playback(),
             InteropCommand::Stop => self.close_video(),
             InteropCommand::Next => {
-                let _ = self.mpv.command("playlist-next", &["force"]);
+                if let Some(next) = self.remote_neighbor(1, false) { self.play_remote_location(next); }
+                else if !self.has_remote_playlist() { let _ = self.mpv.command("playlist-next", &["force"]); }
             }
             InteropCommand::Previous => {
-                let _ = self.mpv.command("playlist-prev", &["force"]);
+                if let Some(previous) = self.remote_neighbor(-1, false) { self.play_remote_location(previous); }
+                else if !self.has_remote_playlist() { let _ = self.mpv.command("playlist-prev", &["force"]); }
             }
             InteropCommand::PreviousChapter => self.previous_media_chapter(),
             InteropCommand::NextChapter => self.next_media_chapter(),
@@ -3108,6 +3117,10 @@ impl PealayerApp {
                 self.set_playback_speed(rate, true);
             }
             InteropCommand::Open { target } => self.load_media_target(&target),
+            InteropCommand::BrowseRemote { target, use_proxy } => { if let Err(error) = crate::remote_location::request(&target, use_proxy, false, ctx) { self.set_osd(error); } },
+            InteropCommand::SelectRemote { target, play } => { if let Err(error) = crate::remote_location::select(&target, play) { self.set_osd(error); } },
+            InteropCommand::SortRemote { by, descending } => crate::remote_location::sort(by, descending),
+            InteropCommand::CloseRemoteBrowser => crate::remote_location::close(),
             InteropCommand::SetFullscreen { enabled } => self.set_fullscreen(ctx, enabled),
             InteropCommand::ToggleFullscreen => self.toggle_fullscreen(ctx),
             InteropCommand::Activate => {
@@ -3751,7 +3764,9 @@ impl PealayerApp {
                     (11, PropertyData::Str(v)) => self.current_aid = v.to_string(),
                     (11, PropertyData::OsdStr(v)) => self.current_aid = v.to_string(),
                     (12, PropertyData::Flag(v)) => {
+                        let advance = v && !self.is_eof;
                         self.is_eof = v;
+                        if advance { if let Some(next) = self.remote_neighbor(1, true) { self.play_remote_location(next); } }
                     }
                     (13, PropertyData::Double(v)) => {
                         self.media_fps = v;
@@ -5009,11 +5024,35 @@ impl PealayerApp {
     }
 
     pub fn load_media_target(&mut self, target: &str) {
-        if crate::media::is_remote_media_target(target) {
+        if crate::remote_location::normalize(target).is_ok() {
+            if let Some(ctx) = crate::remote_location::context() {
+                self.load_remote_target(target, self.open_url_use_proxy, ctx);
+            } else { self.load_url(target); }
+        } else if crate::media::is_remote_media_target(target) {
             self.load_url(target);
         } else {
             self.load_video_file(std::path::PathBuf::from(target));
         }
+    }
+
+    fn remote_neighbor(&self, direction: i32, automatic: bool) -> Option<crate::remote_location::Playback> {
+        crate::remote_location::step(self.current_video_path.as_ref()?.to_str()?, direction, automatic)
+    }
+    fn has_remote_playlist(&self) -> bool {
+        self.current_video_path.as_ref().and_then(|path|path.to_str()).and_then(crate::remote_location::playback_proxy_for).is_some()
+    }
+
+    pub fn load_remote_target(&mut self, target: &str, use_proxy: bool, ctx: &egui::Context) {
+        if crate::remote_location::normalize(target).is_ok_and(|url|crate::remote_location::playable(&url)) {
+            self.play_remote_location(crate::remote_location::Playback {target:target.into(),use_proxy});
+            let _ = crate::remote_location::prefetch(target,use_proxy,ctx);
+        } else if let Err(error) = crate::remote_location::request(target,Some(use_proxy),true,ctx) { self.set_osd(error); }
+    }
+
+    pub fn play_remote_location(&mut self, playback: crate::remote_location::Playback) {
+        if let Err(error) = crate::mpv::proxy::apply_runtime(&self.mpv, playback.use_proxy, &self.open_url_proxy_url) { self.set_osd(error.to_string()); return; }
+        let _ = self.mpv.set_property("options/user-agent", crate::remote_location::USER_AGENT);
+        self.load_url(&playback.target);
     }
 
     pub fn media_timeline_state(&self) -> crate::media::MediaTimelineState {

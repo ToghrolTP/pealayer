@@ -520,6 +520,8 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Custom proxy URL",
             "http://proxy.example:8080",
         ),
+        PreferenceControl::boolean("remote_folder_auto_next", "playback", "Remote folders", "Automatically play the next file in the folder"),
+        PreferenceControl::boolean("remote_folder_thumbnails", "playback", "Remote folders", "Generate thumbnails for listed media files"),
         PreferenceControl::boolean(
             "auto_connect_hardware",
             "hardware",

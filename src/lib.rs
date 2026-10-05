@@ -13,6 +13,7 @@ pub mod mpv;
 pub mod network;
 pub mod platform;
 pub mod preferences_contract;
+pub mod remote_location;
 pub mod server;
 pub mod subtitle;
 pub mod ui;

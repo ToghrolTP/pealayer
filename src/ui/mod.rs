@@ -17,6 +17,7 @@ pub mod media_track_properties;
 pub mod media_tracks;
 pub mod menu;
 pub mod open_url;
+pub mod remote_location;
 pub mod palette;
 pub mod preferences;
 pub mod seek_preview;

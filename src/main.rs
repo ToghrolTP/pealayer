@@ -15,6 +15,7 @@ pub mod mpv;
 pub mod network;
 pub mod platform;
 pub mod preferences_contract;
+pub mod remote_location;
 pub mod server;
 pub mod subtitle;
 pub mod ui;
@@ -391,6 +392,7 @@ fn main() -> eframe::Result {
                 .expect("Failed creating render context");
 
             let egui_ctx = cc.egui_ctx.clone();
+            crate::remote_location::install_context(&egui_ctx);
             render_context.set_update_callback(move || {
                 // Outside a native move, the decoder remains the most efficient
                 // repaint clock. During WM_ENTERSIZEMOVE, the dedicated DWM

@@ -379,6 +379,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 
     let mut open_requested = false;
+    let mut browse_requested = false;
     let mut close_requested = crate::ui::dialog::escape_pressed(ui.ctx());
     let mut inspect_requested = false;
     let mut configure_proxy_requested = false;
@@ -658,6 +659,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 ui,
                 app.rtl,
                 |ui| {
+                    if ui.add_enabled(can_open, egui::Button::new(format!("{}  Browse folder", crate::ui::icons::FOLDER_OPEN))).clicked() { browse_requested = true; }
                     if crate::ui::dialog::action_button(
                         ui,
                         crate::ui::icons::CLIPBOARD,
@@ -706,7 +708,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         app.clear_recent_remote_media();
     }
     if let Some(target) = history_play_requested {
-        app.load_url(&target);
+        if crate::remote_location::normalize(&target).is_ok() { app.load_remote_target(&target, app.open_url_use_proxy, ui.ctx()); } else { app.load_url(&target); }
         app.url_input_buffer.clear();
         app.url_inspector = UrlInspector::default();
         app.show_open_url_dialog = false;
@@ -734,11 +736,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         open_requested = true;
     }
 
-    if open_requested {
+    if browse_requested {
+        let _ = crate::remote_location::request(&app.url_input_buffer, Some(app.open_url_use_proxy), false, ui.ctx());
+        app.show_open_url_dialog = false;
+    } else if open_requested {
         let url = validation
             .map(|validated| validated.normalized)
             .unwrap_or_else(|_| app.url_input_buffer.trim().to_owned());
-        app.load_url(&url);
+        if crate::remote_location::normalize(&url).is_ok() { app.load_remote_target(&url, app.open_url_use_proxy, ui.ctx()); } else { app.load_url(&url); }
         app.url_input_buffer.clear();
         app.url_inspector = UrlInspector::default();
         app.show_open_url_dialog = false;
@@ -1587,7 +1592,7 @@ fn probe_remote_media(
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(PROBE_TIMEOUT)
         .redirect(reqwest::redirect::Policy::limited(8))
-        .user_agent(concat!("Pealayer/", env!("CARGO_PKG_VERSION")));
+        .user_agent(crate::remote_location::USER_AGENT);
     if !network.use_proxy {
         builder = builder.no_proxy();
     } else if let Some(proxy_url) = network.proxy_url.as_deref() {
@@ -1661,7 +1666,7 @@ fn probe_remote_media(
         elapsed_ms: started.elapsed().as_millis(),
     };
 
-    let (thumbnail, thumbnail_error) = if network.fetch_thumbnail {
+    let (thumbnail, thumbnail_error) = if network.fetch_thumbnail && !info.content_type.as_deref().is_some_and(|t| t.to_ascii_lowercase().contains("text/html")) {
         match crate::server::thumbnails::get_or_generate_remote_thumbnail(
             &final_url,
             network.use_proxy,
