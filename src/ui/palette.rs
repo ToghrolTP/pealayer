@@ -71,6 +71,18 @@ pub fn apply(visuals: &mut eframe::egui::Visuals, palette: crate::config::ColorP
 #[cfg(test)]
 mod tests {
     #[test]
+    fn live_appearance_advertises_the_same_palette_preference() {
+        let config = crate::config::AppConfig {
+            color_palette: crate::config::ColorPalette::Native,
+            ..Default::default()
+        };
+        let appearance = crate::platform::interop::AppearanceState::from(&config);
+        let json = serde_json::to_value(&appearance).unwrap();
+        assert_eq!(json["color_palette"], "native");
+        assert_eq!(json["theme"], "system");
+    }
+
+    #[test]
     fn palette_is_persisted_and_advertised_by_the_shared_preferences_contract() {
         use crate::config::{AppConfig, ColorPalette};
         let old: AppConfig = serde_json::from_str("{}").unwrap();

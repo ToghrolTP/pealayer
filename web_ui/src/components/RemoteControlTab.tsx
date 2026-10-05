@@ -17,6 +17,12 @@ import { SeekThumbnailPreview } from './SeekThumbnailPreview';
 
 export interface PlayerState {
   status?: string;
+  appearance?: {
+    theme: 'system' | 'light' | 'dark';
+    color_palette: 'studio' | 'native';
+    accent_color: string;
+    custom_accent_color?: string | null;
+  };
   playing?: boolean;
   volume?: number;
   playback_time?: number;

@@ -698,8 +698,29 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppearanceState {
+    pub theme: crate::config::AppTheme,
+    pub color_palette: crate::config::ColorPalette,
+    pub accent_color: crate::config::AccentColor,
+    pub custom_accent_color: Option<String>,
+}
+
+impl From<&crate::config::AppConfig> for AppearanceState {
+    fn from(config: &crate::config::AppConfig) -> Self {
+        Self {
+            theme: crate::config::resolved_theme(config),
+            color_palette: config.color_palette,
+            accent_color: config.accent_color,
+            custom_accent_color: config.custom_accent_color.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerStatusResponse {
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appearance: Option<AppearanceState>,
     pub playing: bool,
     pub volume: f64,
     #[serde(default)]
@@ -922,6 +943,7 @@ impl Default for PlayerStatusResponse {
     fn default() -> Self {
         Self {
             status: String::new(),
+            appearance: None,
             playing: false,
             volume: 0.0,
             muted: false,

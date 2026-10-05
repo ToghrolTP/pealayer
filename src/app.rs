@@ -875,6 +875,7 @@ impl eframe::App for PealayerApp {
             let chapters = self.media_chapters();
             let current_chapter_index = self.active_media_chapter().map(|chapter| chapter.index);
             let status_resp = crate::platform::interop::PlayerStatusResponse {
+                appearance: Some(crate::platform::interop::AppearanceState::from(&web_config)),
                 status: if !controller_connected {
                     "connecting"
                 } else if !hardware_connected {

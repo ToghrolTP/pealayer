@@ -173,6 +173,20 @@ const App: React.FC = () => {
     return () => media.removeEventListener('change', applyTheme);
   }, [runtime, appConfig?.theme, activeTab]);
 
+  const appearance = state.appearance;
+  useEffect(() => {
+    if (!appearance) return;
+    setAppConfig((previous) => {
+      if (previous?.theme === appearance.theme
+        && previous?.color_palette === appearance.color_palette
+        && previous?.accent_color === appearance.accent_color
+        && previous?.custom_accent_color === appearance.custom_accent_color) return previous;
+      const next = { ...previous, ...appearance };
+      persistJson(STORAGE.config, next);
+      return next;
+    });
+  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color]);
+
   const accentColor = resolvedAccent(runtime, appConfig);
   const accentTextColor = accentForeground(accentColor);
   const paletteName = appConfig?.color_palette === 'native' ? 'native' : 'studio';
