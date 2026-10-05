@@ -21,3 +21,10 @@ Right-click empty timeline space for Snap to grid, Quantize all cues and Remove 
 - `git diff --check`: passed. No full suite or real-output activation.
 - Computer-use skill was used to attempt native visual inspection. Windows.Graphics.Capture failed twice with a fresh window binding: `IGraphicsCaptureItemInterop.CreateForMonitor`, `0x8007041D` (capture-service timeout). No screenshot or live native-menu visual acceptance is claimed; no blind UI inputs were sent.
 - PR #46 remains unmerged.
+
+## Deployment checkpoint
+
+- Previous canonical process accepted `POST /api/ipc` with `quit` and was verified absent before replacement.
+- `scripts/package-windows.ps1 -SkipTests -NoUpx` completed: Web production/PWA verification and optimized Rust build passed.
+- Canonical `%LOCALAPPDATA%/Programs/Pealayer/bin/pealayer.exe` is running as PID 36716. `/healthz`: `ok`. Update manifest: `5a2c24e8c86c917da18a5406c2adc68433fd8e02`, clean build, SHA-256 `86d385ea628a11c7c317f0250e85a86bcf1d2f0742388b7e721614f8e103bd07`.
+- Cafe-PC health endpoint timed out; no remote deployment claim. The local native menu is ready for user inspection; automated native screenshot acceptance remains blocked as documented above.
