@@ -281,14 +281,31 @@ pub(crate) fn begin_new_group(app: &mut PealayerApp) {
     });
 }
 
-pub(crate) fn empty_library_context_menu(app: &mut PealayerApp, ui: &mut egui::Ui) -> egui::Response {
+pub(crate) fn empty_library_context_menu(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+) -> egui::Response {
     let response = ui.allocate_rect(ui.available_rect_before_wrap(), egui::Sense::click());
     response.context_menu(|ui| {
-        if ui.button(format!("{} {}", crate::ui::icons::PLUS, app.tr("New effect"))).clicked() {
+        if ui
+            .button(format!(
+                "{} {}",
+                crate::ui::icons::PLUS,
+                app.tr("New effect")
+            ))
+            .clicked()
+        {
             begin_new_effect(app, None);
             ui.close();
         }
-        if ui.button(format!("{} {}", crate::ui::icons::FOLDER_OPEN, app.tr("New group"))).clicked() {
+        if ui
+            .button(format!(
+                "{} {}",
+                crate::ui::icons::FOLDER_OPEN,
+                app.tr("New group")
+            ))
+            .clicked()
+        {
             begin_new_group(app);
             ui.close();
         }
@@ -1661,29 +1678,36 @@ fn recording_color(value: &str) -> egui::Color32 {
         .iter()
         .find(|color| color.id == id)
         .unwrap_or(&recording_colors()[0])
-        .hex.as_str();
+        .hex
+        .as_str();
     let rgb = crate::config::parse_rgb_hex(hex).expect("recording color must be RGB");
     egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2])
 }
 
 fn paint_recording_swatch(ui: &egui::Ui, rect: egui::Rect, value: &str) {
     let center = egui::pos2(rect.left() + 12.0, rect.center().y);
-    ui.painter().circle_filled(center, 5.0, recording_color(value));
+    ui.painter()
+        .circle_filled(center, 5.0, recording_color(value));
     // White must remain distinguishable on light popup surfaces too.
-    ui.painter().circle_stroke(center, 5.0, egui::Stroke::new(1.0, egui::Color32::GRAY));
+    ui.painter()
+        .circle_stroke(center, 5.0, egui::Stroke::new(1.0, egui::Color32::GRAY));
 }
 
 fn recording_color_picker(ui: &mut egui::Ui, value: &mut String) -> egui::Response {
-    let selected = recording_colors().iter().find(|color| color.id == *value)
+    let selected = recording_colors()
+        .iter()
+        .find(|color| color.id == *value)
         .unwrap_or(&recording_colors()[0]);
     let response = egui::ComboBox::from_id_salt("effect_recording_color")
         .selected_text(format!("     {}", selected.label))
         .show_ui(ui, |ui| {
             for color in recording_colors() {
-                let row = ui.selectable_value(value, color.id.clone(), format!("     {}", color.label));
+                let row =
+                    ui.selectable_value(value, color.id.clone(), format!("     {}", color.label));
                 paint_recording_swatch(ui, row.rect, &color.id);
             }
-        }).response;
+        })
+        .response;
     paint_recording_swatch(ui, response.rect, value);
     response
 }
@@ -1691,20 +1715,41 @@ fn recording_color_picker(ui: &mut egui::Ui, value: &mut String) -> egui::Respon
 fn paint_recording_icon(ui: &egui::Ui, rect: egui::Rect, value: &str) {
     if recording_color(value) == egui::Color32::WHITE && !ui.visuals().dark_mode {
         ui.painter().text(
-            rect.center() + egui::vec2(1.0, 1.0), egui::Align2::CENTER_CENTER,
-            crate::ui::icons::RECORD, egui::FontId::proportional(18.0),
+            rect.center() + egui::vec2(1.0, 1.0),
+            egui::Align2::CENTER_CENTER,
+            crate::ui::icons::RECORD,
+            egui::FontId::proportional(18.0),
             ui.visuals().weak_text_color(),
         );
     }
     ui.painter().text(
-        rect.center(), egui::Align2::CENTER_CENTER, crate::ui::icons::RECORD,
-        egui::FontId::proportional(18.0), recording_color(value),
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        crate::ui::icons::RECORD,
+        egui::FontId::proportional(18.0),
+        recording_color(value),
     );
+}
+
+fn recording_preview_detail(step: &crate::four_d::controller::HardwareMacroStep) -> String {
+    if !step.action_ids.is_empty() {
+        return step.action_ids.join(" · ");
+    }
+    match (step.target, step.value) {
+        (Some(target), Some(value)) => format!("target {target} · value {value}"),
+        (Some(target), None) => format!("target {target}"),
+        (None, Some(value)) => format!("value {value}"),
+        (None, None) if !step.text.trim().is_empty() => step.text.replace('\n', " · "),
+        _ => String::new(),
+    }
 }
 
 pub(crate) fn draw_effect_recording_panel(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let hardware = app.advertised_hardware();
-    let groups = hardware.as_ref().map(|hardware| hardware.effect_groups.clone()).unwrap_or_default();
+    let groups = hardware
+        .as_ref()
+        .map(|hardware| hardware.effect_groups.clone())
+        .unwrap_or_default();
     let connected = hardware
         .as_ref()
         .is_some_and(|hardware| hardware.board_connected);
@@ -1827,6 +1872,43 @@ pub(crate) fn draw_effect_recording_panel(app: &mut PealayerApp, ui: &mut egui::
                 if !recording.last_error.trim().is_empty() {
                     ui.colored_label(ui.visuals().error_fg_color, &recording.last_error);
                 }
+                ui.add_space(7.0);
+                ui.label(egui::RichText::new("Live sequence").small().strong());
+                if recording.preview.is_empty() {
+                    ui.label(
+                        egui::RichText::new("Waiting for the first captured action…")
+                            .small()
+                            .weak(),
+                    );
+                } else {
+                    egui::ScrollArea::vertical()
+                        .id_salt("effect_recording_live_preview")
+                        .max_height(190.0)
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            for (index, step) in recording.preview.iter().enumerate() {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!("#{:02}", index + 1))
+                                            .monospace()
+                                            .weak(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{:>8.3}s",
+                                            step.at_us as f64 / 1_000_000.0
+                                        ))
+                                        .monospace(),
+                                    );
+                                    ui.strong(&step.kind);
+                                    let detail = recording_preview_detail(step);
+                                    if !detail.is_empty() {
+                                        ui.label(egui::RichText::new(detail).small().weak());
+                                    }
+                                });
+                            }
+                        });
+                }
             }
             ui.add_space(7.0);
             ui.horizontal_wrapped(|ui| {
@@ -1914,7 +1996,10 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .as_ref()
         .map(|value| value.strip_effects.clone())
         .unwrap_or_default();
-    let groups = capabilities.as_ref().map(|hardware| hardware.effect_groups.clone()).unwrap_or_default();
+    let groups = capabilities
+        .as_ref()
+        .map(|hardware| hardware.effect_groups.clone())
+        .unwrap_or_default();
     let mut new_group_requested = false;
     let geometry = crate::ui::dialog::bounded_geometry(
         ui.ctx().content_rect(),
@@ -2315,8 +2400,9 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 );
                             }
                             ui.add_space(12.0);
-                            let saved = !app.effect_library_draft.is_new;
                             let reference = app.effect_library_draft.reference.clone();
+                            let saved = !app.effect_library_draft.is_new;
+                            let published = app.controller_effect_is_advertised(&reference);
                             let controller_reachable = app
                                 .engine_handle
                                 .is_connected
@@ -2350,7 +2436,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 }
                                 if ui
                                     .add_enabled(
-                                        saved,
+                                        published,
                                         egui::Button::new(format!(
                                             "{} {}",
                                             crate::ui::icons::PLAY,
@@ -2378,7 +2464,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 }
                                 if ui
                                     .add_enabled(
-                                        saved,
+                                        published,
                                         egui::Button::new(format!(
                                             "{} {}",
                                             crate::ui::icons::TRASH,
@@ -2392,6 +2478,15 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     }
                                 }
                             });
+                            if saved && !published {
+                                ui.label(
+                                    egui::RichText::new(
+                                        "This local draft is not currently published in PCController. Publish it to restore Run and Delete.",
+                                    )
+                                    .small()
+                                    .weak(),
+                                );
+                            }
                             if !app.hardware_effect_authoring.status.is_empty() {
                                 ui.add_space(8.0);
                                 ui.label(
@@ -2412,9 +2507,14 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
         app.save_config();
     }
     app.show_effect_library_editor = open;
-    if new_group_requested { begin_new_group(app); }
+    if new_group_requested {
+        begin_new_group(app);
+    }
     if app.effect_group_draft.is_some() {
-        ui.ctx().move_to_top(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("effect_group_editor")));
+        ui.ctx().move_to_top(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("effect_group_editor"),
+        ));
     }
 }
 
@@ -2426,10 +2526,16 @@ mod tests {
     fn recording_color_swatches_match_the_shared_palette_in_both_themes() {
         for dark in [false, true] {
             let context = egui::Context::default();
-            context.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+            context.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
             for color in recording_colors() {
                 let mut output = context.run_ui(egui::RawInput::default(), |ui| {
-                    let rect = ui.allocate_exact_size(egui::vec2(120.0, 24.0), egui::Sense::hover()).0;
+                    let rect = ui
+                        .allocate_exact_size(egui::vec2(120.0, 24.0), egui::Sense::hover())
+                        .0;
                     paint_recording_swatch(ui, rect, &color.id);
                 });
                 output.textures_delta.clear();
@@ -2450,7 +2556,9 @@ mod tests {
     fn recording_color_popup_selection_updates_header_in_the_same_frame() {
         fn flatten<'a>(shape: &'a egui::epaint::Shape, result: &mut Vec<&'a egui::epaint::Shape>) {
             if let egui::epaint::Shape::Vec(shapes) = shape {
-                for shape in shapes { flatten(shape, result); }
+                for shape in shapes {
+                    flatten(shape, result);
+                }
             } else {
                 result.push(shape);
             }
@@ -2461,27 +2569,47 @@ mod tests {
         context.all_styles_mut(|style| style.animation_time = 0.0);
         let render = |events, color: &mut String| {
             let mut picker = egui::Rect::NOTHING;
-            let mut output = context.run_ui(egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 360.0))),
-                events, ..Default::default()
-            }, |ui| {
-                let icon = ui.allocate_exact_size(egui::vec2(18.0, 24.0), egui::Sense::hover()).0;
-                picker = recording_color_picker(ui, color).rect;
-                paint_recording_icon(ui, icon, color);
-            });
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 360.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let icon = ui
+                        .allocate_exact_size(egui::vec2(18.0, 24.0), egui::Sense::hover())
+                        .0;
+                    picker = recording_color_picker(ui, color).rect;
+                    paint_recording_icon(ui, icon, color);
+                },
+            );
             output.textures_delta.clear();
             (output, picker)
         };
         let click = |pos, pressed| egui::Event::PointerButton {
-            pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE,
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
         };
         render(Vec::new(), &mut color);
         let (_, picker) = render(Vec::new(), &mut color);
-        render(vec![egui::Event::PointerMoved(picker.center()), click(picker.center(), true)], &mut color);
+        render(
+            vec![
+                egui::Event::PointerMoved(picker.center()),
+                click(picker.center(), true),
+            ],
+            &mut color,
+        );
         render(vec![click(picker.center(), false)], &mut color);
         let (output, _) = render(Vec::new(), &mut color);
         let mut shapes = Vec::new();
-        for shape in &output.shapes { flatten(&shape.shape, &mut shapes); }
+        for shape in &output.shapes {
+            flatten(&shape.shape, &mut shapes);
+        }
         for option in recording_colors() {
             assert!(shapes.iter().any(|shape| matches!(
                 shape, egui::epaint::Shape::Circle(circle) if circle.fill == recording_color(&option.id)
@@ -2490,12 +2618,19 @@ mod tests {
                     egui::epaint::Shape::Text(text) => Some(&text.galley.job.text), _ => None,
                 }).collect::<Vec<_>>());
         }
-        let blue = shapes.iter().find_map(|shape| match shape {
-            egui::epaint::Shape::Text(text) if text.galley.job.text.trim() == "Blue" =>
-                Some(text.pos + text.galley.rect.center().to_vec2()),
-            _ => None,
-        }).expect("Blue option is absent");
-        render(vec![egui::Event::PointerMoved(blue), click(blue, true)], &mut color);
+        let blue = shapes
+            .iter()
+            .find_map(|shape| match shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text.trim() == "Blue" => {
+                    Some(text.pos + text.galley.rect.center().to_vec2())
+                }
+                _ => None,
+            })
+            .expect("Blue option is absent");
+        render(
+            vec![egui::Event::PointerMoved(blue), click(blue, true)],
+            &mut color,
+        );
         let (output, _) = render(vec![click(blue, false)], &mut color);
         assert_eq!(color, "blue");
         assert!(output.shapes.iter().any(|shape| matches!(

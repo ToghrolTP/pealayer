@@ -119,6 +119,14 @@ export interface PlayerState {
     category: string;
     color: string;
     steps: number;
+    preview: Array<{
+      at_us: number;
+      kind: string;
+      target?: number;
+      value?: number;
+      text?: string;
+      action_ids?: string[];
+    }>;
     device_retained: boolean;
     overwritten: number;
     started_at: string;
