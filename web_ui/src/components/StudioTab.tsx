@@ -237,8 +237,6 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
           </div>
         </header>
 
-        <EffectRecorder state={state} sendCmd={sendCmd} locale={locale} compact />
-
         <div className="effect-list">
           {controllerEffects.length === 0 ? (
             <Empty
@@ -337,6 +335,11 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       >
         {effectDraft && (
           <div className="effect-editor-grid">
+            {effectDraft.is_new && effectDraft.kind === 'sequence' && (
+              <div className="effect-editor-grid__wide">
+                <EffectRecorder state={state} sendCmd={sendCmd} locale={locale} compact />
+              </div>
+            )}
             <label><span>{tr(locale, 'Type')}</span><Select value={effectDraft.kind} options={[{ value: 'sequence', label: tr(locale, 'Timed sequence') }, { value: 'strip-stream', label: tr(locale, 'Addressable lighting') }]} onChange={(kind) => setEffectDraft({ ...effectDraft, kind })} /></label>
             <label><span>{tr(locale, 'ID')}</span><Input value={effectDraft.id} onChange={(event) => setEffectDraft({ ...effectDraft, id: event.target.value })} /></label>
             <label><span>{tr(locale, 'Name')}</span><Input value={effectDraft.name} onChange={(event) => setEffectDraft({ ...effectDraft, name: event.target.value })} /></label>

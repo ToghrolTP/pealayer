@@ -9325,11 +9325,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 );
                             });
 
-                            if !capabilities.controls.is_empty() {
-                                ui.add_space(8.0);
-                                crate::ui::effects_library::draw_effect_recording_panel(self.app, ui);
-                            }
-
                             let motion_controls = crate::ui::hardware_control::managed_controls(
                                 &capabilities,
                             )

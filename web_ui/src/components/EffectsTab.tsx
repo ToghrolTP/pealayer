@@ -213,8 +213,6 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       </Space>
     </header>
 
-    <EffectRecorder state={state} sendCmd={sendCmd} locale={locale} />
-
     {effects.length === 0 ? <Card className="surface-card"><Empty description={tr(locale, 'No effects')}><Button type="primary" icon={<PlusOutlined />} onClick={() => openEditor()}>{tr(locale, 'Create effect')}</Button></Empty></Card> :
       <Collapse className="effect-groups" defaultActiveKey={grouped.map(([group]) => group)} items={grouped.map(([group, items]) => ({
         key: group,
@@ -297,6 +295,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       width={900}
     >
       {draft && <div className="effect-editor">
+        {draft.is_new && draft.kind === 'sequence' && <EffectRecorder state={state} sendCmd={sendCmd} locale={locale} />}
         <div className="effect-editor__identity">
           <label><span>{tr(locale, 'Type')}</span><Select value={draft.kind} options={[{ value: 'sequence', label: tr(locale, 'Sequence') }, { value: 'strip-stream', label: tr(locale, 'Lighting') }]} onChange={(kind) => setDraft({ ...draft, kind })} /></label>
           <label><span>{tr(locale, 'ID')}</span><Input value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} /></label>

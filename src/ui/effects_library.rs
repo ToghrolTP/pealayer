@@ -2138,8 +2138,10 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     }
                                 });
                             if app.effect_library_draft.kind == "sequence" {
-                                ui.add_space(12.0);
-                                draw_effect_recording_panel(app, ui);
+                                if app.effect_library_draft.is_new {
+                                    ui.add_space(12.0);
+                                    draw_effect_recording_panel(app, ui);
+                                }
                                 ui.add_space(10.0);
                                 draw_sequence_step_editor(
                                     ui,
