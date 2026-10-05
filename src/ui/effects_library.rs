@@ -627,6 +627,159 @@ fn quantize_sequence(steps: &mut [crate::four_d::controller::HardwareMacroStep],
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SequenceCueMenuAction {
+    Edit,
+    Duplicate,
+    Delete,
+}
+
+fn sequence_cue_value_options(kind: &str) -> &'static [(u16, &'static str)] {
+    match kind {
+        "motion" => &[(1, "Up"), (2, "Down"), (0, "Stop")],
+        "relay" => &[(1, "On"), (0, "Off")],
+        _ => &[],
+    }
+}
+
+/// Changes only the authoring draft. No preview or hardware command is sent.
+fn sequence_cue_context_menu(
+    ui: &mut egui::Ui,
+    step: &mut crate::four_d::controller::HardwareMacroStep,
+    quantum_ms: u64,
+) -> Option<SequenceCueMenuAction> {
+    let mut action = None;
+    ui.strong(format!(
+        "{} · {}",
+        sequence_lane(step).1,
+        sequence_cue_label(step)
+    ));
+    ui.separator();
+    if ui
+        .button(format!("{} Edit cue…", crate::ui::icons::PENCIL_SIMPLE))
+        .clicked()
+    {
+        action = Some(SequenceCueMenuAction::Edit);
+        ui.close();
+    }
+    let options = sequence_cue_value_options(&step.kind);
+    if !options.is_empty() {
+        ui.menu_button(format!("{} Action", crate::ui::icons::LIGHTNING), |ui| {
+            for &(value, caption) in options {
+                if ui
+                    .selectable_label(step.value.unwrap_or_default() == value, caption)
+                    .clicked()
+                {
+                    step.value = Some(value);
+                    refresh_semantic_action(step);
+                    ui.close();
+                }
+            }
+        });
+    } else if step.kind == "pwm" {
+        ui.menu_button(
+            format!("{} Intensity", crate::ui::icons::SLIDERS_HORIZONTAL),
+            |ui| {
+                let mut percent = f64::from(step.value.unwrap_or_default()) * 100.0 / 4095.0;
+                if ui
+                    .add(egui::Slider::new(&mut percent, 0.0..=100.0).suffix("%"))
+                    .changed()
+                {
+                    step.value = Some((percent * 4095.0 / 100.0).round() as u16);
+                }
+            },
+        );
+    } else if matches!(step.kind.as_str(), "rgb" | "addressable") {
+        ui.menu_button(format!("{} Color", crate::ui::icons::PALETTE), |ui| {
+            let mut color = egui::Color32::from_rgb(
+                step.red.unwrap_or_default(),
+                step.green.unwrap_or_default(),
+                step.blue.unwrap_or_default(),
+            );
+            if ui.color_edit_button_srgba(&mut color).changed() {
+                step.red = Some(color.r());
+                step.green = Some(color.g());
+                step.blue = Some(color.b());
+            }
+        });
+    }
+    ui.menu_button(format!("{} Timing", crate::ui::icons::CLOCK), |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Start");
+            let mut seconds = step.at_us as f64 / 1_000_000.0;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut seconds)
+                        .range(0.0..=3_600.0)
+                        .speed(0.01)
+                        .suffix(" s"),
+                )
+                .changed()
+            {
+                step.at_us = (seconds * 1_000_000.0).round() as u64;
+            }
+        });
+        ui.horizontal(|ui| {
+            let mut sustained = step.duration_ms.is_some();
+            if ui.checkbox(&mut sustained, "Duration").changed() {
+                step.duration_ms = sustained.then_some(1000);
+            }
+            if let Some(duration) = &mut step.duration_ms {
+                let mut seconds = f64::from(*duration) / 1000.0;
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut seconds)
+                            .range(0.001..=65.535)
+                            .speed(0.01)
+                            .suffix(" s"),
+                    )
+                    .changed()
+                {
+                    *duration = (seconds * 1000.0).round().clamp(1.0, 65535.0) as u16;
+                }
+            }
+        });
+        if ui.button("Move to start").clicked() {
+            step.at_us = 0;
+            ui.close();
+        }
+        if ui
+            .button(format!(
+                "Quantize to {}",
+                crate::duration::format_time_value_ms(quantum_ms)
+            ))
+            .clicked()
+        {
+            quantize_sequence(std::slice::from_mut(step), quantum_ms);
+            ui.close();
+        }
+    });
+    ui.menu_button(
+        format!("{} Repeat", crate::ui::icons::ARROW_CLOCKWISE),
+        |ui| {
+            egui::Grid::new(ui.id().with("repeat-fields"))
+                .num_columns(2)
+                .show(ui, |ui| draw_repeat_controls(ui, step));
+        },
+    );
+    ui.separator();
+    if ui
+        .button(format!("{} Duplicate", crate::ui::icons::COPY))
+        .clicked()
+    {
+        action = Some(SequenceCueMenuAction::Duplicate);
+        ui.close();
+    }
+    if ui
+        .button(format!("{} Delete", crate::ui::icons::TRASH))
+        .clicked()
+    {
+        action = Some(SequenceCueMenuAction::Delete);
+        ui.close();
+    }
+    action
+}
+
 fn draw_sequence_timeline(
     ui: &mut egui::Ui,
     draft: &mut ControllerEffectDraft,
@@ -648,8 +801,8 @@ fn draw_sequence_timeline(
         .data_mut(|data| data.get_persisted::<u64>(quantize_id).unwrap_or(50))
         .max(1);
     let mut snap = ui.data_mut(|data| data.get_persisted::<bool>(snap_id).unwrap_or(true));
-    let mut duplicate_selected = false;
-    let mut remove_selected = false;
+    let mut menu_action = None;
+    let edit_request_id = egui::Id::new((state_prefix.clone(), "edit-request"));
 
     egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::same(10))
@@ -733,7 +886,8 @@ fn draw_sequence_timeline(
                 .id_salt((state_prefix.clone(), "scroll"))
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
-                    let (canvas, _) = ui.allocate_exact_size(canvas_size, egui::Sense::hover());
+                    let (canvas, canvas_response) =
+                        ui.allocate_exact_size(canvas_size, egui::Sense::click());
                     let painter = ui.painter_at(canvas);
                     let timeline_left = canvas.left() + label_width;
                     let visuals = ui.visuals().clone();
@@ -878,7 +1032,7 @@ fn draw_sequence_timeline(
                             if response.clicked() || response.double_clicked() {
                                 *selected_index = index;
                             }
-                            if response.drag_started() {
+                            if response.drag_started_by(egui::PointerButton::Primary) {
                                 *selected_index = index;
                                 if let Some(pointer) = response.interact_pointer_pos() {
                                     ui.data_mut(|data| {
@@ -902,7 +1056,7 @@ fn draw_sequence_timeline(
                                     });
                                 }
                             }
-                            if response.dragged()
+                            if response.dragged_by(egui::PointerButton::Primary)
                                 && let Some(pointer) = response.interact_pointer_pos()
                                 && let Some(drag) = ui
                                     .data_mut(|data| data.get_temp::<SequenceCueDragState>(drag_id))
@@ -956,48 +1110,75 @@ fn draw_sequence_timeline(
                             }
                             response.context_menu(|ui| {
                                 *selected_index = index;
-                                ui.strong(sequence_cue_label(&draft.steps[index]));
-                                ui.separator();
-                                if ui
-                                    .button(format!("{} Duplicate", crate::ui::icons::COPY))
-                                    .clicked()
-                                {
-                                    duplicate_selected = true;
-                                    ui.close();
-                                }
-                                if ui
-                                    .button(format!("{} Delete", crate::ui::icons::TRASH))
-                                    .clicked()
-                                {
-                                    remove_selected = true;
-                                    ui.close();
+                                if let Some(action) = sequence_cue_context_menu(
+                                    ui,
+                                    &mut draft.steps[index],
+                                    quantum_ms,
+                                ) {
+                                    menu_action = Some((index, action));
                                 }
                             });
                         }
                     }
+                    canvas_response.context_menu(|ui| {
+                        ui.strong("Effect timeline");
+                        ui.separator();
+                        ui.checkbox(&mut snap, "Snap to grid");
+                        if ui
+                            .button(format!(
+                                "{} Quantize all cues",
+                                crate::ui::icons::SELECTION_ALL
+                            ))
+                            .clicked()
+                        {
+                            quantize_sequence(&mut draft.steps, quantum_ms);
+                            ui.close();
+                        }
+                        if ui
+                            .button(format!(
+                                "{} Remove leading delay",
+                                crate::ui::icons::SCISSORS
+                            ))
+                            .clicked()
+                        {
+                            strip_sequence_leading_delay(&mut draft.steps);
+                            ui.close();
+                        }
+                    });
                 });
 
-            if ui.input(|input| input.key_pressed(egui::Key::ArrowLeft)) {
+            let nudge_enabled =
+                !ui.ctx().egui_wants_keyboard_input() && !egui::Popup::is_any_open(ui.ctx());
+            if nudge_enabled && ui.input(|input| input.key_pressed(egui::Key::ArrowLeft)) {
                 let step = &mut draft.steps[*selected_index];
                 step.at_us = step.at_us.saturating_sub(quantum_ms.saturating_mul(1_000));
             }
-            if ui.input(|input| input.key_pressed(egui::Key::ArrowRight)) {
+            if nudge_enabled && ui.input(|input| input.key_pressed(egui::Key::ArrowRight)) {
                 let step = &mut draft.steps[*selected_index];
                 step.at_us = step.at_us.saturating_add(quantum_ms.saturating_mul(1_000));
             }
         });
 
-    if duplicate_selected && !draft.steps.is_empty() {
-        let mut duplicate = draft.steps[*selected_index].clone();
-        duplicate.at_us = duplicate
-            .at_us
-            .saturating_add(u64::from(duplicate.duration_ms.unwrap_or(100)).max(1) * 1_000);
-        draft.steps.insert(*selected_index + 1, duplicate);
-        *selected_index += 1;
-    }
-    if remove_selected && !draft.steps.is_empty() {
-        draft.steps.remove(*selected_index);
-        *selected_index = (*selected_index).min(draft.steps.len().saturating_sub(1));
+    ui.data_mut(|data| data.insert_persisted(snap_id, snap));
+    if let Some((index, action)) = menu_action {
+        *selected_index = index;
+        match action {
+            SequenceCueMenuAction::Edit => {
+                ui.data_mut(|data| data.insert_temp(edit_request_id, true));
+            }
+            SequenceCueMenuAction::Duplicate => {
+                let mut duplicate = draft.steps[index].clone();
+                duplicate.at_us = duplicate
+                    .at_us
+                    .saturating_add(u64::from(duplicate.duration_ms.unwrap_or(100)).max(1) * 1_000);
+                draft.steps.insert(index + 1, duplicate);
+                *selected_index = index + 1;
+            }
+            SequenceCueMenuAction::Delete => {
+                draft.steps.remove(index);
+                *selected_index = (*selected_index).min(draft.steps.len().saturating_sub(1));
+            }
+        }
     }
 }
 
@@ -1222,7 +1403,18 @@ fn draw_sequence_step_editor(
     }
 
     selected_index = selected_index.min(draft.steps.len() - 1);
-    ui.heading("Selected cue");
+    let cue_heading = ui.heading("Selected cue");
+    let edit_request_id = egui::Id::new((
+        (
+            "effect-sequence-timeline",
+            draft.reference.clone(),
+            draft.id.clone(),
+        ),
+        "edit-request",
+    ));
+    if ui.data_mut(|data| data.remove_temp::<bool>(edit_request_id).unwrap_or(false)) {
+        cue_heading.scroll_to_me(Some(egui::Align::Center));
+    }
     let mut move_step = None;
     let mut remove_step = None;
     for index in selected_index..=selected_index {
@@ -2521,6 +2713,173 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sequence_cue_menu_values_are_channel_specific() {
+        assert_eq!(
+            sequence_cue_value_options("motion"),
+            &[(1, "Up"), (2, "Down"), (0, "Stop")]
+        );
+        assert_eq!(
+            sequence_cue_value_options("relay"),
+            &[(1, "On"), (0, "Off")]
+        );
+        assert!(sequence_cue_value_options("pwm").is_empty());
+        assert!(sequence_cue_value_options("display").is_empty());
+    }
+
+    #[test]
+    fn sequence_cue_right_click_targets_pointer_cue_and_duplicate_preserves_data() {
+        fn text_positions(
+            shape: &egui::epaint::Shape,
+            text: &str,
+            positions: &mut Vec<egui::Pos2>,
+        ) {
+            match shape {
+                egui::epaint::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        text_positions(shape, text, positions);
+                    }
+                }
+                egui::epaint::Shape::Text(t) if t.galley.job.text.contains(text) => {
+                    positions.push(t.pos + t.galley.rect.center().to_vec2())
+                }
+                _ => {}
+            }
+        }
+        for dark in [false, true] {
+            let context = egui::Context::default();
+            context.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+            context.all_styles_mut(|style| style.animation_time = 0.0);
+            let mut draft = ControllerEffectDraft::default();
+            draft.steps = vec![
+                crate::four_d::controller::HardwareMacroStep {
+                    kind: "relay".into(),
+                    target: Some(4),
+                    value: Some(0),
+                    ..Default::default()
+                },
+                crate::four_d::controller::HardwareMacroStep {
+                    kind: "motion".into(),
+                    target: Some(1),
+                    value: Some(1),
+                    at_us: 200_000,
+                    duration_ms: Some(1000),
+                    repeat_count: Some(3),
+                    text: "Preserve metadata".into(),
+                    ..Default::default()
+                },
+            ];
+            let original = draft.steps[1].clone();
+            let mut selected = 0;
+            let render = |events, draft: &mut ControllerEffectDraft, selected: &mut usize| {
+                let mut output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| draw_sequence_timeline(ui, draft, selected),
+                );
+                output.textures_delta.clear();
+                output
+            };
+            render(vec![], &mut draft, &mut selected);
+            let output = render(vec![], &mut draft, &mut selected);
+            let mut positions = vec![];
+            for s in &output.shapes {
+                text_positions(&s.shape, "Up", &mut positions);
+            }
+            let cue = positions[0];
+            let click = |pos, button, pressed| egui::Event::PointerButton {
+                pos,
+                button,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            render(
+                vec![
+                    egui::Event::PointerMoved(cue),
+                    click(cue, egui::PointerButton::Secondary, true),
+                ],
+                &mut draft,
+                &mut selected,
+            );
+            render(
+                vec![egui::Event::PointerMoved(cue + egui::vec2(10.0, 0.0))],
+                &mut draft,
+                &mut selected,
+            );
+            assert_eq!(
+                draft.steps[1], original,
+                "secondary dragging must not move or resize the cue"
+            );
+            render(
+                vec![click(
+                    cue + egui::vec2(10.0, 0.0),
+                    egui::PointerButton::Secondary,
+                    false,
+                )],
+                &mut draft,
+                &mut selected,
+            );
+            // A dragged secondary button is not a click: open the menu with a
+            // subsequent stationary right click, as a user would.
+            render(
+                vec![
+                    egui::Event::PointerMoved(cue),
+                    click(cue, egui::PointerButton::Secondary, true),
+                ],
+                &mut draft,
+                &mut selected,
+            );
+            render(
+                vec![click(cue, egui::PointerButton::Secondary, false)],
+                &mut draft,
+                &mut selected,
+            );
+            let output = render(vec![], &mut draft, &mut selected);
+            assert_eq!(
+                selected, 1,
+                "right click must select the motion cue, not the previously selected relay"
+            );
+            assert_eq!(
+                draft.steps[1], original,
+                "opening menu must not change the cue"
+            );
+            let mut positions = vec![];
+            for s in &output.shapes {
+                text_positions(&s.shape, "Duplicate", &mut positions);
+            }
+            let duplicate = *positions.first().expect("cue context menu did not open");
+            render(
+                vec![
+                    egui::Event::PointerMoved(duplicate),
+                    click(duplicate, egui::PointerButton::Primary, true),
+                ],
+                &mut draft,
+                &mut selected,
+            );
+            render(
+                vec![click(duplicate, egui::PointerButton::Primary, false)],
+                &mut draft,
+                &mut selected,
+            );
+            assert_eq!(draft.steps.len(), 3);
+            assert_eq!(selected, 2);
+            let mut expected = original.clone();
+            expected.at_us += 1_000_000;
+            assert_eq!(draft.steps[2], expected);
+            assert_eq!(draft.steps[1], original);
+        }
+    }
 
     #[test]
     fn recording_color_swatches_match_the_shared_palette_in_both_themes() {
