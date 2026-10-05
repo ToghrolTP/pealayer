@@ -487,7 +487,6 @@ fn open_detail(
     app.hardware_control_name_draft = control.name.clone();
     app.hardware_control_group_draft = control.group.clone();
     app.hardware_control_icon_draft = control.icon.clone();
-    app.hardware_control_icon_search.clear();
     app.hardware_control_color_draft = if control.color.trim().is_empty() {
         "#38D27A".to_string()
     } else {
@@ -513,54 +512,6 @@ fn open_detail(
         })
         .map(|value| f64::from(value) * 100.0 / 4095.0)
         .unwrap_or(0.0);
-}
-
-pub(crate) fn draw_control_icon_choices(
-    language: crate::config::AppLanguage,
-    ui: &mut egui::Ui,
-    selected_icon: &mut String,
-    search: &mut String,
-) -> bool {
-    let mut changed = false;
-    let search_hint = crate::ui::i18n::tr(language, "Search icons");
-    ui.add(
-        egui::TextEdit::singleline(search)
-            .hint_text(search_hint)
-            .desired_width(ui.available_width()),
-    );
-    if ui
-        .selectable_label(
-            selected_icon.is_empty(),
-            crate::ui::i18n::tr(language, "Use channel default"),
-        )
-        .clicked()
-    {
-        changed = !selected_icon.is_empty();
-        selected_icon.clear();
-        ui.close();
-    }
-    ui.separator();
-    let query = search.trim().to_ascii_lowercase();
-    for (key, label, glyph) in crate::ui::icons::CONTROL_ICON_PRESETS {
-        if !query.is_empty()
-            && !key.contains(&query)
-            && !label.to_ascii_lowercase().contains(&query)
-        {
-            continue;
-        }
-        if ui
-            .selectable_label(
-                selected_icon == *key,
-                format!("{glyph}  {}", crate::ui::i18n::tr(language, label)),
-            )
-            .clicked()
-        {
-            changed = selected_icon != *key;
-            *selected_icon = (*key).to_string();
-            ui.close();
-        }
-    }
-    changed
 }
 
 fn parse_display_order(value: &str, peer_count: usize) -> Option<u16> {
@@ -2266,7 +2217,6 @@ fn restore_channel_presentation(
     app.hardware_control_name_draft = control.default_name.clone();
     app.hardware_control_group_draft.clear();
     app.hardware_control_icon_draft.clear();
-    app.hardware_control_icon_search.clear();
     app.hardware_control_color_draft = "#38D27A".to_string();
     app.hardware_control_up_color_draft = "#F59E0B".to_string();
     app.hardware_control_down_color_draft = "#3B82F6".to_string();
@@ -2514,6 +2464,10 @@ fn draw_channel_detail_page(
                         &app.tr("Presentation"),
                         |ui| {
                             let field_width = (ui.available_width() - 170.0).clamp(220.0, 620.0);
+                            let icon_search_hint = app.tr("Search icons...");
+                            let icon_presets_label = app.tr("Presets");
+                            let icon_no_matches_label = app.tr("No matching icons");
+                            let icon_default_label = app.tr("Use channel default");
                             egui::Grid::new(("hardware-control-presentation", &control.key))
                                 .num_columns(2)
                                 .spacing([18.0, 9.0])
@@ -2559,33 +2513,25 @@ fn draw_channel_detail_page(
                                         crate::ui::icons::SPARKLE,
                                         app.tr("Icon")
                                     ));
-                                    let selected_icon = crate::ui::icons::named_control_icon(
-                                        &app.hardware_control_icon_draft,
-                                    )
-                                    .unwrap_or_else(|| {
-                                        crate::ui::icons::control(&control.kind, "")
-                                    });
-                                    let selected_name = crate::ui::icons::control_icon_name(
-                                        &app.hardware_control_icon_draft,
-                                    )
-                                    .unwrap_or("Use channel default");
-                                    egui::ComboBox::from_id_salt((
-                                        "hardware-control-icon",
-                                        &control.key,
-                                    ))
-                                    .width(field_width)
-                                    .selected_text(format!(
-                                        "{selected_icon}  {}",
-                                        app.tr(selected_name)
-                                    ))
-                                    .show_ui(ui, |ui| {
-                                        draw_control_icon_choices(
-                                            app.language,
-                                            ui,
-                                            &mut app.hardware_control_icon_draft,
-                                            &mut app.hardware_control_icon_search,
-                                        );
-                                    });
+                                    crate::ui::icons::searchable_icon_picker(
+                                        ui,
+                                        ("hardware-control-icon", &control.key),
+                                        &mut app.hardware_control_icon_draft,
+                                        crate::ui::icons::IconPickerConfig {
+                                            presets: crate::ui::icons::CONTROL_ICON_PRESETS,
+                                            fallback_glyph: crate::ui::icons::control(
+                                                &control.kind,
+                                                "",
+                                            ),
+                                            fallback_name: &icon_default_label,
+                                            width: field_width,
+                                            show_selected_name: true,
+                                            search_hint: &icon_search_hint,
+                                            presets_label: &icon_presets_label,
+                                            no_matches_label: &icon_no_matches_label,
+                                            clear_label: Some(&icon_default_label),
+                                        },
+                                    );
                                     ui.end_row();
 
                                     if matches!(control.kind.as_str(), "mosfet" | "pwm") {

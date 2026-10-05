@@ -147,6 +147,9 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         ui.data_mut(|d| d.get_temp::<String>(name_id).unwrap_or_default());
                     let mut icon =
                         ui.data_mut(|d| d.get_temp::<String>(icon_id).unwrap_or_default());
+                    if icon.trim().is_empty() {
+                        icon = "sparkle".to_string();
+                    }
                     let mut duration_ms =
                         ui.data_mut(|d| d.get_temp::<u64>(duration_id).unwrap_or(1000));
                     let default_relay = relay_capabilities
@@ -163,7 +166,18 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         ui.end_row();
 
                         ui.label(app.tr("Icon:"));
-                        ui.text_edit_singleline(&mut icon);
+                        let search_hint = app.tr("Search icons...");
+                        let presets_label = app.tr("Presets");
+                        let no_matches_label = app.tr("No matching icons");
+                        crate::ui::icons::searchable_control_icon_picker(
+                            ui,
+                            "custom_template_icon_picker",
+                            &mut icon,
+                            240.0,
+                            &search_hint,
+                            &presets_label,
+                            &no_matches_label,
+                        );
                         ui.end_row();
 
                         ui.label(app.tr("Duration:"));

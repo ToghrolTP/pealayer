@@ -2516,6 +2516,10 @@ fn draw_control_icon_picker(
     size: f32,
 ) {
     let icon = crate::ui::icons::control(&control.kind, &control.icon);
+    let search_hint = app.tr("Search icons...");
+    let presets_label = app.tr("Presets");
+    let no_matches_label = app.tr("No matching icons");
+    let default_label = app.tr("Use channel default");
     let response = ui
         .add(
             egui::Button::new(egui::RichText::new(icon).size(size))
@@ -2538,11 +2542,23 @@ fn draw_control_icon_picker(
             let mut search = ui
                 .data_mut(|data| data.get_temp::<String>(search_id))
                 .unwrap_or_default();
-            if crate::ui::hardware_control::draw_control_icon_choices(
-                app.language,
+            if crate::ui::icons::searchable_icon_picker_contents(
                 ui,
                 &mut selected,
                 &mut search,
+                search_id,
+                response.clicked(),
+                crate::ui::icons::IconPickerConfig {
+                    presets: crate::ui::icons::CONTROL_ICON_PRESETS,
+                    fallback_glyph: icon,
+                    fallback_name: &default_label,
+                    width: 220.0,
+                    show_selected_name: true,
+                    search_hint: &search_hint,
+                    presets_label: &presets_label,
+                    no_matches_label: &no_matches_label,
+                    clear_label: Some(&default_label),
+                },
             ) {
                 update_control_presentation(
                     app,
@@ -2901,7 +2917,6 @@ fn open_control_dialog(
     app.hardware_control_name_draft = control.name.clone();
     app.hardware_control_group_draft = control.group.clone();
     app.hardware_control_icon_draft = control.icon.clone();
-    app.hardware_control_icon_search.clear();
     app.hardware_control_color_draft = if control.color.trim().is_empty() {
         "#38D27A".to_string()
     } else {
@@ -8686,30 +8701,25 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         effect_card(ui, card_width, |ui| {
                                                             if let Some(edit) = inline_edit.as_mut() {
                                                                 ui.horizontal(|ui| {
-                                                                    let selected_icon = crate::ui::icons::named_control_icon(
-                                                                        &edit.icon,
-                                                                    )
-                                                                    .unwrap_or(crate::ui::icons::SPARKLE);
-                                                                    egui::ComboBox::from_id_salt(
+                                                                    let search_hint = self.app.tr("Search icons...");
+                                                                    let presets_label = self.app.tr("Presets");
+                                                                    let no_matches_label = self.app.tr("No matching icons");
+                                                                    crate::ui::icons::searchable_icon_picker(
+                                                                        ui,
                                                                         item_id.with("inline-icon"),
-                                                                    )
-                                                                    .width(38.0)
-                                                                    .selected_text(selected_icon)
-                                                                    .show_ui(ui, |ui| {
-                                                                        for (key, label, glyph) in
-                                                                            crate::ui::icons::CONTROL_ICON_PRESETS
-                                                                        {
-                                                                            if ui
-                                                                                .selectable_label(
-                                                                                    edit.icon.eq_ignore_ascii_case(key),
-                                                                                    format!("{glyph}  {label}"),
-                                                                                )
-                                                                                .clicked()
-                                                                            {
-                                                                                edit.icon = (*key).to_string();
-                                                                            }
-                                                                        }
-                                                                    });
+                                                                        &mut edit.icon,
+                                                                        crate::ui::icons::IconPickerConfig {
+                                                                            presets: crate::ui::icons::CONTROL_ICON_PRESETS,
+                                                                            fallback_glyph: crate::ui::icons::SPARKLE,
+                                                                            fallback_name: "Sparkle",
+                                                                            width: 38.0,
+                                                                            show_selected_name: false,
+                                                                            search_hint: &search_hint,
+                                                                            presets_label: &presets_label,
+                                                                            no_matches_label: &no_matches_label,
+                                                                            clear_label: None,
+                                                                        },
+                                                                    );
                                                                     let action_spacing = ui.spacing().item_spacing.x;
                                                                     let name_width = (ui.available_width()
                                                                         - 48.0
@@ -9022,6 +9032,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let group_name_label = self.app.tr("Name");
                             let group_icon_label = self.app.tr("Icon");
                             let presets_label = self.app.tr("Presets");
+                            let icon_search_hint = self.app.tr("Search icons...");
+                            let icon_no_matches_label = self.app.tr("No matching icons");
+                            let group_default_icon_label = self.app.tr("Folder");
                             let save_group_label = self.app.tr("Save to PCController");
                             let cancel_group_label = self.app.tr("Cancel");
                             let rtl_ui = self.app.rtl;
@@ -9048,40 +9061,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             );
                                             ui.end_row();
                                             ui.label(&group_icon_label);
-                                            ui.horizontal(|ui| {
-                                                ui.label(
-                                                    crate::ui::icons::named_control_icon(&draft.icon)
-                                                        .unwrap_or(
-                                                            crate::ui::icons::FOLDER_OPEN,
-                                                        ),
-                                                );
-                                                ui.add(
-                                                    egui::TextEdit::singleline(&mut draft.icon)
-                                                        .desired_width(130.0)
-                                                        .hint_text("folder"),
-                                                );
-                                                egui::ComboBox::from_id_salt(
-                                                    "effect_group_icon_preset",
-                                                )
-                                                .selected_text(&presets_label)
-                                                .show_ui(ui, |ui| {
-                                                    for (key, label, glyph) in
-                                                        crate::ui::icons::CONTROL_ICON_PRESETS
-                                                    {
-                                                        if ui
-                                                            .selectable_label(
-                                                                draft
-                                                                    .icon
-                                                                    .eq_ignore_ascii_case(key),
-                                                                format!("{glyph}  {label}"),
-                                                            )
-                                                            .clicked()
-                                                        {
-                                                            draft.icon = (*key).to_string();
-                                                        }
-                                                    }
-                                                });
-                                            });
+                                            crate::ui::icons::searchable_icon_picker(
+                                                ui,
+                                                "effect_group_icon_picker",
+                                                &mut draft.icon,
+                                                crate::ui::icons::IconPickerConfig {
+                                                    presets: crate::ui::icons::CONTROL_ICON_PRESETS,
+                                                    fallback_glyph: crate::ui::icons::FOLDER_OPEN,
+                                                    fallback_name: &group_default_icon_label,
+                                                    width: 250.0,
+                                                    show_selected_name: true,
+                                                    search_hint: &icon_search_hint,
+                                                    presets_label: &presets_label,
+                                                    no_matches_label: &icon_no_matches_label,
+                                                    clear_label: None,
+                                                },
+                                            );
                                             ui.end_row();
                                         });
                                     ui.add_space(10.0);

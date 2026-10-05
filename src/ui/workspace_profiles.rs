@@ -43,6 +43,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     .hint_text(name_hint),
             );
             workspace_icon_picker(
+                app.language,
                 ui,
                 "new-workspace-icon",
                 &mut app.workspace_profile_icon_draft,
@@ -106,6 +107,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     );
                                     metadata_changed |= name_response.changed();
                                     metadata_changed |= workspace_icon_picker(
+                                        app.language,
                                         ui,
                                         format!("workspace-icon-{id}"),
                                         &mut icon,
@@ -190,6 +192,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 }
 
 fn workspace_icon_picker(
+    language: crate::config::AppLanguage,
     ui: &mut egui::Ui,
     id: impl std::hash::Hash + std::fmt::Debug,
     value: &mut String,
@@ -197,18 +200,13 @@ fn workspace_icon_picker(
     if value.trim().is_empty() {
         *value = "window".to_string();
     }
-    let previous = value.clone();
-    egui::ComboBox::from_id_salt(id)
-        .width(126.0)
-        .selected_text(format!(
-            "{}  {}",
-            crate::ui::icons::workspace_icon(value),
-            crate::ui::icons::workspace_icon_name(value)
-        ))
-        .show_ui(ui, |ui| {
-            for (key, label, glyph) in crate::ui::icons::WORKSPACE_ICON_PRESETS {
-                ui.selectable_value(value, (*key).to_string(), format!("{glyph}  {label}"));
-            }
-        });
-    *value != previous
+    crate::ui::icons::searchable_workspace_icon_picker(
+        ui,
+        id,
+        value,
+        126.0,
+        &crate::ui::i18n::tr(language, "Search icons..."),
+        &crate::ui::i18n::tr(language, "Presets"),
+        &crate::ui::i18n::tr(language, "No matching icons"),
+    )
 }

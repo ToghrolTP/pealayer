@@ -79,15 +79,165 @@ pub fn control_icon_name(name: &str) -> Option<&'static str> {
         .map(|(_, label, _)| *label)
 }
 
-fn control_icon_preset_matches(key: &str, label: &str, query: &str) -> bool {
+fn icon_preset_matches(key: &str, label: &str, query: &str) -> bool {
     let query = query.trim().to_lowercase();
     query.is_empty() || key.to_lowercase().contains(&query) || label.to_lowercase().contains(&query)
 }
 
-/// A single searchable icon combobox shared by effect editors. The closed
-/// control shows the selected Phosphor icon and its human-readable name. Its
-/// popup keeps search and results as separate sections so the layout stays
-/// predictable as filtering changes the visible presets.
+/// Presentation and catalog data for the shared icon picker. Keeping this in
+/// one component prevents workspace, effect, and hardware-channel selectors
+/// from drifting back to unrelated text boxes and preset menus.
+#[derive(Clone, Copy)]
+pub struct IconPickerConfig<'a> {
+    pub presets: &'a [(&'a str, &'a str, &'a str)],
+    pub fallback_glyph: &'a str,
+    pub fallback_name: &'a str,
+    pub width: f32,
+    pub show_selected_name: bool,
+    pub search_hint: &'a str,
+    pub presets_label: &'a str,
+    pub no_matches_label: &'a str,
+    pub clear_label: Option<&'a str>,
+}
+
+fn icon_preset<'a>(
+    presets: &'a [(&'a str, &'a str, &'a str)],
+    value: &str,
+) -> Option<&'a (&'a str, &'a str, &'a str)> {
+    presets
+        .iter()
+        .find(|(key, _, _)| key.eq_ignore_ascii_case(value.trim()))
+}
+
+/// Draw the popup body used by both combobox selectors and compact icon
+/// buttons. The first row is always search; optional defaults and preset
+/// results form separate, consistently divided sections below it.
+pub fn searchable_icon_picker_contents(
+    ui: &mut eframe::egui::Ui,
+    value: &mut String,
+    search: &mut String,
+    search_id: eframe::egui::Id,
+    request_focus: bool,
+    config: IconPickerConfig<'_>,
+) -> bool {
+    use eframe::egui;
+
+    let previous = value.clone();
+    let search_response = ui
+        .horizontal(|ui| {
+            ui.label(egui::RichText::new(MAGNIFYING_GLASS).color(ui.visuals().weak_text_color()));
+            ui.add(
+                egui::TextEdit::singleline(search)
+                    .id_salt(search_id.with("input"))
+                    .hint_text(config.search_hint)
+                    .desired_width(ui.available_width()),
+            )
+        })
+        .inner;
+    if request_focus {
+        search_response.request_focus();
+    }
+
+    if let Some(clear_label) = config.clear_label {
+        ui.separator();
+        if ui
+            .selectable_label(
+                value.trim().is_empty(),
+                format!("{}  {clear_label}", config.fallback_glyph),
+            )
+            .clicked()
+        {
+            value.clear();
+            search.clear();
+            ui.close();
+        }
+    }
+
+    ui.separator();
+    ui.label(
+        egui::RichText::new(config.presets_label)
+            .small()
+            .strong()
+            .color(ui.visuals().weak_text_color()),
+    );
+
+    let mut match_count = 0;
+    for (key, label, glyph) in config.presets {
+        if !icon_preset_matches(key, label, search) {
+            continue;
+        }
+        match_count += 1;
+        if ui
+            .selectable_label(value.eq_ignore_ascii_case(key), format!("{glyph}  {label}"))
+            .clicked()
+        {
+            *value = (*key).to_string();
+            search.clear();
+            ui.close();
+        }
+    }
+    if match_count == 0 {
+        ui.label(
+            egui::RichText::new(config.no_matches_label)
+                .italics()
+                .color(ui.visuals().weak_text_color()),
+        );
+    }
+
+    *value != previous
+}
+
+/// A single searchable icon combobox shared by all native egui editors. The
+/// closed control shows the selected Phosphor icon and, when space permits,
+/// its human-readable name.
+pub fn searchable_icon_picker(
+    ui: &mut eframe::egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    value: &mut String,
+    config: IconPickerConfig<'_>,
+) -> bool {
+    use eframe::egui;
+
+    let button_id = ui.make_persistent_id(&id_salt);
+    let search_id = button_id.with("search");
+    let was_open = egui::ComboBox::is_open(ui.ctx(), button_id);
+    let mut search = ui.data_mut(|data| data.get_temp::<String>(search_id).unwrap_or_default());
+    let previous = value.clone();
+    let selected = icon_preset(config.presets, value);
+    let selected_glyph = selected
+        .map(|(_, _, glyph)| *glyph)
+        .unwrap_or(config.fallback_glyph);
+    let selected_name = selected.map(|(_, label, _)| *label).unwrap_or_else(|| {
+        if value.trim().is_empty() {
+            config.fallback_name
+        } else {
+            value.trim()
+        }
+    });
+    let selected_text = if config.show_selected_name && !selected_name.is_empty() {
+        format!("{selected_glyph}  {selected_name}")
+    } else {
+        selected_glyph.to_string()
+    };
+
+    egui::ComboBox::from_id_salt(&id_salt)
+        .width(config.width)
+        .height(320.0)
+        .selected_text(selected_text)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show_ui(ui, |ui| {
+            ui.set_min_width(config.width.max(260.0));
+            searchable_icon_picker_contents(ui, value, &mut search, search_id, !was_open, config);
+        });
+
+    if egui::ComboBox::is_open(ui.ctx(), button_id) {
+        ui.data_mut(|data| data.insert_temp(search_id, search));
+    } else {
+        ui.data_mut(|data| data.remove::<String>(search_id));
+    }
+    *value != previous
+}
+
 pub fn searchable_control_icon_picker(
     ui: &mut eframe::egui::Ui,
     id_salt: impl std::hash::Hash + std::fmt::Debug,
@@ -97,86 +247,49 @@ pub fn searchable_control_icon_picker(
     presets_label: &str,
     no_matches_label: &str,
 ) -> bool {
-    use eframe::egui;
+    searchable_icon_picker(
+        ui,
+        id_salt,
+        value,
+        IconPickerConfig {
+            presets: CONTROL_ICON_PRESETS,
+            fallback_glyph: SPARKLE,
+            fallback_name: "Sparkle",
+            width,
+            show_selected_name: true,
+            search_hint,
+            presets_label,
+            no_matches_label,
+            clear_label: None,
+        },
+    )
+}
 
-    let button_id = ui.make_persistent_id(&id_salt);
-    let search_id = button_id.with("search");
-    let was_open = egui::ComboBox::is_open(ui.ctx(), button_id);
-    let mut search = ui.data_mut(|data| data.get_temp::<String>(search_id).unwrap_or_default());
-    let previous = value.clone();
-    let selected_glyph = named_control_icon(value).unwrap_or(SPARKLE);
-    let selected_name = control_icon_name(value)
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| value.trim());
-    let selected_text = if selected_name.is_empty() {
-        selected_glyph.to_string()
-    } else {
-        format!("{selected_glyph}  {selected_name}")
-    };
-
-    egui::ComboBox::from_id_salt(&id_salt)
-        .width(width)
-        .height(320.0)
-        .selected_text(selected_text)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .show_ui(ui, |ui| {
-            ui.set_min_width(width.max(260.0));
-
-            let search_response = ui
-                .horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(MAGNIFYING_GLASS).color(ui.visuals().weak_text_color()),
-                    );
-                    ui.add(
-                        egui::TextEdit::singleline(&mut search)
-                            .id_salt(search_id.with("input"))
-                            .hint_text(search_hint)
-                            .desired_width(ui.available_width()),
-                    )
-                })
-                .inner;
-            if !was_open {
-                search_response.request_focus();
-            }
-
-            ui.separator();
-            ui.label(
-                egui::RichText::new(presets_label)
-                    .small()
-                    .strong()
-                    .color(ui.visuals().weak_text_color()),
-            );
-
-            let mut match_count = 0;
-            for (key, label, glyph) in CONTROL_ICON_PRESETS {
-                if !control_icon_preset_matches(key, label, &search) {
-                    continue;
-                }
-                match_count += 1;
-                if ui
-                    .selectable_label(value.eq_ignore_ascii_case(key), format!("{glyph}  {label}"))
-                    .clicked()
-                {
-                    *value = (*key).to_string();
-                    search.clear();
-                    ui.close();
-                }
-            }
-            if match_count == 0 {
-                ui.label(
-                    egui::RichText::new(no_matches_label)
-                        .italics()
-                        .color(ui.visuals().weak_text_color()),
-                );
-            }
-        });
-
-    if egui::ComboBox::is_open(ui.ctx(), button_id) {
-        ui.data_mut(|data| data.insert_temp(search_id, search));
-    } else {
-        ui.data_mut(|data| data.remove::<String>(search_id));
-    }
-    *value != previous
+pub fn searchable_workspace_icon_picker(
+    ui: &mut eframe::egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    value: &mut String,
+    width: f32,
+    search_hint: &str,
+    presets_label: &str,
+    no_matches_label: &str,
+) -> bool {
+    searchable_icon_picker(
+        ui,
+        id_salt,
+        value,
+        IconPickerConfig {
+            presets: WORKSPACE_ICON_PRESETS,
+            fallback_glyph: APP_WINDOW,
+            fallback_name: "Window",
+            width,
+            show_selected_name: true,
+            search_hint,
+            presets_label,
+            no_matches_label,
+            clear_label: None,
+        },
+    )
 }
 
 pub fn control(kind: &str, advertised: &str) -> &'static str {
@@ -251,17 +364,10 @@ mod tests {
         assert_eq!(named_control_icon("  LAMP "), Some(LAMP));
         assert_eq!(control_icon_name("seat"), Some("Seat"));
         assert_eq!(named_control_icon("not-a-preset"), None);
-        assert!(control_icon_preset_matches(
-            "lightbulb",
-            "Light bulb",
-            "bulb"
-        ));
-        assert!(control_icon_preset_matches(
-            "lightbulb",
-            "Light bulb",
-            "LIGHT"
-        ));
-        assert!(!control_icon_preset_matches("seat", "Seat", "lamp"));
+        assert!(icon_preset_matches("lightbulb", "Light bulb", "bulb"));
+        assert!(icon_preset_matches("lightbulb", "Light bulb", "LIGHT"));
+        assert!(!icon_preset_matches("seat", "Seat", "lamp"));
+        assert!(icon_preset_matches("timeline", "Timeline", "time"));
     }
 
     #[test]
@@ -275,5 +381,25 @@ mod tests {
         assert_eq!(workspace_icon("timeline"), WAVEFORM);
         assert_eq!(workspace_icon_name("monitor"), "Monitor");
         assert_eq!(workspace_icon("unknown"), APP_WINDOW);
+    }
+
+    #[test]
+    fn every_native_icon_editor_uses_the_shared_searchable_picker() {
+        let effects = include_str!("effects_library.rs");
+        let hardware = include_str!("hardware_control.rs");
+        let layout = include_str!("layout.rs");
+        let workspaces = include_str!("workspace_profiles.rs");
+        let four_d = include_str!("four_d.rs");
+
+        assert!(effects.contains("searchable_control_icon_picker"));
+        assert!(hardware.contains("searchable_icon_picker"));
+        assert!(layout.contains("searchable_icon_picker_contents"));
+        assert!(layout.contains("searchable_icon_picker"));
+        assert!(workspaces.contains("searchable_workspace_icon_picker"));
+        assert!(four_d.contains("searchable_control_icon_picker"));
+
+        assert!(!hardware.contains("draw_control_icon_choices"));
+        assert!(!layout.contains(concat!("effect_group_icon_", "preset")));
+        assert!(!four_d.contains("text_edit_singleline(&mut icon)"));
     }
 }
