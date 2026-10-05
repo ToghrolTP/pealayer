@@ -23,3 +23,13 @@ Native fallback/startup also apply `sub-align-x` and `sub-justify` independently
 - `cargo test --lib --locked --jobs 1 subtitle -- --test-threads=1`: 13 passed, covering all nine explicit direction/alignment combinations, processed-overlay enforcement, old-config migration, round-trip persistence, native/Web contract options/defaults, malformed enum rejection, multiline/position/font preservation, and real headless libmpv `sub-align-x`/`sub-justify` with runtime config snapshot.
 - TypeScript `tsc --noEmit`: passed. Binary compile/optimized packaging and live deployment results follow in the checkpoint.
 - No full test suite, physical output activation or native subtitle screenshot acceptance is claimed by these checks.
+
+## Deployment checkpoint
+
+- Source commit `9493e8a` and embedded Web UI commit `146ec8abc0e47f8e5491bbcdf593f6215b342e24` are pushed to PR #46. The PR remains unmerged.
+- `cargo check --bin pealayer --locked --jobs 1` and optimized `scripts/package-windows.ps1 -SkipTests -NoUpx` succeeded. The embedded PWA build is `0aab44ed8b09192e`, with 39 precached resources verified. Existing deprecation/dead-code warnings remain.
+- The old canonical process accepted `POST /api/ipc` with `quit` and exited before replacement. No force-kill was used. The new canonical `C:\Users\David\AppData\Local\Programs\Pealayer\bin\pealayer.exe` is running, observed PID `42024`; `/healthz` returned `ok` and `/api/player/status` reported `hardware_connected: true`. No hardware output was activated.
+- Live `/api/update/manifest`: commit `146ec8abc0e47f8e5491bbcdf593f6215b342e24`, `git_dirty: false`, executable SHA-256 `17dc9b52abd38a3a1ff8b321102d5e16eeaaff1fef8671756c4dc7e214c374e4`. Host-specific libmpv runtime SHA-256 remains `e56ce67cd00f06a59dc7ed5b97a49a9182a381554c755dc4570a52af1ef30e65`.
+- Live `/api/preferences` reports `subtitle_alignment: center` and the Left/Center/Right/Subtitle style dropdown. An isolated browser tab verified the visible options and default without altering preferences or the user's existing tab/draft. Screenshot: [Web alignment dropdown](subtitle-alignment-web.png).
+- Native Computer Use capture failed on both initial and fresh window bindings with `IGraphicsCaptureItemInterop.CreateForMonitor ... 0x8007041D`. No blind desktop inputs were attempted. Native screenshot acceptance therefore remains pending; the nine direction/alignment combinations and real libmpv properties are verified by the focused tests above.
+- Cafe-PC `http://cafe-pc:8080/healthz` timed out after 5 seconds. No Cafe deployment is claimed; use the peer updater when reachable. This documentation/image checkpoint follows the built code commit.
