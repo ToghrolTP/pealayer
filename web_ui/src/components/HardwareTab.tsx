@@ -42,6 +42,7 @@ import {
 } from '@ant-design/icons';
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
+import { GroupSelect } from './GroupSelect';
 
 interface HardwareTabProps {
   state: PlayerState;
@@ -331,6 +332,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
       {detailKey ? controls.filter((control) => control.key === detailKey).map((control) => <div className="channel-detail" key={control.key}>
         <div className="channel-detail__identity"><span>{controlIcon(control.kind)}</span><div><strong>{control.name || control.default_name}</strong><code>{controlIdentity(control)}</code></div></div>
         <label><span>{tr(locale, 'Name')}</span><Input defaultValue={control.name || control.default_name} onPressEnter={(event) => updatePresentation(control.key, { name: event.currentTarget.value.trim() })} /></label>
+        <label><span>{tr(locale, 'Group')}</span><GroupSelect value={control.group ?? ''} groups={controls.map((item) => item.group ?? '')} locale={locale} onChange={(group) => updatePresentation(control.key, { group })} /></label>
         <dl className="detail-list">
           <div><dt>{tr(locale, 'Order')}</dt><dd>{control.order + 1}</dd></div>
           <div><dt>{tr(locale, 'Type')}</dt><dd>{control.kind}</dd></div>

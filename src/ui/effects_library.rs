@@ -1642,6 +1642,13 @@ fn draw_sequence_step_editor(
 
 pub(crate) fn draw_effect_recording_panel(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let hardware = app.advertised_hardware();
+    let groups = crate::ui::group_picker::group_options(
+        hardware.iter().flat_map(|hardware| {
+            hardware.macros.iter().map(|effect| effect.category.as_str())
+                .chain(hardware.strip_effects.iter().map(|effect| effect.category.as_str()))
+        }),
+        &app.hardware_effect_authoring.category,
+    );
     let connected = hardware
         .as_ref()
         .is_some_and(|hardware| hardware.board_connected);
@@ -1705,11 +1712,13 @@ pub(crate) fn draw_effect_recording_panel(app: &mut PealayerApp, ui: &mut egui::
                         );
                         ui.end_row();
                         ui.label("Category");
-                        ui.add(
-                            egui::TextEdit::singleline(
-                                &mut app.hardware_effect_authoring.category,
-                            )
-                            .desired_width(180.0),
+                        crate::ui::group_picker::group_picker(
+                            ui,
+                            "recording-group",
+                            &mut app.hardware_effect_authoring.category,
+                            groups.iter().map(String::as_str),
+                            260.0,
+                            app.language,
                         );
                         ui.end_row();
                         ui.label("Capture");
@@ -1853,6 +1862,11 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .as_ref()
         .map(|value| value.strip_effects.clone())
         .unwrap_or_default();
+    let groups = crate::ui::group_picker::group_options(
+        sequences.iter().map(|effect| effect.category.as_str())
+            .chain(strips.iter().map(|effect| effect.category.as_str())),
+        &app.effect_library_draft.category,
+    );
     let geometry = crate::ui::dialog::bounded_geometry(
         ui.ctx().content_rect(),
         20.0,
@@ -2064,14 +2078,13 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     );
                                     ui.end_row();
                                     ui.label(&labels.5);
-                                    let category_align = crate::ui::i18n::input_alignment(
-                                        rtl_ui,
-                                        &draft.category,
-                                    );
-                                    ui.add(
-                                        egui::TextEdit::singleline(&mut draft.category)
-                                            .horizontal_align(category_align)
-                                            .desired_width(320.0),
+                                    crate::ui::group_picker::group_picker(
+                                        ui,
+                                        "effect-group",
+                                        &mut draft.category,
+                                        groups.iter().map(String::as_str),
+                                        320.0,
+                                        display_language,
                                     );
                                     ui.end_row();
                                     ui.label(&labels.6);

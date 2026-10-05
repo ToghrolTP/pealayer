@@ -4225,21 +4225,19 @@ fn draw_compact_control_card(
                         data.get_temp::<String>(group_draft_id)
                             .unwrap_or_else(|| control.group.clone())
                     });
-                    let edit_align = crate::ui::i18n::input_alignment(app.rtl, &draft);
                     let edit_width = (ui.available_width() * 0.42).clamp(64.0, 190.0);
-                    let edit = ui.add_sized(
-                        [edit_width, 24.0],
-                        egui::TextEdit::singleline(&mut draft)
-                            .horizontal_align(edit_align)
-                            .hint_text(app.tr("No group")),
+                    let changed = crate::ui::group_picker::group_picker(
+                        ui,
+                        group_draft_id,
+                        &mut draft,
+                        capabilities.controls.iter().map(|item| item.group.as_str()),
+                        edit_width,
+                        app.language,
                     );
-                    if edit.changed() {
+                    if changed {
                         ui.data_mut(|data| data.insert_temp(group_draft_id, draft.clone()));
                     }
-                    if ui.button(crate::ui::icons::FLOPPY_DISK).clicked()
-                        || (edit.lost_focus()
-                            && ui.input(|input| input.key_pressed(egui::Key::Enter)))
-                    {
+                    if ui.button(crate::ui::icons::FLOPPY_DISK).clicked() {
                         update_control_group(app, capabilities, control, draft);
                         ui.data_mut(|data| data.insert_temp(group_edit_id, false));
                     }
@@ -4650,22 +4648,20 @@ fn draw_control_card(
                             data.get_temp::<String>(group_draft_id)
                                 .unwrap_or_else(|| control.group.clone())
                         });
-                        let edit_align = crate::ui::i18n::input_alignment(app.rtl, &draft);
                         ui.horizontal(|ui| {
                             ui.label(app.tr("Group"));
-                            let edit = ui.add_sized(
-                                [ui.available_width().max(80.0) - 52.0, 24.0],
-                                egui::TextEdit::singleline(&mut draft)
-                                    .horizontal_align(edit_align)
-                                    .hint_text(app.tr("No group")),
+                            let changed = crate::ui::group_picker::group_picker(
+                                ui,
+                                group_draft_id,
+                                &mut draft,
+                                capabilities.controls.iter().map(|item| item.group.as_str()),
+                                ui.available_width().max(80.0) - 52.0,
+                                app.language,
                             );
-                            if edit.changed() {
+                            if changed {
                                 ui.data_mut(|data| data.insert_temp(group_draft_id, draft.clone()));
                             }
-                            if ui.button(crate::ui::icons::FLOPPY_DISK).clicked()
-                                || (edit.lost_focus()
-                                    && ui.input(|input| input.key_pressed(egui::Key::Enter)))
-                            {
+                            if ui.button(crate::ui::icons::FLOPPY_DISK).clicked() {
                                 update_control_group(app, capabilities, control, draft);
                                 editing_group = false;
                             }

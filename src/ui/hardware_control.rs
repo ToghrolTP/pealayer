@@ -2663,16 +2663,13 @@ fn draw_channel_detail_page(
                                         crate::ui::icons::FOLDER_OPEN,
                                         app.tr("Group")
                                     ));
-                                    let align = crate::ui::i18n::input_alignment(
-                                        app.rtl,
-                                        &app.hardware_control_group_draft,
-                                    );
-                                    ui.add_sized(
-                                        [field_width, 28.0],
-                                        egui::TextEdit::singleline(
-                                            &mut app.hardware_control_group_draft,
-                                        )
-                                        .horizontal_align(align),
+                                    crate::ui::group_picker::group_picker(
+                                        ui,
+                                        ("channel-group", &control.key),
+                                        &mut app.hardware_control_group_draft,
+                                        capabilities.controls.iter().map(|item| item.group.as_str()),
+                                        field_width,
+                                        app.language,
                                     );
                                     ui.end_row();
 

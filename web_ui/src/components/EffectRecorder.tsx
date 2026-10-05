@@ -3,6 +3,7 @@ import { DeleteOutlined, LoadingOutlined, SaveOutlined } from '@ant-design/icons
 import { Button, Input, Popconfirm, Select, Space, Tag } from 'antd';
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
+import { GroupSelect } from './GroupSelect';
 
 interface EffectRecorderProps {
   state: PlayerState;
@@ -51,7 +52,7 @@ export const EffectRecorder: React.FC<EffectRecorderProps> = ({ state, sendCmd, 
 
       {!recording.active && <div className="effect-recorder__grid">
         <label><span>{tr(locale, 'Name')}</span><Input value={name} autoFocus onChange={(event) => setName(event.target.value)} placeholder={tr(locale, 'Recorded effect name')} /></label>
-        <label><span>{tr(locale, 'Category')}</span><Input value={category} onChange={(event) => setCategory(event.target.value)} /></label>
+        <label><span>{tr(locale, 'Category')}</span><GroupSelect value={category} groups={(state.controller_effects ?? []).map((effect) => effect.category)} locale={locale} onChange={setCategory} /></label>
         <label><span>{tr(locale, 'Capture mode')}</span><Select value={mode} onChange={setMode} options={[
           { value: 'automatic', label: tr(locale, 'Automatic · all live sources') },
           { value: 'device-clock', label: tr(locale, 'Device clock') },
