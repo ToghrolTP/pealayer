@@ -229,6 +229,10 @@ fn main() -> eframe::Result {
         launch_config.windows_dwm_theming,
         launch_config.windows_mica_backdrop,
     );
+    crate::platform::windows::configure_window_magnetic_snap(
+        launch_config.window_magnetic_snap,
+        launch_config.window_magnetic_snap_distance as i32,
+    );
     let initial_window_title = app_name.clone();
     let icon_data = crate::config::resolved_app_icon(&launch_config)
         .and_then(|path| std::fs::read(path).ok())
@@ -812,6 +816,8 @@ fn main() -> eframe::Result {
                 live_pwm_updates: loaded_config.live_pwm_updates,
                 hardware_actions_on_press: loaded_config.hardware_actions_on_press,
                 single_instance: loaded_config.single_instance,
+                window_magnetic_snap: loaded_config.window_magnetic_snap,
+                window_magnetic_snap_distance: loaded_config.window_magnetic_snap_distance,
                 windows_mica_backdrop: loaded_config.windows_mica_backdrop,
                 windows_dwm_theming: loaded_config.windows_dwm_theming,
                 opengl_vsync: loaded_config.opengl_vsync,

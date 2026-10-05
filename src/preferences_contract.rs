@@ -636,6 +636,31 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 ("none", "Do nothing"),
             ],
         ),
+        {
+            let mut control = PreferenceControl::boolean(
+                "window_magnetic_snap",
+                "input",
+                "Window movement",
+                "Magnetic window snap",
+            );
+            control.description = Some(
+                "Snap near monitor work-area edges. Hold Ctrl while dragging to bypass it temporarily.",
+            );
+            control
+        },
+        {
+            let mut control = PreferenceControl::number(
+                "window_magnetic_snap_distance",
+                "input",
+                "Window movement",
+                "Snap distance",
+                1.0,
+                128.0,
+                1.0,
+            );
+            control.description = Some("Distance in device-independent pixels.");
+            control
+        },
         PreferenceControl::boolean(
             "single_instance",
             "advanced",
@@ -896,6 +921,30 @@ mod tests {
         assert!(matches!(control.kind, PreferenceControlKind::Boolean));
         assert_eq!(control.section, "hardware");
         assert_eq!(control.group, "Timeline");
+    }
+
+    #[test]
+    fn magnetic_window_snap_matches_the_shared_rayanlamp_contract() {
+        let config = crate::config::AppConfig::default();
+        assert!(!config.window_magnetic_snap);
+        assert_eq!(config.window_magnetic_snap_distance, 16);
+        let controls = preference_controls(&config);
+        let enabled = controls
+            .iter()
+            .find(|control| control.key == "window_magnetic_snap")
+            .expect("magnetic snap toggle");
+        assert!(matches!(enabled.kind, PreferenceControlKind::Boolean));
+        assert_eq!(enabled.section, "input");
+        assert_eq!(enabled.group, "Window movement");
+        let distance = controls
+            .iter()
+            .find(|control| control.key == "window_magnetic_snap_distance")
+            .expect("magnetic snap distance");
+        assert!(matches!(distance.kind, PreferenceControlKind::Number));
+        assert_eq!(
+            (distance.minimum, distance.maximum),
+            (Some(1.0), Some(128.0))
+        );
     }
 
     #[test]

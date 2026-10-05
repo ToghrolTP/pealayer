@@ -452,6 +452,8 @@ pub struct AppConfig {
     pub show_estop_control: bool,
     pub confirm_estop_release: bool,
     pub single_instance: bool,
+    pub window_magnetic_snap: bool,
+    pub window_magnetic_snap_distance: u32,
     pub windows_mica_backdrop: bool,
     pub windows_dwm_theming: bool,
     pub opengl_vsync: bool,
@@ -564,6 +566,10 @@ impl Default for AppConfig {
             show_estop_control: true,
             confirm_estop_release: true,
             single_instance: true,
+            // Match RayanLamp's proven opt-in policy and 16-DIP acquisition
+            // distance. Ctrl remains a live, per-message bypass.
+            window_magnetic_snap: false,
+            window_magnetic_snap_distance: 16,
             windows_mica_backdrop: false,
             windows_dwm_theming: true,
             // Reactive egui rendering does not require a continuously synced
@@ -1303,6 +1309,9 @@ impl AppConfig {
             return Err(
                 "timeline_navigation_transition_ms must be between 50 and 2000".to_string(),
             );
+        }
+        if !(1..=128).contains(&self.window_magnetic_snap_distance) {
+            return Err("window_magnetic_snap_distance must be between 1 and 128".to_string());
         }
         if self.subtitle_text_replacements.len() > 128 {
             return Err("subtitle_text_replacements contains more than 128 entries".to_string());
@@ -2054,6 +2063,29 @@ mod tests {
         let config = AppConfig::default();
         assert!(config.show_estop_control);
         assert!(config.confirm_estop_release);
+    }
+
+    #[test]
+    fn window_magnetic_snap_defaults_and_distance_are_validated() {
+        let defaults = AppConfig::default();
+        assert!(!defaults.window_magnetic_snap);
+        assert_eq!(defaults.window_magnetic_snap_distance, 16);
+        assert!(defaults.validate().is_ok());
+
+        for valid in [1, 16, 128] {
+            let config = AppConfig {
+                window_magnetic_snap_distance: valid,
+                ..AppConfig::default()
+            };
+            assert!(config.validate().is_ok(), "distance {valid}");
+        }
+        for invalid in [0, 129] {
+            let config = AppConfig {
+                window_magnetic_snap_distance: invalid,
+                ..AppConfig::default()
+            };
+            assert!(config.validate().is_err(), "distance {invalid}");
+        }
     }
 
     #[test]

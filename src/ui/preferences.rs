@@ -1651,6 +1651,7 @@ fn group_icon(group: &str) -> &'static str {
         "Motion controls" => crate::ui::icons::SEAT,
         "Keyboard shortcuts" => crate::ui::icons::KEYBOARD,
         "Video surface" => crate::ui::icons::SELECTION_ALL,
+        "Window movement" => crate::ui::icons::APP_WINDOW,
         "Status bar" => crate::ui::icons::GAUGE,
         "Windows graphics and composition" | "Dialog windows" => crate::ui::icons::APP_WINDOW,
         _ => crate::ui::icons::GEAR,

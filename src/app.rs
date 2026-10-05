@@ -461,6 +461,8 @@ pub struct PealayerApp {
     pub(crate) live_pwm_updates: bool,
     pub(crate) hardware_actions_on_press: bool,
     pub(crate) single_instance: bool,
+    pub(crate) window_magnetic_snap: bool,
+    pub(crate) window_magnetic_snap_distance: u32,
     pub(crate) windows_mica_backdrop: bool,
     pub(crate) windows_dwm_theming: bool,
     pub(crate) opengl_vsync: bool,
@@ -4861,6 +4863,8 @@ impl PealayerApp {
         cfg.show_estop_control = self.show_estop_control;
         cfg.confirm_estop_release = self.confirm_estop_release;
         cfg.single_instance = self.single_instance;
+        cfg.window_magnetic_snap = self.window_magnetic_snap;
+        cfg.window_magnetic_snap_distance = self.window_magnetic_snap_distance;
         cfg.windows_mica_backdrop = self.windows_mica_backdrop;
         cfg.windows_dwm_theming = self.windows_dwm_theming;
         cfg.opengl_vsync = self.opengl_vsync;
@@ -5047,6 +5051,8 @@ impl PealayerApp {
         self.show_estop_control = config.show_estop_control;
         self.confirm_estop_release = config.confirm_estop_release;
         self.single_instance = config.single_instance;
+        self.window_magnetic_snap = config.window_magnetic_snap;
+        self.window_magnetic_snap_distance = config.window_magnetic_snap_distance;
         self.windows_mica_backdrop = config.windows_mica_backdrop;
         self.windows_dwm_theming = config.windows_dwm_theming;
         self.opengl_vsync = config.opengl_vsync;
@@ -5061,6 +5067,10 @@ impl PealayerApp {
         crate::platform::windows::configure_window_composition(
             self.windows_dwm_theming,
             self.windows_mica_backdrop,
+        );
+        crate::platform::windows::configure_window_magnetic_snap(
+            self.window_magnetic_snap,
+            self.window_magnetic_snap_distance as i32,
         );
         if let Some(layout_json) = config.workspace_dock_layout.as_deref()
             && let Ok(mut dock_state) = serde_json::from_str::<
@@ -6289,6 +6299,8 @@ impl Default for PealayerApp {
             live_pwm_updates: true,
             hardware_actions_on_press: true,
             single_instance: true,
+            window_magnetic_snap: false,
+            window_magnetic_snap_distance: 16,
             windows_mica_backdrop: false,
             windows_dwm_theming: true,
             opengl_vsync: false,

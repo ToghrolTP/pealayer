@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering},
+};
 
 #[cfg(target_os = "windows")]
 fn wide_null_path(path: &std::path::Path) -> Vec<u16> {
@@ -139,6 +142,9 @@ static SIMPLE_VIDEO_ASPECT_ENABLED: AtomicBool = AtomicBool::new(false);
 static SIMPLE_VIDEO_ASPECT_BITS: AtomicU64 = AtomicU64::new(0);
 static SIMPLE_VIDEO_CHROME_WIDTH: AtomicI32 = AtomicI32::new(0);
 static SIMPLE_VIDEO_CHROME_HEIGHT: AtomicI32 = AtomicI32::new(0);
+static WINDOW_MAGNETIC_SNAP_ENABLED: AtomicBool = AtomicBool::new(false);
+static WINDOW_MAGNETIC_SNAP_DISTANCE: AtomicI32 = AtomicI32::new(16);
+static WINDOW_MAGNETIC_DRAG: Mutex<MagneticDragSession> = Mutex::new(MagneticDragSession::new());
 static ORIGINAL_WINDOW_PROC: AtomicIsize = AtomicIsize::new(0);
 static SHELL_COMMAND: AtomicU32 = AtomicU32::new(0);
 static SHELL_PAUSED: AtomicBool = AtomicBool::new(true);
@@ -316,6 +322,7 @@ pub fn get_registered_hwnd() -> isize {
 const WM_ENTERSIZEMOVE_VALUE: u32 = 0x0231;
 const WM_EXITSIZEMOVE_VALUE: u32 = 0x0232;
 const WM_SIZING_VALUE: u32 = 0x0214;
+const WM_MOVING_VALUE: u32 = 0x0216;
 
 const WMSZ_LEFT_VALUE: usize = 1;
 const WMSZ_RIGHT_VALUE: usize = 2;
@@ -333,12 +340,409 @@ struct SimpleVideoAspectConstraint {
     chrome_height: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct SizingRect {
     left: i32,
     top: i32,
     right: i32,
     bottom: i32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct SnapAxisAnchor {
+    active: bool,
+    bypass: bool,
+    cursor: i32,
+    raw_leading: i32,
+    raw_trailing: i32,
+    snapped_leading: i32,
+    snapped_trailing: i32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct MagneticDragSession {
+    x: SnapAxisAnchor,
+    y: SnapAxisAnchor,
+    control_bypass: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct SnapResult {
+    snapped_x: bool,
+    snapped_y: bool,
+}
+
+impl MagneticDragSession {
+    const fn new() -> Self {
+        Self {
+            x: SnapAxisAnchor {
+                active: false,
+                bypass: false,
+                cursor: 0,
+                raw_leading: 0,
+                raw_trailing: 0,
+                snapped_leading: 0,
+                snapped_trailing: 0,
+            },
+            y: SnapAxisAnchor {
+                active: false,
+                bypass: false,
+                cursor: 0,
+                raw_leading: 0,
+                raw_trailing: 0,
+                snapped_leading: 0,
+                snapped_trailing: 0,
+            },
+            control_bypass: false,
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    fn apply(
+        &mut self,
+        target: SizingRect,
+        cursor: (i32, i32),
+        work_area: SizingRect,
+        dpi: u32,
+        threshold_dip: i32,
+        control_down: bool,
+    ) -> (SizingRect, SnapResult, bool) {
+        if target.width() <= 0 || target.height() <= 0 || threshold_dip <= 0 {
+            self.reset();
+            return (target, SnapResult::default(), false);
+        }
+        if control_down {
+            return self.detach_for_control(target, cursor);
+        }
+        if self.control_bypass {
+            // Ctrl is a live override. Releasing it during the same native
+            // move loop re-arms both axes immediately at the current position.
+            self.control_bypass = false;
+            self.x = SnapAxisAnchor::default();
+            self.y = SnapAxisAnchor::default();
+        }
+
+        let release_distance = i64::from(scaled_snap_threshold(threshold_dip, dpi) + 4).max(8);
+        let mut raw = target;
+        let mut handled = false;
+        if self.x.active {
+            let delta = i64::from(cursor.0) - i64::from(self.x.cursor);
+            (raw.left, raw.right) =
+                translate_snap_axis(self.x.raw_leading, self.x.raw_trailing, delta);
+            if delta.abs() >= release_distance {
+                self.x = SnapAxisAnchor {
+                    bypass: true,
+                    ..SnapAxisAnchor::default()
+                };
+                handled = true;
+            }
+        }
+        if self.y.active {
+            let delta = i64::from(cursor.1) - i64::from(self.y.cursor);
+            (raw.top, raw.bottom) =
+                translate_snap_axis(self.y.raw_leading, self.y.raw_trailing, delta);
+            if delta.abs() >= release_distance {
+                self.y = SnapAxisAnchor {
+                    bypass: true,
+                    ..SnapAxisAnchor::default()
+                };
+                handled = true;
+            }
+        }
+
+        let (candidate, candidate_result) =
+            snap_to_work_area(raw, work_area, scaled_snap_threshold(threshold_dip, dpi));
+        let mut output = raw;
+        let mut result = SnapResult::default();
+        let x_can_acquire = !self.x.bypass;
+        let y_can_acquire = !self.y.bypass;
+        if self.x.bypass && !candidate_result.snapped_x {
+            self.x.bypass = false;
+        }
+        if self.y.bypass && !candidate_result.snapped_y {
+            self.y.bypass = false;
+        }
+
+        if self.x.active {
+            output.left = self.x.snapped_leading;
+            output.right = self.x.snapped_trailing;
+            result.snapped_x = true;
+            handled = true;
+        } else if x_can_acquire && candidate_result.snapped_x {
+            self.x.acquire(
+                cursor.0,
+                raw.left,
+                raw.right,
+                candidate.left,
+                candidate.right,
+            );
+            output.left = candidate.left;
+            output.right = candidate.right;
+            result.snapped_x = true;
+            handled = true;
+        }
+        if self.y.active {
+            output.top = self.y.snapped_leading;
+            output.bottom = self.y.snapped_trailing;
+            result.snapped_y = true;
+            handled = true;
+        } else if y_can_acquire && candidate_result.snapped_y {
+            self.y.acquire(
+                cursor.1,
+                raw.top,
+                raw.bottom,
+                candidate.top,
+                candidate.bottom,
+            );
+            output.top = candidate.top;
+            output.bottom = candidate.bottom;
+            result.snapped_y = true;
+            handled = true;
+        }
+        (output, result, handled)
+    }
+
+    fn detach_for_control(
+        &mut self,
+        mut target: SizingRect,
+        cursor: (i32, i32),
+    ) -> (SizingRect, SnapResult, bool) {
+        let mut handled = false;
+        if self.x.active {
+            (target.left, target.right) = translate_snap_axis(
+                self.x.raw_leading,
+                self.x.raw_trailing,
+                i64::from(cursor.0) - i64::from(self.x.cursor),
+            );
+            handled = true;
+        }
+        if self.y.active {
+            (target.top, target.bottom) = translate_snap_axis(
+                self.y.raw_leading,
+                self.y.raw_trailing,
+                i64::from(cursor.1) - i64::from(self.y.cursor),
+            );
+            handled = true;
+        }
+        self.x = SnapAxisAnchor::default();
+        self.y = SnapAxisAnchor::default();
+        self.control_bypass = true;
+        (target, SnapResult::default(), handled)
+    }
+}
+
+impl SnapAxisAnchor {
+    fn acquire(
+        &mut self,
+        cursor: i32,
+        raw_leading: i32,
+        raw_trailing: i32,
+        snapped_leading: i32,
+        snapped_trailing: i32,
+    ) {
+        *self = Self {
+            active: true,
+            bypass: false,
+            cursor,
+            raw_leading,
+            raw_trailing,
+            snapped_leading,
+            snapped_trailing,
+        };
+    }
+}
+
+fn scaled_snap_threshold(threshold_dip: i32, dpi: u32) -> i32 {
+    if threshold_dip <= 0 {
+        return 0;
+    }
+    let dpi = i64::from(if dpi == 0 { 96 } else { dpi });
+    ((i64::from(threshold_dip) * dpi + 48) / 96).clamp(1, i64::from(i32::MAX)) as i32
+}
+
+fn nearest_snap_delta(first: i64, second: i64, threshold: i64) -> Option<i32> {
+    [first, second]
+        .into_iter()
+        .filter(|delta| delta.abs() <= threshold)
+        .min_by_key(|delta| delta.abs())
+        .map(|delta| delta.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32)
+}
+
+fn snap_to_work_area(
+    moving: SizingRect,
+    work_area: SizingRect,
+    threshold: i32,
+) -> (SizingRect, SnapResult) {
+    if moving.width() <= 0
+        || moving.height() <= 0
+        || work_area.width() <= 0
+        || work_area.height() <= 0
+        || threshold <= 0
+    {
+        return (moving, SnapResult::default());
+    }
+    let x_delta = nearest_snap_delta(
+        i64::from(work_area.left) - i64::from(moving.left),
+        i64::from(work_area.right) - i64::from(moving.right),
+        i64::from(threshold),
+    );
+    let y_delta = nearest_snap_delta(
+        i64::from(work_area.top) - i64::from(moving.top),
+        i64::from(work_area.bottom) - i64::from(moving.bottom),
+        i64::from(threshold),
+    );
+    let mut snapped = moving;
+    if let Some(delta) = x_delta {
+        (snapped.left, snapped.right) =
+            translate_snap_axis(moving.left, moving.right, i64::from(delta));
+    }
+    if let Some(delta) = y_delta {
+        (snapped.top, snapped.bottom) =
+            translate_snap_axis(moving.top, moving.bottom, i64::from(delta));
+    }
+    (
+        snapped,
+        SnapResult {
+            snapped_x: x_delta.is_some(),
+            snapped_y: y_delta.is_some(),
+        },
+    )
+}
+
+fn translate_snap_axis(leading: i32, trailing: i32, delta: i64) -> (i32, i32) {
+    let width = i64::from(trailing) - i64::from(leading);
+    if width <= 0 {
+        return (leading, trailing);
+    }
+    let delta = delta.clamp(
+        i64::from(i32::MIN) - i64::from(leading),
+        i64::from(i32::MAX) - i64::from(trailing),
+    );
+    let translated = i64::from(leading) + delta;
+    (translated as i32, (translated + width) as i32)
+}
+
+pub fn configure_window_magnetic_snap(enabled: bool, distance_dip: i32) {
+    WINDOW_MAGNETIC_SNAP_DISTANCE.store(distance_dip.clamp(1, 128), Ordering::Release);
+    WINDOW_MAGNETIC_SNAP_ENABLED.store(enabled, Ordering::Release);
+    if !enabled && let Ok(mut drag) = WINDOW_MAGNETIC_DRAG.lock() {
+        drag.reset();
+    }
+}
+
+fn reset_window_magnetic_drag() {
+    if let Ok(mut drag) = WINDOW_MAGNETIC_DRAG.lock() {
+        drag.reset();
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct NativePoint {
+    x: i32,
+    y: i32,
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct NativeMonitorInfo {
+    size: u32,
+    monitor: SizingRect,
+    work: SizingRect,
+    flags: u32,
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn constrain_native_moving_rect(hwnd: isize, lparam: isize) -> bool {
+    const MONITOR_DEFAULTTONEAREST: u32 = 2;
+    const VK_CONTROL: i32 = 0x11;
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetAsyncKeyState(key: i32) -> i16;
+        fn GetCursorPos(point: *mut NativePoint) -> i32;
+        fn GetDpiForWindow(hwnd: isize) -> u32;
+        fn GetMonitorInfoW(monitor: isize, info: *mut NativeMonitorInfo) -> i32;
+        fn MonitorFromRect(rect: *const SizingRect, flags: u32) -> isize;
+    }
+    #[link(name = "shcore")]
+    unsafe extern "system" {
+        fn GetDpiForMonitor(monitor: isize, dpi_type: i32, dpi_x: *mut u32, dpi_y: *mut u32)
+        -> i32;
+    }
+
+    if !WINDOW_MAGNETIC_SNAP_ENABLED.load(Ordering::Acquire) || lparam == 0 {
+        reset_window_magnetic_drag();
+        return false;
+    }
+    // SAFETY: WM_MOVING supplies a writable RECT for this window-procedure
+    // call. The null case is rejected above.
+    let target = unsafe { &mut *(lparam as *mut SizingRect) };
+    let mut cursor = NativePoint { x: 0, y: 0 };
+    if unsafe { GetCursorPos(&mut cursor) } == 0 {
+        reset_window_magnetic_drag();
+        return false;
+    }
+    let control_down = (unsafe { GetAsyncKeyState(VK_CONTROL) } as u16 & 0x8000) != 0;
+    let monitor = unsafe { MonitorFromRect(target, MONITOR_DEFAULTTONEAREST) };
+    if monitor == 0 {
+        reset_window_magnetic_drag();
+        return false;
+    }
+    let mut dpi = unsafe { GetDpiForWindow(hwnd) };
+    if dpi == 0 {
+        dpi = 96;
+    }
+    // Snapping is evaluated against the destination monitor selected from
+    // the proposed WM_MOVING rectangle, so the threshold must use that
+    // monitor's effective DPI rather than the DPI of the monitor being left.
+    let mut monitor_dpi_x = 0;
+    let mut monitor_dpi_y = 0;
+    if unsafe { GetDpiForMonitor(monitor, 0, &mut monitor_dpi_x, &mut monitor_dpi_y) } >= 0
+        && monitor_dpi_x > 0
+    {
+        dpi = monitor_dpi_x;
+    }
+    let work_area = if control_down {
+        SizingRect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        }
+    } else {
+        let mut info = NativeMonitorInfo {
+            size: std::mem::size_of::<NativeMonitorInfo>() as u32,
+            monitor: *target,
+            work: *target,
+            flags: 0,
+        };
+        if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+            reset_window_magnetic_drag();
+            return false;
+        }
+        info.work
+    };
+    let distance = WINDOW_MAGNETIC_SNAP_DISTANCE.load(Ordering::Acquire);
+    let Ok(mut drag) = WINDOW_MAGNETIC_DRAG.lock() else {
+        return false;
+    };
+    let (snapped, _, handled) = drag.apply(
+        *target,
+        (cursor.x, cursor.y),
+        work_area,
+        dpi,
+        distance,
+        control_down,
+    );
+    if handled {
+        *target = snapped;
+    }
+    handled
 }
 
 impl SizingRect {
@@ -525,6 +929,10 @@ fn observe_native_window_message(message: u32) {
     let Some(active) = native_window_operation_transition(message) else {
         return;
     };
+    // A magnetic latch belongs to exactly one native move loop. Resetting at
+    // both boundaries also prevents a Preferences/config change from replaying
+    // an old snapped coordinate during the next drag.
+    reset_window_magnetic_drag();
     WINDOW_MOVE_RESIZE_ACTIVE.store(active, Ordering::Release);
     if !active {
         // Playback callbacks are intentionally suppressed during the modal
@@ -1122,6 +1530,13 @@ unsafe extern "system" fn shell_window_proc(
     };
 
     observe_native_window_message(message);
+
+    if message == WM_MOVING_VALUE
+        && unsafe { constrain_native_moving_rect(hwnd.0 as isize, lparam.0) }
+    {
+        // WM_MOVING uses the same in/out RECT convention as WM_SIZING.
+        return LRESULT(1);
+    }
 
     if message == WM_SIZING_VALUE && unsafe { constrain_native_sizing_rect(wparam.0, lparam.0) } {
         // WM_SIZING expects TRUE after the application updates the proposed
@@ -1803,6 +2218,126 @@ mod tests {
         assert!(take_native_window_operation_ended());
         assert!(!take_native_window_operation_ended());
         assert_eq!(native_window_operation_transition(0x000F), None);
+    }
+
+    fn rect(left: i32, top: i32, right: i32, bottom: i32) -> SizingRect {
+        SizingRect {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    #[test]
+    fn magnetic_window_snap_threshold_scales_with_destination_dpi() {
+        assert_eq!(scaled_snap_threshold(16, 0), 16);
+        assert_eq!(scaled_snap_threshold(16, 96), 16);
+        assert_eq!(scaled_snap_threshold(16, 144), 24);
+        assert_eq!(scaled_snap_threshold(16, 192), 32);
+    }
+
+    #[test]
+    fn magnetic_window_snap_acquires_all_work_area_edges() {
+        let work = rect(0, 0, 1000, 800);
+        for (moving, expected, expected_result) in [
+            (
+                rect(8, 200, 108, 300),
+                rect(0, 200, 100, 300),
+                SnapResult {
+                    snapped_x: true,
+                    snapped_y: false,
+                },
+            ),
+            (
+                rect(892, 200, 992, 300),
+                rect(900, 200, 1000, 300),
+                SnapResult {
+                    snapped_x: true,
+                    snapped_y: false,
+                },
+            ),
+            (
+                rect(200, 8, 300, 108),
+                rect(200, 0, 300, 100),
+                SnapResult {
+                    snapped_x: false,
+                    snapped_y: true,
+                },
+            ),
+            (
+                rect(200, 692, 300, 792),
+                rect(200, 700, 300, 800),
+                SnapResult {
+                    snapped_x: false,
+                    snapped_y: true,
+                },
+            ),
+        ] {
+            let (snapped, result) = snap_to_work_area(moving, work, 10);
+            assert_eq!(snapped, expected);
+            assert_eq!(result, expected_result);
+        }
+    }
+
+    #[test]
+    fn magnetic_window_snap_breakaway_uses_raw_acquisition_rect() {
+        let work = rect(0, 0, 1000, 800);
+        let raw = rect(8, 100, 108, 200);
+        let mut drag = MagneticDragSession::new();
+        let (snapped, result, handled) = drag.apply(raw, (100, 150), work, 96, 10, false);
+        assert!(handled && result.snapped_x);
+        assert_eq!(snapped, rect(0, 100, 100, 200));
+
+        let (released, result, handled) = drag.apply(snapped, (120, 150), work, 96, 10, false);
+        assert!(handled && !result.snapped_x);
+        assert_eq!(released, rect(28, 100, 128, 200));
+    }
+
+    #[test]
+    fn magnetic_window_snap_control_detaches_then_rearms_in_same_drag() {
+        let work = rect(0, 0, 1000, 800);
+        let mut drag = MagneticDragSession::new();
+        let (snapped, _, _) = drag.apply(rect(8, 100, 108, 200), (100, 150), work, 96, 10, false);
+
+        let (detached, result, handled) =
+            drag.apply(snapped, (110, 150), SizingRect::default(), 96, 10, true);
+        assert!(handled);
+        assert_eq!(result, SnapResult::default());
+        assert_eq!(detached, rect(18, 100, 118, 200));
+
+        let (resnapped, result, handled) =
+            drag.apply(rect(5, 120, 105, 220), (115, 170), work, 96, 10, false);
+        assert!(handled && result.snapped_x && !result.snapped_y);
+        assert_eq!(resnapped, rect(0, 120, 100, 220));
+    }
+
+    #[test]
+    fn magnetic_window_snap_corner_axes_release_independently() {
+        let work = rect(0, 0, 1000, 800);
+        let mut drag = MagneticDragSession::new();
+        let (corner, result, _) = drag.apply(rect(8, 8, 108, 108), (100, 100), work, 96, 10, false);
+        assert!(result.snapped_x && result.snapped_y);
+
+        let (released, result, handled) = drag.apply(corner, (120, 103), work, 96, 10, false);
+        assert!(handled && !result.snapped_x && result.snapped_y);
+        assert_eq!(released, rect(28, 0, 128, 100));
+    }
+
+    #[test]
+    fn magnetic_window_snap_reset_clears_latches_and_control_bypass() {
+        let work = rect(0, 0, 1000, 800);
+        let mut drag = MagneticDragSession::new();
+        let (snapped, _, _) = drag.apply(rect(8, 100, 108, 200), (100, 150), work, 96, 10, false);
+        let _ = drag.apply(snapped, (110, 150), SizingRect::default(), 96, 10, true);
+        assert!(drag.control_bypass);
+        drag.reset();
+        assert_eq!(drag, MagneticDragSession::new());
+
+        let (right, result, handled) =
+            drag.apply(rect(892, 240, 992, 340), (942, 290), work, 96, 10, false);
+        assert!(handled && result.snapped_x && !result.snapped_y);
+        assert_eq!(right, rect(900, 240, 1000, 340));
     }
 
     fn assert_video_aspect(
