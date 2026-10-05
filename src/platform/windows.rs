@@ -138,6 +138,7 @@ static WINDOW_DWM_THEMING: AtomicBool = AtomicBool::new(true);
 static WINDOW_MICA_BACKDROP: AtomicBool = AtomicBool::new(false);
 static WINDOW_MOVE_RESIZE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static WINDOW_MOVE_RESIZE_ENDED: AtomicBool = AtomicBool::new(false);
+static WINDOW_LIVE_VIDEO_DURING_MOVE: AtomicBool = AtomicBool::new(true);
 static SIMPLE_VIDEO_ASPECT_ENABLED: AtomicBool = AtomicBool::new(false);
 static SIMPLE_VIDEO_ASPECT_BITS: AtomicU64 = AtomicU64::new(0);
 static SIMPLE_VIDEO_CHROME_WIDTH: AtomicI32 = AtomicI32::new(0);
@@ -944,6 +945,26 @@ fn observe_native_window_message(message: u32) {
 
 pub fn native_window_operation_active() -> bool {
     WINDOW_MOVE_RESIZE_ACTIVE.load(Ordering::Acquire)
+}
+
+pub fn configure_live_video_during_window_move(enabled: bool) {
+    WINDOW_LIVE_VIDEO_DURING_MOVE.store(enabled, Ordering::Release);
+}
+
+fn video_rendering_allowed_during_window_operation(active: bool, enabled: bool) -> bool {
+    !active || enabled
+}
+
+/// Whether libmpv's decoder-frame callback and GL paint callback should keep
+/// presenting while Windows owns the thread in its native move/resize loop.
+/// Property wakeups are deliberately still coalesced during that loop: the
+/// frame callback already repaints at media cadence and drains queued state,
+/// whereas repainting for both streams made the title bar trail the pointer.
+pub fn native_window_video_rendering_allowed() -> bool {
+    video_rendering_allowed_during_window_operation(
+        native_window_operation_active(),
+        WINDOW_LIVE_VIDEO_DURING_MOVE.load(Ordering::Acquire),
+    )
 }
 
 pub fn take_native_window_operation_ended() -> bool {
@@ -2201,7 +2222,7 @@ mod tests {
     }
 
     #[test]
-    fn native_move_resize_messages_gate_rendering_until_the_operation_ends() {
+    fn native_move_resize_messages_track_the_operation_until_it_ends() {
         WINDOW_MOVE_RESIZE_ACTIVE.store(false, Ordering::Release);
         WINDOW_MOVE_RESIZE_ENDED.store(false, Ordering::Release);
 
@@ -2218,6 +2239,18 @@ mod tests {
         assert!(take_native_window_operation_ended());
         assert!(!take_native_window_operation_ended());
         assert_eq!(native_window_operation_transition(0x000F), None);
+    }
+
+    #[test]
+    fn live_video_is_the_default_move_loop_policy_with_freeze_as_fallback() {
+        assert!(video_rendering_allowed_during_window_operation(
+            false, false
+        ));
+        assert!(video_rendering_allowed_during_window_operation(false, true));
+        assert!(video_rendering_allowed_during_window_operation(true, true));
+        assert!(!video_rendering_allowed_during_window_operation(
+            true, false
+        ));
     }
 
     fn rect(left: i32, top: i32, right: i32, bottom: i32) -> SizingRect {

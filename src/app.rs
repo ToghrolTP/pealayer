@@ -471,6 +471,7 @@ pub struct PealayerApp {
     pub(crate) windows_mica_backdrop: bool,
     pub(crate) windows_dwm_theming: bool,
     pub(crate) opengl_vsync: bool,
+    pub(crate) live_video_during_window_move: bool,
     pub(crate) native_dialog_windows: bool,
     pub(crate) native_preferences: Option<crate::ui::preferences::NativePreferencesController>,
     pub(crate) status_bar: crate::config::StatusBarConfig,
@@ -699,16 +700,16 @@ impl eframe::App for PealayerApp {
         let is_pointer_down = ui.input(|i| i.pointer.any_down());
         let native_window_operating = crate::platform::windows::native_window_operation_active();
         if crate::platform::windows::take_native_window_operation_ended() {
-            // The libmpv callbacks are quiet during Windows' modal move loop.
-            // Paint once on release to consume queued state and present the
-            // newest frame without waiting for another decoder wakeup.
+            // Always paint once on release: live mode consumes any final
+            // geometry/property change, while compatibility mode replaces the
+            // deliberately retained frame without waiting for another wakeup.
             ui.ctx().request_repaint();
         }
         // Only throttle the MPV render pass for a real window/timeline drag.
         // `egui_is_using_pointer()` is also true while seeking or holding the
         // video surface, where suppressing paint freezes the very preview the
         // gesture is meant to control.
-        self.is_window_operating = native_window_operating
+        self.is_window_operating = (native_window_operating && !self.live_video_during_window_move)
             || should_throttle_video_render(
                 is_pointer_down,
                 self.is_window_operating,
@@ -4889,6 +4890,7 @@ impl PealayerApp {
         cfg.windows_mica_backdrop = self.windows_mica_backdrop;
         cfg.windows_dwm_theming = self.windows_dwm_theming;
         cfg.opengl_vsync = self.opengl_vsync;
+        cfg.live_video_during_window_move = self.live_video_during_window_move;
         cfg.native_dialog_windows = self.native_dialog_windows;
         cfg.auto_reload_config = self.auto_reload_config;
         cfg.status_bar = self.status_bar;
@@ -5087,6 +5089,7 @@ impl PealayerApp {
         self.windows_mica_backdrop = config.windows_mica_backdrop;
         self.windows_dwm_theming = config.windows_dwm_theming;
         self.opengl_vsync = config.opengl_vsync;
+        self.live_video_during_window_move = config.live_video_during_window_move;
         self.native_dialog_windows = config.native_dialog_windows;
         self.auto_reload_config = config.auto_reload_config;
         self.status_bar = config.status_bar;
@@ -5102,6 +5105,9 @@ impl PealayerApp {
         crate::platform::windows::configure_window_magnetic_snap(
             self.window_magnetic_snap,
             self.window_magnetic_snap_distance as i32,
+        );
+        crate::platform::windows::configure_live_video_during_window_move(
+            self.live_video_during_window_move,
         );
         if let Some(layout_json) = config.workspace_dock_layout.as_deref()
             && let Ok(mut dock_state) = serde_json::from_str::<
@@ -6340,6 +6346,7 @@ impl Default for PealayerApp {
             windows_mica_backdrop: false,
             windows_dwm_theming: true,
             opengl_vsync: false,
+            live_video_during_window_move: true,
             native_dialog_windows: true,
             native_preferences: None,
             status_bar: crate::config::StatusBarConfig::default(),

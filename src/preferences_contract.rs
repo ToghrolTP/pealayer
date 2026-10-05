@@ -719,6 +719,18 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Windows graphics and composition",
             "Use OpenGL vertical sync",
         ),
+        {
+            let mut control = PreferenceControl::boolean(
+                "live_video_during_window_move",
+                "advanced",
+                "Windows graphics and composition",
+                "Keep video playing while moving the window",
+            );
+            control.description = Some(
+                "Render live libmpv frames during a native window drag. Turn this off only as a compatibility fallback for a problematic graphics driver.",
+            );
+            control
+        },
         PreferenceControl::boolean(
             "native_dialog_windows",
             "advanced",
@@ -1009,6 +1021,25 @@ mod tests {
         assert_eq!(
             (distance.minimum, distance.maximum),
             (Some(1.0), Some(128.0))
+        );
+    }
+
+    #[test]
+    fn live_video_during_native_window_movement_is_enabled_and_configurable() {
+        let config = crate::config::AppConfig::default();
+        assert!(config.live_video_during_window_move);
+        let controls = preference_controls(&config);
+        let control = controls
+            .iter()
+            .find(|control| control.key == "live_video_during_window_move")
+            .expect("live window-movement video preference");
+        assert!(matches!(control.kind, PreferenceControlKind::Boolean));
+        assert_eq!(control.section, "advanced");
+        assert_eq!(control.group, "Windows graphics and composition");
+        assert!(
+            control
+                .description
+                .is_some_and(|description| description.contains("compatibility fallback"))
         );
     }
 

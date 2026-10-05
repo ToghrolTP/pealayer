@@ -460,6 +460,10 @@ pub struct AppConfig {
     pub windows_mica_backdrop: bool,
     pub windows_dwm_theming: bool,
     pub opengl_vsync: bool,
+    /// Keep libmpv frames repainting while Windows runs its modal title-bar
+    /// move/resize loop. Disable this only as a compatibility fallback for a
+    /// graphics driver that cannot present smoothly during native movement.
+    pub live_video_during_window_move: bool,
     pub native_dialog_windows: bool,
     pub auto_reload_config: bool,
     pub status_bar: StatusBarConfig,
@@ -582,6 +586,10 @@ impl Default for AppConfig {
             // swap loop. Some Windows OpenGL drivers flicker with V-Sync, so
             // keep it opt-in while retaining the persisted preference.
             opengl_vsync: false,
+            // Winit delivers WM_PAINT while the Windows move/resize modal loop
+            // is active. Keep the decoder frame callback driving those paints;
+            // only redundant property wakeups are suppressed during the drag.
+            live_video_during_window_move: true,
             // Preferences is an owned native tool window on Windows. Keep the
             // embedded implementation as a runtime fallback when process or
             // window creation is unavailable.

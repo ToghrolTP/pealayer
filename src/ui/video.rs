@@ -739,10 +739,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let callback = egui::PaintCallback {
         rect,
         callback: Arc::new(eframe::egui_glow::CallbackFn::new(move |_info, painter| {
-            // Check the native flag at paint time as well as the egui-sampled
-            // flag. WM_ENTERSIZEMOVE can arrive after the frame was assembled
-            // but before this callback runs.
-            if is_operating || crate::platform::windows::native_window_operation_active() {
+            // Check the configured native policy at paint time as well as the
+            // egui-sampled drag flag. WM_ENTERSIZEMOVE can arrive after this
+            // frame was assembled; live mode must still present it, while the
+            // compatibility fallback deliberately retains the last frame.
+            if is_operating || !crate::platform::windows::native_window_video_rendering_allowed() {
                 return;
             }
             let gl = painter.gl();

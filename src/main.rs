@@ -233,6 +233,9 @@ fn main() -> eframe::Result {
         launch_config.window_magnetic_snap,
         launch_config.window_magnetic_snap_distance as i32,
     );
+    crate::platform::windows::configure_live_video_during_window_move(
+        launch_config.live_video_during_window_move,
+    );
     let initial_window_title = app_name.clone();
     let icon_data = crate::config::resolved_app_icon(&launch_config)
         .and_then(|path| std::fs::read(path).ok())
@@ -394,12 +397,12 @@ fn main() -> eframe::Result {
 
             let egui_ctx = cc.egui_ctx.clone();
             render_context.set_update_callback(move || {
-                // Windows uses a modal non-client loop while moving/resizing a
-                // window. Flooding that loop with a decoder repaint for every
-                // video frame makes the window trail and jitter under the
-                // pointer. DWM can move the last composed frame smoothly; the
-                // app explicitly schedules a fresh paint on WM_EXITSIZEMOVE.
-                if !crate::platform::windows::native_window_operation_active() {
+                // WM_PAINT continues to be dispatched by winit inside the
+                // Windows move/resize modal loop. Let the decoder frame stream
+                // drive that paint at the media's natural cadence so playback
+                // remains live. The old frozen-frame behavior remains an
+                // explicit compatibility preference for problematic drivers.
+                if crate::platform::windows::native_window_video_rendering_allowed() {
                     egui_ctx.request_repaint();
                 }
             });
@@ -476,6 +479,10 @@ fn main() -> eframe::Result {
 
             let egui_ctx2 = cc.egui_ctx.clone();
             mpv_client.set_wakeup_callback(move || {
+                // Decoder-frame updates above are sufficient to present video
+                // during the modal move loop. Coalesce property-event wakeups
+                // until release so time-pos and other observations cannot add
+                // a second repaint stream that makes the window trail.
                 if !crate::platform::windows::native_window_operation_active() {
                     egui_ctx2.request_repaint();
                 }
@@ -827,6 +834,7 @@ fn main() -> eframe::Result {
                 windows_mica_backdrop: loaded_config.windows_mica_backdrop,
                 windows_dwm_theming: loaded_config.windows_dwm_theming,
                 opengl_vsync: loaded_config.opengl_vsync,
+                live_video_during_window_move: loaded_config.live_video_during_window_move,
                 native_dialog_windows: loaded_config.native_dialog_windows,
                 native_preferences: None,
                 status_bar: loaded_config.status_bar,
