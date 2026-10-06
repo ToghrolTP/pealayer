@@ -151,6 +151,13 @@ pub struct HardwareEffectAuthoringState {
     pub anchor_ms: u64,
     pub pending_operation: Option<String>,
     pub pending_saved_macro_id: Option<u64>,
+    /// The most recent effect whose upsert was acknowledged by PCController.
+    ///
+    /// Catalog refreshes are asynchronous, so the cached capability snapshot
+    /// can legitimately lag behind a successful publish. Keep the explicit
+    /// acknowledgement as immediate authority for Run/Delete instead of
+    /// leaving those controls disabled until the next polling cycle.
+    pub acknowledged_effect_reference: Option<String>,
     pub status: String,
 }
 
@@ -166,9 +173,42 @@ impl Default for HardwareEffectAuthoringState {
             anchor_ms: 0,
             pending_operation: None,
             pending_saved_macro_id: None,
+            acknowledged_effect_reference: None,
             status: String::new(),
         }
     }
+}
+
+impl HardwareEffectAuthoringState {
+    fn acknowledge_effect_publish(&mut self, reference: &str) {
+        self.acknowledged_effect_reference = canonical_effect_reference(reference);
+    }
+
+    fn forget_effect_publish(&mut self, reference: &str) {
+        let reference = canonical_effect_reference(reference);
+        if self.acknowledged_effect_reference == reference {
+            self.acknowledged_effect_reference = None;
+        }
+    }
+
+    fn effect_publish_is_acknowledged(&self, reference: &str) -> bool {
+        canonical_effect_reference(reference)
+            .is_some_and(|reference| self.acknowledged_effect_reference.as_ref() == Some(&reference))
+    }
+}
+
+fn canonical_effect_reference(reference: &str) -> Option<String> {
+    let reference = reference.trim();
+    let id = if reference
+        .get(.."effect:".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("effect:"))
+    {
+        &reference["effect:".len()..]
+    } else {
+        reference
+    }
+    .trim();
+    (!id.is_empty()).then(|| format!("effect:{}", id.to_ascii_lowercase()))
 }
 
 pub struct RttState {
@@ -2685,6 +2725,12 @@ impl PealayerApp {
     }
 
     pub(crate) fn controller_effect_is_advertised(&self, reference: &str) -> bool {
+        if self
+            .hardware_effect_authoring
+            .effect_publish_is_acknowledged(reference)
+        {
+            return true;
+        }
         let reference = reference.trim();
         let id = reference.strip_prefix("effect:").unwrap_or(reference);
         self.advertised_hardware().is_some_and(|capabilities| {
@@ -2946,14 +2992,22 @@ impl PealayerApp {
                             self.board_operation_status = self.tr("Physical front panel refreshed");
                         }
                         "effect-save" => {
-                            self.effect_library_draft.reference =
+                            let reference =
                                 format!("effect:{}", self.effect_library_draft.id.trim());
+                            self.effect_library_draft.reference = reference.clone();
                             self.effect_library_draft.is_new = false;
+                            self.hardware_effect_authoring
+                                .acknowledge_effect_publish(&reference);
                             self.save_config();
                             self.engine_handle.request_catalog_refresh();
                         }
-                        "effect-delete" | "strip-config" | "strip-fill" | "strip-frame"
-                        | "strip-pixel" | "strip-status" => {
+                        "effect-delete" => {
+                            self.hardware_effect_authoring
+                                .forget_effect_publish(&self.effect_library_draft.reference);
+                            self.engine_handle.request_catalog_refresh();
+                        }
+                        "strip-config" | "strip-fill" | "strip-frame" | "strip-pixel"
+                        | "strip-status" => {
                             self.engine_handle.request_catalog_refresh();
                         }
                         _ => {}
@@ -7401,6 +7455,29 @@ mod tests {
 
         assert!(!app.estop_active);
         assert!(!app.show_estop_release_dialog);
+    }
+
+    #[test]
+    fn successful_effect_publish_is_immediately_runnable_before_catalog_refresh() {
+        let mut app = PealayerApp::default();
+        assert!(!app.controller_effect_is_advertised("effect:17"));
+
+        app.hardware_effect_authoring
+            .acknowledge_effect_publish("17");
+
+        assert!(app.controller_effect_is_advertised("effect:17"));
+        assert!(app.controller_effect_is_advertised("EFFECT:17"));
+        assert!(!app.controller_effect_is_advertised("effect:18"));
+    }
+
+    #[test]
+    fn deleting_an_acknowledged_effect_revokes_the_immediate_publish_state() {
+        let mut authoring = HardwareEffectAuthoringState::default();
+        authoring.acknowledge_effect_publish("effect:rainbow-wave");
+
+        authoring.forget_effect_publish("RAINBOW-WAVE");
+
+        assert!(!authoring.effect_publish_is_acknowledged("effect:rainbow-wave"));
     }
 
     #[test]
