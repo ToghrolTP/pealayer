@@ -354,7 +354,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         if app.current_video_path.is_some() && app.click_player_to_toggle {
             app.toggle_playback();
         } else if app.current_video_path.is_none() {
-            if let Some(path) = rfd::FileDialog::new()
+            if crate::peer::active() {
+                crate::ui::peer_browser::open(ui.ctx(), crate::ui::peer_browser::Purpose::Media, None);
+            } else if let Some(path) = rfd::FileDialog::new()
                 .add_filter(
                     &video_files_label,
                     &["mp4", "mkv", "avi", "webm", "mov", "flv"],
@@ -439,7 +441,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     .clicked()
                 {
                     ui.close();
-                    if let Some(path) = rfd::FileDialog::new()
+                    if crate::peer::active() {
+                        crate::ui::peer_browser::open(ui.ctx(), crate::ui::peer_browser::Purpose::Media, None);
+                    } else if let Some(path) = rfd::FileDialog::new()
                         .add_filter(
                             &video_files_label,
                             &["mp4", "mkv", "avi", "webm", "mov", "flv"],

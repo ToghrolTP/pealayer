@@ -1,13 +1,13 @@
 use libmpv2::Mpv;
 use std::collections::BTreeMap;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MediaPropertyGroup {
     pub name: String,
     pub properties: Vec<(String, String)>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MediaCollectionEntry {
     pub index: i64,
     pub properties: BTreeMap<String, String>,
@@ -23,7 +23,7 @@ pub struct MediaChapter {
 /// A static, factual snapshot read directly from libmpv after a file loads or
 /// when the user explicitly refreshes the Media Inspector. Exact libmpv keys
 /// are retained so the diagnostic surface never invents or obscures data.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MediaFileInfo {
     pub loaded: bool,
     pub groups: Vec<MediaPropertyGroup>,

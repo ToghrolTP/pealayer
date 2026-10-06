@@ -268,7 +268,7 @@ fn main() -> eframe::Result {
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([800.0, 600.0])
         .with_clamp_size_to_monitor_size(true);
-    if let Some(geometry) = launch_config
+    if !crate::peer::active() && let Some(geometry) = launch_config
         .workspace_session
         .window_geometry
         .or(launch_config.window_geometry)

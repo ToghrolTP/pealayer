@@ -5,6 +5,8 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 pub enum Purpose {
     Media,
+    Audio,
+    Subtitle,
     TimelineOpen,
     TimelineSave,
     ConfigImport,
@@ -309,7 +311,9 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
                     cancel = true;
                 }
                 let label = match state.purpose {
-                    Purpose::Media | Purpose::TimelineOpen => "Open",
+                    Purpose::Media | Purpose::Audio | Purpose::Subtitle | Purpose::TimelineOpen => {
+                        "Open"
+                    }
                     Purpose::TimelineSave | Purpose::ConfigExport(_) => "Save",
                     Purpose::ConfigImport => "Import",
                 };
@@ -343,6 +347,8 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
                     Purpose::ConfigExport(config)=>client.post("/api/peer/files",&serde_json::json!({"operation":"export_config","path":selected,"config":config})).map(|_|()),
                     Purpose::TimelineOpen=>client.post("/api/peer/files",&serde_json::json!({"operation":"open_timeline","path":selected})).map(|_|()),
                     Purpose::TimelineSave=>client.post("/api/peer/files",&serde_json::json!({"operation":"save_timeline","path":selected})).map(|_|()),
+                    Purpose::Audio=>client.post("/api/peer/media",&serde_json::json!({"operation":"command","name":"audio-add","args":[selected]})).map(|_|()),
+                    Purpose::Subtitle=>client.post("/api/peer/media",&serde_json::json!({"operation":"command","name":"sub-add","args":[selected]})).map(|_|()),
                     Purpose::Media=>Ok(()),
                 };
                 if let Ok(mut state) = browser.0.lock() {

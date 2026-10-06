@@ -84,12 +84,16 @@ fn browser() -> &'static Mutex<Browser> {
     BROWSER.get_or_init(Default::default)
 }
 pub fn snapshot() -> BrowserState {
+    if let Some(snapshot)=crate::peer::client().and_then(|client|client.snapshot()) {
+        return serde_json::from_value(snapshot.session.status.get("remote_browser").cloned().unwrap_or_default()).unwrap_or_default();
+    }
     browser()
         .lock()
         .map(|b| b.state.clone())
         .unwrap_or_default()
 }
 pub fn revision() -> u64 {
+    if crate::peer::active(){return snapshot().revision;}
     browser()
         .lock()
         .map(|b| b.state.revision)
@@ -112,6 +116,7 @@ fn update_neighbors(browser: &mut Browser) {
     browser.state.next_file = index.and_then(|i| files.get(i + 1)).map(|e| e.url.clone());
 }
 pub fn set_current(target: Option<&str>) {
+    if crate::peer::active(){return;}
     if let Ok(mut b) = browser().lock() {
         if b.current.as_deref() == target {
             return;
@@ -623,9 +628,14 @@ pub fn request(
     play_files: bool,
     ctx: &eframe::egui::Context,
 ) -> Result<(), String> {
+    if let Some(client)=crate::peer::client(){
+        if play_files {return client.queue("/api/peer/open",serde_json::json!({"target":target,"use_proxy":use_proxy}));}
+        return client.queue("/api/player/command",serde_json::json!({"command":"browse_remote","target":target,"use_proxy":use_proxy}));
+    }
     request_inner(target, use_proxy, play_files, false, ctx)
 }
 pub fn prefetch(target: &str, use_proxy: bool, ctx: &eframe::egui::Context) -> Result<(), String> {
+    if crate::peer::active(){return Ok(());}
     request_inner(target, Some(use_proxy), false, true, ctx)
 }
 fn request_inner(
@@ -709,6 +719,7 @@ fn request_inner(
     Ok(())
 }
 pub fn close() {
+    if let Some(client)=crate::peer::client(){let _=client.queue("/api/player/command",serde_json::json!({"command":"close_remote_browser"}));return;}
     if let Ok(mut b) = browser().lock() {
         b.state.visible = false;
         b.generation += 1;
@@ -718,9 +729,11 @@ pub fn close() {
     }
 }
 pub fn take_playback() -> Option<Playback> {
+    if crate::peer::active(){return None;}
     browser().lock().ok()?.pending_play.take()
 }
 pub fn select(target: &str, play: bool) -> Result<(), String> {
+    if let Some(client)=crate::peer::client(){return client.queue("/api/player/command",serde_json::json!({"command":"select_remote","target":target,"play":play}));}
     let mut b = browser()
         .lock()
         .map_err(|_| "Remote browser unavailable".to_string())?;
@@ -753,6 +766,7 @@ pub fn select(target: &str, play: bool) -> Result<(), String> {
     Ok(())
 }
 pub fn sort(by: SortBy, descending: bool) {
+    if let Some(client)=crate::peer::client(){let _=client.queue("/api/player/command",serde_json::json!({"command":"sort_remote","by":by,"descending":descending}));return;}
     if let Ok(mut b) = browser().lock() {
         b.state.sort = by;
         b.state.descending = descending;
@@ -783,6 +797,7 @@ pub fn step(current: &str, direction: i32, automatic: bool) -> Option<Playback> 
     })
 }
 pub fn sync_options(auto_next: bool, thumbnails: bool) {
+    if crate::peer::active(){return;}
     if let Ok(mut b) = browser().lock() {
         if b.state.auto_next != auto_next || b.state.thumbnails != thumbnails {
             b.state.auto_next = auto_next;
@@ -805,15 +820,14 @@ pub fn thumbnail(
     ctx: &eframe::egui::Context,
 ) -> Result<Option<std::path::PathBuf>, String> {
     let config = crate::platform::interop::get_live_config();
+    let peer_listing=crate::peer::active().then(snapshot);
     let mut b = browser()
         .lock()
         .map_err(|_| "Remote browser unavailable".to_string())?;
     if !config.remote_folder_thumbnails {
         return Err("Folder thumbnails are disabled.".into());
     }
-    if !b
-        .state
-        .listing
+    if !peer_listing.as_ref().map(|state|&state.listing).unwrap_or(&b.state.listing)
         .as_ref()
         .is_some_and(|l| l.entries.iter().any(|e| e.url == target && e.playable))
     {
@@ -847,21 +861,19 @@ pub fn thumbnail(
         .insert(target.clone(), "loading".into());
     drop(b);
     std::thread::spawn(move || {
-        let result = crate::server::thumbnails::get_or_generate_remote_thumbnail(
-            &target,
-            use_proxy,
-            config.open_url_proxy_url.as_deref(),
-        );
+        let result = if let Some(client)=crate::peer::client(){client.folder_thumbnail(&target)}else{
+            crate::server::thumbnails::get_or_generate_remote_thumbnail(&target,use_proxy,config.open_url_proxy_url.as_deref()).map(|file|file.path)
+        };
         if let Ok(mut b) = browser().lock() {
             b.thumbnail_workers = b.thumbnail_workers.saturating_sub(1);
             match result {
-                Ok(file) => {
+                Ok(path) => {
                     if b.thumbnail_paths.len() >= 256 {
                         if let Some(key) = b.thumbnail_paths.keys().next().cloned() {
                             b.thumbnail_paths.remove(&key);
                         }
                     }
-                    b.thumbnail_paths.insert(target.clone(), file.path);
+                    b.thumbnail_paths.insert(target.clone(), path);
                     b.state.thumbnail_status.insert(target, "ready".into());
                 }
                 Err(error) => {

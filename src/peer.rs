@@ -10,10 +10,21 @@ static CLIENT: OnceLock<Arc<Client>> = OnceLock::new();
 static INSTANCE: OnceLock<String> = OnceLock::new();
 static SERVER: OnceLock<ServerResources> = OnceLock::new();
 static TIMELINE: Mutex<Option<TimelineState>> = Mutex::new(None);
+static MEDIA_VIEW: Mutex<Option<MediaView>> = Mutex::new(None);
 static GUI_REQUESTS: Mutex<std::collections::VecDeque<GuiRequest>> =
     Mutex::new(std::collections::VecDeque::new());
 static PREVIEW_ERROR: Mutex<Option<String>> = Mutex::new(None);
 static CONSUMERS: Mutex<Vec<(String, Instant)>> = Mutex::new(Vec::new());
+pub fn consumer_present(id: &str) -> bool {
+    CONSUMERS.lock().is_ok_and(|consumers| {
+        consumers
+            .iter()
+            .any(|(known, seen)| known == id && seen.elapsed() < Duration::from_secs(15))
+    })
+}
+pub fn preference_owner_id() -> eframe::egui::Id {
+    eframe::egui::Id::new("remote_preference_preview_owner")
+}
 pub fn observe_consumer(headers: &[(String, String)]) {
     if let Some((_, id)) = headers
         .iter()
@@ -127,6 +138,8 @@ pub struct Session {
     pub status: Value,
     pub hardware: Option<crate::four_d::controller::HardwareCapabilities>,
     pub media: Option<String>,
+    #[serde(default)]
+    pub media_view: Option<MediaView>,
     pub position: f64,
     pub paused: bool,
     pub speed: f64,
@@ -134,6 +147,22 @@ pub struct Session {
     pub timeline: Option<TimelineState>,
     pub config_path: String,
     pub consumers: Vec<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+pub struct MediaView {
+    pub tracks: Vec<crate::app::MediaTrackInfo>,
+    pub file: crate::media_info::MediaFileInfo,
+    pub vid: String,
+    pub aid: String,
+    pub sid: String,
+}
+pub fn publish_media_view(view: MediaView) {
+    if !active()
+        && let Ok(mut slot) = MEDIA_VIEW.lock()
+    {
+        *slot = Some(view);
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
@@ -222,6 +251,7 @@ pub fn server_session() -> Result<Session, String> {
             .ok()
             .and_then(|value| value.clone()),
         media,
+        media_view: MEDIA_VIEW.lock().ok().and_then(|view| view.clone()),
         position: server.mpv.get_property::<f64>("time-pos").unwrap_or(0.0),
         paused: server.mpv.get_property::<bool>("pause").unwrap_or(true),
         speed: server.mpv.get_property::<f64>("speed").unwrap_or(1.0),
@@ -286,6 +316,11 @@ pub fn apply_media_operation(operation: MediaOperation) -> Result<(), String> {
                 // Opening must use the application path (session, cues, history,
                 // proxy configuration), not a raw libmpv command.
                 return Err("Use the unified Open command to load media".into());
+            }
+            if matches!(name.as_str(), "sub-add" | "audio-add" | "video-add")
+                && !crate::platform::interop::get_live_config().web_allow_file_access
+            {
+                return Err("Web host file access permission is disabled".into());
             }
             mpv.command(&name, &args.iter().map(String::as_str).collect::<Vec<_>>())
                 .map_err(|error| error.to_string())
@@ -465,6 +500,73 @@ impl Client {
         url.query_pairs_mut().append_pair("path", target);
         Ok(url.to_string())
     }
+    /// A cached image is the only filesystem output of remote folder browsing.
+    /// The authority performs discovery/FFmpeg work and owns proxy credentials.
+    pub fn folder_thumbnail(&self, target: &str) -> Result<std::path::PathBuf, String> {
+        use sha2::{Digest, Sha256};
+        use std::io::Read;
+        let directory = crate::server::thumbnails::get_thumbnail_cache_dir().join("peers");
+        let key = format!(
+            "{:x}",
+            Sha256::digest(format!("{}\n{target}", self.origin).as_bytes())
+        );
+        let path = directory.join(format!("{key}.jpg"));
+        if path.is_file() {
+            return Ok(path);
+        }
+        let mut url = self.url("/api/remote/thumbnail")?;
+        url.query_pairs_mut().append_pair("url", target);
+        let request_target = format!("{}?{}", url.path(), url.query().unwrap_or_default());
+        for _ in 0..20 {
+            let response = self
+                .request(reqwest::Method::GET, &request_target)?
+                .send()
+                .map_err(|error| error.to_string())?;
+            if response.status() == reqwest::StatusCode::ACCEPTED {
+                std::thread::sleep(Duration::from_millis(500));
+                continue;
+            }
+            let response = response
+                .error_for_status()
+                .map_err(|error| error.to_string())?;
+            let mut bytes = Vec::new();
+            response
+                .take(8 * 1024 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|error| error.to_string())?;
+            if bytes.len() > 8 * 1024 * 1024 {
+                return Err("Peer thumbnail exceeds 8 MiB".into());
+            }
+            image::load_from_memory(&bytes).map_err(|error| error.to_string())?;
+            std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+            // The caller caps in-memory entries; bound the on-disk peer cache too.
+            let mut cached = std::fs::read_dir(&directory)
+                .map_err(|error| error.to_string())?
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .path()
+                        .extension()
+                        .is_some_and(|extension| extension == "jpg")
+                })
+                .collect::<Vec<_>>();
+            cached.sort_by_key(|entry| entry.metadata().and_then(|meta| meta.modified()).ok());
+            let excess = cached.len().saturating_sub(255);
+            for entry in cached.into_iter().take(excess) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+            let staged = directory.join(format!(".{key}.{}.tmp", uuid::Uuid::new_v4()));
+            std::fs::write(&staged, bytes).map_err(|error| error.to_string())?;
+            if let Err(error) = std::fs::rename(&staged, &path) {
+                let _ = std::fs::remove_file(&staged);
+                if !path.is_file() {
+                    return Err(error.to_string());
+                }
+            }
+            return Ok(path);
+        }
+        Err("Peer thumbnail is still pending; refresh the folder to retry".into())
+    }
     pub fn save_config(&self, config: &crate::config::AppConfig) -> Result<(), String> {
         if mirroring() {
             return Ok(());
@@ -503,7 +605,7 @@ impl Client {
         }
         self.post(
             "/api/peer/config",
-            &serde_json::json!({"operation":"save","values":patch}),
+            &serde_json::json!({"operation":"save","expected":patch.keys().map(|key|(key.clone(),old.get(key).cloned().unwrap_or(Value::Null))).collect::<serde_json::Map<String,Value>>(),"values":patch}),
         )
         .map(|_| ())
     }
@@ -512,6 +614,26 @@ impl Client {
             *slot = Some(context.clone());
         }
     }
+}
+pub fn validate_config_expectations(
+    config: &crate::config::AppConfig,
+    expected: Option<&Value>,
+) -> Result<(), String> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    let expected = expected
+        .as_object()
+        .ok_or("Expected configuration must be an object")?;
+    let current = serde_json::to_value(config).map_err(|error| error.to_string())?;
+    for (key, value) in expected {
+        if current.get(key) != Some(value) {
+            return Err(format!(
+                "Setting {key} changed on another peer; refresh before saving"
+            ));
+        }
+    }
+    Ok(())
 }
 pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
     if local_port == 0 {
@@ -605,6 +727,7 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
                         changed = latest.session.status != session.status
                             || latest.session.config != session.config
                             || latest.session.media != session.media
+                            || latest.session.media_view != session.media_view
                             || latest.session.timeline != session.timeline;
                         latest.session = session;
                         latest.received = Instant::now();
@@ -640,6 +763,7 @@ pub(crate) struct PeerUiState {
     pub media_error: Option<String>,
     pub timeline: Option<TimelineState>,
     pub last_correction: Option<Instant>,
+    pub attached_external: std::collections::BTreeSet<String>,
 }
 
 fn preserve_geometry(new: &mut Value, old: Option<&Value>) {
@@ -673,5 +797,34 @@ mod tests {
         ] {
             assert!(endpoint(value).is_err());
         }
+    }
+    #[test]
+    fn configuration_conflicts_do_not_overwrite_newer_values() {
+        let config = crate::config::AppConfig::default();
+        assert!(
+            validate_config_expectations(
+                &config,
+                Some(&serde_json::json!({"volume":config.volume}))
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_config_expectations(
+                &config,
+                Some(&serde_json::json!({"volume":config.volume+1.0}))
+            )
+            .is_err()
+        );
+        assert!(validate_config_expectations(&config, Some(&serde_json::json!([]))).is_err());
+    }
+    #[test]
+    fn workspace_sharing_preserves_screen_specific_geometry() {
+        let old = serde_json::json!({"window_geometry":{"x":12},"egui_memory":"server"});
+        let mut new =
+            serde_json::json!({"name":"Shared","window_geometry":{"x":999},"egui_memory":"client"});
+        preserve_geometry(&mut new, Some(&old));
+        assert_eq!(new["window_geometry"], old["window_geometry"]);
+        assert_eq!(new["egui_memory"], old["egui_memory"]);
+        assert_eq!(new["name"], "Shared");
     }
 }

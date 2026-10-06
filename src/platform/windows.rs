@@ -1481,6 +1481,7 @@ pub fn sync_windows_jump_list_with_options(
     recent_media: &[std::path::PathBuf],
     include_quick_actions: bool,
 ) {
+    if crate::peer::active() { return; }
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::UI::Shell::{SHARD_PATHW, SHAddToRecentDocs};

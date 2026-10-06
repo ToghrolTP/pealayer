@@ -673,8 +673,16 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
             peer_result(result)
         }
         ("POST", "/api/peer/hardware") => peer_result(serde_json::from_slice(&request.body).map_err(|error|error.to_string()).and_then(crate::peer::hardware_command).map(|_|serde_json::json!({"accepted":true}))),
-        ("POST", "/api/peer/config" | "/api/peer/timeline")=>peer_result(serde_json::from_slice(&request.body).map_err(|error|error.to_string()).and_then(|value|crate::peer::gui_request(path,value))),
+        ("POST", "/api/peer/config" | "/api/peer/timeline")=>peer_result(serde_json::from_slice::<serde_json::Value>(&request.body).map_err(|error|error.to_string()).and_then(|mut value|{
+            if path=="/api/peer/config" {
+                let consumer=media_stream::header(&request.headers,"x-pealayer-client").unwrap_or("");
+                let object=value.as_object_mut().ok_or("Configuration request must be an object")?;
+                object.insert("_consumer".into(),serde_json::Value::String(consumer.to_string()));
+            }
+            crate::peer::gui_request(path,value)
+        })),
         ("POST", "/api/peer/files")=>peer_result(serde_json::from_slice(&request.body).map_err(|error|error.to_string()).and_then(|value|crate::peer::gui_request(path,value))),
+        ("POST", "/api/peer/open")=>peer_result(serde_json::from_slice(&request.body).map_err(|error|error.to_string()).and_then(|value|crate::peer::gui_request(path,value))),
         ("OPTIONS", _) => HttpResponse::text(204, "No Content", ""),
         ("GET", "/healthz") => HttpResponse::json(
             200,
@@ -870,7 +878,7 @@ fn denied_web_capability(
             | ("POST", "/api/player/command")
             | ("POST", "/api/ipc")
     );
-    let file_route = path.starts_with("/api/fs/") || path.starts_with("/api/remote/") || path=="/api/peer/files"
+    let file_route = path.starts_with("/api/fs/") || path.starts_with("/api/remote/") || matches!(path,"/api/peer/files"|"/api/peer/open")
         || matches!(path, "/api/player/frame" | "/api/player/seek-thumbnail"
             | "/api/player/taskbar-preview" | "/api/player/taskbar-preview.png" | "/api/player/taskbar-icons.png");
     let update_route = path.starts_with("/api/update/");
@@ -902,27 +910,44 @@ fn proxy_http(request: &HttpRequest, stream:&mut TcpStream)->std::io::Result<()>
     let Some(client)=crate::peer::client() else {return Ok(())};
     let route=media_stream::header(&request.headers,"x-pealayer-route").unwrap_or("");
     if route.split(',').any(|id|id.trim()==crate::peer::instance_id()) || route.split(',').count()>8 {
-        return write_http_response(stream,HttpResponse::text(508,"Loop Detected","Pealayer peer routing loop"));
+        return write_http_response_headers(stream,HttpResponse::text(508,"Loop Detected","Pealayer peer routing loop"),request.method=="HEAD");
     }
     let forwarded=if route.is_empty(){crate::peer::instance_id().to_string()}else{format!("{route},{}",crate::peer::instance_id())};
     let result=(|| -> Result<reqwest::blocking::Response,String> {
         let method=reqwest::Method::from_bytes(request.method.as_bytes()).map_err(|error|error.to_string())?;
-        let mut upstream=client.request(method,&request.target)?.timeout(Duration::from_secs(86400)).header("X-Pealayer-Route",forwarded);
+        let streaming=request.method=="GET" && request.target.split('?').next()==Some("/api/fs/file");
+        let mut upstream=client.request(method,&request.target)?.timeout(Duration::from_secs(if streaming {86400}else{10}));
+        let connection_tokens=request.headers.iter().filter(|(key,_)|key.eq_ignore_ascii_case("connection")).flat_map(|(_,value)|value.split(',')).map(|token|token.trim().to_ascii_lowercase()).collect::<Vec<_>>();
         for (key,value) in &request.headers {
-            if !matches!(key.to_ascii_lowercase().as_str(),"host"|"connection"|"content-length"|"transfer-encoding"|"upgrade"|"x-pealayer-route"|"user-agent") {upstream=upstream.header(key,value)}
+            let lower=key.to_ascii_lowercase();
+            if !hop_by_hop_header(&lower,&connection_tokens) && !matches!(lower.as_str(),"host"|"content-length"|"x-pealayer-route"|"x-pealayer-client"|"user-agent") {upstream=upstream.header(key,value)}
         }
-        upstream.body(request.body.clone()).send().map_err(|error|error.to_string())
+        let mut upstream=upstream.body(request.body.clone()).build().map_err(|error|error.to_string())?;
+        // RequestBuilder::header appends. Replace the default route instead so
+        // every relay retains the complete loop-detection chain exactly once.
+        upstream.headers_mut().insert("x-pealayer-route",reqwest::header::HeaderValue::from_str(&forwarded).map_err(|error|error.to_string())?);
+        if let Some(consumer)=media_stream::header(&request.headers,"x-pealayer-client")
+            && uuid::Uuid::parse_str(consumer).is_ok()
+        {
+            upstream.headers_mut().insert("x-pealayer-client",reqwest::header::HeaderValue::from_str(consumer).map_err(|error|error.to_string())?);
+        }
+        client.http.execute(upstream).map_err(|error|error.to_string())
     })();
-    let mut upstream=match result {Ok(response)=>response,Err(error)=>return write_http_response(stream,HttpResponse::text(502,"Bad Gateway",error))};
+    let mut upstream=match result {Ok(response)=>response,Err(error)=>return write_http_response_headers(stream,HttpResponse::text(502,"Bad Gateway",error),request.method=="HEAD")};
     write!(stream,"HTTP/1.1 {} {}\r\nConnection: close\r\n",upstream.status().as_u16(),upstream.status().canonical_reason().unwrap_or("Upstream Response"))?;
+    let connection_tokens=upstream.headers().get_all("connection").iter().filter_map(|value|value.to_str().ok()).flat_map(|value|value.split(',')).map(|token|token.trim().to_ascii_lowercase()).collect::<Vec<_>>();
     for (key,value) in upstream.headers(){
-        if matches!(key.as_str(),"connection"|"transfer-encoding"|"keep-alive"){continue}
+        if hop_by_hop_header(key.as_str(),&connection_tokens){continue}
         if let Ok(value)=value.to_str(){write!(stream,"{key}: {value}\r\n")?}
     }
     write!(stream,"\r\n")?;
     let _=stream.set_write_timeout(Some(Duration::from_secs(30)));
     if request.method!="HEAD"{std::io::copy(&mut upstream,stream)?;}
     stream.flush()
+}
+
+fn hop_by_hop_header(name:&str, connection_tokens:&[String])->bool {
+    matches!(name,"connection"|"keep-alive"|"proxy-authenticate"|"proxy-authorization"|"te"|"trailer"|"transfer-encoding"|"upgrade") || connection_tokens.iter().any(|token|token==name)
 }
 
 fn permission_denied(capability: &str) -> HttpResponse {

@@ -216,13 +216,17 @@ fn draw_external_audio(app: &mut PealayerApp, ui: &mut egui::Ui) {
         if ui
             .button(format!("{}  {}", icons::PLUS, app.tr("Add audio file...")))
             .clicked()
-            && let Some(path) = rfd::FileDialog::new()
+        {
+            if crate::peer::active() {
+                crate::ui::peer_browser::open(ui.ctx(), crate::ui::peer_browser::Purpose::Audio, None);
+            } else if let Some(path) = rfd::FileDialog::new()
                 .add_filter("Audio Files", &["mp3", "flac", "wav", "m4a", "aac", "ogg"])
                 .pick_file()
             && let Some(path_str) = path.to_str()
-        {
+            {
             let _ = app.mpv.command("audio-add", &[path_str]);
             app.refresh_media_tracks();
+            }
         }
     });
 }

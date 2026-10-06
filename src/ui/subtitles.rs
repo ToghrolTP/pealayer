@@ -337,13 +337,17 @@ fn draw_external_subtitle(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 app.tr("Add subtitle file...")
             ))
             .clicked()
-            && let Some(path) = rfd::FileDialog::new()
+        {
+            if crate::peer::active() {
+                crate::ui::peer_browser::open(ui.ctx(), crate::ui::peer_browser::Purpose::Subtitle, None);
+            } else if let Some(path) = rfd::FileDialog::new()
                 .add_filter("Subtitles", &["srt", "vtt", "ass", "ssa"])
                 .pick_file()
             && let Some(path_str) = path.to_str()
-        {
+            {
             let _ = app.mpv.command("sub-add", &[path_str]);
             app.refresh_media_tracks();
+            }
         }
     });
 }

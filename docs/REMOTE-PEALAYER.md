@@ -45,7 +45,11 @@ network or permission failure disables only its preview, not remote controls.
 Revoking file access hides the preview source but does not prevent connecting.
 File → Open and project/config import/export use a server-files dialog, not a
 consumer-native picker. Typed paths are server paths. Configuration exports
-and project saves execute on the authority.
+and project saves execute on the authority and require `.json` destinations.
+External audio/subtitle attachment also browses server files. Track metadata,
+chapters and selection come from the authority even when preview decoding fails.
+Remote-folder browsing, sorting and selection are forwarded to the authority;
+folder thumbnails are retrieved into a bounded consumer cache.
 
 ## Synchronization and safety
 
@@ -68,10 +72,16 @@ key; E-STOP remains enforced by the authority/PCController contract. Timeline
 replacement checks the previously observed timeline and rejects conflicting
 edits instead of overwriting newer work. Configuration Save waits for the
 authority's actual disk-save/application acknowledgement.
+Changed preference fields include their previously observed values, rejecting
+conflicting saves. A live preference preview has one consumer owner; other
+consumers cannot save/discard that preview. It rolls back after its owner has
+been absent for 15 seconds. An open authority Preferences editor blocks peer
+configuration edits rather than silently discarding its draft.
 
 Preferences currently reuse the embedded editor in consumer mode so a native
 helper cannot accidentally edit a local profile. Server window geometry and
 egui scroll/window memory are preserved rather than overwritten by consumers.
+Closing a consumer does not persist its lifecycle/window state to the authority.
 
 ## Access boundaries
 
@@ -83,3 +93,22 @@ loops. File access is broad host-file access: disable it where inappropriate.
 
 Validation evidence and deployment results are recorded separately; compilation
 alone does not establish two-host playback or physical hardware correctness.
+
+## Current validation checkpoint (2026-10-06)
+
+Compile-only `cargo check --tests --locked` passed. No test suites were executed.
+The first release build passed; the follow-up review changes require a new
+release build. Attempts to launch isolated authority/consumer instances were
+rejected by the execution policy. Native screenshot capture also failed with
+`0x8007041D`. No running player was replaced, no hardware output was tested,
+and no before/after screenshot is available for this feature yet.
+
+Acceptance remains open for two-instance GUI/API/WebSocket operation, HEAD and
+seek-range transfers, server-only persistence, Preferences save/discard and
+disconnect rollback, remote media/proxy failures, external track selection,
+timeline conflict handling, and hardware press/release/E-STOP over a degraded
+network. Preview clock correction is not certified frame-exact. Native RF/editor
+and messaging surfaces also need an end-to-end parity audit; relaying their
+commands alone is not evidence that every native dialog mirrors remote state.
+
+Do not treat this checkpoint as production acceptance or merge/deploy approval.
