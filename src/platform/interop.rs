@@ -2227,6 +2227,9 @@ fn gate_controller_subscription_message(
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| "PCController subscription omitted its host identity".to_string())?;
+        if !push_target.matches_source_instance(instance_id) {
+            return Err("PCController push identity differs from the selected RPC coordinator; waiting for its catalog".into());
+        }
         push_target.observe_source_instance(instance_id);
         *subscription_ready = true;
         return Ok(pending.drain(..).collect());
@@ -2254,7 +2257,6 @@ fn run_pccontroller_action_bridge(
 
     let (mut socket, _) = tungstenite::connect(endpoint)
         .map_err(|error| format!("connect to PCController action WebSocket: {error}"))?;
-    *connected_once = true;
     if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_mut() {
         stream
             .set_read_timeout(Some(Duration::from_millis(250)))
@@ -2284,11 +2286,31 @@ fn run_pccontroller_action_bridge(
     let mut receipt_order = VecDeque::new();
     let mut subscription_ready = false;
     let mut pending_pre_ack = VecDeque::new();
+    let subscription_started = Instant::now();
+    let mut subscribed_host = String::new();
+    let mut last_ping = Instant::now();
+    let mut pending_ping: Option<(u64, Instant)> = None;
     loop {
         if !push_target.is_alive() || push_target.websocket_endpoint().as_deref() != Some(endpoint)
         {
             let _ = socket.close(None);
             return Ok(());
+        }
+        if !subscription_ready && subscription_started.elapsed() > Duration::from_secs(5) {
+            return Err("PCController subscription acknowledgement timed out".into());
+        }
+        if subscription_ready && !push_target.matches_source_instance(&subscribed_host) {
+            return Err("PCController RPC coordinator changed; reconnecting push subscription".into());
+        }
+        if pending_ping.is_some_and(|(_,sent)|sent.elapsed() > Duration::from_secs(5)) {
+            return Err("PCController action transport heartbeat timed out".into());
+        }
+        if subscription_ready && pending_ping.is_none() && last_ping.elapsed() >= Duration::from_secs(2) {
+            socket.send(controller_rpc(next_id,"controller.ping",serde_json::json!({})))
+                .map_err(|error|format!("ping PCController action transport: {error}"))?;
+            pending_ping=Some((next_id,Instant::now()));
+            next_id=next_id.wrapping_add(1).max(1);
+            last_ping=Instant::now();
         }
         while let Ok(acknowledgement) = acknowledgement_rx.try_recv() {
             send_action_ack(&mut socket, &mut next_id, acknowledgement)?;
@@ -2303,6 +2325,13 @@ fn run_pccontroller_action_bridge(
                 let Ok(message) = serde_json::from_str::<Value>(&text) else {
                     continue;
                 };
+                if pending_ping.is_some_and(|(id,_)|message.get("id").and_then(Value::as_u64)==Some(id)) {
+                    if let Some(error)=message.get("error").filter(|value|!value.is_null()) { return Err(format!("PCController heartbeat rejected: {error}")); }
+                    pending_ping=None;
+                }
+                if !subscription_ready && message.get("id").and_then(Value::as_u64)==Some(1) {
+                    subscribed_host=message["result"]["instance_id"].as_str().unwrap_or_default().to_owned();
+                }
                 let was_subscription_ready = subscription_ready;
                 let ready_messages = gate_controller_subscription_message(
                     message,
@@ -2311,6 +2340,7 @@ fn run_pccontroller_action_bridge(
                     push_target,
                 )?;
                 if subscription_ready && !was_subscription_ready {
+                    *connected_once = true;
                     egui_ctx.request_repaint();
                 }
                 for message in ready_messages {
@@ -3209,12 +3239,21 @@ mod tests {
             100
         );
 
+        let acknowledgement = serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"subscribed":true,"instance_id":"new-host"}});
+        assert!(gate_controller_subscription_message(acknowledgement.clone(), &mut ready, &mut pending, &target).is_err());
+        assert!(!ready);
+        // A WebSocket on another coordinator must not overwrite RPC identity.
+        assert_eq!(handle.hardware_capabilities.lock().unwrap().as_ref().unwrap().host_instance_id,"old-host");
+        // Model the independently refreshed authoritative RPC catalog.
+        {
+            let mut slot=handle.hardware_capabilities.lock().unwrap();
+            let capabilities=slot.as_mut().unwrap();
+            capabilities.host_instance_id="new-host".into();
+            capabilities.status_led=None;
+            capabilities.status_led_revision=0;
+        }
         let buffered = gate_controller_subscription_message(
-            serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "result": {"subscribed": true, "instance_id": "new-host"}
-            }),
+            acknowledgement,
             &mut ready,
             &mut pending,
             &target,

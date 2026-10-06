@@ -495,6 +495,16 @@ impl ControllerPushTarget {
         self.lifecycle.strong_count() > 0
     }
 
+    /// Push and RPC must refer to the same coordinator, even when a local
+    /// tunnel shares the endpoint during a restart. A subscription must not
+    /// replace the identity that the authoritative RPC catalog established.
+    pub(crate) fn matches_source_instance(&self, instance_id: &str) -> bool {
+        self.hardware_capabilities.upgrade().and_then(|capabilities| {
+            capabilities.lock().ok().and_then(|slot| slot.as_ref().map(|value|
+                !instance_id.is_empty() && value.host_instance_id == instance_id))
+        }).unwrap_or(false)
+    }
+
     /// Returns the selected WebSocket URL only while the user wants a
     /// PCController connection. Direct-serial diagnostics never start a second
     /// coordinator transport.
