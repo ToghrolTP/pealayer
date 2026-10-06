@@ -450,6 +450,31 @@ pub(crate) fn timeline_keyboard_focus_id() -> egui::Id {
     egui::Id::new("timeline-keyboard-focus")
 }
 
+fn delete_selected_cues_without_timeline_focus(
+    app: &mut PealayerApp,
+    ui: &egui::Ui,
+) -> bool {
+    if app.selected_instance_ids.is_empty()
+        || app.active_drag.is_some()
+        || ui.ctx().text_edit_focused()
+        || egui::Popup::is_any_open(ui.ctx())
+        || ui
+            .ctx()
+            .memory(|memory| memory.has_focus(timeline_keyboard_focus_id()))
+        || !ui.input(|input| input.key_pressed(egui::Key::Delete))
+    {
+        return false;
+    }
+
+    let removed = app.delete_selected_timeline_cues();
+    if removed > 0 {
+        ui.ctx().request_repaint();
+        true
+    } else {
+        false
+    }
+}
+
 fn pan_timeline_offset(
     offset: egui::Vec2,
     pointer_delta: egui::Vec2,
@@ -6481,6 +6506,67 @@ mod timeline_row_tests {
         assert!(app.selected_keyframes.is_empty());
         assert!(!context.memory(|memory| memory.has_focus(timeline_keyboard_focus_id())));
         assert_eq!(app.timeline.keyframes.len(), 1, "blur must not delete keyframes");
+    }
+
+    #[test]
+    fn delete_key_removes_a_selected_cue_without_timeline_focus_but_not_during_text_editing() {
+        let context = egui::Context::default();
+        let mut app = PealayerApp::default();
+        let effect = crate::four_d::models::Effect::new(
+            "Delete shortcut".to_string(),
+            String::new(),
+            1_000,
+            Vec::new(),
+        );
+        let effect_id = effect.id;
+        app.timeline.templates.push(effect);
+        let selected = crate::four_d::models::EffectInstance::new(effect_id, 1_000);
+        app.selected_instance_ids.insert(selected.id);
+        app.timeline.instances.push(selected);
+        let delete_event = || egui::Event::Key {
+            key: egui::Key::Delete,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+
+        let output = context.run_ui(
+            egui::RawInput {
+                events: vec![delete_event()],
+                ..Default::default()
+            },
+            |ui| {
+                assert!(!ui
+                    .ctx()
+                    .memory(|memory| memory.has_focus(timeline_keyboard_focus_id())));
+                assert!(delete_selected_cues_without_timeline_focus(&mut app, ui));
+            },
+        );
+        discard_ui_output(output);
+        assert!(app.timeline.instances.is_empty());
+
+        let selected = crate::four_d::models::EffectInstance::new(effect_id, 2_000);
+        app.selected_instance_ids.insert(selected.id);
+        app.timeline.instances.push(selected);
+        let mut text = String::from("keep editing");
+        let output = context.run_ui(egui::RawInput::default(), |ui| {
+            ui.text_edit_singleline(&mut text).request_focus();
+        });
+        discard_ui_output(output);
+        let output = context.run_ui(
+            egui::RawInput {
+                events: vec![delete_event()],
+                ..Default::default()
+            },
+            |ui| {
+                ui.text_edit_singleline(&mut text);
+                assert!(ui.ctx().text_edit_focused());
+                assert!(!delete_selected_cues_without_timeline_focus(&mut app, ui));
+            },
+        );
+        discard_ui_output(output);
+        assert_eq!(app.timeline.instances.len(), 1);
     }
 
     #[test]
@@ -14422,6 +14508,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                             }
                             clear_unfocused_timeline_keyframes(self.app, ui, keyframe_hit, popup_was_open);
+                            delete_selected_cues_without_timeline_focus(self.app, ui);
 
                             if ui.ctx().memory(|memory| {
                                 memory.has_focus(timeline_keyboard_focus_id())
@@ -14687,6 +14774,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     self.app.selected_timeline_keyframe = None;
                                 } else if delete_pressed {
                                     if !self.app.selected_instance_ids.is_empty()
+                                        && self.app.selected_keyframes.is_empty()
+                                        && self.app.selected_timeline_keyframe.is_none()
+                                    {
+                                        self.app.delete_selected_timeline_cues();
+                                    } else if !self.app.selected_instance_ids.is_empty()
                                         || !self.app.selected_keyframes.is_empty()
                                         || self.app.selected_timeline_keyframe.is_some()
                                     {

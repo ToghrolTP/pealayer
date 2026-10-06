@@ -6105,6 +6105,41 @@ impl PealayerApp {
         self.sync_timeline_engine();
     }
 
+    /// Deletes every selected cue as one undoable timeline edit.
+    ///
+    /// Selection may outlive the timeline's synthetic keyboard focus (for
+    /// example after clicking another non-text control), so keyboard and menu
+    /// entry points share this model-level operation instead of duplicating a
+    /// focus-dependent retain call.
+    pub(crate) fn delete_selected_timeline_cues(&mut self) -> usize {
+        let selected = self.selected_instance_ids.clone();
+        let removed = self
+            .timeline
+            .instances
+            .iter()
+            .filter(|instance| selected.contains(&instance.id))
+            .count();
+        if removed == 0 {
+            self.selected_instance_ids.clear();
+            return 0;
+        }
+
+        self.undo_stack.push(self.snapshot_timeline());
+        if self
+            .active_drag
+            .as_ref()
+            .is_some_and(|drag| selected.contains(&drag.instance_id))
+        {
+            self.active_drag = None;
+        }
+        self.timeline
+            .instances
+            .retain(|instance| !selected.contains(&instance.id));
+        self.selected_instance_ids.clear();
+        self.commit_timeline_edit();
+        removed
+    }
+
     pub(crate) fn set_timeline_track_linked(&mut self, key: &str, linked: bool) {
         if self.timeline.track_state(key).linked == linked {
             return;
@@ -7198,6 +7233,36 @@ mod tests {
         assert_eq!(effect.duration_ms, 2_500);
         assert!(effect.actions.is_empty());
         assert_eq!(effect.controller_macro.as_ref().map(|cue| cue.id), Some(7));
+    }
+
+    #[test]
+    fn deleting_selected_cues_is_grouped_as_one_undoable_timeline_edit() {
+        let mut app = PealayerApp::default();
+        let effect = crate::four_d::models::Effect::new(
+            "Selected cue".to_string(),
+            String::new(),
+            1_000,
+            Vec::new(),
+        );
+        let effect_id = effect.id;
+        app.timeline.templates.push(effect);
+        let first = crate::four_d::models::EffectInstance::new(effect_id, 1_000);
+        let second = crate::four_d::models::EffectInstance::new(effect_id, 2_000);
+        let retained = crate::four_d::models::EffectInstance::new(effect_id, 3_000);
+        app.selected_instance_ids.insert(first.id);
+        app.selected_instance_ids.insert(second.id);
+        app.timeline.instances = vec![first, second, retained.clone()];
+
+        assert_eq!(app.delete_selected_timeline_cues(), 2);
+        assert_eq!(app.timeline.instances, vec![retained]);
+        assert!(app.selected_instance_ids.is_empty());
+
+        let deleted_state = app.snapshot_timeline();
+        let restored = app
+            .undo_stack
+            .undo(deleted_state)
+            .expect("cue deletion should create one undo checkpoint");
+        assert_eq!(restored.instances.len(), 3);
     }
 
     #[test]
