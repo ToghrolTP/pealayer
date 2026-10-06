@@ -15,6 +15,22 @@ enum HardwareTransport {
     },
 }
 
+// ControllerClient separates wire failures from server rejection messages.
+// A broken TCP stream must be discarded, but an invalid binding must not
+// disconnect a healthy coordinator. Never retry a mutation here: it may have
+// already executed before the connection failed.
+fn controller_wire_failed(error: &str) -> bool {
+    [
+        "encode PCController JSON-RPC request:",
+        "write PCController JSON-RPC request:",
+        "read PCController JSON-RPC response:",
+        "decode PCController JSON-RPC response:",
+        "PCController closed the JSON-RPC connection",
+    ]
+    .iter()
+    .any(|prefix| error.starts_with(prefix))
+}
+
 impl HardwareTransport {
     fn send(&mut self, command: Command) -> Result<(), String> {
         match self {
@@ -1112,6 +1128,16 @@ pub fn spawn_engine() -> EngineHandle {
                         } else {
                             Err("PCController is not connected".to_string())
                         };
+                        if let Err(error) = &result
+                            && controller_wire_failed(error)
+                        {
+                            if let Ok(mut guard) = engine_conn_error.lock() {
+                                *guard = Some(format!("{method}: {error}"));
+                            }
+                            // The shared cleanup below drops the stale stream;
+                            // normal connection recovery obtains a new one.
+                            engine_connected.store(false, Ordering::Relaxed);
+                        }
                         if result.is_ok()
                             && matches!(operation.as_str(), "macro-save" | "macro-discard")
                         {
@@ -2188,6 +2214,16 @@ mod tests {
         assert!(!should_yield_direct_transport(true, true, true));
         assert!(!should_yield_direct_transport(true, false, false));
         assert!(!should_yield_direct_transport(false, false, true));
+    }
+
+    #[test]
+    fn tracked_controller_calls_recover_wire_errors_not_domain_rejections() {
+        assert!(controller_wire_failed("encode PCController JSON-RPC request: socket aborted"));
+        assert!(controller_wire_failed("read PCController JSON-RPC response: timed out"));
+        assert!(controller_wire_failed("PCController closed the JSON-RPC connection"));
+        assert!(!controller_wire_failed("RF binding name already exists"));
+        assert!(!controller_wire_failed("virtual keyboard is disabled"));
+        assert!(!controller_wire_failed("PCController is not connected"));
     }
 
     #[test]
