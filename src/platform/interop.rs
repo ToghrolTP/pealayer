@@ -2128,6 +2128,25 @@ fn controller_rpc(id: u64, method: &str, params: Value) -> tungstenite::Message 
     )
 }
 
+pub(crate) fn controller_instance_id() -> String {
+    format!("pealayer:desktop-{}", std::process::id())
+}
+
+pub(crate) fn controller_instance_identity(instance_id: &str, name: &str) -> Value {
+    serde_json::json!({
+        "id": instance_id, "surface":"pealayer", "page":"player", "state":"active", "lease_seconds":45,
+        "self":{"kind":"native","pid":std::process::id(),"vars":{
+            "rpc":format!("http://127.0.0.1:{}/api/rpc",crate::config::control_port()),
+            "websocket":format!("ws://127.0.0.1:{}/ws",crate::config::control_port()),
+            "ipc":format!("http://127.0.0.1:{}/api/ipc",crate::config::control_port()),
+            "web_ui":format!("http://127.0.0.1:{}/",crate::config::control_port())}},
+        "values":{"application":name,"version":env!("CARGO_PKG_VERSION"),"commit":env!("PEALAYER_GIT_COMMIT"),
+            "os":std::env::consts::OS,"arch":std::env::consts::ARCH,
+            "app_actions":PCCONTROLLER_ACTIONS,"control_contract":"pealayer.control",
+            "control_transports":"native,http,websocket,json-rpc","coordinator":"pccontroller","serial_owner":"pccontroller"}
+    })
+}
+
 fn report_controller_instance(
     socket: &mut tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
     id: u64,
@@ -2137,30 +2156,7 @@ fn report_controller_instance(
         .send(controller_rpc(
             id,
             "controller.app.instance.report",
-            serde_json::json!({
-                "id": instance_id,
-                "surface": "pealayer",
-                "page": "player",
-                "state": "active",
-                "lease_seconds": 45,
-                "self": {
-                    "kind": "native",
-                    "pid": std::process::id(),
-                    "vars": {
-                        "rpc": format!("http://127.0.0.1:{}/api/rpc", crate::config::control_port()),
-                        "websocket": format!("ws://127.0.0.1:{}/ws", crate::config::control_port()),
-                        "ipc": format!("http://127.0.0.1:{}/api/ipc", crate::config::control_port()),
-                        "web_ui": format!("http://127.0.0.1:{}/", crate::config::control_port()),
-                    },
-                },
-                "values": {
-                    "app_actions": PCCONTROLLER_ACTIONS,
-                    "control_contract": "pealayer.control",
-                    "control_transports": "native,http,websocket,json-rpc",
-                    "coordinator": "pccontroller",
-                    "serial_owner": "pccontroller",
-                },
-            }),
+            controller_instance_identity(instance_id, &crate::config::resolved_app_name(&get_live_config())),
         ))
         .map_err(|error| format!("report Pealayer instance to PCController: {error}"))
 }
@@ -2240,7 +2236,7 @@ fn run_pccontroller_action_bridge(
             .map_err(|error| format!("configure PCController action read timeout: {error}"))?;
     }
 
-    let instance_id = format!("pealayer:desktop-{}", std::process::id());
+    let instance_id = controller_instance_id();
     let mut next_id = 1_u64;
     socket
         .send(controller_rpc(

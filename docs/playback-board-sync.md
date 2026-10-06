@@ -19,6 +19,8 @@ The clock does not actuate any relay or replace effect-cue timing.
 
 Pealayer registers its process identity, app name, version, commit, OS and
 architecture in PCController's existing leased app-instance registry.
+Playback and the reverse-control subscription share one identity and payload;
+neither can erase the other's advertised control endpoints or actions.
 It publishes playback approximately ten times per second while advancing,
 once per second while paused, and immediately upon state/seek/rate changes.
 Cache stalls, scrubbing, EOF and E-STOP hold clock advancement. No media

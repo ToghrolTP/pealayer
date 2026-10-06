@@ -60,7 +60,7 @@ pub fn spawn(
     endpoint: Arc<Mutex<String>>,
 ) {
     std::thread::spawn(move || {
-        let id = format!("pealayer:{}", crate::messaging::snapshot().instance_id);
+        let id = crate::platform::interop::controller_instance_id();
         let mut client: Option<ControllerClient> = None;
         let mut active_endpoint = String::new();
         let mut sequence = 0_u64;
@@ -164,14 +164,30 @@ pub fn spawn(
     });
 }
 fn identity(id: &str, name: &str) -> serde_json::Value {
-    json!({"id":id,"surface":"pealayer","state":"active","lease_seconds":30,
-        "self":{"kind":"process","pid":std::process::id()},
-        "values":{"application":name,"version":env!("CARGO_PKG_VERSION"),
-            "commit":env!("PEALAYER_GIT_COMMIT"),"os":std::env::consts::OS,"arch":std::env::consts::ARCH}})
+    crate::platform::interop::controller_instance_identity(id, name)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn playback_and_action_subscriptions_share_one_complete_client_identity() {
+        let id = crate::platform::interop::controller_instance_id();
+        let value = identity(&id, "Custom Player");
+        assert_eq!(value["id"], id);
+        assert_eq!(value["values"]["application"], "Custom Player");
+        assert!(
+            value["values"]["app_actions"]
+                .as_str()
+                .unwrap()
+                .contains("pealayer.pause")
+        );
+        assert!(
+            value["self"]["vars"]["rpc"]
+                .as_str()
+                .unwrap()
+                .ends_with("/api/rpc")
+        );
+    }
     #[test]
     fn playback_sample_detects_state_seek_duration_and_rate_without_false_seek() {
         let a = PlaybackSample {
