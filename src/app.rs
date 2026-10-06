@@ -479,6 +479,7 @@ pub struct PealayerApp {
     pub(crate) auto_connect_hardware: bool,
     pub(crate) click_player_to_toggle: bool,
     pub(crate) show_subseconds: bool,
+    pub(crate) human_readable_time_units: bool,
     pub(crate) seekbar_hover_thumbnails: bool,
     pub(crate) nle_seekbar_hover_thumbnails: bool,
     pub(crate) seekbar_thumbnail_preview: crate::ui::seek_preview::SeekbarThumbnailPreview,
@@ -5257,6 +5258,7 @@ impl PealayerApp {
         cfg.subtitle_text_replacements = self.subtitle_text_replacements.clone();
         cfg.audio_delay_seconds = self.audio_delay;
         cfg.show_subseconds = self.show_subseconds;
+        cfg.human_readable_time_units = self.human_readable_time_units;
         cfg.seekbar_hover_thumbnails = self.seekbar_hover_thumbnails;
         cfg.nle_seekbar_hover_thumbnails = self.nle_seekbar_hover_thumbnails;
         cfg.consistent_video_aspect_ratio = self.consistent_video_aspect_ratio;
@@ -5451,6 +5453,7 @@ impl PealayerApp {
         self.subtitle_alignment = config.subtitle_alignment;
         self.subtitle_text_replacements = config.subtitle_text_replacements.clone();
         self.show_subseconds = config.show_subseconds;
+        self.human_readable_time_units = config.human_readable_time_units;
         self.seekbar_hover_thumbnails = config.seekbar_hover_thumbnails;
         self.nle_seekbar_hover_thumbnails = config.nle_seekbar_hover_thumbnails;
         let aspect_lock_enabled =
@@ -6786,6 +6789,7 @@ impl Default for PealayerApp {
             auto_connect_hardware: true,
             click_player_to_toggle: true,
             show_subseconds: true,
+            human_readable_time_units: true,
             seekbar_hover_thumbnails: false,
             nle_seekbar_hover_thumbnails: false,
             seekbar_thumbnail_preview: crate::ui::seek_preview::SeekbarThumbnailPreview::default(),

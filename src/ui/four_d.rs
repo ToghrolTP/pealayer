@@ -186,6 +186,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             &mut duration_ms,
                             50..=10_000,
                             50.0,
+                            app.human_readable_time_units,
                         ));
                         ui.end_row();
 

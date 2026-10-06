@@ -479,6 +479,9 @@ pub struct AppConfig {
     pub temporary_fast_forward_speed: f64,
     pub subtitle_font_size: f64,
     pub numeric_input_steps: BTreeMap<String, NumericInputSteps>,
+    /// Prefer compact human units (for example `1s`) in editable time fields.
+    /// When disabled, millisecond-backed fields are always rendered as ms.
+    pub human_readable_time_units: bool,
     pub subtitle_delay_seconds: f64,
     pub subtitle_position_percent: f64,
     pub subtitle_direction: crate::subtitle::SubtitleDirection,
@@ -645,6 +648,7 @@ impl Default for AppConfig {
             temporary_fast_forward_speed: 2.0,
             subtitle_font_size: 55.0,
             numeric_input_steps: BTreeMap::new(),
+            human_readable_time_units: true,
             subtitle_delay_seconds: 0.0,
             subtitle_position_percent: 100.0,
             subtitle_direction: crate::subtitle::SubtitleDirection::Auto,

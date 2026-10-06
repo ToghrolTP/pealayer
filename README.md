@@ -58,7 +58,9 @@ without duplicating PCController's effect steps.
    snapping, quantization, keyboard nudging, duplicate/delete, or **Remove
    delay** to refine the sequence. The selected cue exposes the right control
    for its channel type, including seat/relay duration, PWM or RGB fade target,
-   easing, curve quality, and repetition.
+   easing, curve quality, and repetition. Time fields accept bare milliseconds,
+   explicit units such as `250ms`, `1.5s`, `2m`, `1h`, compound values, and
+   clock notation; Enter or focus loss commits and normalizes the value.
 4. Live capture is available in that same editor. Start recording, operate any
    advertised controls, inspect status, then choose **Finish and edit**. The
    saved PCController take opens on the editor timeline and is also placed at
@@ -115,6 +117,8 @@ hardware-free verification.
 
 ### 🖥 Operating System Integration & IPC
 Application accelerators are editable in **Preferences → Input → Application shortcuts** and persisted in the shared configuration (also exposed by Web UI preferences). Defaults: **F11** toggles fullscreen, **Shift+F10** reveals/focuses the Media Inspector, **Ctrl+Shift+F10** opens the local media's containing folder, **Ctrl+,** opens Preferences, and **Ctrl+Shift+,** opens the configuration file through its OS-registered external handler. On macOS the last two use **Cmd** instead of **Ctrl**. Empty bindings disable an accelerator; invalid/duplicate chords are rejected. These are focused-application shortcuts, not background/global hardware hotkeys. Remote streams have no local containing folder.
+
+Editable durations use human-readable units by default. **Preferences → Input → Numeric input → Human-readable time units** chooses automatic `ms`/`s`/`min`/`h` formatting; disable it when every time field should remain displayed in milliseconds. Both modes continue to accept explicit unit suffixes.
 
 Equivalent shared commands: `pealayer --media-info`, `pealayer --media-folder`, `pealayer --edit-config`, and `pealayer --preferences`. The command catalog advertises `open_media_information`, `open_media_folder`, and `edit_configuration` for IPC/HTTP/JSON-RPC consumers.
 

@@ -647,6 +647,7 @@ fn sequence_cue_context_menu(
     ui: &mut egui::Ui,
     step: &mut crate::four_d::controller::HardwareMacroStep,
     quantum_ms: u64,
+    human_readable_time_units: bool,
 ) -> Option<SequenceCueMenuAction> {
     let mut action = None;
     ui.strong(format!(
@@ -706,17 +707,17 @@ fn sequence_cue_context_menu(
     ui.menu_button(format!("{} Timing", crate::ui::icons::CLOCK), |ui| {
         ui.horizontal(|ui| {
             ui.label("Start");
-            let mut seconds = step.at_us as f64 / 1_000_000.0;
+            let mut at_us = step.at_us;
             if ui
-                .add(
-                    egui::DragValue::new(&mut seconds)
-                        .range(0.0..=3_600.0)
-                        .speed(0.01)
-                        .suffix(" s"),
-                )
+                .add(crate::duration::time_value_us_drag(
+                    &mut at_us,
+                    0..=3_600_000_000,
+                    1_000.0,
+                    human_readable_time_units,
+                ))
                 .changed()
             {
-                step.at_us = (seconds * 1_000_000.0).round() as u64;
+                step.at_us = at_us;
             }
         });
         ui.horizontal(|ui| {
@@ -725,17 +726,17 @@ fn sequence_cue_context_menu(
                 step.duration_ms = sustained.then_some(1000);
             }
             if let Some(duration) = &mut step.duration_ms {
-                let mut seconds = f64::from(*duration) / 1000.0;
+                let mut duration_ms = u64::from(*duration);
                 if ui
-                    .add(
-                        egui::DragValue::new(&mut seconds)
-                            .range(0.001..=65.535)
-                            .speed(0.01)
-                            .suffix(" s"),
-                    )
+                    .add(crate::duration::time_value_drag(
+                        &mut duration_ms,
+                        1..=65_535,
+                        10.0,
+                        human_readable_time_units,
+                    ))
                     .changed()
                 {
-                    *duration = (seconds * 1000.0).round().clamp(1.0, 65535.0) as u16;
+                    *duration = duration_ms as u16;
                 }
             }
         });
@@ -746,7 +747,10 @@ fn sequence_cue_context_menu(
         if ui
             .button(format!(
                 "Quantize to {}",
-                crate::duration::format_time_value_ms(quantum_ms)
+                crate::duration::format_time_value_ms_with_preference(
+                    quantum_ms,
+                    human_readable_time_units,
+                )
             ))
             .clicked()
         {
@@ -759,7 +763,9 @@ fn sequence_cue_context_menu(
         |ui| {
             egui::Grid::new(ui.id().with("repeat-fields"))
                 .num_columns(2)
-                .show(ui, |ui| draw_repeat_controls(ui, step));
+                .show(ui, |ui| {
+                    draw_repeat_controls(ui, step, human_readable_time_units)
+                });
         },
     );
     ui.separator();
@@ -784,6 +790,7 @@ fn draw_sequence_timeline(
     ui: &mut egui::Ui,
     draft: &mut ControllerEffectDraft,
     selected_index: &mut usize,
+    human_readable_time_units: bool,
 ) {
     let state_prefix = (
         "effect-sequence-timeline",
@@ -1114,6 +1121,7 @@ fn draw_sequence_timeline(
                                     ui,
                                     &mut draft.steps[index],
                                     quantum_ms,
+                                    human_readable_time_units,
                                 ) {
                                     menu_action = Some((index, action));
                                 }
@@ -1185,6 +1193,7 @@ fn draw_sequence_timeline(
 fn draw_repeat_controls(
     ui: &mut egui::Ui,
     step: &mut crate::four_d::controller::HardwareMacroStep,
+    human_readable_time_units: bool,
 ) {
     ui.label("Repeat");
     ui.horizontal(|ui| {
@@ -1214,6 +1223,7 @@ fn draw_repeat_controls(
                 &mut value,
                 1..=3_600_000,
                 10.0,
+                human_readable_time_units,
             ))
             .changed()
         {
@@ -1227,6 +1237,7 @@ fn draw_timeline_authoring_fields(
     ui: &mut egui::Ui,
     step: &mut crate::four_d::controller::HardwareMacroStep,
     index: usize,
+    human_readable_time_units: bool,
 ) {
     let supports_duration = matches!(
         step.kind.as_str(),
@@ -1242,6 +1253,7 @@ fn draw_timeline_authoring_fields(
                 &mut duration,
                 1..=65_535,
                 10.0,
+                human_readable_time_units,
             ))
             .changed()
         {
@@ -1326,7 +1338,7 @@ fn draw_timeline_authoring_fields(
         ui.end_row();
     }
 
-    draw_repeat_controls(ui, step);
+    draw_repeat_controls(ui, step, human_readable_time_units);
 }
 
 fn draw_sequence_step_editor(
@@ -1334,6 +1346,7 @@ fn draw_sequence_step_editor(
     draft: &mut ControllerEffectDraft,
     rtl_ui: bool,
     capabilities: Option<&crate::four_d::controller::HardwareCapabilities>,
+    human_readable_time_units: bool,
 ) {
     let selection_id = egui::Id::new((
         "effect-sequence-selected-cue",
@@ -1383,7 +1396,12 @@ fn draw_sequence_step_editor(
     });
     ui.add_space(6.0);
 
-    draw_sequence_timeline(ui, draft, &mut selected_index);
+    draw_sequence_timeline(
+        ui,
+        draft,
+        &mut selected_index,
+        human_readable_time_units,
+    );
     ui.data_mut(|data| data.insert_persisted(selection_id, selected_index));
     ui.add_space(8.0);
 
@@ -1488,17 +1506,17 @@ fn draw_sequence_step_editor(
                         ui.end_row();
 
                         ui.label("Time");
-                        let mut at_ms = step.at_us as f64 / 1_000.0;
+                        let mut at_us = step.at_us;
                         if ui
-                            .add(
-                                egui::DragValue::new(&mut at_ms)
-                                    .range(0.0..=3_600_000.0)
-                                    .speed(1.0)
-                                    .suffix(" ms"),
-                            )
+                            .add(crate::duration::time_value_us_drag(
+                                &mut at_us,
+                                0..=3_600_000_000,
+                                1_000.0,
+                                human_readable_time_units,
+                            ))
                             .changed()
                         {
-                            step.at_us = (at_ms.max(0.0) * 1_000.0).round() as u64;
+                            step.at_us = at_us;
                         }
                         ui.end_row();
 
@@ -1655,11 +1673,19 @@ fn draw_sequence_step_editor(
                                 );
                                 ui.end_row();
                                 ui.label("Visible for");
-                                ui.add(
-                                    egui::DragValue::new(step.duration_ms.get_or_insert(1_500))
-                                        .range(1..=65_535)
-                                        .suffix(" ms"),
-                                );
+                                let mut duration_ms =
+                                    u64::from(*step.duration_ms.get_or_insert(1_500));
+                                if ui
+                                    .add(crate::duration::time_value_drag(
+                                        &mut duration_ms,
+                                        1..=65_535,
+                                        10.0,
+                                        human_readable_time_units,
+                                    ))
+                                    .changed()
+                                {
+                                    step.duration_ms = Some(duration_ms as u16);
+                                }
                                 ui.end_row();
                             }
                             "rf" => {
@@ -1682,11 +1708,18 @@ fn draw_sequence_step_editor(
                                 });
                                 ui.end_row();
                                 ui.label("Pulse");
-                                ui.add(
-                                    egui::DragValue::new(step.pulse_us.get_or_insert(350))
-                                        .range(1..=65_535)
-                                        .suffix(" µs"),
-                                );
+                                let mut pulse_us = u64::from(*step.pulse_us.get_or_insert(350));
+                                if ui
+                                    .add(crate::duration::time_value_us_drag(
+                                        &mut pulse_us,
+                                        1..=65_535,
+                                        10.0,
+                                        human_readable_time_units,
+                                    ))
+                                    .changed()
+                                {
+                                    step.pulse_us = Some(pulse_us as u16);
+                                }
                                 ui.end_row();
                             }
                             "beep" => {
@@ -1698,11 +1731,19 @@ fn draw_sequence_step_editor(
                                 );
                                 ui.end_row();
                                 ui.label("Duration");
-                                ui.add(
-                                    egui::DragValue::new(step.duration_ms.get_or_insert(120))
-                                        .range(1..=65_535)
-                                        .suffix(" ms"),
-                                );
+                                let mut duration_ms =
+                                    u64::from(*step.duration_ms.get_or_insert(120));
+                                if ui
+                                    .add(crate::duration::time_value_drag(
+                                        &mut duration_ms,
+                                        1..=65_535,
+                                        10.0,
+                                        human_readable_time_units,
+                                    ))
+                                    .changed()
+                                {
+                                    step.duration_ms = Some(duration_ms as u16);
+                                }
                                 ui.end_row();
                             }
                             "rgb" => {
@@ -1816,7 +1857,12 @@ fn draw_sequence_step_editor(
                             _ => {}
                         }
 
-                        draw_timeline_authoring_fields(ui, step, index);
+                        draw_timeline_authoring_fields(
+                            ui,
+                            step,
+                            index,
+                            human_readable_time_units,
+                        );
                     });
 
                 ui.add_space(5.0);
@@ -2217,6 +2263,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
     let mut open = app.show_effect_library_editor;
     let display_language = app.language;
+    let human_readable_time_units = app.human_readable_time_units;
     let capabilities = app.advertised_hardware();
     let sequences = capabilities
         .as_ref()
@@ -2493,6 +2540,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                             &mut draft.duration_ms,
                                             1..=3_600_000,
                                             100.0,
+                                            human_readable_time_units,
                                         ));
                                     }
                                     ui.end_row();
@@ -2535,6 +2583,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     &mut app.effect_library_draft,
                                     rtl_ui,
                                     capabilities.as_ref(),
+                                    human_readable_time_units,
                                 );
                                 ui.add_space(8.0);
                                 if crate::ui::icons::disclosure_header(
@@ -2549,14 +2598,21 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                             .spacing([14.0, 8.0])
                                             .show(ui, |ui| {
                                                 ui.label("Timing tolerance");
-                                                ui.add(
-                                                    egui::DragValue::new(
-                                                        &mut app.effect_library_draft
-                                                            .timing_tolerance_us,
-                                                    )
-                                                    .range(0..=5_000_000)
-                                                    .suffix(" µs"),
+                                                let mut tolerance_us = u64::from(
+                                                    app.effect_library_draft.timing_tolerance_us,
                                                 );
+                                                if ui
+                                                    .add(crate::duration::time_value_us_drag(
+                                                        &mut tolerance_us,
+                                                        0..=5_000_000,
+                                                        100.0,
+                                                        human_readable_time_units,
+                                                    ))
+                                                    .changed()
+                                                {
+                                                    app.effect_library_draft.timing_tolerance_us =
+                                                        tolerance_us as u32;
+                                                }
                                                 ui.end_row();
                                                 ui.label("Keep outputs on cancel");
                                                 ui.checkbox(
@@ -2824,7 +2880,7 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ui| draw_sequence_timeline(ui, draft, selected),
+                    |ui| draw_sequence_timeline(ui, draft, selected, true),
                 );
                 output.textures_delta.clear();
                 output
