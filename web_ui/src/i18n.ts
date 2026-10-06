@@ -1,6 +1,13 @@
 export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
+  'Web Studio': 'استودیوی وب',
+  'Connected workspace': 'فضای کاری متصل',
+  'Connecting': 'در حال اتصال',
+  'Pealayer connection': 'اتصال پی‌لیر',
+  'New effect': 'افکت جدید',
+  'Armed': 'آمادهٔ ضبط',
+  'Record hardware': 'ضبط سخت‌افزار',
   'Loading…': 'در حال بارگذاری…',
   'This view could not load': 'بارگذاری این صفحه ممکن نشد',
   'Use Ctrl or Command plus wheel to scroll tracks vertically': 'پیمایش عمودی ترک‌ها با Ctrl یا Command و چرخ ماوس',

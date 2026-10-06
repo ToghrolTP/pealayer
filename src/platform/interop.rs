@@ -999,11 +999,16 @@ impl WebControllerEffectDraft {
             field("effect icon", &self.icon)?;
         }
         match self.kind.as_str() {
-            "sequence" => self
-                .id
-                .parse::<u8>()
-                .map(|_| ())
-                .map_err(|_| "sequence effect id must be from 0 to 255".to_string()),
+            "sequence" => {
+                self.id.parse::<u8>()
+                    .map_err(|_| "sequence effect id must be from 0 to 255".to_string())?;
+                // Reject malformed authored steps before acknowledging the RPC
+                // instead of discovering them later in the UI dispatch queue.
+                let steps = self.program.get("steps").unwrap_or(&self.program);
+                serde_json::from_value::<Vec<crate::four_d::controller::HardwareMacroStep>>(steps.clone())
+                    .map_err(|error| format!("Invalid effect sequence: {error}"))?;
+                Ok(())
+            }
             "strip-stream" => {
                 if !valid_controller_effect_reference(&self.id) || !self.program.is_object() {
                     return Err(

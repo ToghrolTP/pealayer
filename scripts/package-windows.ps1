@@ -124,7 +124,7 @@ $effectiveExecutableFile = "$effectiveExecutableName.exe"
 $stagedExecutable = Join-Path $stagingDirectory $effectiveExecutableFile
 $stagedRuntime = Join-Path $stagingDirectory 'libmpv-2.dll'
 Copy-Item -LiteralPath (Join-Path $releaseDirectory 'pealayer.exe') -Destination $stagedExecutable -Force
-Copy-Item -LiteralPath $libmpvRuntime -Destination $stagedRuntime -Force
+Copy-PealayerLibmpvRuntime -RuntimeLibrary $libmpvRuntime -DestinationDirectory $stagingDirectory
 
 $resource = (Get-Item -LiteralPath $stagedExecutable).VersionInfo
 $expectedProductName = if ($env:APP_NAME) {
@@ -154,7 +154,7 @@ $smoke = Start-Process -FilePath $stagedExecutable -ArgumentList '--smoke-test' 
 if ($smoke.ExitCode -ne 0) { throw "Packaged Pealayer/libmpv smoke test failed with exit code $($smoke.ExitCode)" }
 
 Copy-Item -LiteralPath $stagedExecutable -Destination $outputDirectory -Force
-Copy-Item -LiteralPath $stagedRuntime -Destination $outputDirectory -Force
+Copy-PealayerLibmpvRuntime -RuntimeLibrary $stagedRuntime -DestinationDirectory $outputDirectory
 $fontSource = Join-Path $repositoryRoot 'assets\fonts\Vazirmatn-Regular.ttf'
 if (-not (Test-Path -LiteralPath $fontSource -PathType Leaf)) {
     throw "Bundled Persian fallback font is missing: $fontSource"
@@ -183,7 +183,7 @@ if (Test-Path -LiteralPath (Join-Path $webDistribution 'index.html')) {
     $webUiPackaged = $true
 }
 
-$artifacts = @($effectiveExecutableFile,'libmpv-2.dll','assets/fonts/Vazirmatn-Regular.ttf') | ForEach-Object {
+$artifacts = @($effectiveExecutableFile,'libmpv-2.dll','mpv-2.dll','assets/fonts/Vazirmatn-Regular.ttf') | ForEach-Object {
     $path = Join-Path $outputDirectory $_
     [ordered]@{
         path = $_

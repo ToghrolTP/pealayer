@@ -33,7 +33,7 @@ import type { TimelineWheelPreferences } from '../timelineWheel';
 
 interface StudioTabProps {
   state: PlayerState;
-  sendCmd: (command: string, payload?: Record<string, unknown>) => void;
+  sendCmd: (command: string, payload?: Record<string, unknown>) => Promise<boolean>;
   locale: UiLocale;
   appName: string;
   quickSeekSeconds: number;
@@ -110,12 +110,13 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   }, [timelineWheelPreferences]);
   const [selectedEffect, setSelectedEffect] = useState<string | null>(null);
   const [effectEditorOpen, setEffectEditorOpen] = useState(false);
+  const [savingEffect, setSavingEffect] = useState(false);
   const [effectDraft, setEffectDraft] = useState<Record<string, any> | null>(null);
   const captureBusy = Boolean(state.effect_recording?.active || state.effect_recording?.pending);
   const effectPayload = (draft: Record<string, any>) => {
     const { programText, steps, engine, ...payload } = draft;
     return { ...payload, program: draft.kind === 'sequence' ? {
-      steps: steps ?? [], properties: { ...(draft.program?.properties ?? {}), mode: engine ?? 'auto', color: draft.color ?? 'violet' },
+      steps: steps ?? [], properties: { ...(draft.program?.properties ?? {}), mode: engine ?? 'auto', ...(draft.color ? { color: draft.color } : {}) },
     } : JSON.parse(programText || '{}') };
   };
   const [seekDraft, setSeekDraft] = useState<number | null>(null);
@@ -236,7 +237,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       ...effect,
       programText: JSON.stringify(program, null, 2),
       steps: Array.isArray(program.steps) ? program.steps : [],
-      color: program.properties?.color ?? 'green',
+      color: program.properties?.color,
       engine: program.properties?.mode ?? 'auto',
       default_fps: effect.default_fps ?? 20,
       default_pixels: effect.default_pixels ?? 100,
@@ -352,20 +353,25 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       <Modal
         title={effectDraft?.is_new ? tr(locale, 'New effect') : tr(locale, 'Effect properties')}
         open={effectEditorOpen}
-        onCancel={() => { if (!captureBusy) setEffectEditorOpen(false); }}
-        closable={!captureBusy}
-        maskClosable={!captureBusy}
-        keyboard={!captureBusy}
-        okButtonProps={{ disabled: captureBusy }}
-        cancelButtonProps={{ disabled: captureBusy }}
+        onCancel={() => { if (!captureBusy && !savingEffect) setEffectEditorOpen(false); }}
+        closable={!captureBusy && !savingEffect}
+        maskClosable={!captureBusy && !savingEffect}
+        keyboard={!captureBusy && !savingEffect}
+        okButtonProps={{ disabled: captureBusy || savingEffect }}
+        cancelButtonProps={{ disabled: captureBusy || savingEffect }}
+        confirmLoading={savingEffect}
         okText={tr(locale, 'Save')}
         width={640}
-        onOk={() => {
-          if (!effectDraft) return;
-          try { sendCmd('controller_effect.save', effectPayload(effectDraft)); }
+        onOk={async () => {
+          if (!effectDraft || savingEffect) return;
+          setSavingEffect(true);
+          try {
+            if (!await sendCmd('controller_effect.save', effectPayload(effectDraft))) return;
+            window.localStorage.removeItem('pealayer.effect-working-draft');
+            setEffectEditorOpen(false);
+          }
           catch { void message.error(tr(locale, 'Program must be valid JSON')); return; }
-          window.localStorage.removeItem('pealayer.effect-working-draft');
-          setEffectEditorOpen(false);
+          finally { setSavingEffect(false); }
         }}
       >
         {effectDraft && (
@@ -552,7 +558,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         <div className="program-viewer">
           {state.current_video ? (
             <img
-              src={`${apiBaseUrl}/api/player/frame`}
+              src={`${apiBaseUrl}/api/player/frame?media=${encodeURIComponent(state.current_video)}`}
               alt={tr(locale, 'Video Preview')}
             />
           ) : (
@@ -687,6 +693,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             sendCmd('controller_effect_cue.add', { reference, start_time_ms: Math.round(fraction * timelineDurationMs) });
           }}
         >
+          <div className="timeline-markers-web">
           <div
             className="timeline-playhead-web"
             style={{ left: `${Math.min(100, (currentSeconds * 1000 / timelineDurationMs) * 100)}%` }}
@@ -702,6 +709,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
               onClick={() => sendCmd('set_chapter', { index: chapter.index })}
             />
           ))}
+          </div>
           {timelineLanes.length === 0 ? (
             <div className="timeline-empty">{tr(locale, 'No effects')}</div>
           ) : timelineLanes.map((lane) => {
@@ -719,8 +727,11 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                     (() => {
                       const placement = cuePreviews[cue.id] ?? cue;
                       return (
-                    <button
+                    <div
                       key={cue.id}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={cue.name}
                       className="timeline-cue"
                       style={{
                         left: `${(placement.start_time_ms / timelineDurationMs) * 100}%`,
@@ -756,6 +767,11 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                         }
                         sendCmd('seek_to', { seconds: placement.start_time_ms / 1000 });
                       }}
+                      onKeyDown={(event) => {
+                        if (event.target !== event.currentTarget || !['Enter', ' '].includes(event.key)) return;
+                        event.preventDefault();
+                        sendCmd('seek_to', { seconds: placement.start_time_ms / 1000 });
+                      }}
                     >
                       <span className="timeline-cue__resize timeline-cue__resize--left" aria-hidden="true" />
                       <span>{cue.name}</span>
@@ -770,7 +786,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                         }}
                       />
                       <span className="timeline-cue__resize timeline-cue__resize--right" aria-hidden="true" />
-                    </button>
+                    </div>
                       );
                     })()
                   ))}

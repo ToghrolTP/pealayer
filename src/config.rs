@@ -1279,7 +1279,7 @@ impl AppConfig {
 
                 // Transparent Migration from legacy recent.json if present
                 let legacy_path =
-                    PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
+                    PathBuf::from(std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".to_string()))
                         .join(".config")
                         .join("pealayer")
                         .join("recent.json");

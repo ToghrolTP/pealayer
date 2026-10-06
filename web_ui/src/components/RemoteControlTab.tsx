@@ -242,7 +242,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
             min={0}
             max={100}
             value={seekDraft ?? seekPercent}
-            disabled={!state.seekable || !state.duration}
+            disabled={!state.current_video || !state.seekable || !state.duration}
             onChange={setSeekDraft}
             onChangeComplete={(value) => {
               setSeekDraft(null);
@@ -257,7 +257,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
       <div className="remote-player__controls">
         {(state.remote_browser?.previous_file || state.remote_browser?.next_file) && <Tooltip title="Previous file"><Button shape="circle" icon={<StepBackwardOutlined />} disabled={!state.remote_browser.previous_file} onClick={() => sendCmd('previous')} /></Tooltip>}
         <Tooltip title={`${tr(locale, 'Seek backward')} ${quickSeekSeconds}s`}>
-          <Button shape="circle" icon={<FastBackwardOutlined />} onClick={() => sendCmd('seek', { seconds: -quickSeekSeconds })} />
+          <Button shape="circle" icon={<FastBackwardOutlined />} disabled={!state.current_video || !state.seekable} onClick={() => sendCmd('seek', { seconds: -quickSeekSeconds })} />
         </Tooltip>
         <Tooltip title={state.playing ? tr(locale, 'Pause') : tr(locale, 'Play')}>
           <Button
@@ -268,7 +268,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
           />
         </Tooltip>
         <Tooltip title={`${tr(locale, 'Seek forward')} ${quickSeekSeconds}s`}>
-          <Button shape="circle" icon={<FastForwardOutlined />} onClick={() => sendCmd('seek', { seconds: quickSeekSeconds })} />
+          <Button shape="circle" icon={<FastForwardOutlined />} disabled={!state.current_video || !state.seekable} onClick={() => sendCmd('seek', { seconds: quickSeekSeconds })} />
         </Tooltip>
         {(state.remote_browser?.previous_file || state.remote_browser?.next_file) && <Tooltip title="Next file"><Button shape="circle" icon={<StepForwardOutlined />} disabled={!state.remote_browser.next_file} onClick={() => sendCmd('next')} /></Tooltip>}
       </div>

@@ -1,40 +1,39 @@
-const PRECACHE = 'pealayer-precache-d039b3cafcd11df0';
-const RUNTIME = 'pealayer-runtime-d039b3cafcd11df0';
+const PRECACHE = 'pealayer-precache-4abe3ec7e48ed30b';
+const RUNTIME = 'pealayer-runtime-4abe3ec7e48ed30b';
 const PRECACHE_URLS = [
   "/",
-  "/assets/DeleteOutlined.js?v=d039b3cafcd11df0",
-  "/assets/DesktopOutlined.js?v=d039b3cafcd11df0",
-  "/assets/EditOutlined.js?v=d039b3cafcd11df0",
-  "/assets/EffectRecorder.js?v=d039b3cafcd11df0",
-  "/assets/EffectsTab.js?v=d039b3cafcd11df0",
-  "/assets/ExperimentOutlined.js?v=d039b3cafcd11df0",
-  "/assets/GroupSelect.js?v=d039b3cafcd11df0",
-  "/assets/HardwareTab.js?v=d039b3cafcd11df0",
-  "/assets/MediaLibraryTab.js?v=d039b3cafcd11df0",
-  "/assets/PlayerInfoTab.js?v=d039b3cafcd11df0",
-  "/assets/PlusOutlined.js?v=d039b3cafcd11df0",
-  "/assets/PoweroffOutlined.js?v=d039b3cafcd11df0",
-  "/assets/PreferencesTab.js?v=d039b3cafcd11df0",
-  "/assets/RemoteControlTab.js?v=d039b3cafcd11df0",
-  "/assets/SafetyCertificateOutlined.js?v=d039b3cafcd11df0",
-  "/assets/SaveOutlined.js?v=d039b3cafcd11df0",
-  "/assets/SeekThumbnailPreview.js?v=d039b3cafcd11df0",
-  "/assets/StudioTab.js?v=d039b3cafcd11df0",
-  "/assets/VideoCameraOutlined.js?v=d039b3cafcd11df0",
-  "/assets/WifiOutlined.js?v=d039b3cafcd11df0",
-  "/assets/app.css?v=d039b3cafcd11df0",
-  "/assets/app.js?v=d039b3cafcd11df0",
-  "/assets/card.js?v=d039b3cafcd11df0",
-  "/assets/color-picker.js?v=d039b3cafcd11df0",
-  "/assets/jsx-runtime.js?v=d039b3cafcd11df0",
-  "/assets/message.js?v=d039b3cafcd11df0",
-  "/assets/popconfirm.js?v=d039b3cafcd11df0",
-  "/assets/rolldown-runtime.js?v=d039b3cafcd11df0",
-  "/assets/row.js?v=d039b3cafcd11df0",
-  "/assets/select.js?v=d039b3cafcd11df0",
-  "/assets/slider.js?v=d039b3cafcd11df0",
-  "/assets/typography.js?v=d039b3cafcd11df0",
-  "/assets/useBreakpoint.js?v=d039b3cafcd11df0",
+  "/assets/DeleteOutlined.js?v=4abe3ec7e48ed30b",
+  "/assets/DesktopOutlined.js?v=4abe3ec7e48ed30b",
+  "/assets/EditOutlined.js?v=4abe3ec7e48ed30b",
+  "/assets/EffectRecorder.js?v=4abe3ec7e48ed30b",
+  "/assets/EffectsTab.js?v=4abe3ec7e48ed30b",
+  "/assets/ExperimentOutlined.js?v=4abe3ec7e48ed30b",
+  "/assets/GroupSelect.js?v=4abe3ec7e48ed30b",
+  "/assets/HardwareTab.js?v=4abe3ec7e48ed30b",
+  "/assets/MediaLibraryTab.js?v=4abe3ec7e48ed30b",
+  "/assets/PlayerInfoTab.js?v=4abe3ec7e48ed30b",
+  "/assets/PlusOutlined.js?v=4abe3ec7e48ed30b",
+  "/assets/PoweroffOutlined.js?v=4abe3ec7e48ed30b",
+  "/assets/PreferencesTab.js?v=4abe3ec7e48ed30b",
+  "/assets/RemoteControlTab.js?v=4abe3ec7e48ed30b",
+  "/assets/SafetyCertificateOutlined.js?v=4abe3ec7e48ed30b",
+  "/assets/SaveOutlined.js?v=4abe3ec7e48ed30b",
+  "/assets/SeekThumbnailPreview.js?v=4abe3ec7e48ed30b",
+  "/assets/StudioTab.js?v=4abe3ec7e48ed30b",
+  "/assets/VideoCameraOutlined.js?v=4abe3ec7e48ed30b",
+  "/assets/WifiOutlined.js?v=4abe3ec7e48ed30b",
+  "/assets/app.css?v=4abe3ec7e48ed30b",
+  "/assets/app.js?v=4abe3ec7e48ed30b",
+  "/assets/card.js?v=4abe3ec7e48ed30b",
+  "/assets/color-picker.js?v=4abe3ec7e48ed30b",
+  "/assets/jsx-runtime.js?v=4abe3ec7e48ed30b",
+  "/assets/popconfirm.js?v=4abe3ec7e48ed30b",
+  "/assets/rolldown-runtime.js?v=4abe3ec7e48ed30b",
+  "/assets/row.js?v=4abe3ec7e48ed30b",
+  "/assets/select.js?v=4abe3ec7e48ed30b",
+  "/assets/slider.js?v=4abe3ec7e48ed30b",
+  "/assets/typography.js?v=4abe3ec7e48ed30b",
+  "/assets/useBreakpoint.js?v=4abe3ec7e48ed30b",
   "/fuji-loader.css",
   "/fuji-loader.svg",
   "/index.html",
@@ -64,18 +63,20 @@ self.addEventListener('activate', (event) => {
         .filter((key) => key.startsWith('pealayer-') && ![PRECACHE, RUNTIME].includes(key))
         .map((key) => caches.delete(key))))
       .then(() => self.clients.claim())
-      .then(() => notifyClients({ type: 'PEALAYER_SW_READY', version: 'd039b3cafcd11df0' })),
+      .then(() => notifyClients({ type: 'PEALAYER_SW_READY', version: '4abe3ec7e48ed30b' })),
   );
 });
 
 self.addEventListener('message', (event) => {
-  if (event.data?.type === 'SKIP_WAITING') {
-    event.waitUntil(self.skipWaiting());
-    return;
-  }
-  if (event.data?.type === 'CLEAR_RUNTIME_CACHE') {
-    event.waitUntil(caches.delete(RUNTIME));
-  }
+  // Message shape is not authorization: verify the sending window as well.
+  if (event.origin !== self.location.origin || !event.source?.id) return;
+  const sourceId = event.source.id;
+  event.waitUntil((async () => {
+    const client = await self.clients.get(sourceId);
+    if (!client || client.type !== 'window' || new URL(client.url).origin !== self.location.origin) return;
+    if (event.data?.type === 'SKIP_WAITING') await self.skipWaiting();
+    if (event.data?.type === 'CLEAR_RUNTIME_CACHE') await caches.delete(RUNTIME);
+  })());
 });
 
 self.addEventListener('fetch', (event) => {

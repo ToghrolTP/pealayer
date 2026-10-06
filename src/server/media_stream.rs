@@ -183,13 +183,14 @@ pub(crate) fn serve(request: &super::HttpRequest, stream: &mut TcpStream) -> std
     let encoded: String = url::form_urlencoded::byte_serialize(name.as_bytes()).collect();
     write!(
         stream,
-        "HTTP/1.1 {}\r\nContent-Type: {mime}\r\nContent-Length: {length}\r\nAccept-Ranges: bytes\r\nETag: {etag}\r\nLast-Modified: {last_modified}\r\nCache-Control: private, no-cache\r\nContent-Disposition: {disposition}; filename*=UTF-8''{encoded}\r\nX-Content-Type-Options: nosniff\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Expose-Headers: Content-Length, Content-Range, Accept-Ranges, ETag, Last-Modified\r\nConnection: close\r\n",
+        "HTTP/1.1 {}\r\nContent-Type: {mime}\r\nContent-Length: {length}\r\nAccept-Ranges: bytes\r\nETag: {etag}\r\nLast-Modified: {last_modified}\r\nCache-Control: private, no-cache\r\nContent-Disposition: {disposition}; filename*=UTF-8''{encoded}\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n",
         if range.is_some() {
             "206 Partial Content"
         } else {
             "200 OK"
         }
     )?;
+    write!(stream, "{}", super::cors_headers(&request.headers))?;
     if let Some((start, end)) = range {
         write!(stream, "Content-Range: bytes {start}-{end}/{size}\r\n")?;
     }

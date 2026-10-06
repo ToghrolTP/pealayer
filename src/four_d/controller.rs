@@ -1237,6 +1237,9 @@ impl ControllerClient {
     }
 
     pub fn send_command(&mut self, command: Command) -> Result<(), String> {
+        if matches!(command, Command::RelaySet { id: 0, .. }) {
+            return Err("relay ID must be non-zero".to_string());
+        }
         match command {
             Command::Ping => {
                 self.call("controller.ping", json!({}))?;

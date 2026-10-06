@@ -325,6 +325,50 @@ fn spawn_control_server_on_addresses_with_channel(
     state_tx
 }
 
+/// Native peers have no Origin header. Browser callers must be same-origin,
+/// or explicitly trusted with PEALAYER_WEB_ALLOWED_ORIGINS (comma-separated).
+/// Host validation prevents a rebinding hostname from authorizing itself.
+fn browser_origin_allowed(headers: &[(String, String)], local: Option<std::net::SocketAddr>) -> bool {
+    let hosts = headers.iter().filter(|(name, _)| name.eq_ignore_ascii_case("host")).collect::<Vec<_>>();
+    if hosts.len() != 1 { return false; }
+    let authority = &hosts[0].1;
+    let Ok(host) = url::Url::parse(&format!("http://{authority}")) else { return false; };
+    if !host.username().is_empty() || host.password().is_some() || host.path() != "/" || host.query().is_some() || host.fragment().is_some() { return false; }
+    let Some(local) = local else { return false; };
+    let Some(name) = host.host_str() else { return false; };
+    let name = name.trim_matches(['[', ']']).trim_end_matches('.').to_ascii_lowercase();
+    let local_name = name.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.to_canonical() == local.ip().to_canonical())
+        || (name == "localhost" && local.ip().is_loopback())
+        || [std::env::var("COMPUTERNAME").ok(), std::env::var("HOSTNAME").ok()].into_iter().flatten().any(|own| {
+        let own = own.to_ascii_lowercase();
+        name == own || name == format!("{own}.local")
+    });
+    let allowed = std::env::var("PEALAYER_WEB_ALLOWED_ORIGINS").unwrap_or_default()
+        .split(',').filter_map(|value| url::Url::parse(value.trim()).ok())
+        .filter(|url| matches!(url.scheme(), "http" | "https"))
+        .collect::<Vec<_>>();
+    let configured_name = allowed.iter().any(|url| {
+        url::Url::parse(&format!("{}://{authority}", url.scheme())).is_ok_and(|host| host.origin() == url.origin())
+    });
+    // Same-origin browser GETs often omit Origin. They still need Host checks.
+    if !local_name && !configured_name { return false; }
+    let origins = headers.iter().filter(|(name, _)| name.eq_ignore_ascii_case("origin")).collect::<Vec<_>>();
+    if origins.is_empty() { return true; }
+    if origins.len() != 1 { return false; }
+    let origin = &origins[0].1;
+    let Ok(url) = url::Url::parse(origin) else { return false; };
+    if !matches!(url.scheme(), "http" | "https") || url.origin().ascii_serialization() != *origin { return false; }
+    allowed.iter().any(|allowed| allowed.origin() == url.origin())
+        || url::Url::parse(&format!("{}://{authority}", url.scheme())).is_ok_and(|host| host.origin() == url.origin())
+}
+
+fn cors_headers(headers: &[(String, String)]) -> String {
+    // Called only after browser_origin_allowed has accepted the request.
+    media_stream::header(headers, "origin").map(|origin| format!(
+        "Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\nAccess-Control-Allow-Headers: Content-Type, Authorization, Range\r\nAccess-Control-Allow-Methods: GET, HEAD, POST, DELETE, OPTIONS\r\nAccess-Control-Expose-Headers: Content-Length, Content-Range, Accept-Ranges, ETag, Last-Modified\r\n"
+    )).unwrap_or_default()
+}
+
 fn handle_connection(mut stream: TcpStream, state: ControlState) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
     let mut preview = [0_u8; 16 * 1024];
@@ -354,6 +398,9 @@ fn handle_connection(mut stream: TcpStream, state: ControlState) {
         handle_websocket(stream, state);
     } else {
         let response = match read_http_request(&mut stream) {
+            Ok(request) if !browser_origin_allowed(&request.headers, stream.local_addr().ok()) => {
+                HttpResponse::text(403, "Forbidden", "Browser origin is not permitted")
+            }
             Ok(request) if crate::peer::active() && request.target.starts_with("/api/") && request.target.split('?').next()!=Some("/api/client/status") => {
                 let _ = proxy_http(&request, &mut stream);
                 return;
@@ -366,7 +413,9 @@ fn handle_connection(mut stream: TcpStream, state: ControlState) {
             Ok(mut request) => {
                 let head=request.method=="HEAD";
                 if head{request.method="GET".into();}
-                let response=route_http(request,&state);
+                let cors = cors_headers(&request.headers);
+                let mut response=route_http(request,&state);
+                response.cors = cors;
                 let _=write_http_response_headers(&mut stream,response,head);
                 return;
             },
@@ -377,7 +426,12 @@ fn handle_connection(mut stream: TcpStream, state: ControlState) {
 }
 
 fn handle_websocket(stream: TcpStream, state: ControlState) {
-    let mut websocket = match tungstenite::accept(stream) {
+    let local = stream.local_addr().ok();
+    let mut websocket = match tungstenite::accept_hdr(stream, |request: &tungstenite::handshake::server::Request, response: tungstenite::handshake::server::Response| {
+        let headers = request.headers().iter().filter_map(|(key, value)| value.to_str().ok().map(|value| (key.to_string(), value.to_string()))).collect::<Vec<_>>();
+        if browser_origin_allowed(&headers, local) { Ok(response) }
+        else { Err(tungstenite::http::Response::builder().status(403).body(Some("Browser origin is not permitted".to_string())).expect("valid rejection response")) }
+    }) {
         Ok(websocket) => websocket,
         Err(error) => {
             log::warn!("Reject Pealayer WebSocket upgrade: {error}");
@@ -597,6 +651,7 @@ struct HttpResponse {
     content_type: &'static str,
     body: Vec<u8>,
     cache_control: &'static str,
+    cors: String,
 }
 
 impl HttpResponse {
@@ -620,6 +675,7 @@ impl HttpResponse {
             content_type,
             body,
             cache_control: "no-store",
+            cors: String::new(),
         }
     }
 
@@ -635,12 +691,13 @@ fn write_http_response(stream: &mut TcpStream, response: HttpResponse) -> std::i
 fn write_http_response_headers(stream:&mut TcpStream,response:HttpResponse,head:bool)->std::io::Result<()>{
     write!(
         stream,
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: {}\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: SAMEORIGIN\r\nReferrer-Policy: no-referrer\r\nPermissions-Policy: fullscreen=(self), screen-wake-lock=(self)\r\nContent-Security-Policy: default-src 'self'; connect-src 'self' ws: wss: http: https:; img-src 'self' data: blob: http: https:; media-src 'self' blob: http: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: {}\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: SAMEORIGIN\r\nReferrer-Policy: no-referrer\r\nPermissions-Policy: fullscreen=(self), screen-wake-lock=(self)\r\nContent-Security-Policy: default-src 'self'; connect-src 'self' ws: wss: http: https:; img-src 'self' data: blob: http: https:; media-src 'self' blob: http: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:\r\n{}\r\n",
         response.status,
         response.reason,
         response.content_type,
         response.body.len(),
         response.cache_control,
+        response.cors,
     )?;
     if !head{stream.write_all(&response.body)?;}
     stream.flush()
@@ -920,7 +977,7 @@ fn proxy_http(request: &HttpRequest, stream:&mut TcpStream)->std::io::Result<()>
         let connection_tokens=request.headers.iter().filter(|(key,_)|key.eq_ignore_ascii_case("connection")).flat_map(|(_,value)|value.split(',')).map(|token|token.trim().to_ascii_lowercase()).collect::<Vec<_>>();
         for (key,value) in &request.headers {
             let lower=key.to_ascii_lowercase();
-            if !hop_by_hop_header(&lower,&connection_tokens) && !matches!(lower.as_str(),"host"|"content-length"|"x-pealayer-route"|"x-pealayer-client"|"user-agent") {upstream=upstream.header(key,value)}
+            if !hop_by_hop_header(&lower,&connection_tokens) && !matches!(lower.as_str(),"host"|"content-length"|"x-pealayer-route"|"x-pealayer-client"|"user-agent"|"origin") {upstream=upstream.header(key,value)}
         }
         let mut upstream=upstream.body(request.body.clone()).build().map_err(|error|error.to_string())?;
         // RequestBuilder::header appends. Replace the default route instead so
@@ -937,10 +994,10 @@ fn proxy_http(request: &HttpRequest, stream:&mut TcpStream)->std::io::Result<()>
     write!(stream,"HTTP/1.1 {} {}\r\nConnection: close\r\n",upstream.status().as_u16(),upstream.status().canonical_reason().unwrap_or("Upstream Response"))?;
     let connection_tokens=upstream.headers().get_all("connection").iter().filter_map(|value|value.to_str().ok()).flat_map(|value|value.split(',')).map(|token|token.trim().to_ascii_lowercase()).collect::<Vec<_>>();
     for (key,value) in upstream.headers(){
-        if hop_by_hop_header(key.as_str(),&connection_tokens){continue}
+        if hop_by_hop_header(key.as_str(),&connection_tokens) || key.as_str().starts_with("access-control-"){continue}
         if let Ok(value)=value.to_str(){write!(stream,"{key}: {value}\r\n")?}
     }
-    write!(stream,"\r\n")?;
+    write!(stream,"{}\r\n",cors_headers(&request.headers))?;
     let _=stream.set_write_timeout(Some(Duration::from_secs(30)));
     if request.method!="HEAD"{std::io::copy(&mut upstream,stream)?;}
     stream.flush()
@@ -1573,6 +1630,22 @@ fn mime_for_path(path: &std::path::Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_origins_must_match_listener_host_and_cannot_rebind() {
+        let local = Some("127.0.0.1:8080".parse().unwrap());
+        let headers = |origin: &str, host: &str| vec![("Origin".to_string(), origin.to_string()), ("Host".to_string(), host.to_string())];
+        assert!(browser_origin_allowed(&headers("http://127.0.0.1:8080", "127.0.0.1:8080"), local));
+        assert!(!browser_origin_allowed(&headers("http://127.0.0.1:8081", "127.0.0.1:8080"), local));
+        assert!(!browser_origin_allowed(&headers("http://rebind.invalid:8080", "rebind.invalid:8080"), local));
+        assert!(!browser_origin_allowed(&headers("null", "127.0.0.1:8080"), local));
+        assert!(browser_origin_allowed(&[("Host".into(), "127.0.0.1:8080".into())], local)); // Native RPC peers.
+        assert!(!browser_origin_allowed(&[("Host".into(), "rebind.invalid:8080".into())], local));
+        assert!(!browser_origin_allowed(&[], local));
+        let mut duplicate = headers("http://127.0.0.1:8080", "127.0.0.1:8080");
+        duplicate.push(("origin".into(), "http://127.0.0.1:8080".into()));
+        assert!(!browser_origin_allowed(&duplicate, local));
+    }
 
     #[test]
     fn remote_query_urls_preserve_unicode_and_encoded_separators() {

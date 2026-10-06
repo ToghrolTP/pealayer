@@ -196,7 +196,6 @@ fn perform_video_surface_click(
 }
 
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    let video_files_label = app.tr("Video Files");
     let video_size = ui.available_size();
     if video_size.x <= 0.0 || video_size.y <= 0.0 {
         return;
@@ -354,17 +353,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         if app.current_video_path.is_some() && app.click_player_to_toggle {
             app.toggle_playback();
         } else if app.current_video_path.is_none() {
-            if crate::peer::active() {
-                crate::ui::peer_browser::open(ui.ctx(), crate::ui::peer_browser::Purpose::Media, None);
-            } else if let Some(path) = rfd::FileDialog::new()
-                .add_filter(
-                    &video_files_label,
-                    &["mp4", "mkv", "avi", "webm", "mov", "flv"],
-                )
-                .pick_file()
-            {
-                app.load_video_file(path);
-            }
+            app.open_media_file_dialog(ui.ctx());
         }
     }
 
@@ -441,17 +430,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     .clicked()
                 {
                     ui.close();
-                    if crate::peer::active() {
-                        crate::ui::peer_browser::open(ui.ctx(), crate::ui::peer_browser::Purpose::Media, None);
-                    } else if let Some(path) = rfd::FileDialog::new()
-                        .add_filter(
-                            &video_files_label,
-                            &["mp4", "mkv", "avi", "webm", "mov", "flv"],
-                        )
-                        .pick_file()
-                    {
-                        app.load_video_file(path);
-                    }
+                    app.open_media_file_dialog(ui.ctx());
                 }
 
                 if ui

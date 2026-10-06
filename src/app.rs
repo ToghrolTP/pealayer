@@ -2220,13 +2220,7 @@ impl PealayerApp {
                     self.toggle_audio_muted();
                 }
                 crate::platform::windows::TRAY_CMD_OPEN => {
-                    if crate::peer::active(){crate::ui::peer_browser::open(ctx,crate::ui::peer_browser::Purpose::Media,None);}
-                    else if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Video Files", &["mp4", "mkv", "avi", "webm", "mov", "flv"])
-                        .pick_file()
-                    {
-                        self.load_video_file(path);
-                    }
+                    self.open_media_file_dialog(ctx);
                 }
                 crate::platform::windows::TRAY_CMD_EXIT => {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -5143,6 +5137,19 @@ impl PealayerApp {
 
     pub(crate) fn toggle_audio_muted(&mut self) {
         self.set_audio_muted(!self.is_muted);
+    }
+
+    /// One picker for the menu, video surface and tray. Retain PathBuf rather
+    /// than losing non-UTF-8 local names; peer clients browse the master only.
+    pub(crate) fn open_media_file_dialog(&mut self, ctx: &egui::Context) {
+        if crate::peer::active() {
+            crate::ui::peer_browser::open(ctx, crate::ui::peer_browser::Purpose::Media, None);
+        } else if let Some(path) = rfd::FileDialog::new()
+            .add_filter(self.tr("Video Files"), &["mp4", "mkv", "avi", "webm", "mov", "flv"])
+            .pick_file()
+        {
+            self.load_video_file(path);
+        }
     }
 
     pub fn load_video_file(&mut self, path: std::path::PathBuf) {

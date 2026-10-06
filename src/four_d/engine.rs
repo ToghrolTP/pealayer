@@ -35,6 +35,9 @@ fn controller_wire_failed(error: &str) -> bool {
 
 impl HardwareTransport {
     fn send(&mut self, command: Command) -> Result<(), String> {
+        if matches!(command, Command::RelaySet { id: 0, .. }) {
+            return Err("relay ID must be non-zero".to_string());
+        }
         match self {
             Self::Controller(client) => client.send_command(command),
             Self::DirectSerial { port, sequence } => {

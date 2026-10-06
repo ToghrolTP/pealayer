@@ -1,10 +1,20 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+fn nonzero_relay<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
+    let id = u8::deserialize(deserializer)?;
+    if id == 0 {
+        Err(serde::de::Error::custom("relay ID must be non-zero"))
+    } else {
+        Ok(id)
+    }
+}
+
 /// Represents the smallest unit of a command to a relay.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AtomicAction {
     /// The non-zero relay ID advertised by the active PCController capability catalog.
+    #[serde(deserialize_with = "nonzero_relay")]
     pub relay_id: u8,
     /// The state to set the relay to: true = ON, false = OFF
     pub state: bool,
@@ -21,7 +31,7 @@ pub type Action = AtomicAction;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HardwareTarget {
     Any,
-    Relay(u8),
+    Relay(#[serde(deserialize_with = "nonzero_relay")] u8),
     ControllerMacro,
 }
 
@@ -29,14 +39,14 @@ impl HardwareTarget {
     pub fn primary_relay_id(&self) -> Option<u8> {
         match self {
             Self::Any | Self::ControllerMacro => None,
-            Self::Relay(relay_id) => Some(*relay_id),
+            Self::Relay(relay_id) => (*relay_id != 0).then_some(*relay_id),
         }
     }
 
     pub fn is_compatible_with_relay(&self, relay_id: u8) -> bool {
         match self {
             Self::Any => relay_id != 0,
-            Self::Relay(target_id) => *target_id == relay_id,
+            Self::Relay(target_id) => relay_id != 0 && *target_id == relay_id,
             Self::ControllerMacro => false,
         }
     }
@@ -90,6 +100,29 @@ pub enum ControllerEffectLane {
 
 pub fn default_hardware_target() -> HardwareTarget {
     HardwareTarget::Any
+}
+
+// One-way project-file migration, not a second public hardware taxonomy.
+// Physical output IDs come only from the authored actions, never from labels.
+fn migrate_project_targets(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            let legacy = fields.get("target").and_then(serde_json::Value::as_str)
+                .is_some_and(|name| matches!(name, "Water" | "Wind" | "SeatVibration" | "Smoke" | "Auxiliary"));
+            if legacy && let Some(actions) = fields.get("actions").and_then(serde_json::Value::as_array) {
+                let ids = actions.iter().filter_map(|action| action.get("relay_id").and_then(serde_json::Value::as_u64)).collect::<std::collections::BTreeSet<_>>();
+                let target = if ids.len() == 1 {
+                    serde_json::json!({"Relay": ids.iter().next().copied().unwrap()})
+                } else {
+                    serde_json::json!("Any")
+                };
+                fields.insert("target".to_string(), target);
+            }
+            for child in fields.values_mut() { migrate_project_targets(child); }
+        }
+        serde_json::Value::Array(items) => for item in items { migrate_project_targets(item); },
+        _ => {}
+    }
 }
 
 /// A reusable template or macro defining a sequence of actions.
@@ -310,6 +343,28 @@ impl Default for Timeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_relay_ids_are_rejected_even_from_imported_data() {
+        assert!(serde_json::from_str::<HardwareTarget>(r#"{"Relay":0}"#).is_err());
+        assert!(serde_json::from_str::<AtomicAction>(r#"{"relay_id":0,"state":true,"offset_ms":0}"#).is_err());
+        assert_eq!(HardwareTarget::Relay(0).primary_relay_id(), None);
+        assert!(!HardwareTarget::Relay(0).is_compatible_with_relay(0));
+    }
+
+    #[test]
+    fn project_migration_preserves_explicit_output_ids_not_label_meanings() {
+        let mut value = serde_json::json!({"target":"Water","actions":[{"relay_id":7,"state":true,"offset_ms":12}]});
+        let actions = value["actions"].clone();
+        migrate_project_targets(&mut value);
+        assert_eq!(value["target"], serde_json::json!({"Relay":7}));
+        assert_eq!(value["actions"], actions);
+        value["target"] = serde_json::json!("Auxiliary");
+        value["actions"].as_array_mut().unwrap().push(serde_json::json!({"relay_id":8,"state":false,"offset_ms":15}));
+        migrate_project_targets(&mut value);
+        assert_eq!(value["target"], "Any");
+        assert_eq!(value["actions"].as_array().unwrap().len(), 2);
+    }
 
     #[test]
     fn fresh_timeline_contains_no_invented_production_data() {
@@ -553,7 +608,9 @@ impl Timeline {
     pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
         let file = std::fs::File::open(path)?;
         let reader = std::io::BufReader::new(file);
-        let timeline = serde_json::from_reader(reader)?;
+        let mut value: serde_json::Value = serde_json::from_reader(reader)?;
+        migrate_project_targets(&mut value);
+        let timeline = serde_json::from_value(value)?;
         Ok(timeline)
     }
 

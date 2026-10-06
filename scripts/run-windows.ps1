@@ -73,7 +73,7 @@ $binary = Join-Path $binaryDirectory 'pealayer.exe'
 if (-not (Test-Path -LiteralPath $binary)) {
     throw "Pealayer binary was not produced at $binary"
 }
-Copy-Item -LiteralPath $libmpvRuntime -Destination (Join-Path $binaryDirectory 'libmpv-2.dll') -Force
+Copy-PealayerLibmpvRuntime -RuntimeLibrary $libmpvRuntime -DestinationDirectory $binaryDirectory
 
 if (-not $BuildOnly) {
     & $binary @ApplicationArguments

@@ -91,6 +91,17 @@ HTTP. Expose it only on trusted networks or behind an authenticated TLS proxy.
 An HTTPS origin can be supplied instead of pealayer://. Routing headers reject
 loops. File access is broad host-file access: disable it where inappropriate.
 
+Browser API requests and WebSocket upgrades now require a same-origin sender
+whose Host matches the receiving interface, localhost, or this host's native
+name. Cross-origin browser controllers and reverse-proxy names must be trusted
+explicitly with `PEALAYER_WEB_ALLOWED_ORIGINS`, a comma-separated list of exact
+origins (scheme, hostname and port). For example, to allow a separately hosted
+controller, set `PEALAYER_WEB_ALLOWED_ORIGINS=https://control.example.invalid`
+in the server's environment before launch. No wildcard is supported. A native
+consumer validates its local browser origin before relaying as a native peer.
+This reduces browser-origin and DNS-rebinding exposure; it is **not** LAN-client
+authentication. The shared-token policy remains an open review finding.
+
 Validation evidence and deployment results are recorded separately; compilation
 alone does not establish two-host playback or physical hardware correctness.
 

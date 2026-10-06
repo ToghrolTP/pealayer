@@ -10,7 +10,16 @@ const REMOTE_THUMBNAIL_PIPELINE_REVISION: &str = "remote-20-percent-v1";
 const SEEK_THUMBNAIL_PIPELINE_REVISION: &str = "seek-preview-320x180-v1";
 const SEEK_THUMBNAIL_FILTER: &str = "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2:color=0x0b0f14";
 const MAX_SEEK_THUMBNAILS: usize = 512;
-static SEEK_THUMBNAIL_STAGE_ID: AtomicU64 = AtomicU64::new(1);
+static THUMBNAIL_STAGE_ID: AtomicU64 = AtomicU64::new(1);
+
+// Each extractor owns its staging file; only complete images are shared.
+fn thumbnail_stage_path(cache_dir: &Path, cache_key: &str) -> PathBuf {
+    cache_dir.join(format!(
+        "{cache_key}.{}.{}.tmp.jpg",
+        std::process::id(),
+        THUMBNAIL_STAGE_ID.fetch_add(1, Ordering::Relaxed)
+    ))
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RemoteThumbnailFile {
@@ -56,8 +65,7 @@ pub fn get_or_generate_thumbnail(video_path: &Path) -> Option<PathBuf> {
         return Some(thumb_path);
     }
 
-    let staged_path = cache_dir.join(format!("{cache_key}.tmp.jpg"));
-    let _ = std::fs::remove_file(&staged_path);
+    let staged_path = thumbnail_stage_path(&cache_dir, &cache_key);
     let input = video_path.to_string_lossy();
     let output = staged_path.to_string_lossy();
 
@@ -146,8 +154,7 @@ pub fn get_or_generate_remote_thumbnail(
         .filter(|duration| duration.is_finite() && *duration > 0.0)
         .map(|duration| duration * 0.20);
 
-    let staged_path = cache_dir.join(format!("{cache_key}.tmp.jpg"));
-    let _ = std::fs::remove_file(&staged_path);
+    let staged_path = thumbnail_stage_path(&cache_dir, &cache_key);
     let output = staged_path.to_string_lossy().into_owned();
     let seek = position_seconds.unwrap_or(0.0).to_string();
 
@@ -252,13 +259,7 @@ pub fn get_or_generate_seek_thumbnail(
         return Ok(thumbnail_path);
     }
 
-    let stage_id = SEEK_THUMBNAIL_STAGE_ID.fetch_add(1, Ordering::Relaxed);
-    let staged_path = cache_dir.join(format!(
-        "{cache_key}.{}.{}.tmp.jpg",
-        std::process::id(),
-        stage_id
-    ));
-    let _ = std::fs::remove_file(&staged_path);
+    let staged_path = thumbnail_stage_path(&cache_dir, &cache_key);
     let output = staged_path.to_string_lossy().into_owned();
     let seek = second.to_string();
 
@@ -537,6 +538,16 @@ fn thumbnail_cache_key(video_path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_extractors_never_share_staging_files() {
+        let cache = Path::new("cache");
+        let first = thumbnail_stage_path(cache, "same-media");
+        let second = thumbnail_stage_path(cache, "same-media");
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), Some(cache));
+        assert!(first.to_string_lossy().ends_with(".tmp.jpg"));
+    }
 
     #[test]
     fn test_thumbnail_cache_path() {

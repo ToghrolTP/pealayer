@@ -147,6 +147,22 @@ function Resolve-PealayerLibmpv {
     throw "No complete libmpv development package was found for $RustHost. Checked:$details`nRun scripts\configure-windows-host.ps1 -LibmpvDirectory <directory> once on this host."
 }
 
+function Copy-PealayerLibmpvRuntime {
+    param(
+        [Parameter(Mandatory = $true)][string]$RuntimeLibrary,
+        [Parameter(Mandatory = $true)][string]$DestinationDirectory
+    )
+    # Import libraries from supported packages name either mpv-2.dll or
+    # libmpv-2.dll. Both aliases must contain the *same host-selected* runtime.
+    New-Item -ItemType Directory -Force -Path $DestinationDirectory | Out-Null
+    foreach ($name in @('libmpv-2.dll', 'mpv-2.dll')) {
+        $destination = Join-Path $DestinationDirectory $name
+        if ([System.IO.Path]::GetFullPath($RuntimeLibrary) -ine [System.IO.Path]::GetFullPath($destination)) {
+            Copy-Item -LiteralPath $RuntimeLibrary -Destination $destination -Force
+        }
+    }
+}
+
 function Set-PealayerLibmpvBuildEnvironment {
     [CmdletBinding()]
     param(

@@ -192,13 +192,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 top_menu_button(ui, app.tr("File"), |ui| {
                     if ui.button(app.tr("Open Video File...")).clicked() {
                         ui.close();
-                        if crate::peer::active(){crate::ui::peer_browser::open(&ctx,crate::ui::peer_browser::Purpose::Media,None);}
-                        else if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Video Files", &["mp4", "mkv", "avi", "webm", "mov", "flv"])
-                            .pick_file()
-                        {
-                            app.load_video_file(path);
-                        }
+                        app.open_media_file_dialog(&ctx);
                     }
 
                     if ui.button(app.tr("Open Location / URL...")).clicked() {

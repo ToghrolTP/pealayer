@@ -43,7 +43,7 @@ import recordingColors from '../../../assets/themes/recording-colors.json';
 
 interface EffectsTabProps {
   state: PlayerState;
-  sendCmd: (command: string, payload?: Record<string, unknown>) => void;
+  sendCmd: (command: string, payload?: Record<string, unknown>) => Promise<boolean>;
   locale: UiLocale;
 }
 
@@ -109,13 +109,14 @@ const draftPayload = (draft: EffectDraft): Record<string, unknown> => ({
   ...draft,
   program: draft.kind === 'sequence' ? {
     steps: draft.steps.map((step) => ({ ...step, at_us: Math.max(0, Math.round(step.at_us)) })),
-    properties: { ...draft.properties, color: draft.color },
+    properties: { ...draft.properties, ...(draft.color ? { color: draft.color } : {}) },
   } : JSON.parse(draft.programText || '{}'),
 });
 
 export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }) => {
   const effects = state.controller_effects ?? [];
   const [draft, setDraft] = useState<EffectDraft | null>(null);
+  const [saving, setSaving] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [inlineEdit, setInlineEdit] = useState<InlineEffectEdit | null>(null);
   const [newGroupName, setNewGroupName] = useState<string | null>(null);
@@ -139,7 +140,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       description: effect.description,
       kind: effect.kind,
       duration_ms: effect.duration_ms,
-      color: String(parts.properties.color ?? 'green'),
+      color: String(parts.properties.color ?? ''),
       default_fps: effect.default_fps ?? 20,
       default_pixels: effect.default_pixels ?? 100,
       steps: parts.steps,
@@ -175,17 +176,21 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
     setDraft({ ...draft, steps });
   };
 
-  const save = () => {
-    if (!draft) return;
-    try { sendCmd('controller_effect.save', draftPayload(draft)); }
+  const save = async () => {
+    if (!draft || saving) return;
+    setSaving(true);
+    try {
+      if (!await sendCmd('controller_effect.save', draftPayload(draft))) return;
+      setDraft(null);
+    }
     catch { void message.error(tr(locale, 'Program must be valid JSON')); return; }
-    setDraft(null);
+    finally { setSaving(false); }
   };
 
-  const saveInlineIdentity = (effect: typeof effects[number]) => {
+  const saveInlineIdentity = async (effect: typeof effects[number]) => {
     if (!inlineEdit || inlineEdit.reference !== effect.reference || !inlineEdit.name.trim()) return;
     const parts = programParts(effect.program);
-    sendCmd('controller_effect.save', {
+    if (!await sendCmd('controller_effect.save', {
       reference: effect.reference,
       id: effect.id,
       name: inlineEdit.name.trim(),
@@ -194,12 +199,12 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       description: effect.description,
       kind: effect.kind,
       duration_ms: effect.duration_ms,
-      color: String(parts.properties.color ?? 'green'),
+      ...(parts.properties.color ? { color: String(parts.properties.color) } : {}),
       default_fps: effect.default_fps ?? 20,
       default_pixels: effect.default_pixels ?? 100,
       program: effect.program,
       is_new: false,
-    });
+    })) return;
     setInlineEdit(null);
   };
 
@@ -310,14 +315,15 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       className="effect-editor-modal"
       title={draft?.is_new ? tr(locale, 'New effect') : tr(locale, 'Manage effect')}
       open={Boolean(draft)}
-      onCancel={() => { if (!captureBusy) setDraft(null); }}
-      closable={!captureBusy}
-      maskClosable={!captureBusy}
-      keyboard={!captureBusy}
-      cancelButtonProps={{ disabled: captureBusy }}
+      onCancel={() => { if (!captureBusy && !saving) setDraft(null); }}
+      closable={!captureBusy && !saving}
+      maskClosable={!captureBusy && !saving}
+      keyboard={!captureBusy && !saving}
+      cancelButtonProps={{ disabled: captureBusy || saving }}
+      confirmLoading={saving}
       onOk={save}
       okText={tr(locale, 'Save')}
-      okButtonProps={{ icon: <SaveOutlined />, disabled: captureBusy || !draft?.name.trim() }}
+      okButtonProps={{ icon: <SaveOutlined />, disabled: captureBusy || saving || !draft?.name.trim() }}
       width={900}
     >
       {draft && <div className="effect-editor">

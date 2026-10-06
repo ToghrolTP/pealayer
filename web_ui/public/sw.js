@@ -27,13 +27,15 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('message', (event) => {
-  if (event.data?.type === 'SKIP_WAITING') {
-    event.waitUntil(self.skipWaiting());
-    return;
-  }
-  if (event.data?.type === 'CLEAR_RUNTIME_CACHE') {
-    event.waitUntil(caches.delete(RUNTIME));
-  }
+  // Message shape is not authorization: verify the sending window as well.
+  if (event.origin !== self.location.origin || !event.source?.id) return;
+  const sourceId = event.source.id;
+  event.waitUntil((async () => {
+    const client = await self.clients.get(sourceId);
+    if (!client || client.type !== 'window' || new URL(client.url).origin !== self.location.origin) return;
+    if (event.data?.type === 'SKIP_WAITING') await self.skipWaiting();
+    if (event.data?.type === 'CLEAR_RUNTIME_CACHE') await caches.delete(RUNTIME);
+  })());
 });
 
 self.addEventListener('fetch', (event) => {

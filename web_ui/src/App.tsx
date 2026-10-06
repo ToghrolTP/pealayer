@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useState, useRef } from 'react';
-import { Alert, ConfigProvider, theme, Layout, Menu } from 'antd';
+import { Alert, ConfigProvider, theme, Layout, Menu, message } from 'antd';
 import {
   AppstoreOutlined,
   BulbOutlined,
@@ -197,42 +197,58 @@ const App: React.FC = () => {
   }, [accentColor, accentTextColor]);
 
   const nextRequestId = useRef(1);
-  const rawSendCmd = useCallback((command: string, payload: Record<string, any> = {}) => {
+  const pendingRequests = useRef(new Map<number, { finish: (ok: boolean) => void; timer: number }>());
+  const apiEndpoint = useCallback((path: string) => {
+    if (!connectionTarget) return path;
+    const address = connectionTarget.replace(/^pealayer:\/\//i, 'http://');
+    const target = new URL(address.includes('://') ? address : `http://${address}`);
+    if (target.protocol === 'ws:') target.protocol = 'http:';
+    if (target.protocol === 'wss:') target.protocol = 'https:';
+    target.pathname = path;
+    target.search = '';
+    target.hash = '';
+    return target.toString();
+  }, [connectionTarget]);
+  const completeRequest = useCallback((response: any) => {
+    const pending = pendingRequests.current.get(Number(response.id));
+    if (!pending) return;
+    window.clearTimeout(pending.timer);
+    pendingRequests.current.delete(Number(response.id));
+    const error = response.error?.message || response.error || (response.result?.accepted === false ? 'Command dispatcher unavailable' : null);
+    if (error) void message.error(String(error));
+    pending.finish(!error);
+  }, []);
+  const rawSendCmd = useCallback((command: string, payload: Record<string, any> = {}): Promise<boolean> => {
+    const methodAliases: Record<string, string> = {
+      add_effect_cue: 'pealayer.timeline.effect.add',
+      remove_effect_cue: 'pealayer.timeline.effect.remove',
+      set_recording: 'pealayer.recording.set',
+    };
+    const id = nextRequestId.current++;
+    const request = { jsonrpc: '2.0', id, method: methodAliases[command] || command, params: payload };
+    return new Promise((finish) => {
+      const timer = window.setTimeout(() => {
+        completeRequest({ id, error: { message: 'Command acknowledgement timed out; check the current state before retrying.' } });
+      }, 15_000);
+      pendingRequests.current.set(id, { finish, timer });
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      const methodAliases: Record<string, string> = {
-        add_effect_cue: 'pealayer.timeline.effect.add',
-        remove_effect_cue: 'pealayer.timeline.effect.remove',
-        set_recording: 'pealayer.recording.set',
-      };
-      wsRef.current.send(JSON.stringify({
-        jsonrpc: '2.0',
-        id: nextRequestId.current++,
-        method: methodAliases[command] || command,
-        params: payload,
-      }));
+      try { wsRef.current.send(JSON.stringify(request)); }
+      catch (error) { completeRequest({ id, error: { message: String(error) } }); }
     } else {
-      const body = JSON.stringify({ command, ...payload });
-      let endpoint = '/api/player/command';
-      if (connectionTarget) {
-        try {
-          const target = new URL(connectionTarget.includes('://') ? connectionTarget : `http://${connectionTarget}`);
-          if (target.protocol === 'ws:') target.protocol = 'http:';
-          if (target.protocol === 'wss:') target.protocol = 'https:';
-          target.pathname = '/api/player/command';
-          target.search = '';
-          target.hash = '';
-          endpoint = target.toString();
-        } catch {
-          return;
-        }
-      }
-      fetch(endpoint, {
+      // Identical method, parameters and correlation ID on both transports.
+      try { void fetch(apiEndpoint('/api/rpc'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body,
-      }).catch(() => {});
+        body: JSON.stringify(request),
+      }).then(async (response) => {
+        const result = await response.json();
+        if (!response.ok && !result.error) result.error = { message: `Command rejected (${response.status})` };
+        completeRequest({ ...result, id });
+      }).catch((error) => completeRequest({ id, error: { message: String(error) } })); }
+      catch (error) { completeRequest({ id, error: { message: String(error) } }); }
     }
-  }, [connectionTarget]);
+    });
+  }, [apiEndpoint, completeRequest]);
 
   const platform = useWebPlatform(
     state,
@@ -244,10 +260,13 @@ const App: React.FC = () => {
   const signalInteraction = platform.signalInteraction;
 
   const sendCmd = useCallback((command: string, payload: Record<string, any> = {}) => {
-    if (!platform.online && !connected) return;
+    if (!platform.online && !connected) {
+      void message.error(tr(runtime?.locale || 'en', 'Pealayer backend unavailable'));
+      return Promise.resolve(false);
+    }
     signalInteraction();
-    rawSendCmd(command, payload);
-  }, [connected, platform.online, rawSendCmd, signalInteraction]);
+    return rawSendCmd(command, payload);
+  }, [connected, platform.online, rawSendCmd, signalInteraction, runtime?.locale]);
 
   const resolveWebSocketUrl = useCallback(() => {
     const fallbackProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -255,7 +274,8 @@ const App: React.FC = () => {
       return `${fallbackProtocol}//${window.location.host}${runtime?.websocketPath || '/ws'}`;
     }
     try {
-      const target = new URL(connectionTarget.includes('://') ? connectionTarget : `ws://${connectionTarget}`);
+      const address = connectionTarget.replace(/^pealayer:\/\//i, 'ws://');
+      const target = new URL(address.includes('://') ? address : `ws://${address}`);
       if (target.protocol === 'http:') target.protocol = 'ws:';
       if (target.protocol === 'https:') target.protocol = 'wss:';
       if (!target.pathname || target.pathname === '/') target.pathname = runtime?.websocketPath || '/ws';
@@ -280,7 +300,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     let disposed = false;
-    fetch('/api/runtime/config')
+    fetch(apiEndpoint('/api/runtime/config'))
       .then((response) => {
         if (!response.ok) throw new Error(`runtime config ${response.status}`);
         return response.json();
@@ -293,12 +313,12 @@ const App: React.FC = () => {
       })
       .catch(() => {});
     return () => { disposed = true; };
-  }, []);
+  }, [apiEndpoint]);
 
   useEffect(() => {
     if (!runtime) return;
     let disposed = false;
-    fetch('/api/config')
+    fetch(apiEndpoint('/api/config'))
       .then((response) => response.ok ? response.json() : Promise.reject())
       .then((value) => {
         if (!disposed && value && typeof value === 'object') {
@@ -312,7 +332,7 @@ const App: React.FC = () => {
       })
       .catch(() => {});
     return () => { disposed = true; };
-  }, [runtime]);
+  }, [runtime, apiEndpoint]);
 
   useEffect(() => {
     if (!runtime) return;
@@ -357,7 +377,7 @@ const App: React.FC = () => {
         ws.onmessage = (ev) => {
           try {
             const data = JSON.parse(ev.data);
-            if (data && data.jsonrpc === '2.0') return;
+            if (data && data.jsonrpc === '2.0') { completeRequest(data); return; }
             const nextState = data?.type === 'state' ? data.state : data;
             if (nextState && typeof nextState === 'object' && typeof nextState.status === 'string') {
               setState((prev) => {
@@ -380,11 +400,11 @@ const App: React.FC = () => {
     connectWS();
 
     const httpInterval = setInterval(async () => {
-      if (connectionTarget || (wsRef.current && wsRef.current.readyState === WebSocket.OPEN)) {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         return; // Skip HTTP polling when WebSocket is connected
       }
       try {
-        const res = await fetch('/api/player/status');
+        const res = await fetch(apiEndpoint('/api/player/status'));
         if (res.ok) {
           const data = await res.json();
           setState((prev) => {
@@ -416,7 +436,15 @@ const App: React.FC = () => {
       wsRef.current = null;
       window.removeEventListener('online', reconnectNow);
     };
-  }, [runtime, connectionTarget, resolveWebSocketUrl]);
+  }, [runtime, connectionTarget, resolveWebSocketUrl, apiEndpoint, completeRequest]);
+
+  useEffect(() => () => {
+    for (const pending of pendingRequests.current.values()) {
+      window.clearTimeout(pending.timer);
+      pending.finish(false);
+    }
+    pendingRequests.current.clear();
+  }, []);
 
   const changeConnectionTarget = (target: string) => {
     setConnectionTarget(target);
