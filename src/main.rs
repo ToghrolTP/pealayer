@@ -624,6 +624,8 @@ fn main() -> eframe::Result {
                 media_fps: 0.0,
                 video_aspect_ratio: 16.0 / 9.0,
                 consistent_video_aspect_ratio: loaded_config.consistent_video_aspect_ratio,
+                always_on_top: loaded_config.always_on_top,
+                applied_always_on_top: None,
                 pending_video_aspect_resize: false,
                 is_paused: false,
                 is_eof: false,

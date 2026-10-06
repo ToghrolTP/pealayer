@@ -314,6 +314,18 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             ],
         ),
         {
+            let mut control = PreferenceControl::select(
+                "always_on_top", "appearance", "Window", "Always on top",
+                &[
+                    ("never", "Never"),
+                    ("always", "Always"),
+                    ("while_playing_video", "While playing video"),
+                ],
+            );
+            control.description = Some("Keep the player window above other windows. While playing video returns to normal on pause or end; audio-only playback does not pin the window.");
+            control
+        },
+        {
             let mut control = PreferenceControl::boolean(
                 "consistent_video_aspect_ratio",
                 "appearance",
@@ -1266,6 +1278,39 @@ mod tests {
         assert!(matches!(control.kind, PreferenceControlKind::Boolean));
         assert_eq!(control.section, "appearance");
         assert_eq!(control.group, "Window");
+    }
+
+    #[test]
+    fn always_on_top_is_shared_and_defaults_to_never() {
+        use crate::config::AlwaysOnTopMode;
+        let config: crate::config::AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(config.always_on_top, AlwaysOnTopMode::Never);
+        let controls = preference_controls(&config);
+        let control = controls.iter().find(|control| control.key == "always_on_top").unwrap();
+        assert_eq!(control.section, "appearance");
+        assert_eq!(control.group, "Window");
+        assert!(matches!(control.kind, PreferenceControlKind::Select));
+        assert_eq!(control.options.len(), 3);
+        for (mode, value) in [
+            (AlwaysOnTopMode::Never, "never"),
+            (AlwaysOnTopMode::Always, "always"),
+            (AlwaysOnTopMode::WhilePlayingVideo, "while_playing_video"),
+        ] {
+            assert_eq!(serde_json::to_value(mode).unwrap(), value);
+            assert!(control.options.iter().any(|option| option.value == value));
+            let patched = config.apply_patch(&serde_json::json!({"always_on_top": value})).unwrap();
+            assert_eq!(patched.always_on_top, mode);
+            for loaded in [false, true] {
+                for paused in [false, true] {
+                    for ended in [false, true] {
+                        let expected = mode == AlwaysOnTopMode::Always
+                            || (mode == AlwaysOnTopMode::WhilePlayingVideo && loaded && !paused && !ended);
+                        assert_eq!(mode.is_active(loaded, paused, ended), expected);
+                    }
+                }
+            }
+        }
+        assert!(config.apply_patch(&serde_json::json!({"always_on_top": "sometimes"})).is_err());
     }
 
     #[test]

@@ -6,6 +6,25 @@ use std::sync::mpsc::{Receiver, channel};
 pub const DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 50;
 pub const MAX_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 500;
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AlwaysOnTopMode {
+    #[default]
+    Never,
+    Always,
+    WhilePlayingVideo,
+}
+
+impl AlwaysOnTopMode {
+    pub fn is_active(self, video_loaded: bool, paused: bool, ended: bool) -> bool {
+        match self {
+            Self::Never => false,
+            Self::Always => true,
+            Self::WhilePlayingVideo => video_loaded && !paused && !ended,
+        }
+    }
+}
+
 /// Vertical wheel policy. Physical horizontal wheel input always pans X.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -492,6 +511,7 @@ pub struct AppConfig {
     pub seekbar_hover_thumbnails: bool,
     pub nle_seekbar_hover_thumbnails: bool,
     pub consistent_video_aspect_ratio: bool,
+    pub always_on_top: AlwaysOnTopMode,
     pub quick_seek_seconds: f64,
     pub frame_step_count: u32,
     pub wheel_seek_seconds: f64,
@@ -659,6 +679,7 @@ impl Default for AppConfig {
             seekbar_hover_thumbnails: false,
             nle_seekbar_hover_thumbnails: false,
             consistent_video_aspect_ratio: true,
+            always_on_top: AlwaysOnTopMode::Never,
             quick_seek_seconds: 10.0,
             frame_step_count: 1,
             wheel_seek_seconds: 5.0,

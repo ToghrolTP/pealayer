@@ -341,6 +341,8 @@ pub struct PealayerApp {
     pub(crate) media_fps: f64,
     pub(crate) video_aspect_ratio: f64,
     pub(crate) consistent_video_aspect_ratio: bool,
+    pub(crate) always_on_top: crate::config::AlwaysOnTopMode,
+    pub(crate) applied_always_on_top: Option<bool>,
     pub(crate) pending_video_aspect_resize: bool,
     pub is_paused: bool,
     pub is_eof: bool,
@@ -1267,6 +1269,7 @@ impl eframe::App for PealayerApp {
         let ctx = ui.ctx().clone();
 
         self.process_events();
+        self.sync_window_level(ui.ctx());
         if self.is_scrubbing || self.pending_scrub_commit.is_some() {
             // A paused libmpv surface still needs paint opportunities while a
             // coalesced preview or exact commit is decoding. This timer exists
@@ -2218,6 +2221,27 @@ impl PealayerApp {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// Change the native stacking level only on policy or playback transitions.
+    /// Target the main window explicitly, never a preferences/dialog viewport.
+    fn sync_window_level(&mut self, ctx: &egui::Context) {
+        let video_loaded = self.current_video_path.is_some()
+            && self.media_metadata_loaded
+            && self.media_tracks.iter().any(|track| {
+                track.kind == MediaTrackType::Video
+                    && self.current_vid == track.id.to_string()
+                    && track.image != Some(true)
+                    && track.album_art != Some(true)
+            });
+        let active = !self.web_only
+            && self.always_on_top.is_active(video_loaded, self.is_paused, self.is_eof);
+        if self.applied_always_on_top != Some(active) {
+            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::WindowLevel(
+                if active { egui::WindowLevel::AlwaysOnTop } else { egui::WindowLevel::Normal },
+            ));
+            self.applied_always_on_top = Some(active);
         }
     }
 
@@ -5369,6 +5393,7 @@ impl PealayerApp {
         cfg.seekbar_hover_thumbnails = self.seekbar_hover_thumbnails;
         cfg.nle_seekbar_hover_thumbnails = self.nle_seekbar_hover_thumbnails;
         cfg.consistent_video_aspect_ratio = self.consistent_video_aspect_ratio;
+        cfg.always_on_top = self.always_on_top;
         cfg.quick_seek_seconds = self.quick_seek_seconds;
         cfg.frame_step_count = self.frame_step_count;
         cfg.wheel_seek_seconds = self.wheel_seek_seconds;
@@ -5566,6 +5591,8 @@ impl PealayerApp {
         let aspect_lock_enabled =
             !self.consistent_video_aspect_ratio && config.consistent_video_aspect_ratio;
         self.consistent_video_aspect_ratio = config.consistent_video_aspect_ratio;
+        self.always_on_top = config.always_on_top;
+        self.sync_window_level(ctx);
         if aspect_lock_enabled && self.current_video_path.is_some() {
             self.pending_video_aspect_resize = true;
         } else if !self.consistent_video_aspect_ratio {
@@ -6856,6 +6883,8 @@ impl Default for PealayerApp {
             media_fps: 0.0,
             video_aspect_ratio: 16.0 / 9.0,
             consistent_video_aspect_ratio: true,
+            always_on_top: crate::config::AlwaysOnTopMode::Never,
+            applied_always_on_top: None,
             pending_video_aspect_resize: false,
             is_paused: false,
             is_eof: false,
