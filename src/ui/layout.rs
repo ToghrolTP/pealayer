@@ -802,6 +802,8 @@ fn effect_library_card_header(
     id: egui::Id,
     icon: &str,
     title: &str,
+    primary_action_icon: &str,
+    primary_action_enabled: bool,
     tooltips: [&str; 7],
 ) -> EffectCardHeaderResponse {
     ui.horizontal(|ui| {
@@ -883,10 +885,13 @@ fn effect_library_card_header(
                         )
                         .on_hover_text(tooltips[4]);
                     let run = ui
-                        .add_sized(
-                            [action_button_width, 24.0],
-                            egui::Button::new(crate::ui::icons::PLAY).frame(false),
-                        )
+                        .add_enabled_ui(primary_action_enabled, |ui| {
+                            ui.add_sized(
+                                [action_button_width, 24.0],
+                                egui::Button::new(primary_action_icon).frame(false),
+                            )
+                        })
+                        .inner
                         .on_hover_text(tooltips[3]);
                     let rename = ui
                         .add_sized(
@@ -1519,7 +1524,7 @@ fn effect_preset_reference(preset: &crate::app::EffectPreset) -> Option<String> 
             .as_ref()
             .map(|effect| effect.id.trim())
             .filter(|id| !id.is_empty())
-            .map(|id| format!("strip:{id}")),
+            .map(|id| format!("effect:{id}")),
     }
 }
 
@@ -3629,10 +3634,6 @@ fn responsive_action_label(
     } else {
         format!("{icon} {}", action.name)
     }
-}
-
-fn should_show_stop_preview(preview_active: bool, pending_operation: Option<&str>) -> bool {
-    preview_active || pending_operation == Some("effect-stop")
 }
 
 fn hardware_section(
@@ -6879,14 +6880,6 @@ mod timeline_row_tests {
     }
 
     #[test]
-    fn stop_preview_is_only_visible_for_an_active_or_stopping_preview() {
-        assert!(!should_show_stop_preview(false, None));
-        assert!(!should_show_stop_preview(false, Some("effect-preview")));
-        assert!(should_show_stop_preview(true, None));
-        assert!(should_show_stop_preview(false, Some("effect-stop")));
-    }
-
-    #[test]
     fn rf_codes_accept_hex_and_decimal_without_guessing_invalid_input() {
         assert_eq!(parse_rf_code("0x12AB34"), Some(0x12AB34));
         assert_eq!(parse_rf_code("1223476"), Some(1_223_476));
@@ -7657,6 +7650,8 @@ mod timeline_row_tests {
                                     egui::Id::new("header-anchor"),
                                     crate::ui::icons::SPARKLE,
                                     title,
+                                    crate::ui::icons::PLAY,
+                                    true,
                                     ["Drag", "Icon", "Rename", "Run", "Place", "More", "Rename"],
                                 );
                                 geometry.set((
@@ -7866,6 +7861,8 @@ mod timeline_row_tests {
                                         egui::Id::new("effect-card-with-action"),
                                         crate::ui::icons::SPARKLE,
                                         "Seat rise",
+                                        crate::ui::icons::PLAY,
+                                        true,
                                         ["Drag", "Icon", "Rename", "Run", "Place", "More", "Rename"],
                                     );
                                     let button = match action {
@@ -7975,6 +7972,8 @@ mod timeline_row_tests {
                                     id,
                                     crate::ui::icons::SPARKLE,
                                     "Grip fixture",
+                                    crate::ui::icons::PLAY,
+                                    true,
                                     ["Drag", "Icon", "Rename", "Run", "Place", "More", "Rename"],
                                 )
                             })
@@ -8197,6 +8196,21 @@ mod timeline_row_tests {
         assert_eq!(
             effect_preset_reference(&first).as_deref(),
             Some("effect:7")
+        );
+
+        let strip = crate::app::EffectPreset {
+            category: "Lighting".to_string(),
+            group_icon: String::new(),
+            source: crate::app::EffectPresetSource::ControllerStrip,
+            effect: crate::four_d::models::Effect::controller_strip_effect(
+                "Aurora".to_string(),
+                5_000,
+                "aurora".to_string(),
+            ),
+        };
+        assert_eq!(
+            effect_preset_reference(&strip).as_deref(),
+            Some("effect:aurora")
         );
     }
 
@@ -10107,6 +10121,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         &preset.effect.name,
                                                     );
                                                 let source = preset.source;
+                                                let (_, primary_action_icon, primary_action_label, primary_action_enabled) =
+                                                    crate::ui::effects_library::saved_effect_preview_action_presentation(
+                                                        self.app,
+                                                        &reference,
+                                                    );
                                                 let mut run_now = false;
                                                 let mut place_at_playhead = false;
                                                 let mut more_response = None;
@@ -10219,11 +10238,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                     item_id,
                                                                     &preset.effect.icon,
                                                                     &displayed_effect_name,
+                                                                    primary_action_icon,
+                                                                    primary_action_enabled,
                                                                     [
                                                                         &self.app.tr("Drag effect to timeline"),
                                                                         &self.app.tr("Change icon"),
                                                                         &self.app.tr("Rename"),
-                                                                        &self.app.tr("Run now"),
+                                                                        &primary_action_label,
                                                                         &self.app.tr("Place at playhead"),
                                                                         &self.app.tr("More actions"),
                                                                         &self.app.tr("Rename"),
@@ -10301,7 +10322,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 if run_now
                                                     && let Err(error) = self
                                                         .app
-                                                        .play_controller_effect(&reference)
+                                                        .invoke_controller_effect_preview_action(&reference)
                                                 {
                                                     self.app.set_osd(error);
                                                 }
@@ -10326,10 +10347,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     ui.strong(&displayed_effect_name);
                                                     ui.label(egui::RichText::new(&reference).monospace().weak().small());
                                                     ui.separator();
-                                                    if ui.button(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, self.app.tr("Rename"))).clicked() {
-                                                        request_effect_card_rename(ui.ctx(), item_id);
-                                                        ui.close();
-                                                    }
                                                     if ui.button(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, self.app.tr("Manage"))).clicked() {
                                                         if crate::ui::effects_library::select_advertised_effect(
                                                             self.app,
@@ -10340,18 +10357,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         }
                                                         ui.close();
                                                     }
-                                                    if ui.button(format!("{} {}", crate::ui::icons::PLAY, self.app.tr("Run now"))).clicked() {
-                                                        if let Err(error) = self.app.play_controller_effect(&reference) {
-                                                            self.app.set_osd(error);
-                                                        }
-                                                        ui.close();
-                                                    }
-                                                    if ui.button(format!("{} {}", crate::ui::icons::STOP_CIRCLE, self.app.tr("Stop"))).clicked() {
-                                                        if let Err(error) = self.app.stop_controller_effect(&reference) {
-                                                            self.app.set_osd(error);
-                                                        }
-                                                        ui.close();
-                                                    }
+                                                    crate::ui::effects_library::draw_saved_effect_preview_action(
+                                                        self.app,
+                                                        ui,
+                                                        &reference,
+                                                    );
                                                     if ui.button(format!("{} {}", crate::ui::icons::PLUS, self.app.tr("Place at playhead"))).clicked() {
                                                         self.app.place_controller_effect_at_playhead(&payload);
                                                         ui.close();

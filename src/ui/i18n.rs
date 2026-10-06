@@ -243,6 +243,8 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Jump to cue start" => "پرش به آغاز نشانه",
         "Cue start" => "آغاز نشانه",
         "Run now" => "اجرای فوری",
+        "Starting…" => "در حال آغاز…",
+        "Stopping…" => "در حال توقف…",
         "Restore default name" => "بازگردانی نام پیش‌فرض",
         "Type" => "نوع",
         "Control" => "کنترل",

@@ -33,6 +33,51 @@ fn show_saved_effect_context_menu(
         });
 }
 
+pub(crate) fn saved_effect_preview_action_presentation(
+    app: &mut PealayerApp,
+    reference: &str,
+) -> (
+    crate::app::ControllerEffectPreviewPhase,
+    &'static str,
+    String,
+    bool,
+) {
+    let phase = app.controller_effect_preview_phase(reference);
+    let (icon, label) = match phase {
+        crate::app::ControllerEffectPreviewPhase::Run => {
+            (crate::ui::icons::PLAY, app.tr("Run now"))
+        }
+        crate::app::ControllerEffectPreviewPhase::Starting => {
+            (crate::ui::icons::PLAY, app.tr("Starting…"))
+        }
+        crate::app::ControllerEffectPreviewPhase::Stop => {
+            (crate::ui::icons::STOP_CIRCLE, app.tr("Stop"))
+        }
+        crate::app::ControllerEffectPreviewPhase::Stopping => {
+            (crate::ui::icons::STOP_CIRCLE, app.tr("Stopping…"))
+        }
+    };
+    let enabled = app.controller_effect_preview_action_enabled(phase);
+    (phase, icon, label, enabled)
+}
+
+pub(crate) fn draw_saved_effect_preview_action(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    reference: &str,
+) {
+    let (_, icon, label, enabled) = saved_effect_preview_action_presentation(app, reference);
+    if ui
+        .add_enabled(enabled, egui::Button::new(format!("{icon} {label}")))
+        .clicked()
+    {
+        if let Err(error) = app.invoke_controller_effect_preview_action(reference) {
+            app.set_osd(error);
+        }
+        ui.close();
+    }
+}
+
 pub(crate) fn select_sequence(
     app: &mut PealayerApp,
     effect: &crate::four_d::controller::HardwareMacro,
@@ -183,28 +228,7 @@ fn draw_saved_effect_context_menu(
         app.show_effect_library_editor = true;
         ui.close();
     }
-    if ui
-        .button(format!("{} {}", crate::ui::icons::PLAY, app.tr("Run now")))
-        .clicked()
-    {
-        if let Err(error) = app.play_controller_effect(reference) {
-            app.set_osd(error);
-        }
-        ui.close();
-    }
-    if ui
-        .button(format!(
-            "{} {}",
-            crate::ui::icons::STOP_CIRCLE,
-            app.tr("Stop")
-        ))
-        .clicked()
-    {
-        if let Err(error) = app.stop_controller_effect(reference) {
-            app.set_osd(error);
-        }
-        ui.close();
-    }
+    draw_saved_effect_preview_action(app, ui, reference);
     if ui
         .button(format!(
             "{} {}",

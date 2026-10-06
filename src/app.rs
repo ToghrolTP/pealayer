@@ -163,6 +163,9 @@ pub struct HardwareEffectAuthoringState {
     pub capture_mode: String,
     pub active: bool,
     pub preview_active: bool,
+    pub preview_reference: Option<String>,
+    preview_duration: Option<std::time::Duration>,
+    preview_deadline: Option<std::time::Instant>,
     pub anchor_ms: u64,
     pub pending_operation: Option<String>,
     pub pending_saved_macro_id: Option<u64>,
@@ -189,6 +192,9 @@ impl Default for HardwareEffectAuthoringState {
             capture_mode: "automatic".to_string(),
             active: false,
             preview_active: false,
+            preview_reference: None,
+            preview_duration: None,
+            preview_deadline: None,
             anchor_ms: 0,
             pending_operation: None,
             pending_saved_macro_id: None,
@@ -219,19 +225,85 @@ impl HardwareEffectAuthoringState {
             self.acknowledged_effect_reference.as_ref() == Some(&reference)
         })
     }
+
+    fn begin_effect_preview(
+        &mut self,
+        reference: &str,
+        duration: Option<std::time::Duration>,
+    ) {
+        self.preview_reference = canonical_effect_reference(reference);
+        self.preview_duration = duration;
+        self.preview_deadline = None;
+        self.preview_active = false;
+    }
+
+    fn acknowledge_effect_preview(&mut self, now: std::time::Instant) {
+        self.preview_active = true;
+        self.preview_deadline = self.preview_duration.map(|duration| now + duration);
+    }
+
+    fn finish_effect_preview(&mut self) {
+        self.preview_active = false;
+        self.preview_reference = None;
+        self.preview_duration = None;
+        self.preview_deadline = None;
+    }
+
+    fn expire_effect_preview(&mut self, now: std::time::Instant) {
+        if self.pending_operation.is_none()
+            && self
+                .preview_deadline
+                .is_some_and(|deadline| deadline <= now)
+        {
+            self.finish_effect_preview();
+        }
+    }
+
+    fn preview_repaint_after(&self, now: std::time::Instant) -> Option<std::time::Duration> {
+        self.preview_deadline
+            .and_then(|deadline| deadline.checked_duration_since(now))
+    }
+
+    fn effect_preview_phase(
+        &mut self,
+        reference: &str,
+        now: std::time::Instant,
+    ) -> ControllerEffectPreviewPhase {
+        self.expire_effect_preview(now);
+        let same_effect = canonical_effect_reference(reference).is_some_and(|reference| {
+            self.preview_reference.as_ref() == Some(&reference)
+        });
+        match self.pending_operation.as_deref() {
+            Some("effect-play" | "effect-preview") if same_effect => {
+                ControllerEffectPreviewPhase::Starting
+            }
+            Some("effect-stop") if same_effect => ControllerEffectPreviewPhase::Stopping,
+            _ if same_effect && self.preview_active => ControllerEffectPreviewPhase::Stop,
+            _ => ControllerEffectPreviewPhase::Run,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ControllerEffectPreviewPhase {
+    Run,
+    Starting,
+    Stop,
+    Stopping,
 }
 
 fn canonical_effect_reference(reference: &str) -> Option<String> {
     let reference = reference.trim();
-    let id = if reference
-        .get(.."effect:".len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("effect:"))
-    {
-        &reference["effect:".len()..]
-    } else {
-        reference
-    }
-    .trim();
+    let id = ["effect:", "strip:"]
+        .into_iter()
+        .find_map(|prefix| {
+            reference
+                .get(..prefix.len())
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
+                .then(|| &reference[prefix.len()..])
+        })
+        .unwrap_or(reference)
+        .trim();
     (!id.is_empty()).then(|| format!("effect:{}", id.to_ascii_lowercase()))
 }
 
@@ -737,6 +809,15 @@ impl eframe::App for PealayerApp {
             self.process_shell_commands(ui.ctx());
         }
         self.process_controller_call_results();
+        let preview_now = std::time::Instant::now();
+        self.hardware_effect_authoring
+            .expire_effect_preview(preview_now);
+        if let Some(remaining) = self
+            .hardware_effect_authoring
+            .preview_repaint_after(preview_now)
+        {
+            ui.ctx().request_repaint_after(remaining);
+        }
         self.refresh_controller_effect_timeline_metadata();
         self.poll_external_config(ui.ctx());
 
@@ -2536,7 +2617,10 @@ impl PealayerApp {
         if !advertised {
             return Err("the selected strip effect is no longer advertised".to_string());
         }
-        self.request_hardware_effect_command("effect-preview", format!("effect play {id}"))
+        self.request_hardware_effect_command("effect-preview", format!("effect play {id}"))?;
+        self.hardware_effect_authoring
+            .begin_effect_preview(&format!("effect:{id}"), None);
+        Ok(())
     }
 
     pub(crate) fn stop_strip_preview(&mut self) -> Result<(), String> {
@@ -2824,10 +2908,68 @@ impl PealayerApp {
                     .to_string(),
             );
         }
+        let canonical = canonical_effect_reference(reference)
+            .ok_or_else(|| "Select a PCController effect first".to_string())?;
+        let duration = self.controller_effect_preview_duration(&canonical);
         self.request_hardware_effect_command(
             "effect-play",
             format!("effect play {}", reference.trim()),
-        )
+        )?;
+        self.hardware_effect_authoring
+            .begin_effect_preview(&canonical, duration);
+        Ok(())
+    }
+
+    fn controller_effect_preview_duration(
+        &self,
+        reference: &str,
+    ) -> Option<std::time::Duration> {
+        let reference = canonical_effect_reference(reference)?;
+        let id = reference.strip_prefix("effect:")?;
+        let duration_ms = self
+            .advertised_hardware()?
+            .macros
+            .iter()
+            .find(|effect| {
+                effect.id.to_string() == id || effect.name.eq_ignore_ascii_case(id)
+            })?
+            .duration_ms;
+        (duration_ms > 0).then(|| std::time::Duration::from_millis(duration_ms))
+    }
+
+    pub(crate) fn controller_effect_preview_phase(
+        &mut self,
+        reference: &str,
+    ) -> ControllerEffectPreviewPhase {
+        self.hardware_effect_authoring
+            .effect_preview_phase(reference, std::time::Instant::now())
+    }
+
+    pub(crate) fn controller_effect_preview_action_enabled(
+        &self,
+        phase: ControllerEffectPreviewPhase,
+    ) -> bool {
+        self.hardware_effect_authoring.pending_operation.is_none()
+            && matches!(
+                phase,
+                ControllerEffectPreviewPhase::Run | ControllerEffectPreviewPhase::Stop
+            )
+    }
+
+    pub(crate) fn invoke_controller_effect_preview_action(
+        &mut self,
+        reference: &str,
+    ) -> Result<(), String> {
+        match self.controller_effect_preview_phase(reference) {
+            ControllerEffectPreviewPhase::Run => self.play_controller_effect(reference),
+            ControllerEffectPreviewPhase::Stop => self.stop_controller_effect(reference),
+            ControllerEffectPreviewPhase::Starting => {
+                Err("This effect is still starting".to_string())
+            }
+            ControllerEffectPreviewPhase::Stopping => {
+                Err("This effect is still stopping".to_string())
+            }
+        }
     }
 
     pub(crate) fn controller_effect_is_advertised(&self, reference: &str) -> bool {
@@ -3077,12 +3219,13 @@ impl PealayerApp {
                             self.hardware_effect_authoring.pending_saved_macro_id = self.hardware_effect_authoring.append_target;
                             self.engine_handle.request_catalog_refresh();
                         }
-                        "effect-preview" | "strip-rainbow" => {
-                            self.hardware_effect_authoring.preview_active = true;
+                        "effect-play" | "effect-preview" | "strip-rainbow" => {
+                            self.hardware_effect_authoring
+                                .acknowledge_effect_preview(std::time::Instant::now());
                             self.engine_handle.request_catalog_refresh();
                         }
                         "effect-stop" | "strip-stop" | "strip-clear" => {
-                            self.hardware_effect_authoring.preview_active = false;
+                            self.hardware_effect_authoring.finish_effect_preview();
                             self.engine_handle.request_catalog_refresh();
                         }
                         "board-name"
@@ -3163,8 +3306,8 @@ impl PealayerApp {
                 Err(error) => {
                     if result.operation == "effect-save" { self.hardware_effect_authoring.record_after_publish = None; }
                     if result.operation == "macro-start" { self.hardware_effect_authoring.append_target = None; }
-                    if result.operation == "effect-preview" {
-                        self.hardware_effect_authoring.preview_active = false;
+                    if matches!(result.operation.as_str(), "effect-play" | "effect-preview") {
+                        self.hardware_effect_authoring.finish_effect_preview();
                     }
                     if is_board_operation {
                         self.board_operation_status = error.clone();
@@ -8334,6 +8477,68 @@ mod tests {
         authoring.forget_effect_publish("RAINBOW-WAVE");
 
         assert!(!authoring.effect_publish_is_acknowledged("effect:rainbow-wave"));
+    }
+
+    #[test]
+    fn effect_preview_phase_is_contextual_per_effect_and_expires() {
+        let mut authoring = HardwareEffectAuthoringState::default();
+        let started_at = std::time::Instant::now();
+        authoring.begin_effect_preview(
+            "effect:7",
+            Some(std::time::Duration::from_millis(750)),
+        );
+        authoring.pending_operation = Some("effect-play".to_string());
+
+        assert_eq!(
+            authoring.effect_preview_phase("effect:7", started_at),
+            ControllerEffectPreviewPhase::Starting
+        );
+        assert_eq!(
+            authoring.effect_preview_phase("effect:8", started_at),
+            ControllerEffectPreviewPhase::Run
+        );
+
+        authoring.pending_operation = None;
+        authoring.acknowledge_effect_preview(started_at);
+        assert_eq!(
+            authoring.effect_preview_phase(
+                "effect:7",
+                started_at + std::time::Duration::from_millis(749),
+            ),
+            ControllerEffectPreviewPhase::Stop
+        );
+
+        assert_eq!(
+            authoring.effect_preview_phase(
+                "effect:7",
+                started_at + std::time::Duration::from_millis(750),
+            ),
+            ControllerEffectPreviewPhase::Run
+        );
+        assert!(!authoring.preview_active);
+        assert_eq!(authoring.preview_reference, None);
+    }
+
+    #[test]
+    fn effect_preview_phase_reports_stopping_only_for_the_running_card() {
+        let mut authoring = HardwareEffectAuthoringState::default();
+        let now = std::time::Instant::now();
+        authoring.begin_effect_preview("strip:Aurora", None);
+        authoring.acknowledge_effect_preview(now);
+        authoring.pending_operation = Some("effect-stop".to_string());
+
+        assert_eq!(
+            authoring.effect_preview_phase("effect:aurora", now),
+            ControllerEffectPreviewPhase::Stopping
+        );
+        assert_eq!(
+            authoring.effect_preview_phase("effect:other", now),
+            ControllerEffectPreviewPhase::Run
+        );
+        assert_eq!(
+            canonical_effect_reference("STRIP:Aurora").as_deref(),
+            Some("effect:aurora")
+        );
     }
 
     #[test]
