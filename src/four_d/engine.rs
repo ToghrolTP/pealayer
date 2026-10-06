@@ -363,6 +363,14 @@ pub enum EngineMessage {
     },
 }
 
+type StateNotifier = Arc<dyn Fn() + Send + Sync>;
+
+fn notify_state_change(notifier: &Mutex<Option<StateNotifier>>) {
+    // Never invoke an interface callback while holding the engine's lock.
+    let callback = notifier.lock().ok().and_then(|slot| slot.clone());
+    if let Some(callback) = callback { callback(); }
+}
+
 pub struct EngineHandle {
     lifecycle: Arc<()>,
     pub playback_time_ms: Arc<AtomicU64>,
@@ -379,6 +387,7 @@ pub struct EngineHandle {
     pub hardware_capabilities: Arc<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
     pub controller_call_results: Arc<Mutex<std::collections::VecDeque<ControllerCallResult>>>,
     catalog_refresh_requested: Arc<AtomicBool>,
+    state_notifier: Arc<Mutex<Option<StateNotifier>>>,
     pub sender: mpsc::Sender<EngineMessage>,
 }
 
@@ -398,6 +407,9 @@ pub struct ControllerPushTarget {
 }
 
 impl EngineHandle {
+    pub fn set_state_notifier(&self, notify: impl Fn() + Send + Sync + 'static) {
+        if let Ok(mut slot) = self.state_notifier.lock() { *slot = Some(Arc::new(notify)); }
+    }
     pub(crate) fn playback_lifecycle(&self) -> std::sync::Weak<()> { Arc::downgrade(&self.lifecycle) }
     pub fn attach_playback_clock(&self, mpv:&'static libmpv2::Mpv) {super::media_timeline::observe_mpv(self,mpv);}
     pub fn request_prepared_play(&self)->bool {
@@ -638,6 +650,7 @@ pub fn spawn_engine() -> EngineHandle {
     let hardware_capabilities = Arc::new(Mutex::new(None));
     let controller_call_results = Arc::new(Mutex::new(std::collections::VecDeque::new()));
     let catalog_refresh_requested = Arc::new(AtomicBool::new(false));
+    let state_notifier = Arc::new(Mutex::new(None));
 
     let (tx, rx) = mpsc::channel();
     super::media_sync::spawn(Arc::downgrade(&lifecycle), Arc::clone(&media_playback),
@@ -654,6 +667,7 @@ pub fn spawn_engine() -> EngineHandle {
     let engine_capabilities = Arc::clone(&hardware_capabilities);
     let engine_controller_call_results = Arc::clone(&controller_call_results);
     let engine_catalog_refresh_requested = Arc::clone(&catalog_refresh_requested);
+    let engine_state_notifier = Arc::clone(&state_notifier);
 
     thread::spawn(move || {
         let mut queue: Vec<CompiledAction> = Vec::new();
@@ -1253,6 +1267,11 @@ pub fn spawn_engine() -> EngineHandle {
                             }
                         }
                     }
+                    // Push notifications request discovery before its result
+                    // exists. Wake every interface after installing that result
+                    // too; otherwise a paused/idle GUI and its cached Web state
+                    // can remain one captured edge behind indefinitely.
+                    notify_state_change(&engine_state_notifier);
                 }
             }
 
@@ -1488,6 +1507,7 @@ pub fn spawn_engine() -> EngineHandle {
         hardware_capabilities,
         controller_call_results,
         catalog_refresh_requested,
+        state_notifier,
         sender: tx,
     }
 }
@@ -1737,6 +1757,23 @@ pub fn evaluate_relay_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn state_notifier_runs_after_unlocking_and_only_when_requested() {
+        let slot: Arc<Mutex<Option<StateNotifier>>> = Arc::new(Mutex::new(None));
+        notify_state_change(&slot);
+        let callback_slot = Arc::clone(&slot);
+        let calls = Arc::new(AtomicU64::new(0));
+        let callback_calls = Arc::clone(&calls);
+        *slot.lock().unwrap() = Some(Arc::new(move || {
+            assert!(callback_slot.try_lock().is_ok());
+            callback_calls.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        notify_state_change(&slot);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        *slot.lock().unwrap() = None;
+    }
     use crate::four_d::models::{AtomicAction, Effect, EffectInstance, Timeline};
 
     #[test]

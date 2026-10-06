@@ -563,6 +563,8 @@ fn main() -> eframe::Result {
             let (_web_cmd_tx, web_cmd_rx) = std::sync::mpsc::channel();
             let (media_cmd_tx, media_cmd_rx) = std::sync::mpsc::channel();
             let engine_handle = crate::four_d::engine::spawn_engine();
+            let engine_repaint = cc.egui_ctx.clone();
+            engine_handle.set_state_notifier(move || engine_repaint.request_repaint());
             engine_handle.attach_playback_clock(mpv_static);
             let controller_cmd_rx = crate::platform::interop::spawn_pccontroller_action_bridge(
                 cc.egui_ctx.clone(),
