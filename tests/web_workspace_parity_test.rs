@@ -45,7 +45,7 @@ fn web_hardware_and_effects_consume_the_shared_live_contract() {
 }
 
 #[test]
-fn effect_recording_is_only_offered_while_creating_a_new_sequence() {
+fn effect_recording_is_offered_for_new_and_existing_sequences() {
     let native_hardware = include_str!("../src/ui/layout.rs");
     let native_effects = include_str!("../src/ui/effects_library.rs");
     let web_hardware = include_str!("../web_ui/src/components/HardwareTab.tsx");
@@ -53,17 +53,17 @@ fn effect_recording_is_only_offered_while_creating_a_new_sequence() {
     let web_studio = include_str!("../web_ui/src/components/StudioTab.tsx");
 
     assert!(!native_hardware.contains("draw_effect_recording_panel"));
-    assert!(native_effects.contains("if app.effect_library_draft.is_new"));
+    assert!(native_effects.contains("if app.effect_library_draft.kind == \"sequence\""));
     assert_eq!(
         native_effects
-            .matches("draw_effect_recording_panel(app, ui)")
+            .matches("draw_effect_capture_controls(app, ui)")
             .count(),
         1
     );
     assert!(!web_hardware.contains("EffectRecorder"));
-    assert!(web_effects.contains("draft.is_new && draft.kind === 'sequence' && <EffectRecorder"));
+    assert!(web_effects.contains("draft.kind === 'sequence' ? <>"));
     assert_eq!(web_effects.matches("<EffectRecorder").count(), 1);
-    assert!(web_studio.contains("effectDraft.is_new && effectDraft.kind === 'sequence'"));
+    assert!(web_studio.contains("effectDraft.kind === 'sequence' && ("));
     assert_eq!(web_studio.matches("<EffectRecorder").count(), 1);
 }
 
