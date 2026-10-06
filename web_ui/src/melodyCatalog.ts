@@ -26,16 +26,17 @@ export const appendMelodySteps = <T extends Record<string, any>>(
       kind: 'beep',
       frequency_hz: note.frequency_hz,
       duration_ms: note.duration_ms,
-    } as T);
+    } as unknown as T);
     offsetMs += note.duration_ms;
-    if ((note.gap_ms ?? 0) > 0) {
+    const gapMs = note.gap_ms ?? 0;
+    if (gapMs > 0) {
       result.push({
         at_us: baseUs + offsetMs * 1000,
         kind: 'beep',
         frequency_hz: 0,
-        duration_ms: note.gap_ms,
-      } as T);
-      offsetMs += note.gap_ms ?? 0;
+        duration_ms: gapMs,
+      } as unknown as T);
+      offsetMs += gapMs;
     }
   }
   return result;
