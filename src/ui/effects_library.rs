@@ -3160,7 +3160,7 @@ mod tests {
                         text_positions(shape, text, positions);
                     }
                 }
-                egui::epaint::Shape::Text(value) if value.galley.job.text == text => {
+                egui::epaint::Shape::Text(value) if value.galley.job.text.contains(text) => {
                     positions.push(value.pos + value.galley.rect.center().to_vec2());
                 }
                 _ => {}
