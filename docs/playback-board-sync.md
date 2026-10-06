@@ -40,6 +40,15 @@ separate board acknowledgement fields. `board_synced` is not just a socket
 connection indicator; inspect `board_error`, `board_sequence`,
 `board_synced_at` and `board_round_trip_ms` when diagnosing firmware mismatch.
 The structured event stream publishes `media.playback` events for subscribers.
+Subscribe on PCController's `/ipc` WebSocket with the `state` topic (the
+`events` topic is the separate activity stream):
+
+```json
+{"jsonrpc":"2.0","id":3,"method":"controller.subscribe","params":{"topics":["state"],"interval_ms":100}}
+```
+
+Notifications use method `controller.state`, kind `media.playback`, and carry
+the playback fields in `params.metadata`.
 
 PCController advances between samples and sends exact segment bytes to the
 board. This is bounded best-effort real-time synchronization, not a claim of
@@ -50,3 +59,6 @@ presentation each expire after three seconds without refresh.
 The authoritative wire/API contract is documented in PCController's
 `docs/Playback-Board-Sync.md`; this is one playback presenter, not an effect
 catalog or a second board-owned playback engine.
+
+Local acceptance evidence and remaining physical gates:
+[Playback verification](verification/playback-board-results.md).

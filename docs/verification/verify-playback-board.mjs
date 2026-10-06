@@ -48,7 +48,7 @@ ws.addEventListener('message', message => {
   function visit(v) { if (!v || typeof v !== 'object') return; if (v.kind === 'media.playback') events.push(v); for (const child of Object.values(v)) { if (typeof child === 'object') visit(child); } }
   visit(value);
 });
-ws.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'controller.subscribe', params: { topics: ['events'], interval_ms: 100, after_id: 0 } }));
+ws.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'controller.subscribe', params: { topics: ['state'], interval_ms: 100, after_id: 0 } }));
 const evidence = { generated_at: new Date().toISOString(), virtual_board: true, checks: [] };
 try {
   await command('pause'); await command('set_rate', { rate: 1 }); await command('seek_to', { seconds: 65 });
@@ -87,6 +87,8 @@ try {
   await command('pause'); await command('set_rate', { rate: initial.playback_rate || 1 });
   await command('seek_to', { seconds: initial.playback_time });
   if (initial.playing) await command('play');
+  await until(v => v.playing === initial.playing && v.rate === (initial.playback_rate || 1)
+    && Math.abs(v.position_ms - initial.playback_time * 1000) < (initial.playing ? 2000 : 200));
   ws.close(); socket.end();
 }
 console.log(JSON.stringify(evidence, null, 2));
