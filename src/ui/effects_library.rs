@@ -565,6 +565,63 @@ fn sequence_lane(
     }
 }
 
+fn sequence_lane_index_at_pointer(
+    pointer_y: f32,
+    rows_top: f32,
+    row_height: f32,
+    lane_count: usize,
+) -> Option<usize> {
+    let relative_y = pointer_y - rows_top;
+    if relative_y < 0.0 || relative_y >= row_height * lane_count as f32 {
+        return None;
+    }
+    Some((relative_y / row_height).floor() as usize)
+}
+
+/// Retargets a cue to another compatible timeline lane while preserving its
+/// timing and command value. Incompatible lanes are deliberately ignored so a
+/// vertical move cannot silently turn a seat action into a different command.
+fn retarget_sequence_cue_to_lane(
+    step: &mut crate::four_d::controller::HardwareMacroStep,
+    lane_key: &str,
+) -> bool {
+    let changed = if step.kind == "display" {
+        let Some(destination) = lane_key.strip_prefix("display.") else {
+            return false;
+        };
+        if step.destination == destination {
+            false
+        } else {
+            step.destination = destination.to_string();
+            true
+        }
+    } else {
+        let prefix = match step.kind.as_str() {
+            "motion" => "motion.",
+            "relay" => "relay.",
+            "pwm" => "pwm.",
+            "addressable" => "strip.",
+            _ => return false,
+        };
+        let Some(target) = lane_key
+            .strip_prefix(prefix)
+            .and_then(|target| target.parse::<u8>().ok())
+        else {
+            return false;
+        };
+        if step.target == Some(target) {
+            false
+        } else {
+            step.target = Some(target);
+            true
+        }
+    };
+    if changed {
+        refresh_semantic_action(step);
+    }
+    changed
+}
+
 fn sequence_cue_label(step: &crate::four_d::controller::HardwareMacroStep) -> String {
     match step.kind.as_str() {
         "motion" => match step.value.unwrap_or_default() {
@@ -877,6 +934,7 @@ fn draw_sequence_timeline(
                     .2
                     .push(index);
             }
+            let lane_keys = lanes.keys().cloned().collect::<Vec<_>>();
 
             let label_width = 126.0;
             let row_height = 42.0;
@@ -1081,6 +1139,15 @@ fn draw_sequence_timeline(
                                             moved.max(0) as u64
                                         };
                                         step.at_us = moved.saturating_mul(1_000);
+                                        if let Some(lane_index) = sequence_lane_index_at_pointer(
+                                            pointer.y,
+                                            canvas.top() + ruler_height,
+                                            row_height,
+                                            lane_keys.len(),
+                                        ) && let Some(lane_key) = lane_keys.get(lane_index)
+                                        {
+                                            retarget_sequence_cue_to_lane(step, lane_key);
+                                        }
                                     }
                                     crate::app::DragMode::ResizeRight => {
                                         let duration = (drag.duration_ms as i64 + delta_ms).max(1);
@@ -3054,6 +3121,129 @@ mod tests {
         step.value = Some(1);
         refresh_semantic_action(&mut step);
         assert_eq!(step.action_ids, ["relay.5.on"]);
+    }
+
+    #[test]
+    fn retargeting_a_motion_cue_preserves_action_and_timing() {
+        let mut step = crate::four_d::controller::HardwareMacroStep {
+            at_us: 125_000,
+            kind: "motion".to_string(),
+            target: Some(0),
+            value: Some(1),
+            duration_ms: Some(750),
+            action_ids: vec!["seat.a.up".to_string()],
+            ..Default::default()
+        };
+
+        assert!(retarget_sequence_cue_to_lane(&mut step, "motion.1"));
+        assert_eq!(step.target, Some(1));
+        assert_eq!(step.value, Some(1));
+        assert_eq!(step.at_us, 125_000);
+        assert_eq!(step.duration_ms, Some(750));
+        assert_eq!(step.action_ids, ["seat.b.up"]);
+
+        let unchanged = step.clone();
+        assert!(!retarget_sequence_cue_to_lane(&mut step, "relay.4"));
+        assert_eq!(step, unchanged);
+    }
+
+    #[test]
+    fn vertical_move_drag_retargets_a_motion_cue_to_the_destination_lane() {
+        fn text_positions(
+            shape: &egui::epaint::Shape,
+            text: &str,
+            positions: &mut Vec<egui::Pos2>,
+        ) {
+            match shape {
+                egui::epaint::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        text_positions(shape, text, positions);
+                    }
+                }
+                egui::epaint::Shape::Text(value) if value.galley.job.text.contains(text) => {
+                    positions.push(value.pos + value.galley.rect.center().to_vec2());
+                }
+                _ => {}
+            }
+        }
+
+        let context = egui::Context::default();
+        context.all_styles_mut(|style| style.animation_time = 0.0);
+        let mut draft = ControllerEffectDraft::default();
+        draft.steps = vec![
+            crate::four_d::controller::HardwareMacroStep {
+                kind: "motion".to_string(),
+                target: Some(0),
+                value: Some(1),
+                duration_ms: Some(500),
+                action_ids: vec!["seat.a.up".to_string()],
+                ..Default::default()
+            },
+            crate::four_d::controller::HardwareMacroStep {
+                kind: "motion".to_string(),
+                target: Some(1),
+                value: Some(2),
+                at_us: 750_000,
+                duration_ms: Some(500),
+                action_ids: vec!["seat.b.down".to_string()],
+                ..Default::default()
+            },
+        ];
+        let mut selected = 0;
+        let render = |events, draft: &mut ControllerEffectDraft, selected: &mut usize| {
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| draw_sequence_timeline(ui, draft, selected, true),
+            );
+            output.textures_delta.clear();
+            output
+        };
+        render(vec![], &mut draft, &mut selected);
+        let output = render(vec![], &mut draft, &mut selected);
+        let mut up_positions = vec![];
+        let mut seat_b_positions = vec![];
+        for shape in &output.shapes {
+            text_positions(&shape.shape, "Up", &mut up_positions);
+            text_positions(&shape.shape, "Seat B", &mut seat_b_positions);
+        }
+        let cue = *up_positions.first().expect("Seat A Up cue was not painted");
+        let seat_b = *seat_b_positions.first().expect("Seat B lane was not painted");
+        let destination = egui::pos2(cue.x, seat_b.y);
+        let pointer_button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+
+        render(
+            vec![egui::Event::PointerMoved(cue), pointer_button(cue, true)],
+            &mut draft,
+            &mut selected,
+        );
+        render(
+            vec![egui::Event::PointerMoved(destination)],
+            &mut draft,
+            &mut selected,
+        );
+        render(
+            vec![pointer_button(destination, false)],
+            &mut draft,
+            &mut selected,
+        );
+
+        assert_eq!(draft.steps[0].target, Some(1));
+        assert_eq!(draft.steps[0].value, Some(1));
+        assert_eq!(draft.steps[0].at_us, 0);
+        assert_eq!(draft.steps[0].duration_ms, Some(500));
+        assert_eq!(draft.steps[0].action_ids, ["seat.b.up"]);
     }
 
     #[test]
