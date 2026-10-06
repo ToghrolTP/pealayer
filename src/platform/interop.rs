@@ -311,6 +311,29 @@ pub enum InteropCommand {
         blue: u8,
         brightness: u8,
     },
+    SetAddressableStripPixel {
+        pixel: u16,
+        pixels: u16,
+        red: u8,
+        green: u8,
+        blue: u8,
+        brightness: u8,
+    },
+    SendAddressableStripFrame {
+        pixels: u16,
+        rgb: Vec<u8>,
+    },
+    StartAddressableStripRainbow {
+        pixels: u16,
+        fps: u8,
+    },
+    StartAddressableStripEffect {
+        id: String,
+        pixels: u16,
+        fps: u8,
+    },
+    StopAddressableStrip,
+    RefreshAddressableStripStatus,
     ClearAddressableStrip,
     PressFrontPanelKey {
         key: String,
@@ -486,6 +509,34 @@ impl InteropCommand {
             }
             Self::ConfigureAddressableStrip { pixels } if *pixels == 0 => {
                 Err("addressable strip pixel count must be greater than zero".to_string())
+            }
+            Self::SetAddressableStripPixel { pixel, pixels, .. }
+                if *pixels == 0 || *pixel >= *pixels =>
+            {
+                Err("addressable strip pixel must be inside the configured pixel count".to_string())
+            }
+            Self::SendAddressableStripFrame { pixels, rgb }
+                if *pixels == 0 || rgb.len() != usize::from(*pixels) * 3 =>
+            {
+                Err("addressable strip frame must contain exactly three bytes per pixel".to_string())
+            }
+            Self::StartAddressableStripRainbow { pixels, fps }
+                if *pixels == 0 || *fps == 0 =>
+            {
+                Err("addressable strip rainbow requires a pixel count and frame rate".to_string())
+            }
+            Self::StartAddressableStripEffect { id, pixels, fps }
+                if *pixels == 0
+                    || *fps == 0
+                    || id.is_empty()
+                    || id.len() > 64
+                    || !id.chars().all(|character| {
+                        character.is_ascii_lowercase()
+                            || character.is_ascii_digit()
+                            || matches!(character, '.' | '-' | '_')
+                    }) =>
+            {
+                Err("addressable strip effect request is invalid".to_string())
             }
             Self::InvokeHardwareAction { action_id }
                 if action_id.trim().is_empty()
@@ -690,7 +741,10 @@ pub fn command_catalog() -> Value {
             "controller_effect.record.start", "controller_effect.record.status",
             "controller_effect.record.save", "controller_effect.record.discard",
             "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm", "refresh_hardware_catalog",
-            "configure_addressable_strip", "fill_addressable_strip", "clear_addressable_strip",
+            "configure_addressable_strip", "fill_addressable_strip", "set_addressable_strip_pixel",
+            "send_addressable_strip_frame", "start_addressable_strip_rainbow",
+            "start_addressable_strip_effect", "stop_addressable_strip",
+            "refresh_addressable_strip_status", "clear_addressable_strip",
             "press_front_panel_key", "board_information", "rf_control", "open_rf_manager"
         ],
         "json_rpc_prefix": "pealayer",
@@ -1874,6 +1928,91 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 blue: byte("blue")?,
                 brightness: byte("brightness")?,
             })
+        }
+        "hardware.strip.pixel" | "pealayer.hardware.strip.pixel" => {
+            let word = |name: &str| {
+                request
+                    .params
+                    .get(name)
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u16::try_from(value).ok())
+                    .ok_or_else(|| format!("missing valid strip {name}"))
+            };
+            let byte = |name: &str| {
+                request
+                    .params
+                    .get(name)
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u8::try_from(value).ok())
+                    .ok_or_else(|| format!("missing valid strip {name}"))
+            };
+            Some(InteropCommand::SetAddressableStripPixel {
+                pixel: word("pixel")?,
+                pixels: word("pixels")?,
+                red: byte("red")?,
+                green: byte("green")?,
+                blue: byte("blue")?,
+                brightness: byte("brightness")?,
+            })
+        }
+        "hardware.strip.frame" | "pealayer.hardware.strip.frame" => {
+            let pixels = request
+                .params
+                .get("pixels")
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .ok_or_else(|| "missing valid addressable strip pixel count".to_string())?;
+            let rgb = request
+                .params
+                .get("rgb")
+                .and_then(Value::as_array)
+                .ok_or_else(|| "missing valid strip RGB frame".to_string())?
+                .iter()
+                .map(|value| {
+                    value
+                        .as_u64()
+                        .and_then(|value| u8::try_from(value).ok())
+                        .ok_or_else(|| "strip RGB values must be bytes".to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Some(InteropCommand::SendAddressableStripFrame { pixels, rgb })
+        }
+        "hardware.strip.rainbow" | "pealayer.hardware.strip.rainbow" => {
+            let pixels = request
+                .params
+                .get("pixels")
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .ok_or_else(|| "missing valid addressable strip pixel count".to_string())?;
+            let fps = request
+                .params
+                .get("fps")
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .ok_or_else(|| "missing valid strip frame rate".to_string())?;
+            Some(InteropCommand::StartAddressableStripRainbow { pixels, fps })
+        }
+        "hardware.strip.effect" | "pealayer.hardware.strip.effect" => {
+            let id = string(&["id", "effect_id"])?;
+            let pixels = request
+                .params
+                .get("pixels")
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .ok_or_else(|| "missing valid addressable strip pixel count".to_string())?;
+            let fps = request
+                .params
+                .get("fps")
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .ok_or_else(|| "missing valid strip frame rate".to_string())?;
+            Some(InteropCommand::StartAddressableStripEffect { id, pixels, fps })
+        }
+        "hardware.strip.stop" | "pealayer.hardware.strip.stop" => {
+            Some(InteropCommand::StopAddressableStrip)
+        }
+        "hardware.strip.status" | "pealayer.hardware.strip.status" => {
+            Some(InteropCommand::RefreshAddressableStripStatus)
         }
         "hardware.strip.clear" | "pealayer.hardware.strip.clear" => {
             Some(InteropCommand::ClearAddressableStrip)
@@ -3458,6 +3597,50 @@ mod tests {
             command_from_json_rpc(&refresh).unwrap(),
             Some(InteropCommand::RefreshHardwareCatalog)
         ));
+    }
+
+    #[test]
+    fn parses_complete_addressable_strip_web_controls() {
+        let rainbow: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"rainbow","method":"hardware.strip.rainbow","params":{"pixels":100,"fps":20}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&rainbow).unwrap(),
+            Some(InteropCommand::StartAddressableStripRainbow { pixels: 100, fps: 20 })
+        ));
+
+        let pixel: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"pixel","method":"hardware.strip.pixel","params":{"pixel":4,"pixels":12,"red":1,"green":2,"blue":3,"brightness":128}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&pixel).unwrap(),
+            Some(InteropCommand::SetAddressableStripPixel {
+                pixel: 4,
+                pixels: 12,
+                red: 1,
+                green: 2,
+                blue: 3,
+                brightness: 128,
+            })
+        ));
+
+        let frame: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"frame","method":"hardware.strip.frame","params":{"pixels":2,"rgb":[255,0,0,0,0,255]}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&frame).unwrap(),
+            Some(InteropCommand::SendAddressableStripFrame { pixels: 2, rgb })
+                if rgb == vec![255, 0, 0, 0, 0, 255]
+        ));
+
+        let invalid_frame: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"bad-frame","method":"hardware.strip.frame","params":{"pixels":2,"rgb":[255,0,0]}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&invalid_frame).is_err());
     }
 
     #[test]

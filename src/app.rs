@@ -4054,6 +4054,51 @@ impl PealayerApp {
                     return;
                 }
             }
+            InteropCommand::SetAddressableStripPixel {
+                pixel,
+                pixels,
+                red,
+                green,
+                blue,
+                brightness,
+            } => {
+                if let Err(error) = self.set_addressable_strip_pixel(
+                    pixel, pixels, red, green, blue, brightness,
+                ) {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::SendAddressableStripFrame { pixels, rgb } => {
+                if let Err(error) = self.send_addressable_strip_frame(pixels, &rgb) {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::StartAddressableStripRainbow { pixels, fps } => {
+                if let Err(error) = self.start_addressable_strip_rainbow(pixels, fps) {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::StartAddressableStripEffect { id, pixels, fps } => {
+                if let Err(error) = self.start_addressable_strip_effect(&id, pixels, fps) {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::StopAddressableStrip => {
+                if let Err(error) = self.stop_addressable_strip() {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::RefreshAddressableStripStatus => {
+                if let Err(error) = self.refresh_addressable_strip_status() {
+                    self.set_osd(error);
+                    return;
+                }
+            }
             InteropCommand::ClearAddressableStrip => {
                 if let Err(error) = self.clear_addressable_strip() {
                     self.set_osd(error);
