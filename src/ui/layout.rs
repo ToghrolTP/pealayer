@@ -2159,6 +2159,54 @@ fn all_timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
     rows
 }
 
+/// Project the native timeline's authoritative row model into the shared Web
+/// status contract. Keeping this beside `all_timeline_track_rows` prevents the
+/// two surfaces from independently inventing track visibility or ordering.
+pub(crate) fn web_timeline_tracks(
+    app: &PealayerApp,
+) -> Vec<crate::platform::interop::WebTimelineTrack> {
+    all_timeline_track_rows(app)
+        .into_iter()
+        .map(|row| {
+            let (kind, lane) = match row.kind {
+                TimelineTrackKind::Video(_) => ("video".to_string(), None),
+                TimelineTrackKind::Audio(_) => ("audio".to_string(), None),
+                TimelineTrackKind::Subtitle(_) => ("subtitle".to_string(), None),
+                TimelineTrackKind::ControllerEffect(lane) => (
+                    "effect".to_string(),
+                    Some(match lane {
+                        crate::four_d::models::ControllerEffectLane::Motion => "motion",
+                        crate::four_d::models::ControllerEffectLane::Relay => "relay",
+                        crate::four_d::models::ControllerEffectLane::Pwm => "pwm",
+                        crate::four_d::models::ControllerEffectLane::Lighting => "lighting",
+                        crate::four_d::models::ControllerEffectLane::Display => "display",
+                        crate::four_d::models::ControllerEffectLane::Rf => "rf",
+                        crate::four_d::models::ControllerEffectLane::Audio => "audio",
+                        crate::four_d::models::ControllerEffectLane::Sequence => "sequence",
+                        crate::four_d::models::ControllerEffectLane::Composite => "composite",
+                    }.to_string()),
+                ),
+                TimelineTrackKind::Relay(_) | TimelineTrackKind::Hardware(_) => {
+                    ("hardware".to_string(), None)
+                }
+            };
+            crate::platform::interop::WebTimelineTrack {
+                key: row.key,
+                name: row.name,
+                detail: row.detail,
+                kind,
+                lane,
+                control_key: row.control_key,
+                active: row.active,
+                enabled: row.enabled,
+                linked: row.linked,
+                visible: row.visible,
+                dimmed: row.dimmed,
+            }
+        })
+        .collect()
+}
+
 fn controller_effect_lane_label(
     app: &PealayerApp,
     lane: crate::four_d::models::ControllerEffectLane,

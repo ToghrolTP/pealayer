@@ -8,6 +8,8 @@ import {
   FolderOpenOutlined,
   InfoCircleOutlined,
   SettingOutlined,
+  ApiOutlined,
+  ClockCircleOutlined,
 } from '@ant-design/icons';
 import { HeaderBar } from './components/HeaderBar';
 import { SharedToasts } from './components/SharedToasts';
@@ -644,6 +646,15 @@ const App: React.FC = () => {
             </WebViewBoundary>
           </Content>
         </Layout>
+        <footer className="app-statusbar" aria-label={tr(runtime?.locale || 'en', 'Application status')}>
+          <span className={`app-statusbar__connection ${connected ? 'is-online' : ''}`}>
+            <i />{connected ? `${tr(runtime?.locale || 'en', 'Connected')} · ${connectionMode.toUpperCase()}` : tr(runtime?.locale || 'en', 'Offline')}
+          </span>
+          <span><ApiOutlined />{state.hardware_connected ? (state.hardware?.board_name || 'PCController') : tr(runtime?.locale || 'en', 'Board unavailable')}</span>
+          {state.current_video && <span><ClockCircleOutlined />{state.playing ? tr(runtime?.locale || 'en', 'Playing') : tr(runtime?.locale || 'en', 'Paused')} · {Math.max(0, state.playback_time ?? 0).toFixed(1)}s</span>}
+          {state.update?.state && state.update.state !== 'idle' && <span className="app-statusbar__update">{state.update.message}</span>}
+          <strong>{activeTab === 'timeline' ? tr(runtime?.locale || 'en', 'Timeline') : tr(runtime?.locale || 'en', menuItems.find(item => item?.key === activeTab)?.label as string || activeTab)}</strong>
+        </footer>
       </Layout>
     </ConfigProvider>
   );

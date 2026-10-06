@@ -11,6 +11,7 @@ import {
   EditOutlined,
   FastBackwardOutlined,
   FastForwardOutlined,
+  FileTextOutlined,
   PauseOutlined,
   PlusOutlined,
   RadarChartOutlined,
@@ -28,6 +29,7 @@ import recordingColors from '../../../assets/themes/recording-colors.json';
 import { mediaBasename } from '../mediaLabel';
 import { formatTimelineTime } from '../timelineTime';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
+import { MediaSurface } from './MediaSurface';
 import { defaultTimelineWheelPreferences, timelineWheelAction, timelineZoomAtPointer } from '../timelineWheel';
 import type { TimelineWheelPreferences } from '../timelineWheel';
 
@@ -166,6 +168,19 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
     });
     return lanes;
   }, [directControls, effects]);
+  const timelineRows = useMemo(() => {
+    const shared = (state.timeline_tracks ?? []).filter((track) => track.linked && track.visible);
+    if (shared.length > 0) return shared;
+    return timelineLanes.map((lane) => ({
+      key: lane,
+      name: directControls.find((control) => control.key === lane)?.name ?? (lane.charAt(0).toUpperCase() + lane.slice(1)),
+      detail: null,
+      kind: directControls.some((control) => control.key === lane) ? 'hardware' as const : 'effect' as const,
+      lane: directControls.some((control) => control.key === lane) ? null : lane,
+      control_key: directControls.some((control) => control.key === lane) ? lane : null,
+      active: true, enabled: true, linked: true, visible: true, dimmed: false,
+    }));
+  }, [directControls, state.timeline_tracks, timelineLanes]);
   const workspaceProfiles = useMemo(
     () => [...(state.workspace_profiles ?? [])].sort((left, right) => left.order - right.order || left.name.localeCompare(right.name)),
     [state.workspace_profiles],
@@ -568,10 +583,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
 
         <div className="program-viewer">
           {state.current_video ? (
-            <img
-              src={`${apiBaseUrl}/api/player/frame?media=${encodeURIComponent(state.current_video)}`}
-              alt={tr(locale, 'Video Preview')}
-            />
+            <MediaSurface state={state} apiBaseUrl={apiBaseUrl} emptyLabel={tr(locale, 'Video Preview')} />
           ) : (
             <div className="program-viewer__empty">
               <VideoCameraOutlined />
@@ -721,18 +733,24 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             />
           ))}
           </div>
-          {timelineLanes.length === 0 ? (
+          {timelineRows.length === 0 ? (
             <div className="timeline-empty">{tr(locale, 'No effects')}</div>
-          ) : timelineLanes.map((lane) => {
+          ) : timelineRows.map((track) => {
+            const lane = track.lane ?? track.control_key ?? track.key;
             const laneEffects = effects.filter((effect) => (effect.lane || 'sequence') === lane);
             const laneEffectIds = new Set(laneEffects.map((effect) => effect.id));
-            const effectCues = cues.filter((cue) => laneEffectIds.has(cue.effect_id));
-            const directControl = directControls.find((control) => control.key === lane);
+            const effectCues = cues.filter((cue) => laneEffectIds.has(cue.effect_id)
+              || Boolean(track.control_key && cue.control_key === track.control_key));
+            const directControl = directControls.find((control) => control.key === track.control_key);
+            const trackIcon = track.kind === 'video' ? <VideoCameraOutlined />
+              : track.kind === 'audio' ? <SoundOutlined />
+                : track.kind === 'subtitle' ? <FileTextOutlined />
+                  : effectGlyph(lane === 'relay' || lane === 'motion' ? 'relay:lane' : lane === 'sequence' ? 'controller' : lane);
             return (
-              <div className="timeline-row" key={lane}>
+              <div className={`timeline-row ${track.dimmed ? 'is-dimmed' : ''} ${track.active ? 'is-active' : ''}`} key={track.key}>
                 <div className="timeline-row__label">
-                  <span>{effectGlyph(lane === 'relay' || lane === 'motion' ? 'relay:lane' : lane === 'sequence' ? 'controller' : lane)}</span>
-                  <strong>{directControl?.name ?? (lane.charAt(0).toUpperCase() + lane.slice(1))}</strong>
+                  <span>{trackIcon}</span>
+                  <span className="timeline-row__identity"><strong>{track.name}</strong>{track.detail && <small title={track.detail}>{track.detail}</small>}</span>
                   {directControl && (
                     <Dropdown
                       trigger={['click']}

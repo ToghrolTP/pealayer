@@ -35,6 +35,17 @@ interface MediaLibraryTabProps {
   apiBaseUrl: string;
 }
 
+const filesystemPath = (value: string) => {
+  const withoutNamespace = value.replace(/^\\\\\?\\/, '');
+  const windows = /^[A-Za-z]:[\\/]/.test(withoutNamespace);
+  const separator = windows ? '\\' : '/';
+  const normalized = withoutNamespace.replace(/[\\/]+/g, separator);
+  const drive = windows ? normalized.slice(0, 2) : '';
+  const parts = normalized.slice(windows ? 2 : 0).split(separator).filter(Boolean);
+  const root = windows ? `${drive}\\` : '/';
+  return { windows, separator, drive, parts, root };
+};
+
 export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMediaPlayStarted, locale, apiBaseUrl }) => {
   const [data, setData] = useState<BrowseResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -192,18 +203,19 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
     },
   ];
 
-  const pathParts = data?.current_path ? data.current_path.split('/').filter(Boolean) : [];
+  const path = filesystemPath(data?.current_path || '/');
 
   const breadcrumbItems = [
     {
       title: (
-        <a onClick={() => fetchDirectory('/')}>
-          {tr(locale, 'Root')}
+        <a onClick={() => fetchDirectory(path.root)}>
+          {path.windows ? path.drive : tr(locale, 'Root')}
         </a>
       ),
     },
-    ...pathParts.map((part, index) => {
-      const subPath = '/' + pathParts.slice(0, index + 1).join('/');
+    ...path.parts.map((part, index) => {
+      const prefix = path.windows ? `${path.drive}\\` : '/';
+      const subPath = prefix + path.parts.slice(0, index + 1).join(path.separator);
       return {
         title: (
           <a onClick={() => fetchDirectory(subPath)}>

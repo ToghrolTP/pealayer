@@ -1288,6 +1288,29 @@ impl eframe::App for PealayerApp {
                             })
                     })
                     .collect(),
+                timeline_tracks: crate::ui::layout::web_timeline_tracks(self),
+                osd: self.osd_message.as_ref().and_then(|(message, started)| {
+                    let options = self.osd_display_options.clone().unwrap_or_default();
+                    let timeout = options
+                        .timeout_seconds
+                        .unwrap_or(self.osd_timeout_seconds)
+                        .max(0.25);
+                    let remaining = std::time::Duration::from_secs_f32(timeout)
+                        .checked_sub(started.elapsed())?;
+                    Some(crate::platform::interop::WebOsdState {
+                        message: message.clone(),
+                        remaining_ms: remaining.as_millis().min(u64::MAX as u128) as u64,
+                        default_position: match self.osd_position {
+                            crate::config::OsdPosition::TopLeft => {
+                                crate::platform::interop::OsdAnchor::TopLeft
+                            }
+                            crate::config::OsdPosition::Center => {
+                                crate::platform::interop::OsdAnchor::Center
+                            }
+                        },
+                        options,
+                    })
+                }),
                 update: crate::update::manager().status(),
             };
             crate::peer::publish_media_view(crate::peer::MediaView {

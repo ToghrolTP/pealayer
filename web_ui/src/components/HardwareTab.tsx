@@ -121,12 +121,23 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
   );
   const updatePresentation = (key: string, fields: Record<string, unknown>) =>
     sendCmd('hardware.presentation.update', { key, fields });
+  const toggleAction = (control: HardwareControl) => {
+    const wanted = control.active ? 'off' : 'on';
+    return control.actions.find((action) => action.verb.toLowerCase() === wanted)
+      ?? control.actions.find((action) => action.verb.toLowerCase() === 'toggle');
+  };
   const actionInputProps = (control: HardwareControl, action: HardwareAction) => {
     const invoke = () => sendCmd('hardware.action.invoke', { action_id: action.id });
-    if (!isMotionControl(control)) return { onClick: invoke };
-
     const keyboardInvoke = (event: React.MouseEvent<HTMLElement>) => {
       if (event.detail === 0) invoke();
+    };
+    if (!isMotionControl(control)) return {
+      onPointerDown: (event: React.PointerEvent<HTMLElement>) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        invoke();
+      },
+      onClick: keyboardInvoke,
     };
     if (isStopAction(action) || (details?.motion_control_mode ?? 'hold') === 'toggle') {
       return {
@@ -205,9 +216,30 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
         {section.controls.sort((left, right) => left.order - right.order).map((control) => {
           const isPwm = /pwm|mosfet/i.test(control.kind);
           const value = pwmDrafts[control.key] ?? control.percent ?? 0;
-          return <article
-            className={`hardware-control ${control.locked ? 'is-locked' : ''} ${dragKey === control.key ? 'is-dragging' : ''} ${dropKey === control.key ? 'is-drop-target' : ''}`}
+          const immediateToggle = !isPwm ? toggleAction(control) : undefined;
+          const contextItems = [
+            { key: 'manage', label: tr(locale, 'Manage'), icon: <ToolOutlined /> },
+            { key: 'rename', label: tr(locale, 'Rename'), icon: <ExperimentOutlined /> },
+            immediateToggle ? { key: 'toggle', label: tr(locale, control.active ? 'Off' : 'On'), icon: <PoweroffOutlined /> } : null,
+            { type: 'divider' as const },
+            { key: 'visibility', label: tr(locale, control.hidden ? 'Show in Hardware Monitor' : 'Hide from Hardware Monitor'), icon: control.hidden ? <EyeOutlined /> : <EyeInvisibleOutlined /> },
+            { key: 'lock', label: tr(locale, control.locked ? 'Unlock' : 'Lock'), icon: control.locked ? <UnlockOutlined /> : <LockOutlined /> },
+          ].filter(Boolean) as any;
+          return <Dropdown
             key={control.key}
+            trigger={['contextMenu']}
+            menu={{
+              items: contextItems,
+              onClick: ({ key }) => {
+                if (key === 'manage') { setDetailKey(control.key); setManagerOpen(true); }
+                if (key === 'rename') { setRenamingKey(control.key); setRenameDraft(control.name || control.default_name); setManagerOpen(true); }
+                if (key === 'toggle' && immediateToggle) sendCmd('hardware.action.invoke', { action_id: immediateToggle.id });
+                if (key === 'visibility') updatePresentation(control.key, { hidden: !control.hidden });
+                if (key === 'lock') updatePresentation(control.key, { locked: !control.locked });
+              },
+            }}
+          ><article
+            className={`hardware-control ${control.locked ? 'is-locked' : ''} ${dragKey === control.key ? 'is-dragging' : ''} ${dropKey === control.key ? 'is-drop-target' : ''}`}
             onDragOver={(event) => {
               if (dragKey && dragKey !== control.key) {
                 event.preventDefault();
@@ -261,9 +293,13 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                 }}
               />
               <output>{value.toFixed(1)}%</output>
-            </div> : <span
+            </div> : <button
+              type="button"
               className={`hardware-control__indicator ${control.active ? 'is-on' : ''}`}
               aria-label={control.active ? tr(locale, 'On') : tr(locale, 'Off')}
+              title={tr(locale, control.active ? 'Turn off' : 'Turn on')}
+              disabled={!immediateToggle || control.locked || !state.hardware_connected || Boolean(state.estop_active)}
+              {...(immediateToggle ? actionInputProps(control, immediateToggle) : {})}
             />}
             <Space.Compact className="hardware-control__actions">
               {visibleActions(control).map((action) => <Tooltip title={action.name || action.verb} key={action.id}>
@@ -276,7 +312,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                 </Button>
               </Tooltip>)}
             </Space.Compact>
-          </article>;
+          </article></Dropdown>;
         })}
       </div>,
     }));
@@ -310,10 +346,18 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
         {state.hardware_connected && <Button icon={<ToolOutlined />} onClick={() => setManagerOpen(true)}>{tr(locale, 'Manage channels')}</Button>}
         <Tag color={state.hardware_connected ? 'success' : 'warning'}>{state.hardware_connected ? tr(locale, 'Connected') : tr(locale, 'Board unavailable')}</Tag>
         <Button
+          className={`hardware-estop ${state.estop_active ? 'is-active' : ''}`}
           danger
-          type={state.estop_active ? 'primary' : 'default'}
+          type="primary"
           icon={<PoweroffOutlined />}
-          onClick={() => sendCmd('pealayer.estop.set', { active: !state.estop_active })}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            sendCmd('pealayer.estop.set', { active: !state.estop_active });
+          }}
+          onClick={(event) => {
+            if (event.detail === 0) sendCmd('pealayer.estop.set', { active: !state.estop_active });
+          }}
         >{tr(locale, 'E-STOP')}</Button>
       </Space>
     </header>

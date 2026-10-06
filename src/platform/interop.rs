@@ -894,6 +894,12 @@ pub struct PlayerStatusResponse {
     pub effect_recording: WebEffectRecording,
     #[serde(default)]
     pub cues: Vec<WebEffectCue>,
+    /// Exact ordered track inventory rendered by the native timeline.
+    #[serde(default)]
+    pub timeline_tracks: Vec<WebTimelineTrack>,
+    /// Currently visible native OSD, projected into every remote surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub osd: Option<WebOsdState>,
     #[serde(default)]
     pub hardware_details: Option<Value>,
     #[serde(default)]
@@ -905,6 +911,33 @@ pub struct WebMediaChapter {
     pub index: i64,
     pub title: String,
     pub time_seconds: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebTimelineTrack {
+    pub key: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_key: Option<String>,
+    pub active: bool,
+    pub enabled: bool,
+    pub linked: bool,
+    pub visible: bool,
+    pub dimmed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebOsdState {
+    pub message: String,
+    pub remaining_ms: u64,
+    pub default_position: OsdAnchor,
+    #[serde(default)]
+    pub options: OsdOptions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1105,6 +1138,8 @@ impl Default for PlayerStatusResponse {
             controller_effect_groups: Vec::new(),
             effect_recording: WebEffectRecording::default(),
             cues: Vec::new(),
+            timeline_tracks: Vec::new(),
+            osd: None,
             hardware_details: None,
             update: crate::update::UpdateStatus::default(),
         }
