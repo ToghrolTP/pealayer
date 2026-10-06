@@ -192,8 +192,9 @@ impl HardwareEffectAuthoringState {
     }
 
     fn effect_publish_is_acknowledged(&self, reference: &str) -> bool {
-        canonical_effect_reference(reference)
-            .is_some_and(|reference| self.acknowledged_effect_reference.as_ref() == Some(&reference))
+        canonical_effect_reference(reference).is_some_and(|reference| {
+            self.acknowledged_effect_reference.as_ref() == Some(&reference)
+        })
     }
 }
 
