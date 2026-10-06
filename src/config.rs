@@ -592,7 +592,7 @@ pub struct AppConfig {
     /// One unsynchronised working copy. PCController remains the effect
     /// catalog owner; this lets authors keep editing while it is offline and
     /// publish the draft when the coordinator returns.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub effect_working_draft: Option<crate::app::ControllerEffectDraft>,
     /// Last media-scoped cue arrangement. This contains only stable
     /// PCController references and cached presentation metadata, never the
@@ -1756,6 +1756,19 @@ fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effect_working_draft_can_be_set_and_cleared_through_config_api() {
+        let config = AppConfig::default();
+        let patch = serde_json::json!({"effect_working_draft": crate::app::ControllerEffectDraft::default()});
+        assert!(AppConfig::validate_patch_shape(&patch).is_ok());
+        let edited = config.apply_patch(&patch).unwrap();
+        assert!(edited.effect_working_draft.is_some());
+        let clear = serde_json::json!({"effect_working_draft": null});
+        assert!(AppConfig::validate_patch_shape(&clear).is_ok());
+        assert!(edited.apply_patch(&clear).unwrap().effect_working_draft.is_none());
+        assert!(config.apply_patch(&clear).unwrap().effect_working_draft.is_none());
+    }
 
     #[test]
     fn displayed_config_path_does_not_expose_an_absolute_profile_path() {

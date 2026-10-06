@@ -23,7 +23,8 @@ const rpc = (method, params = {}) => new Promise((resolve, reject) => {
 });
 async function http(path, body) {
   const response = await fetch(base + path, { signal: AbortSignal.timeout(5000), ...(body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}) });
-  assert(response.ok, path + ': ' + response.status); return response.json();
+  const result = await response.json();
+  assert(response.ok, path + ': ' + response.status + ' ' + JSON.stringify(result)); return result;
 }
 async function pea(method, params = {}) {
   const result = await http('/api/rpc', { jsonrpc: '2.0', id: ++serial, method, params });
@@ -85,9 +86,12 @@ try {
     await clean(async () => { const state = await http('/api/player/status'); if (state.effect_recording?.active) await pea('pealayer.controller_effect.record.discard'); });
     await clean(() => until(async () => !(await http('/api/player/status')).effect_recording?.pending, 'cleanup ready'));
     await clean(() => command('relay 8 off'));
-    await clean(() => command(`effect delete effect:${id}`));
-    if (initialConfig) await clean(() => http('/api/config', { effect_working_draft: initialConfig.effect_working_draft ?? null }));
+    // Route deletion through the consumer too, so its catalog is refreshed
+    // after the owner acknowledges the mutation.
+    await clean(() => pea('pealayer.controller_effect.delete', { reference: `effect:${id}` }));
     await clean(() => until(async () => !(await http('/api/player/status')).controller_effects?.some(item => item.reference === `effect:${id}`), 'temporary effect removed'));
+    if (initialConfig) await clean(() => http('/api/config', { effect_working_draft: initialConfig.effect_working_draft ?? null }));
+    if (initialConfig) await clean(() => until(async () => JSON.stringify((await http('/api/config')).effect_working_draft ?? null) === JSON.stringify(initialConfig.effect_working_draft ?? null), 'original working draft restored'));
   }
   socket.end();
   if (failures.length) throw Error('Cleanup needs attention: ' + failures.join('; '));
