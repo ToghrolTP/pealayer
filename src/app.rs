@@ -3130,13 +3130,9 @@ impl PealayerApp {
             if recording.active || u64::from(recording.id) != id { return; }
             if !self.hardware_effect_authoring.append_discarded
                 && serde_json::to_value(&hardware_macro.steps).ok() != serde_json::to_value(&recording.preview).ok() { return; }
-            for template in &mut self.timeline.templates {
-                if template.controller_macro.as_ref().is_some_and(|cue|cue.id == id) {
-                    let identity = template.id;
-                    *template = effect.clone();
-                    template.id = identity;
-                }
-            }
+            let catalog = controller_effect_catalog(&capabilities);
+            reconcile_controller_effect_templates(&mut self.timeline, &catalog);
+            self.hardware_effect_authoring.timeline_catalog = catalog;
             crate::ui::effects_library::select_sequence(self, &hardware_macro);
             self.hardware_effect_authoring.pending_saved_macro_id = None;
             self.hardware_effect_authoring.append_target = None;
