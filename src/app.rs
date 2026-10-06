@@ -2,6 +2,19 @@ use crate::mpv::render::RenderContextWrapper;
 use eframe::egui;
 use std::sync::{Arc, Mutex};
 
+const IDLE_WEB_SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+fn effective_web_sync_interval(
+    configured: std::time::Duration,
+    playback_or_operation_active: bool,
+) -> std::time::Duration {
+    if playback_or_operation_active {
+        configured
+    } else {
+        configured.max(IDLE_WEB_SYNC_INTERVAL)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DragMode {
     Move,
@@ -977,8 +990,19 @@ impl eframe::App for PealayerApp {
             &web_config,
             ui.ctx().theme() == egui::Theme::Dark,
         );
-        let web_sync_interval =
+        let configured_web_sync_interval =
             std::time::Duration::from_millis(u64::from(web_config.web_sync_interval_ms));
+        let web_sync_active = (self.current_video_path.is_some() && !self.is_paused)
+            || self.is_scrubbing
+            || self.pending_scrub_commit.is_some()
+            || self.hardware_effect_authoring.pending_operation.is_some()
+            || self.board_operation.is_some();
+        // Real controller, WebSocket, media and input changes request their own
+        // repaint. Keep the configured fast cadence only while work is active;
+        // an idle/paused player needs a low-rate status backstop, not a full NLE
+        // recomposition ten times per second.
+        let web_sync_interval =
+            effective_web_sync_interval(configured_web_sync_interval, web_sync_active);
         let now = std::time::Instant::now();
         let appearance_changed =
             crate::platform::interop::get_live_appearance().as_ref() != Some(&appearance);
@@ -7722,6 +7746,20 @@ mod tests {
         APP_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[test]
+    fn web_sync_uses_fast_cadence_only_while_playback_or_operations_are_active() {
+        let configured = std::time::Duration::from_millis(100);
+        assert_eq!(effective_web_sync_interval(configured, true), configured);
+        assert_eq!(
+            effective_web_sync_interval(configured, false),
+            std::time::Duration::from_secs(1)
+        );
+        assert_eq!(
+            effective_web_sync_interval(std::time::Duration::from_secs(2), false),
+            std::time::Duration::from_secs(2)
+        );
     }
 
     #[test]
