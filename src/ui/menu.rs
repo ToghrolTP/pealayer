@@ -192,7 +192,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 top_menu_button(ui, app.tr("File"), |ui| {
                     if ui.button(app.tr("Open Video File...")).clicked() {
                         ui.close();
-                        if let Some(path) = rfd::FileDialog::new()
+                        if crate::peer::active(){crate::ui::peer_browser::open(&ctx,crate::ui::peer_browser::Purpose::Media,None);}
+                        else if let Some(path) = rfd::FileDialog::new()
                             .add_filter("Video Files", &["mp4", "mkv", "avi", "webm", "mov", "flv"])
                             .pick_file()
                         {
@@ -204,6 +205,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         ui.close();
                         app.show_open_url_dialog = true;
                     }
+                    if ui.button(format!("{} Connect to Pealayer...",crate::ui::icons::GLOBE)).clicked(){crate::ui::peer_browser::connection_dialog(&ctx);ui.close();}
                     if ui.button(format!("{}  Browse remote folder...", crate::ui::icons::FOLDER_OPEN)).clicked() {
                         let _ = crate::remote_location::request("", None, false, ui.ctx());
                         ui.close();
@@ -239,7 +241,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         app.apply_interop_command(&ctx, crate::platform::interop::InteropCommand::OpenMediaInformation, "menu");
                         ui.close();
                     }
-                    let has_local_folder = app.current_video_path.as_deref()
+                    let has_local_folder = crate::peer::active()&&app.current_video_path.is_some() || app.current_video_path.as_deref()
                         .is_some_and(|path| crate::application_shortcuts::containing_media_folder(path).is_ok());
                     if ui.add_enabled(has_local_folder, egui::Button::new(format!("{} {}", crate::ui::icons::FOLDER_OPEN, app.tr("Open containing folder")))
                         .shortcut_text(&app.application_shortcuts.media_folder)).clicked() {
@@ -256,7 +258,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                     if ui.button(app.tr("Open Timeline Project...")).clicked() {
                         ui.close();
-                        if let Some(path) = rfd::FileDialog::new()
+                        if crate::peer::active(){crate::ui::peer_browser::open(&ctx,crate::ui::peer_browser::Purpose::TimelineOpen,None);}
+                        else if let Some(path) = rfd::FileDialog::new()
                             .add_filter("Pealayer Timeline", &["json"])
                             .pick_file()
                         {
@@ -288,7 +291,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     let save_btn = egui::Button::new(app.tr("Save Timeline (Sidecar)"));
                     if ui.add_enabled(save_enabled, save_btn).clicked() {
                         ui.close();
-                        if let Some(ref video_path) = app.current_video_path {
+                        if crate::peer::active(){crate::ui::peer_browser::open(&ctx,crate::ui::peer_browser::Purpose::TimelineSave,None);}
+                        else if let Some(ref video_path) = app.current_video_path {
                             let mut sidecar = video_path.clone();
                             sidecar.set_extension("4d.json");
                             if let Err(e) = app.timeline.save_to_file(&sidecar) {
@@ -299,7 +303,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                     if ui.button(app.tr("Save Timeline As...")).clicked() {
                         ui.close();
-                        if let Some(path) = rfd::FileDialog::new()
+                        if crate::peer::active(){crate::ui::peer_browser::open(&ctx,crate::ui::peer_browser::Purpose::TimelineSave,None);}
+                        else if let Some(path) = rfd::FileDialog::new()
                             .add_filter("Pealayer Timeline", &["json"])
                             .save_file()
                         {
@@ -612,6 +617,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
 
                     // 2. Coordinator/direct-diagnostic connection toggle & dropdown
+                    if let Some(client)=crate::peer::client(){
+                        let text=client.origin.as_str().replacen("http://","pealayer://",1);
+                        ui.label(format!("{} {text}",crate::ui::icons::GLOBE));
+                        ui.label(if app.is_connected{"Remote session"}else{"Disconnected"});
+                    } else {
                     let connection_requested = app
                         .engine_handle
                         .connection_requested
@@ -739,6 +749,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             .truncate(),
                     )
                     .on_hover_text(&app.serial_port);
+                    }
                 });
             });
         });

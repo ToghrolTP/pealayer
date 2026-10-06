@@ -482,6 +482,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 
     let mut host = crate::ui::dialog::preferred_host(app.native_dialog_windows, cfg!(windows));
+    // A helper without the peer authority would edit the local profile.
+    // Keep the exact same editor in-process until that helper is connected.
+    if crate::peer::active(){host=crate::ui::dialog::DialogHost::Embedded;}
     if host == crate::ui::dialog::DialogHost::Native {
         if app.native_preferences.is_none() {
             let owner = app
@@ -1266,6 +1269,10 @@ pub(crate) fn perform_config_path_action(
     action: ConfigPathAction,
     config: &AppConfig,
 ) -> Result<&'static str, String> {
+    if let Some(client)=crate::peer::client(){
+        client.queue("/api/player/command",serde_json::json!({"command":"edit_configuration"}))?;
+        return Ok("Requested the server configuration editor");
+    }
     let path = AppConfig::get_config_path();
     if !path.exists() {
         config.save()?;
@@ -1290,6 +1297,7 @@ fn draw_advanced_actions(
     ui: &mut egui::Ui,
     tr: &impl Fn(&'static str) -> String,
 ) {
+    if crate::peer::active(){return;}
     preference_section(
         ui,
         crate::ui::icons::FILE_VIDEO,
@@ -1349,6 +1357,17 @@ fn draw_config_file_actions(
     tr: &impl Fn(&'static str) -> String,
 ) {
     let path = AppConfig::get_config_path();
+    if crate::peer::active(){
+        ui.label(format!("{}  {}",crate::ui::icons::GLOBE,crate::config::display_config_path(&path)));
+        ui.label(egui::RichText::new("Stored on the connected server").weak());
+        if let Some(config)=ui.ctx().data_mut(|data|data.remove_temp::<AppConfig>(egui::Id::new("peer_imported_config"))){draft.config=config;draft.set_transient_status(tr("Configuration imported; review and save"));}
+        ui.horizontal(|ui|{
+            if ui.button(format!("{} Import",crate::ui::icons::FOLDER_OPEN)).clicked(){crate::ui::peer_browser::open(ui.ctx(),crate::ui::peer_browser::Purpose::ConfigImport,None);}
+            if ui.button(format!("{} Export",crate::ui::icons::ARROW_SQUARE_OUT)).clicked(){crate::ui::peer_browser::open(ui.ctx(),crate::ui::peer_browser::Purpose::ConfigExport(Box::new(draft.config.clone())),None);}
+            if ui.button(format!("{} Reload",crate::ui::icons::ARROW_CLOCKWISE)).clicked(){draft.replace_from_disk(AppConfig::load(),tr("Preferences reloaded from disk"));}
+        });
+        return;
+    }
     let response = ui
         .add(
             egui::Label::new(

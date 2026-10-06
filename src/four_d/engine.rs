@@ -378,12 +378,18 @@ pub enum EngineMessage {
         method: String,
         params: serde_json::Value,
     },
+    ReplyControllerCall {
+        method: String,
+        params: serde_json::Value,
+        reply: mpsc::Sender<Result<serde_json::Value, String>>,
+    },
     TrackedControllerCall {
         operation: String,
         method: String,
         params: serde_json::Value,
     },
     CoalescedControllerIntent {
+        created: std::time::Instant,
         control_key: String,
         method: String,
         params: serde_json::Value,
@@ -486,6 +492,7 @@ impl EngineHandle {
     ) -> Result<(), String> {
         self.sender
             .send(EngineMessage::CoalescedControllerIntent {
+                created: std::time::Instant::now(),
                 control_key: control_key.into(),
                 method: method.into(),
                 params,
@@ -671,6 +678,7 @@ fn should_yield_direct_transport(
 }
 
 pub fn spawn_engine() -> EngineHandle {
+    if crate::peer::active() { return spawn_peer_engine(); }
     let lifecycle = Arc::new(());
     let playback_time_ms = Arc::new(AtomicU64::new(0));
     let media_playback = Arc::new(Mutex::new(super::media_sync::PlaybackSample::default()));
@@ -1108,6 +1116,14 @@ pub fn spawn_engine() -> EngineHandle {
                         engine_connection_requested.store(connect, Ordering::Relaxed);
                         last_connect_attempt = None;
                     }
+                    EngineMessage::ReplyControllerCall { method, params, reply } => {
+                        let result = if engine_estop.load(Ordering::SeqCst) && !controller_call_allowed_during_estop(&method, &params) {
+                            Err("hardware command blocked while E-STOP is active".to_string())
+                        } else {
+                            active_transport.as_mut().ok_or_else(|| "PCController is not connected".to_string()).and_then(|transport| transport.call_controller(&method, params))
+                        };
+                        let _ = reply.send(result);
+                    }
                     EngineMessage::ControllerCall { method, params } => {
                         if engine_estop.load(Ordering::SeqCst)
                             && !controller_call_allowed_during_estop(&method, &params)
@@ -1162,6 +1178,7 @@ pub fn spawn_engine() -> EngineHandle {
                         }
                     }
                     EngineMessage::CoalescedControllerIntent {
+                        created: _,
                         control_key,
                         method,
                         params,
@@ -1665,6 +1682,81 @@ pub fn compile_timeline(
     }
 
     compiled
+}
+
+fn spawn_peer_engine() -> EngineHandle {
+    let lifecycle=Arc::new(());
+    let (tx,rx)=mpsc::channel();
+    let handle=EngineHandle {
+        lifecycle:lifecycle.clone(),playback_time_ms:Arc::new(AtomicU64::new(0)),media_playback:Arc::new(Mutex::new(super::media_sync::PlaybackSample::default())),
+        prepared_timeline:Arc::new(Mutex::new(super::media_timeline::PreparedTimeline::default())),media_clock_owned:Arc::new(AtomicBool::new(false)),
+        is_playing:Arc::new(AtomicBool::new(false)),estop_active:Arc::new(AtomicBool::new(false)),connection_requested:Arc::new(AtomicBool::new(true)),is_connected:Arc::new(AtomicBool::new(false)),
+        serial_port:Arc::new(Mutex::new(crate::peer::client().unwrap().origin.to_string())),active_transport:Arc::new(Mutex::new(Some("pealayer:remote".into()))),
+        connection_error:Arc::new(Mutex::new(None)),hardware_capabilities:Arc::new(Mutex::new(None)),controller_call_results:Arc::new(Mutex::new(VecDeque::new())),
+        catalog_refresh_requested:Arc::new(AtomicBool::new(false)),state_notifier:Arc::new(Mutex::new(None)),sender:tx,
+    };
+    let owner=Arc::downgrade(&lifecycle);
+    let capabilities=handle.hardware_capabilities.clone();
+    let connected=handle.is_connected.clone();
+    let estop=handle.estop_active.clone();
+    let results=handle.controller_call_results.clone();
+    let errors=handle.connection_error.clone();
+    let notifier=handle.state_notifier.clone();
+    thread::spawn(move || {
+        let client=crate::peer::client().unwrap();
+        let mut revision=0;
+        let mut pending=PendingControllerIntents::default();
+        let mut deadlines=HashMap::new();
+        while owner.strong_count()>0 {
+            if let Some(snapshot)=client.snapshot() {
+                connected.store(snapshot.received.elapsed()<Duration::from_secs(2),Ordering::Relaxed);
+                if snapshot.revision!=revision {
+                revision=snapshot.revision;
+                if let Ok(mut value)=capabilities.lock(){*value=snapshot.session.hardware;}
+                estop.store(snapshot.session.status.get("estop_active").and_then(serde_json::Value::as_bool).unwrap_or(false),Ordering::SeqCst);
+                if let Ok(mut error)=errors.lock(){*error=client.error.lock().ok().and_then(|value|value.clone());}
+                }
+            }
+            let mut incoming=Vec::new();
+            match rx.recv_timeout(Duration::from_millis(20)) {
+                Ok(message)=>incoming.push(message),
+                Err(mpsc::RecvTimeoutError::Timeout)=>{},
+                Err(mpsc::RecvTimeoutError::Disconnected)=>break,
+            }
+            incoming.extend(rx.try_iter());
+            for message in incoming {
+                    let call=|method:String,params:serde_json::Value| client.post("/api/peer/controller",&serde_json::json!({"method":method,"params":params}));
+                    match message {
+                        EngineMessage::TrackedControllerCall {operation,method,params}=>{
+                            let result=call(method,params);
+                            if let Ok(mut values)=results.lock(){values.push_back(ControllerCallResult {operation,result});}
+                            notify_state_change(&notifier);
+                        }
+                        EngineMessage::ReplyControllerCall {method,params,reply}=>{let _=reply.send(call(method,params));}
+                        EngineMessage::CoalescedControllerIntent {control_key,method,params,refresh_catalog,created}=>{
+                            deadlines.insert(control_key.clone(),created);
+                            pending.replace(control_key,method,params,refresh_catalog);
+                        }
+                        EngineMessage::ControllerCall {method,params}=>{
+                            if let Err(error)=call(method,params) && let Ok(mut slot)=errors.lock(){*slot=Some(error)}
+                        }
+                        EngineMessage::SendCommand(command)=>{let _=client.queue("/api/peer/hardware",serde_json::to_value(command).unwrap_or_default());}
+                        EngineMessage::LiveActuatorOverride {channel,value}=>{let _=client.queue("/api/peer/hardware",serde_json::to_value(Command::PwmSet {channel,value}).unwrap_or_default());}
+                        // Only the authority schedules outputs. Local cue edits
+                        // are sent through the shared timeline session endpoint.
+                        EngineMessage::UpdateQueue(_) | EngineMessage::UpdateControllerMacros(_) | EngineMessage::UpdateControllerStripEffects(_) | EngineMessage::UpdateAnalogTracks(_) | EngineMessage::Seek(_) | EngineMessage::ReconfigureEndpoint {..}=>{}
+                    }
+            }
+            if !connected.load(Ordering::Relaxed){pending.clear();deadlines.clear();}
+            if let Some((key,intent))=pending.pop_front(){
+                let created=deadlines.remove(&key).unwrap_or_else(std::time::Instant::now);
+                if created.elapsed()<=Duration::from_millis(500){
+                    if let Err(error)=client.post("/api/peer/controller",&serde_json::json!({"method":intent.method,"params":intent.params})) && let Ok(mut slot)=errors.lock(){*slot=Some(error);}
+                }else if let Ok(mut slot)=errors.lock(){*slot=Some(format!("Expired remote intent for {key} was discarded"));}
+            }
+        }
+    });
+    handle
 }
 
 pub fn compile_controller_macros(timeline: &Timeline) -> Vec<CompiledControllerMacro> {

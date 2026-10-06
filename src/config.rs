@@ -1114,6 +1114,7 @@ pub fn runtime_port(env_name: &str, default: u16) -> u16 {
 
 /// The single TCP port used by Pealayer's HTTP, WebSocket, and local IPC APIs.
 pub fn control_port() -> u16 {
+    if let Some(client)=crate::peer::client(){return client.local_port}
     let config = AppConfig::load();
     runtime_port("PEALAYER_PORT", config.web_port)
 }
@@ -1234,6 +1235,7 @@ impl AppConfig {
     }
 
     pub fn get_config_path() -> PathBuf {
+        if let Some(client)=crate::peer::client(){return client.snapshot().map(|value|PathBuf::from(value.session.config_path)).unwrap_or_default();}
         if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {
             return PathBuf::from(path);
         }
@@ -1245,6 +1247,7 @@ impl AppConfig {
     }
 
     pub fn load_with_mode(mode: StorageMode, exe_dir: &std::path::Path) -> Self {
+        if let Some(client)=crate::peer::client(){return client.config();}
         match mode {
             StorageMode::Portable => {
                 let path = resolve_portable_config_path(exe_dir);
@@ -1301,6 +1304,7 @@ impl AppConfig {
         exe_dir: &std::path::Path,
     ) -> Result<(), String> {
         self.validate()?;
+        if let Some(client)=crate::peer::client(){return client.save_config(self);}
         match mode {
             StorageMode::Portable => {
                 let path = resolve_portable_config_path(exe_dir);
@@ -1329,6 +1333,7 @@ impl AppConfig {
     }
 
     pub fn load() -> Self {
+        if let Some(client) = crate::peer::client() { return client.config(); }
         if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {
             let path = PathBuf::from(path);
             if let Ok(cfg) = Self::load_from_path(&path) {
@@ -1343,6 +1348,7 @@ impl AppConfig {
 
     pub fn save(&self) -> Result<(), String> {
         self.validate()?;
+        if let Some(client) = crate::peer::client() { return client.save_config(self); }
         if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {
             let path = PathBuf::from(path);
             self.save_to_path(&path)?;
@@ -1360,6 +1366,11 @@ impl AppConfig {
     }
 
     pub fn load_from_path(path: &std::path::Path) -> Result<Self, String> {
+        if let Some(client)=crate::peer::client(){
+            let mut url=client.url("/api/fs/file")?;url.query_pairs_mut().append_pair("path",&path.to_string_lossy());
+            let mut config=client.http.get(url).send().and_then(|response|response.error_for_status()).and_then(|response|response.json::<Self>()).map_err(|error|error.to_string())?;
+            config.normalize_workspace_profiles();config.validate()?;return Ok(config);
+        }
         let data = std::fs::read_to_string(path)
             .map_err(|error| format!("read configuration {}: {error}", path.display()))?;
         let mut config = serde_json::from_str::<Self>(&data)
@@ -1370,6 +1381,7 @@ impl AppConfig {
     }
 
     pub fn save_to_path(&self, path: &std::path::Path) -> Result<(), String> {
+        if crate::peer::active(){return Err("Use the server configuration Export action; local client files are read-only".into());}
         self.validate()?;
         let parent = path
             .parent()
@@ -1423,8 +1435,9 @@ impl AppConfig {
 
     pub fn fingerprint(path: &std::path::Path) -> Result<u64, String> {
         use std::hash::{Hash, Hasher};
-        let bytes = std::fs::read(path)
-            .map_err(|error| format!("read configuration {}: {error}", path.display()))?;
+        let bytes = if let Some(client)=crate::peer::client(){serde_json::to_vec(&client.config()).map_err(|error|error.to_string())?}else{std::fs::read(path)
+            .map_err(|error| format!("read configuration {}: {error}", path.display()))?
+        };
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         bytes.hash(&mut hasher);
         Ok(hasher.finish())

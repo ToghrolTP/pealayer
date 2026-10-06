@@ -13,6 +13,7 @@ pub mod media_info;
 pub mod messaging;
 pub mod mpv;
 pub mod network;
+pub mod peer;
 pub mod platform;
 pub mod preferences_contract;
 pub mod remote_location;
@@ -81,7 +82,18 @@ fn main() -> eframe::Result {
     #[cfg(target_os = "windows")]
     let mut gui_ownership = None;
 
-    let cli_options = match crate::cli::parse_cli_args(startup_args) {
+    let action = crate::cli::parse_cli_args(startup_args);
+    let action = match action {
+        Ok(crate::cli::CliAction::RunClient {endpoint,port,options}) => {
+            match crate::peer::connect(&endpoint,port) {
+                Ok(()) => Ok(crate::cli::CliAction::RunGui(options)),
+                Err(error) => Err(format!("Cannot connect to remote Pealayer: {error}")),
+            }
+        }
+        action => action,
+    };
+    let cli_options = match action {
+        Ok(crate::cli::CliAction::RunClient {..}) => unreachable!(),
         Ok(crate::cli::CliAction::PrintHelp(msg)) => {
             println!("{}", msg);
             return Ok(());
@@ -246,7 +258,7 @@ fn main() -> eframe::Result {
         launch_config.compositor_paced_window_move,
     );
     let initial_window_title = app_name.clone();
-    let icon_data = crate::config::resolved_app_icon(&launch_config)
+    let icon_data = (!crate::peer::active()).then(||crate::config::resolved_app_icon(&launch_config)).flatten()
         .and_then(|path| std::fs::read(path).ok())
         .and_then(|bytes| eframe::icon_data::from_png_bytes(&bytes).ok())
         .or_else(|| {
@@ -280,7 +292,8 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Glow,
-        persistence_path: Some(
+        persist_window: !crate::peer::active(),
+        persistence_path: (!crate::peer::active()).then(||
             crate::config::AppConfig::get_config_path().with_file_name("workspace-state.ron"),
         ),
         glow_options: eframe::egui_glow::GlowConfiguration {
@@ -491,13 +504,13 @@ fn main() -> eframe::Result {
             });
 
             let initial_volume = cli_options.volume.unwrap_or(loaded_config.volume);
-            let startup_media_target = crate::media::startup_media_target(
+            let startup_media_target = if crate::peer::active() { cli_options.target.clone() } else { crate::media::startup_media_target(
                 cli_options.target.as_deref(),
                 loaded_config.restore_last_media_on_startup,
                 loaded_config.last_media_target.as_deref(),
                 &loaded_config.recent_media,
                 &loaded_config.playback_positions,
-            );
+            ) };
             // An explicit CLI media target starts normally. Only an automatic
             // last-session restore inherits the persisted pause state.
             let restore_startup_pause = cli_options
@@ -525,10 +538,10 @@ fn main() -> eframe::Result {
             let _ = mpv_static.set_property("sub-delay", loaded_config.subtitle_delay_seconds);
             let _ = mpv_static.set_property("sub-pos", loaded_config.subtitle_position_percent);
             let _ = mpv_static.set_property("audio-delay", loaded_config.audio_delay_seconds);
-            crate::platform::windows::sync_windows_jump_list_with_options(
+            if !crate::peer::active() { crate::platform::windows::sync_windows_jump_list_with_options(
                 &loaded_config.recent_media,
                 loaded_config.windows_jump_list_quick_actions,
-            );
+            ); }
 
             let (interop_tx, interop_rx) = std::sync::mpsc::channel();
             crate::platform::interop::spawn_interop_listener(
@@ -553,8 +566,10 @@ fn main() -> eframe::Result {
                 .to_string(),
                 crate::ui::platform_accent_rgb(&loaded_config),
             );
+            let mut listener_config=loaded_config.clone();
+            if let Some(client)=crate::peer::client() {listener_config.web_enabled=true;listener_config.web_port=client.local_port;listener_config.web_listen_addresses=vec!["127.0.0.1".into()];}
             let web_state_tx = crate::server::spawn_control_server_for_config(
-                &loaded_config,
+                &listener_config,
                 cc.egui_ctx.clone(),
                 web_runtime,
                 interop_tx.clone(),
@@ -565,11 +580,12 @@ fn main() -> eframe::Result {
             let engine_handle = crate::four_d::engine::spawn_engine();
             let engine_repaint = cc.egui_ctx.clone();
             engine_handle.set_state_notifier(move || engine_repaint.request_repaint());
-            engine_handle.attach_playback_clock(mpv_static);
-            let controller_cmd_rx = crate::platform::interop::spawn_pccontroller_action_bridge(
+            crate::peer::register_server(&engine_handle,mpv_static,cc.egui_ctx.clone());
+            if !crate::peer::active() {engine_handle.attach_playback_clock(mpv_static);}
+            let controller_cmd_rx = if crate::peer::active(){std::sync::mpsc::channel().1}else{crate::platform::interop::spawn_pccontroller_action_bridge(
                 cc.egui_ctx.clone(),
                 engine_handle.controller_push_target(),
-            );
+            )};
 
             let dock_state = loaded_config
                 .workspace_session
@@ -612,7 +628,7 @@ fn main() -> eframe::Result {
                 theme_preference: crate::config::resolved_theme(&loaded_config),
                 color_palette: loaded_config.color_palette,
                 rtl,
-                mpv: mpv_static,
+                mpv: crate::mpv::player::Player(mpv_static),
                 mpv_client,
                 render_context: Arc::new(Mutex::new(Some(RenderContextWrapper(render_context)))),
                 playback_time: 0.0,
@@ -890,7 +906,7 @@ fn main() -> eframe::Result {
                 last_update_notice_state: None,
             };
 
-            if app.auto_connect_hardware {
+            if app.auto_connect_hardware && !crate::peer::active() {
                 let configured_endpoint = app.serial_port.clone();
                 let selected_endpoint = crate::four_d::controller::select_autoconnect_endpoint(
                     &configured_endpoint,

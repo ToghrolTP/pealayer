@@ -45,7 +45,8 @@ pub fn browse_directory(dir_path: Option<&str>) -> Result<DirectoryBrowseRespons
 
     let mut entries = Vec::new();
 
-    if let Ok(read_dir) = fs::read_dir(&canonical) {
+    let read_dir=fs::read_dir(&canonical).map_err(|error|format!("Cannot browse server folder: {error}"))?;
+    {
         for entry_res in read_dir {
             if let Ok(entry) = entry_res {
                 let path = entry.path();

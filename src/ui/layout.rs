@@ -1363,6 +1363,7 @@ fn send_pwm_raw_with(
     raw: u16,
 ) {
     let _ = sender.send(crate::four_d::engine::EngineMessage::CoalescedControllerIntent {
+        created:std::time::Instant::now(),
         control_key: format!("pwm.{channel}"),
         method: "controller.pwm.set".to_string(),
         params: serde_json::json!({"channel": channel, "value": raw}),

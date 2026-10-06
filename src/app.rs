@@ -1,6 +1,5 @@
 use crate::mpv::render::RenderContextWrapper;
 use eframe::egui;
-use libmpv2::Mpv;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -328,7 +327,7 @@ pub struct PealayerApp {
     pub(crate) theme_preference: crate::config::AppTheme,
     pub(crate) color_palette: crate::config::ColorPalette,
     pub(crate) rtl: bool,
-    pub(crate) mpv: &'static Mpv,
+    pub(crate) mpv: crate::mpv::player::Player,
     pub(crate) mpv_client: libmpv2::Mpv,
     pub(crate) render_context: Arc<Mutex<Option<RenderContextWrapper>>>,
 
@@ -698,6 +697,10 @@ pub struct MediaTrackInfo {
 
 impl eframe::App for PealayerApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        for request in crate::peer::take_gui_requests() {
+            let result=if request.deadline< std::time::Instant::now(){Err("Request expired before application; change was not applied".into())}else{self.apply_peer_request(ui.ctx(),&request.path,request.value)};
+            let _=request.reply.send(result);
+        }
         if self.web_only {
             // Keep the native event/render loop alive for libmpv and the
             // shared command engine while exposing only the Web/PWA surface.
@@ -888,6 +891,7 @@ impl eframe::App for PealayerApp {
         // Keep the read-only status snapshot current at the configured cadence;
         // WebSocket delivery itself can be disabled independently.
         let web_config = crate::platform::interop::get_live_config();
+        crate::peer::publish_timeline(crate::peer::TimelineState{timeline:self.timeline.clone(),muted:self.track_muted.clone(),soloed:self.track_soloed.clone()});
         let appearance = crate::platform::interop::AppearanceState::new(
             &web_config,
             ui.ctx().theme() == egui::Theme::Dark,
@@ -1195,7 +1199,8 @@ impl eframe::App for PealayerApp {
             };
             crate::platform::interop::set_live_status(status_resp.clone());
             if let Ok(json) = serde_json::to_string(&status_resp) {
-                let _ = self.web_state_tx.send(json);
+                let authoritative=crate::peer::client().and_then(|client|client.snapshot()).map(|value|value.session.status.to_string()).unwrap_or(json);
+                let _ = self.web_state_tx.send(authoritative);
             }
         }
 
@@ -1269,7 +1274,8 @@ impl eframe::App for PealayerApp {
 
         let ctx = ui.ctx().clone();
 
-        self.process_events();
+        if crate::peer::active(){crate::peer::mirror(||self.process_events());}else{self.process_events();}
+        if crate::peer::active(){self.poll_peer_session(&ctx);}
         self.sync_window_level(ui.ctx());
         if self.is_scrubbing || self.pending_scrub_commit.is_some() {
             // A paused libmpv surface still needs paint opportunities while a
@@ -1684,6 +1690,8 @@ impl eframe::App for PealayerApp {
                 crate::ui::subtitles::draw_settings_dialog(self, ui);
                 crate::ui::audio::draw_settings_dialog(self, ui);
                 crate::ui::preferences::draw(self, ui);
+                crate::ui::peer_browser::draw(self,ui);
+                crate::ui::peer_browser::draw_connection(ui);
                 crate::ui::effects_library::draw_editor(self, ui);
                 crate::ui::board_info::draw(self, ui);
                 crate::ui::rf::draw(self, ui);
@@ -1779,6 +1787,7 @@ impl eframe::App for PealayerApp {
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
         self.save_config();
     }
+    fn persist_egui_memory(&self)->bool { !crate::peer::active() }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // Never leave a press-and-hold channel active merely because Pealayer
@@ -2206,7 +2215,8 @@ impl PealayerApp {
                     self.toggle_audio_muted();
                 }
                 crate::platform::windows::TRAY_CMD_OPEN => {
-                    if let Some(path) = rfd::FileDialog::new()
+                    if crate::peer::active(){crate::ui::peer_browser::open(ctx,crate::ui::peer_browser::Purpose::Media,None);}
+                    else if let Some(path) = rfd::FileDialog::new()
                         .add_filter("Video Files", &["mp4", "mkv", "avi", "webm", "mov", "flv"])
                         .pick_file()
                     {
@@ -3215,6 +3225,23 @@ impl PealayerApp {
         source: &str,
     ) {
         use crate::platform::interop::InteropCommand;
+        if crate::peer::active() && let InteropCommand::Launch{request}=&command {
+            if let Some(target)=&request.target{self.load_media_target(target);}
+            if let Some(value)=request.volume{self.apply_interop_command(ctx,InteropCommand::SetVolume{value},source);}
+            if request.fullscreen{self.set_fullscreen(ctx,true);}
+            if request.activate{ctx.send_viewport_cmd(egui::ViewportCommand::Focus);}
+            for command in request.commands.clone(){self.apply_interop_command(ctx,command,source);}
+            return;
+        }
+
+        // Dialogs and physical client-window placement remain local. Everything
+        // that operates the session goes through the authority's unified engine.
+        if let Some(client)=crate::peer::client() && !crate::peer::mirroring()
+            && !matches!(&command,InteropCommand::OpenPreferences|InteropCommand::OpenMediaInformation|InteropCommand::OpenBoardInformation{..}|InteropCommand::OpenRfManager|InteropCommand::Activate|InteropCommand::Minimize|InteropCommand::Maximize|InteropCommand::Restore|InteropCommand::SetFullscreen{..}|InteropCommand::ToggleFullscreen|InteropCommand::GetStatus) {
+            if matches!(&command,InteropCommand::OpenMediaFolder){crate::ui::peer_browser::open(ctx,crate::ui::peer_browser::Purpose::Media,None);return;}
+            if let Err(error)=serde_json::to_value(&command).map_err(|error|error.to_string()).and_then(|value|client.queue("/api/player/command",value)){self.show_error=Some(error);}
+            return;
+        }
 
         match command {
             InteropCommand::OpenRfManager => { self.rf.open = true; let _ = self.request_rf("catalog", serde_json::json!({"read_board":true})); },
@@ -3986,7 +4013,7 @@ impl PealayerApp {
                     (12, PropertyData::Flag(v)) => {
                         let advance = v && !self.is_eof;
                         self.is_eof = v;
-                        if advance { if let Some(next) = self.remote_neighbor(1, true) { self.play_remote_location(next); } }
+                        if advance && !crate::peer::active() { if let Some(next) = self.remote_neighbor(1, true) { self.play_remote_location(next); } }
                     }
                     (13, PropertyData::Double(v)) => {
                         self.media_fps = v;
@@ -4029,9 +4056,15 @@ impl PealayerApp {
                 },
                 Some(Ok(Event::EndFile(reason))) => {
                     if reason == 4 {
+                        if crate::peer::active(){
+                            // Decoder failure is only a preview failure. Do not
+                            // stop or advance the server or its hardware cues.
+                            crate::peer::set_preview_error("Video preview could not be decoded; remote controls remain available".into());
+                        } else {
                         // MPV_END_FILE_REASON_ERROR
                         self.show_error =
                             Some("Error: Failed to play the selected file.".to_string());
+                        }
                     }
                 }
                 Some(Ok(Event::Seek)) => {
@@ -4096,7 +4129,7 @@ impl PealayerApp {
                         // configured Simple-workspace window geometry.
                         self.pending_video_aspect_resize = true;
                     }
-                    if let Some(position) = self.pending_resume_position.take() {
+                    if let Some(position) = self.pending_resume_position.take().filter(|_|!crate::peer::active()) {
                         if self.is_seekable {
                             let target = if self.duration > 0.0 {
                                 position.min((self.duration - 0.25).max(0.0))
@@ -4133,7 +4166,7 @@ impl PealayerApp {
         // halves of the exact commit have been observed.
         self.update_seek_completion_state();
         self.settle_scrub_commit_if_ready();
-        if self.last_playback_position_checkpoint.elapsed() >= std::time::Duration::from_secs(5) {
+        if !crate::peer::active() && self.last_playback_position_checkpoint.elapsed() >= std::time::Duration::from_secs(5) {
             self.last_playback_position_checkpoint = std::time::Instant::now();
             if self.capture_current_playback_position() {
                 self.save_config();
@@ -5003,7 +5036,7 @@ impl PealayerApp {
             })
             .collect();
         self.media_tracks = media_tracks;
-        self.media_file_info = crate::media_info::capture(self.mpv);
+        self.media_file_info = crate::media_info::capture(&self.mpv);
         if self.media_track_properties.is_some_and(|selection| {
             !self
                 .media_tracks
@@ -5104,6 +5137,7 @@ impl PealayerApp {
     }
 
     pub fn load_video_file(&mut self, path: std::path::PathBuf) {
+        if crate::peer::active(){self.load_media_target(&path.to_string_lossy());return;}
         let path_str = path.to_str().unwrap_or("");
         if !path_str.is_empty() {
             self.reset_scrub_state();
@@ -5256,13 +5290,17 @@ impl PealayerApp {
 
     pub(crate) fn synchronize_playback_proxy(&self) -> Result<(), String> {
         crate::mpv::proxy::apply_runtime(
-            self.mpv,
+            &self.mpv,
             self.open_url_use_proxy,
             &self.open_url_proxy_url,
         )
     }
 
     pub fn load_media_target(&mut self, target: &str) {
+        if let Some(client)=crate::peer::client() && !crate::peer::mirroring() {
+            if let Err(error)=client.queue("/api/player/command",serde_json::json!({"command":"open","target":target})) {self.set_osd(error)}
+            return;
+        }
         if crate::remote_location::normalize(target).is_ok() {
             if let Some(ctx) = crate::remote_location::context() {
                 self.load_remote_target(target, self.open_url_use_proxy, ctx);
@@ -5679,7 +5717,7 @@ impl PealayerApp {
         crate::platform::windows::configure_compositor_paced_window_move(
             self.compositor_paced_window_move,
         );
-        if jump_list_changed {
+        if jump_list_changed && !crate::peer::active() {
             crate::platform::windows::sync_windows_jump_list_with_options(
                 &self.recent_media,
                 self.windows_jump_list_quick_actions,
@@ -5702,14 +5740,14 @@ impl PealayerApp {
         let _ = self.mpv.set_property("audio-delay", self.audio_delay);
         self.sync_subtitle_rendering();
         crate::mpv::proxy::apply_runtime(
-            self.mpv,
+            &self.mpv,
             self.open_url_use_proxy,
             &self.open_url_proxy_url,
         )?;
-        crate::platform::windows::sync_windows_jump_list_with_options(
+        if !crate::peer::active(){crate::platform::windows::sync_windows_jump_list_with_options(
             &self.recent_media,
             self.windows_jump_list_quick_actions,
-        );
+        );}
         self.prune_recent_remote_thumbnail_cache();
         crate::ui::i18n::configure_ui_fonts(
             ctx,
@@ -5734,6 +5772,11 @@ impl PealayerApp {
         ctx: &egui::Context,
         config: crate::config::AppConfig,
     ) -> Result<(), String> {
+        if let Some(client)=crate::peer::client() && !crate::peer::mirroring(){
+            let mut values=serde_json::to_value(&config).map_err(|error|error.to_string())?;
+            if let Some(values)=values.as_object_mut(){for key in ["window_geometry","egui_memory","workspace_session","workspace_dock_layout","last_media_target","last_media_paused","recent_media","playback_positions","hardware_endpoint"]{values.remove(key);}}
+            client.queue("/api/peer/config",serde_json::json!({"operation":"preview","values":values}))?;
+        }
         if self.preference_preview_original.is_none() {
             self.preference_preview_original = Some(self.runtime_config_snapshot());
         }
@@ -5754,6 +5797,7 @@ impl PealayerApp {
     }
 
     pub(crate) fn cancel_preference_preview(&mut self, ctx: &egui::Context) -> Result<(), String> {
+        if let Some(client)=crate::peer::client(){client.post("/api/peer/config",&serde_json::json!({"operation":"discard"}))?;}
         let Some(config) = self.preference_preview_original.take() else {
             return Ok(());
         };
@@ -5779,7 +5823,120 @@ impl PealayerApp {
         Ok(())
     }
 
+    fn apply_peer_request(&mut self,ctx:&egui::Context,path:&str,value:serde_json::Value)->Result<serde_json::Value,String>{
+        if crate::peer::active(){return Err("Only the authoritative instance can apply session changes".into())}
+        match path {
+            "/api/peer/config"=>{
+                let operation=value.get("operation").and_then(serde_json::Value::as_str).unwrap_or("save");
+                match operation {
+                    "save"=>{
+                        let config=crate::platform::interop::get_live_config().apply_patch(value.get("values").ok_or("Configuration values are required")?)?;
+                        config.save()?;
+                        if value.get("values").is_some_and(|values|values.get("workspace_session").is_some()){
+                            let mut profile=config.workspace_session.clone();profile.window_geometry=None;profile.egui_memory=None;self.apply_workspace_profile(ctx,&profile)?;
+                        }
+                        self.commit_preference_preview(ctx,config)?;
+                    },
+                    "preview"=>{
+                        let config=crate::platform::interop::get_live_config().apply_patch(value.get("values").ok_or("Configuration values are required")?)?;
+                        self.preview_runtime_config(ctx,config)?;
+                    },
+                    "discard"=>self.cancel_preference_preview(ctx)?,
+                    _=>return Err("Unknown configuration operation".into()),
+                }
+            },
+            "/api/peer/timeline"=>{
+                let expected:Option<crate::peer::TimelineState>=serde_json::from_value(value.get("expected").cloned().unwrap_or_default()).map_err(|error|error.to_string())?;
+                let current=crate::peer::TimelineState{timeline:self.timeline.clone(),muted:self.track_muted.clone(),soloed:self.track_soloed.clone()};
+                if expected.as_ref()!=Some(&current){return Err("Timeline changed on another peer; refresh before editing again".into())}
+                let state:crate::peer::TimelineState=serde_json::from_value(value.get("state").cloned().ok_or("Timeline state is required")?).map_err(|error|error.to_string())?;
+                if state.timeline.instances.len()>10000 || state.timeline.templates.len()>10000 || state.timeline.keyframes.len()>10000{return Err("Timeline exceeds session limits".into())}
+                self.undo_stack.push(self.snapshot_timeline());
+                self.timeline=state.timeline;self.track_muted=state.muted;self.track_soloed=state.soloed;
+                self.sync_timeline_engine();self.persist_timeline_track_preferences();self.save_config();
+            },
+            "/api/peer/files"=>{
+                let path=std::path::PathBuf::from(value.get("path").and_then(serde_json::Value::as_str).ok_or("Server path is required")?);
+                match value.get("operation").and_then(serde_json::Value::as_str){
+                    Some("export_config")=>{let config:crate::config::AppConfig=serde_json::from_value(value.get("config").cloned().ok_or("Config is required")?).map_err(|error|error.to_string())?;config.validate()?;config.save_to_path(&path)?;},
+                    Some("open_timeline")=>{self.timeline=crate::four_d::models::Timeline::load_from_file(&path).map_err(|error|error.to_string())?;self.sync_timeline_engine();self.save_config();},
+                    Some("save_timeline")=>self.timeline.save_to_file(&path).map_err(|error|error.to_string())?,
+                    _=>return Err("Unsupported server file operation".into()),
+                }
+            },
+            _=>return Err("Unsupported session operation".into()),
+        }
+        Ok(serde_json::json!({"applied":true}))
+    }
+
+    fn poll_peer_session(&mut self,ctx:&egui::Context) {
+        let Some(client)=crate::peer::client() else{return};
+        client.register_context(ctx);
+        let Some(snapshot)=client.snapshot() else{return};
+        let id=egui::Id::new("pealayer_remote_authority_ui");
+        let mut state=ctx.data_mut(|data|data.get_temp::<crate::peer::PeerUiState>(id).unwrap_or_default());
+        if state.config.as_ref()!=Some(&snapshot.session.config) {
+            let config=snapshot.session.config.clone();
+            let workspace_changed=state.config.as_ref().is_none_or(|old|old.active_workspace_profile!=config.active_workspace_profile || old.workspace_session.nle!=config.workspace_session.nle || old.workspace_dock_layout!=config.workspace_dock_layout);
+            if let Err(error)=crate::peer::mirror(||self.apply_runtime_config(ctx,config.clone())){self.config_status=error;}
+            if workspace_changed{
+                let mut profile=config.workspace_session.clone();profile.window_geometry=None;profile.egui_memory=None;
+                if let Err(error)=crate::peer::mirror(||self.apply_workspace_profile(ctx,&profile)){self.config_status=error;}
+            }
+            state.config=Some(config);
+        }
+        if state.timeline!=snapshot.session.timeline {
+            if let Some(timeline)=&snapshot.session.timeline {
+                self.timeline=timeline.timeline.clone();self.track_muted=timeline.muted.clone();self.track_soloed=timeline.soloed.clone();
+            }
+            state.timeline=snapshot.session.timeline.clone();
+        }
+        let fresh=snapshot.received.elapsed()<std::time::Duration::from_secs(2);
+        self.is_connected=fresh;
+        self.serial_port=client.origin.as_str().replacen("http://","pealayer://",1).trim_end_matches('/').into();
+        if !fresh {
+            let _=self.mpv.0.set_property("pause",true);
+            self.connection_notice=Some("Remote Pealayer disconnected; controls are not redirected to local hardware".into());
+            return;
+        }
+        self.connection_notice=client.error.lock().ok().and_then(|value|value.clone()).or_else(||client.command_error.lock().ok().and_then(|value|value.clone()));
+        if state.loaded_media!=snapshot.session.media {
+            let _=self.mpv.0.command("stop",&[]);
+            state.loaded_media=snapshot.session.media.clone();
+            state.media_error=None;
+            if let Some(target)=&snapshot.session.media {
+                match client.media_url(target).and_then(|url|{
+                    self.mpv.0.set_property("user-agent",crate::peer::USER_AGENT).map_err(|error|error.to_string())?;
+                    if url.starts_with(client.origin.as_str()){let _=self.mpv.0.set_property("http-proxy","");}
+                    self.mpv.0.command("loadfile",&[&url,"replace","-1",&format!("start={},pause=yes",snapshot.session.position)]).map_err(|error|error.to_string())
+                }) {Ok(())=>{},Err(error)=>state.media_error=Some(format!("Remote video preview unavailable: {error}"))}
+            }
+        }
+        if let Some(error)=crate::peer::take_preview_error(){state.media_error=Some(error);}
+        self.current_video_path=snapshot.session.media.clone().map(std::path::PathBuf::from);
+        self.volume=snapshot.session.status.get("volume").and_then(serde_json::Value::as_f64).unwrap_or(self.volume);
+        self.is_muted=snapshot.session.status.get("muted").and_then(serde_json::Value::as_bool).unwrap_or(self.is_muted);
+        self.is_paused=snapshot.session.paused;
+        self.playback_rate=snapshot.session.speed;
+        self.duration=snapshot.session.status.get("duration").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+        self.is_seekable=snapshot.session.status.get("seekable").and_then(serde_json::Value::as_bool).unwrap_or(false);
+        let expected=snapshot.session.position+if snapshot.session.paused {0.0}else{(snapshot.received.elapsed().as_secs_f64()+snapshot.round_trip.as_secs_f64()/2.0)*snapshot.session.speed};
+        self.playback_time=expected;
+        if state.loaded_media.is_some() && state.media_error.is_none() {
+            let actual=self.mpv.0.get_property::<f64>("time-pos").ok();
+            if actual.is_some_and(|actual|(actual-expected).abs()>0.08)
+                && state.last_correction.is_none_or(|last|last.elapsed()>=std::time::Duration::from_millis(500)){
+                let _=self.mpv.0.command("seek",&[&expected.to_string(),"absolute+exact"]);state.last_correction=Some(std::time::Instant::now());
+            }
+            if self.mpv.0.get_property::<f64>("speed").ok()!=Some(snapshot.session.speed){let _=self.mpv.0.set_property("speed",snapshot.session.speed);}
+            if self.mpv.0.get_property::<bool>("pause").ok()!=Some(snapshot.session.paused){let _=self.mpv.0.set_property("pause",snapshot.session.paused);}
+        }
+        if let Some(error)=&state.media_error{self.connection_notice=Some(error.clone());}
+        ctx.data_mut(|data|data.insert_temp(id,state));
+    }
+
     fn poll_external_config(&mut self, ctx: &egui::Context) {
+        if crate::peer::active(){ self.poll_peer_session(ctx);return; }
         if !self.auto_reload_config {
             self.config_watcher = None;
             self.config_reload_due = None;
@@ -6129,6 +6286,7 @@ impl PealayerApp {
     }
 
     fn persist_timeline_track_preferences(&mut self) {
+        if crate::peer::active(){self.sync_timeline_engine();return;}
         let Some(video_path) = self.current_video_path.as_ref() else {
             return;
         };
@@ -6305,6 +6463,14 @@ impl PealayerApp {
     /// Keeping relay edges and controller-owned macro cues together prevents
     /// load, undo, delete, and drag operations from updating only one lane.
     pub fn sync_timeline_engine(&self) {
+        let state=crate::peer::TimelineState{timeline:self.timeline.clone(),muted:self.track_muted.clone(),soloed:self.track_soloed.clone()};
+        if let Some(client)=crate::peer::client(){
+            if !crate::peer::mirroring() && let Some(snapshot)=client.snapshot() && snapshot.session.timeline.as_ref()!=Some(&state){
+                let _=client.queue("/api/peer/timeline",serde_json::json!({"expected":snapshot.session.timeline,"state":state}));
+            }
+            return;
+        }
+        crate::peer::publish_timeline(state);
         let mut muted_tracks = self.track_muted.clone();
         for (key, state) in &self.timeline.track_states {
             if !state.linked {
@@ -6873,7 +7039,7 @@ impl Default for PealayerApp {
                 crate::config::AppDirection::Auto,
                 crate::config::resolve_language(crate::config::AppLanguage::System),
             ),
-            mpv,
+            mpv: crate::mpv::player::Player(mpv),
             mpv_client,
             render_context: Arc::new(Mutex::new(None)),
             playback_time: 0.0,

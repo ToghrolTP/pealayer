@@ -1,4 +1,5 @@
 pub mod fs_api;
+mod media_stream;
 pub mod thumbnails;
 pub mod web_assets;
 
@@ -213,7 +214,7 @@ pub fn spawn_control_server_for_config(
             vec![std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)]
         }
     };
-    let port = crate::config::runtime_port("PEALAYER_PORT", config.web_port);
+    let port = crate::peer::client().map(|client|client.local_port).unwrap_or_else(||crate::config::runtime_port("PEALAYER_PORT", config.web_port));
     spawn_control_server_on_addresses_with_channel(
         addresses,
         port,
@@ -353,7 +354,22 @@ fn handle_connection(mut stream: TcpStream, state: ControlState) {
         handle_websocket(stream, state);
     } else {
         let response = match read_http_request(&mut stream) {
-            Ok(request) => route_http(request, &state),
+            Ok(request) if crate::peer::active() && request.target.starts_with("/api/") && request.target.split('?').next()!=Some("/api/client/status") => {
+                let _ = proxy_http(&request, &mut stream);
+                return;
+            }
+            Ok(request) if matches!(request.method.as_str(), "GET" | "HEAD") && request.target.split('?').next() == Some("/api/fs/file") => {
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+                let _ = media_stream::serve(&request, &mut stream);
+                return;
+            }
+            Ok(mut request) => {
+                let head=request.method=="HEAD";
+                if head{request.method="GET".into();}
+                let response=route_http(request,&state);
+                let _=write_http_response_headers(&mut stream,response,head);
+                return;
+            },
             Err(error) => HttpResponse::text(400, "Bad Request", error),
         };
         let _ = write_http_response(&mut stream, response);
@@ -420,6 +436,17 @@ fn handle_websocket(stream: TcpStream, state: ControlState) {
 }
 
 fn handle_websocket_text(state: &ControlState, text: &str) -> Option<String> {
+    if let Some(client) = crate::peer::client() {
+        let value = match serde_json::from_str::<serde_json::Value>(text) {
+            Ok(value) => value,
+            Err(_) => return Some(crate::platform::interop::format_interop_error(None, -32700, "Invalid peer command JSON")),
+        };
+        let path = if value.get("method").is_some() { "/api/rpc" } else { "/api/player/command" };
+        return Some(match client.post(path, &value) {
+            Ok(response) => response.to_string(),
+            Err(error) => crate::platform::interop::format_interop_error(value.get("id").cloned(), -32000, &error),
+        });
+    }
     if let Ok(command) = serde_json::from_str::<crate::platform::interop::InteropCommand>(text) {
         if let Err(error) = command.validate() {
             return Some(crate::platform::interop::format_interop_error(None, -32602, &error));
@@ -497,6 +524,7 @@ struct HttpRequest {
     method: String,
     target: String,
     body: Vec<u8>,
+    headers: Vec<(String, String)>,
 }
 
 fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
@@ -530,14 +558,20 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
     debug_assert_eq!(header_end, parsed_len);
     let method = parsed.method.unwrap_or_default().to_string();
     let target = parsed.path.unwrap_or("/").to_string();
+    let request_headers = parsed.headers.iter().map(|header| (header.name.to_string(), String::from_utf8_lossy(header.value).trim().to_string())).collect();
+    if parsed.headers.iter().any(|header|header.name.eq_ignore_ascii_case("transfer-encoding")){
+        return Err("Transfer-Encoding is not accepted; send an explicit Content-Length".into());
+    }
+    let lengths=parsed.headers.iter().filter(|header|header.name.eq_ignore_ascii_case("content-length")).collect::<Vec<_>>();
+    if lengths.len()>1{return Err("Duplicate Content-Length is not accepted".into())}
     let content_length = parsed
         .headers
         .iter()
         .find(|header| header.name.eq_ignore_ascii_case("content-length"))
         .and_then(|header| std::str::from_utf8(header.value).ok())
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .unwrap_or(0);
-    if parsed_len + content_length > MAX_HTTP_REQUEST_BYTES {
+        .map(|value|value.trim().parse::<usize>().map_err(|_|"Invalid Content-Length".to_string()))
+        .transpose()?.unwrap_or(0);
+    if content_length>MAX_HTTP_REQUEST_BYTES.saturating_sub(parsed_len) {
         return Err("request exceeds 1 MiB limit".to_string());
     }
     while bytes.len() < parsed_len + content_length {
@@ -553,6 +587,7 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
         method,
         target,
         body: bytes[parsed_len..parsed_len + content_length].to_vec(),
+        headers: request_headers,
     })
 }
 
@@ -595,6 +630,9 @@ impl HttpResponse {
 }
 
 fn write_http_response(stream: &mut TcpStream, response: HttpResponse) -> std::io::Result<()> {
+    write_http_response_headers(stream,response,false)
+}
+fn write_http_response_headers(stream:&mut TcpStream,response:HttpResponse,head:bool)->std::io::Result<()>{
     write!(
         stream,
         "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: {}\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: SAMEORIGIN\r\nReferrer-Policy: no-referrer\r\nPermissions-Policy: fullscreen=(self), screen-wake-lock=(self)\r\nContent-Security-Policy: default-src 'self'; connect-src 'self' ws: wss: http: https:; img-src 'self' data: blob: http: https:; media-src 'self' blob: http: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Content-Type\r\nAccess-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n\r\n",
@@ -604,17 +642,39 @@ fn write_http_response(stream: &mut TcpStream, response: HttpResponse) -> std::i
         response.body.len(),
         response.cache_control,
     )?;
-    stream.write_all(&response.body)?;
+    if !head{stream.write_all(&response.body)?;}
     stream.flush()
 }
 
 fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
+    crate::peer::observe_consumer(&request.headers);
     let path = request.target.split('?').next().unwrap_or("/");
     let web = crate::platform::interop::get_live_config();
+    if media_stream::header(&request.headers, "x-pealayer-route").is_some_and(|route| route.split(',').any(|id| id.trim() == crate::peer::instance_id()) || route.split(',').count() > 8) {
+        return HttpResponse::text(508, "Loop Detected", "Pealayer peer routing loop");
+    }
     if let Some(capability) = denied_web_capability(&request.method, path, &web) {
         return permission_denied(capability);
     }
     match (request.method.as_str(), path) {
+        ("GET", "/api/peer/session") => {
+            match crate::peer::server_session() {
+                Ok(session) => HttpResponse::json(200,"OK",serde_json::to_string(&session).unwrap_or_default()),
+                Err(error) => HttpResponse::text(503,"Service Unavailable",error),
+            }
+        }
+        ("GET", "/api/client/status")=>HttpResponse::json(200,"OK",crate::peer::diagnostics().to_string()),
+        ("POST", "/api/peer/media") => peer_result(serde_json::from_slice(&request.body).map_err(|error|error.to_string()).and_then(crate::peer::apply_media_operation).map(|_|serde_json::json!({"accepted":true}))),
+        ("POST", "/api/peer/controller") => {
+            let result = serde_json::from_slice::<serde_json::Value>(&request.body).map_err(|error|error.to_string()).and_then(|value| {
+                let method=value.get("method").and_then(serde_json::Value::as_str).ok_or("A controller method is required")?;
+                crate::peer::controller_call(method.into(),value.get("params").cloned().unwrap_or_else(||serde_json::json!({})))
+            });
+            peer_result(result)
+        }
+        ("POST", "/api/peer/hardware") => peer_result(serde_json::from_slice(&request.body).map_err(|error|error.to_string()).and_then(crate::peer::hardware_command).map(|_|serde_json::json!({"accepted":true}))),
+        ("POST", "/api/peer/config" | "/api/peer/timeline")=>peer_result(serde_json::from_slice(&request.body).map_err(|error|error.to_string()).and_then(|value|crate::peer::gui_request(path,value))),
+        ("POST", "/api/peer/files")=>peer_result(serde_json::from_slice(&request.body).map_err(|error|error.to_string()).and_then(|value|crate::peer::gui_request(path,value))),
         ("OPTIONS", _) => HttpResponse::text(204, "No Content", ""),
         ("GET", "/healthz") => HttpResponse::json(
             200,
@@ -800,7 +860,7 @@ fn denied_web_capability(
 ) -> Option<&'static str> {
     let configuration_route = matches!(
         (method, path),
-        ("GET", "/api/config") | ("GET", "/api/preferences") | ("POST", "/api/config")
+        ("GET", "/api/config") | ("GET", "/api/preferences") | ("POST", "/api/config") | ("GET", "/api/peer/session") | ("POST", "/api/peer/config") | ("POST", "/api/peer/files")
     );
     let control_route = matches!(
         (method, path),
@@ -810,14 +870,14 @@ fn denied_web_capability(
             | ("POST", "/api/player/command")
             | ("POST", "/api/ipc")
     );
-    let file_route = path.starts_with("/api/fs/") || path.starts_with("/api/remote/")
+    let file_route = path.starts_with("/api/fs/") || path.starts_with("/api/remote/") || path=="/api/peer/files"
         || matches!(path, "/api/player/frame" | "/api/player/seek-thumbnail"
             | "/api/player/taskbar-preview" | "/api/player/taskbar-preview.png" | "/api/player/taskbar-icons.png");
     let update_route = path.starts_with("/api/update/");
     if configuration_route && !web.web_allow_configuration {
         return Some("configuration");
     }
-    if control_route && !web.web_allow_control {
+    if (control_route || (method=="POST" && path.starts_with("/api/peer/"))) && !web.web_allow_control {
         return Some("control");
     }
     if file_route && !web.web_allow_file_access {
@@ -827,6 +887,42 @@ fn denied_web_capability(
         return Some("application updates");
     }
     None
+}
+
+fn peer_result(result: Result<serde_json::Value,String>) -> HttpResponse {
+    match result {
+        Ok(value)=>HttpResponse::json(200,"OK",value.to_string()),
+        Err(error)=>HttpResponse::json(400,"Bad Request",serde_json::json!({"error":error}).to_string()),
+    }
+}
+
+/// API gateway for a consumer's local port. Streams through bounded buffers;
+/// upstream permissions, errors, ranges and content headers remain authoritative.
+fn proxy_http(request: &HttpRequest, stream:&mut TcpStream)->std::io::Result<()> {
+    let Some(client)=crate::peer::client() else {return Ok(())};
+    let route=media_stream::header(&request.headers,"x-pealayer-route").unwrap_or("");
+    if route.split(',').any(|id|id.trim()==crate::peer::instance_id()) || route.split(',').count()>8 {
+        return write_http_response(stream,HttpResponse::text(508,"Loop Detected","Pealayer peer routing loop"));
+    }
+    let forwarded=if route.is_empty(){crate::peer::instance_id().to_string()}else{format!("{route},{}",crate::peer::instance_id())};
+    let result=(|| -> Result<reqwest::blocking::Response,String> {
+        let method=reqwest::Method::from_bytes(request.method.as_bytes()).map_err(|error|error.to_string())?;
+        let mut upstream=client.request(method,&request.target)?.timeout(Duration::from_secs(86400)).header("X-Pealayer-Route",forwarded);
+        for (key,value) in &request.headers {
+            if !matches!(key.to_ascii_lowercase().as_str(),"host"|"connection"|"content-length"|"transfer-encoding"|"upgrade"|"x-pealayer-route"|"user-agent") {upstream=upstream.header(key,value)}
+        }
+        upstream.body(request.body.clone()).send().map_err(|error|error.to_string())
+    })();
+    let mut upstream=match result {Ok(response)=>response,Err(error)=>return write_http_response(stream,HttpResponse::text(502,"Bad Gateway",error))};
+    write!(stream,"HTTP/1.1 {} {}\r\nConnection: close\r\n",upstream.status().as_u16(),upstream.status().canonical_reason().unwrap_or("Upstream Response"))?;
+    for (key,value) in upstream.headers(){
+        if matches!(key.as_str(),"connection"|"transfer-encoding"|"keep-alive"){continue}
+        if let Ok(value)=value.to_str(){write!(stream,"{key}: {value}\r\n")?}
+    }
+    write!(stream,"\r\n")?;
+    let _=stream.set_write_timeout(Some(Duration::from_secs(30)));
+    if request.method!="HEAD"{std::io::copy(&mut upstream,stream)?;}
+    stream.flush()
 }
 
 fn permission_denied(capability: &str) -> HttpResponse {

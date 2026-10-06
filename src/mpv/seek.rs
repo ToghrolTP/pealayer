@@ -50,6 +50,10 @@ impl MpvSeekBackend {
 
 impl SeekBackend for MpvSeekBackend {
     fn execute_seek(&self, target_time: f64, mode: SeekMode) {
+        if let Some(client)=crate::peer::client() {
+            let _=client.queue("/api/player/command",serde_json::json!({"command":"seek_to","seconds":target_time.max(0.0)}));
+            return;
+        }
         let t = target_time.max(0.0);
         let t_str = t.to_string();
         match mode {

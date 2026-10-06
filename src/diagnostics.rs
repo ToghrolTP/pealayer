@@ -49,6 +49,7 @@ pub fn install_panic_reporter() {
             info,
             std::backtrace::Backtrace::force_capture(),
         );
+        let path=if crate::peer::active(){crate::server::thumbnails::get_thumbnail_cache_dir().join("peer-latest-panic.log")}else{path.clone()};
         let _ = write_report(&path, &report);
         previous(info);
     }));

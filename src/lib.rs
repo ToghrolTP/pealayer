@@ -11,6 +11,7 @@ pub mod media_info;
 pub mod messaging;
 pub mod mpv;
 pub mod network;
+pub mod peer;
 pub mod platform;
 pub mod preferences_contract;
 pub mod remote_location;

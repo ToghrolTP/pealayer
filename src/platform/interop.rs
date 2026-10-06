@@ -1553,6 +1553,7 @@ pub fn get_live_appearance() -> Option<AppearanceState> {
 }
 
 pub fn get_live_status() -> PlayerStatusResponse {
+    if let Some(client)=crate::peer::client() && let Some(snapshot)=client.snapshot() && let Ok(status)=serde_json::from_value(snapshot.session.status){return status;}
     if let Ok(lock) = LIVE_STATUS.read() {
         if let Some(ref st) = *lock {
             return st.clone();

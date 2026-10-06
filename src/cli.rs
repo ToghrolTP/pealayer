@@ -17,6 +17,7 @@ pub struct CliOptions {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CliAction {
     RunGui(CliOptions),
+    RunClient { endpoint: String, port: u16, options: CliOptions },
     SendRemote(String),
     PushUpdate(String),
     UpdateFrom { url: String, sha256: Option<String> },
@@ -28,6 +29,7 @@ pub enum CliAction {
 }
 
 pub fn resolved_instance_identity() -> String {
+    if let Some(client)=crate::peer::client(){return format!("Pealayer:peer:{}",client.local_port)}
     let mut identity = crate::config::resolved_app_name(&crate::config::AppConfig::load());
     if let Ok(instance_id) = std::env::var("PEALAYER_INSTANCE_ID") {
         let instance_id = instance_id.trim();
@@ -97,6 +99,8 @@ UPDATE OPTIONS:
   --update-status [HOST]    Query local or remote update progress
 
 APPLICATION OPTIONS:
+  --connect <pealayer://HOST:PORT>  Control a remote Pealayer session
+  --client-port <PORT>       Local relay Web/API port (default 8081)
   --web-only, --headless     Run the full backend with only the Web/PWA interface visible
   --register-associations    Register Pealayer as the default media handler
   --unregister-associations  Unregister Pealayer file associations
@@ -114,6 +118,8 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
     let mut volume = None;
     let mut commands = Vec::new();
     let mut web_only = false;
+    let mut peer_endpoint = None;
+    let mut client_port = 8081;
 
     let parse_number = |option: &str, value: String| {
         value
@@ -123,6 +129,15 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
 
     while let Some(arg) = args_iter.next() {
         match arg.as_str() {
+            "--connect" => {
+                let value=args_iter.next().ok_or("--connect requires a Pealayer endpoint")?;
+                crate::peer::endpoint(&value)?;
+                peer_endpoint=Some(value);
+            }
+            "--client-port" => {
+                client_port=args_iter.next().ok_or("--client-port requires a port")?.parse::<u16>().map_err(|_|"Invalid client port")?;
+                if client_port==0{return Err("Client port must be nonzero".into())}
+            }
             "-h" | "--help" => {
                 return Ok(CliAction::PrintHelp(format_help_message()));
             }
@@ -293,13 +308,17 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
         }
     }
 
-    Ok(CliAction::RunGui(CliOptions {
+    if target.as_deref().is_some_and(|value|value.starts_with("pealayer://")) {
+        peer_endpoint=target.take();
+    }
+    let options=CliOptions {
         target,
         fullscreen,
         volume,
         commands,
         web_only,
-    }))
+    };
+    Ok(if let Some(endpoint)=peer_endpoint {CliAction::RunClient {endpoint,port:client_port,options}}else{CliAction::RunGui(options)})
 }
 
 pub fn send_remote_command(cmd_str: &str) -> Result<String, String> {

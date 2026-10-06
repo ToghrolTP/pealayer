@@ -21,7 +21,7 @@ const CAPABILITY_MOTION_BREAK: u32 = 1 << 21;
 const CAPABILITY_STATUS_EFFECTS: u32 = 1 << 28;
 const CAPABILITY_STATUS_LED_PUSH: u32 = 1 << 29;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareOutput {
     pub id: u8,
     pub key: String,
@@ -30,7 +30,7 @@ pub struct HardwareOutput {
     pub control: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareAction {
     pub id: String,
     pub verb: String,
@@ -38,7 +38,7 @@ pub struct HardwareAction {
     pub icon: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareControl {
     pub key: String,
     pub kind: String,
@@ -56,7 +56,7 @@ pub struct HardwareControl {
     pub actions: Vec<HardwareAction>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareBoardProfile {
     pub key: String,
     pub board_identity: String,
@@ -69,7 +69,7 @@ pub struct HardwareBoardProfile {
     pub revision: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareMotionSide {
     pub requested: String,
     pub applied: String,
@@ -77,13 +77,13 @@ pub struct HardwareMotionSide {
     pub revision: u64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareMotionState {
     pub left: HardwareMotionSide,
     pub right: HardwareMotionSide,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareCapabilities {
     pub board_connected: bool,
     pub board_name: String,
@@ -285,7 +285,7 @@ impl HardwareCapabilities {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareBoardIdentity {
     pub product_name: String,
     pub stored_name: String,
@@ -297,7 +297,7 @@ pub struct HardwareBoardIdentity {
     pub build_timestamp: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwarePort {
     pub name: String,
     pub display_name: String,
@@ -310,7 +310,7 @@ pub struct HardwarePort {
     pub instance_id: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareBoardSettings {
     pub flags: u8,
     pub silent: bool,
@@ -339,7 +339,7 @@ pub struct HardwareBoardSettings {
     pub persisted: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareFrontPanel {
     /// Schema reported by the authoritative `controller.front_panel` read.
     /// Zero means that only a changed-only display frame has been observed.
@@ -367,7 +367,7 @@ pub struct ControllerEndpointHealth {
     pub board_connected: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareStatusLed {
     pub red: u8,
     pub green: u8,
@@ -377,7 +377,7 @@ pub struct HardwareStatusLed {
     pub condition: u8,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareTelemetry {
     pub supply_mv: Option<i32>,
     pub bus_mv: Option<i32>,
@@ -393,7 +393,7 @@ pub struct HardwareTelemetry {
     pub door_open: Option<bool>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareWarning {
     pub code: String,
     pub severity: String,
@@ -476,7 +476,7 @@ pub struct HardwareMacroStep {
     pub action_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareMacro {
     pub id: u64,
     pub name: String,
@@ -495,7 +495,7 @@ pub struct HardwareMacro {
     pub board_profile_mode: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareStripEffect {
     pub id: String,
     pub name: String,
@@ -515,7 +515,7 @@ pub struct HardwareStripEffect {
     pub maximum_pixels: Option<u16>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareStripControl {
     pub minimum_pixels: u16,
     pub maximum_pixels: u16,

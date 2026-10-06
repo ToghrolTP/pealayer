@@ -827,7 +827,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "web_allow_file_access",
             "web",
             "Permissions",
-            "Allow host file browsing and management",
+            "Allow host file browsing, retrieval and downloads",
         ),
         PreferenceControl::boolean(
             "web_allow_updates",
