@@ -494,6 +494,7 @@ pub struct PealayerApp {
     pub(crate) active_hardware_bindings: std::collections::BTreeSet<String>,
     pub(crate) board_operation: Option<String>,
     pub(crate) board_operation_status: String,
+    pub(crate) rf: crate::ui::rf::RfState,
     pub(crate) board_settings_draft: Option<crate::four_d::controller::HardwareBoardSettings>,
     pub(crate) board_settings_dirty: bool,
     pub(crate) board_reboot_armed: bool,
@@ -1000,6 +1001,7 @@ impl eframe::App for PealayerApp {
             let chapters = self.media_chapters();
             let current_chapter_index = self.active_media_chapter().map(|chapter| chapter.index);
             let status_resp = crate::platform::interop::PlayerStatusResponse {
+                rf: self.rf.snapshot(),
                 remote_browser: crate::remote_location::snapshot(),
                 messages,
                 appearance: Some(appearance),
@@ -1680,6 +1682,7 @@ impl eframe::App for PealayerApp {
                 crate::ui::preferences::draw(self, ui);
                 crate::ui::effects_library::draw_editor(self, ui);
                 crate::ui::board_info::draw(self, ui);
+                crate::ui::rf::draw(self, ui);
                 crate::ui::hardware_control::draw(self, ui);
                 crate::ui::media_track_properties::draw(self, ui);
                 crate::ui::workspace_profiles::draw(self, ui);
@@ -2944,6 +2947,21 @@ impl PealayerApp {
             .map(|mut queue| queue.drain(..).collect::<Vec<_>>())
             .unwrap_or_default();
         for result in results {
+            if result.operation.starts_with("rf-") {
+                self.rf.pending = false;
+                match result.result {
+                    Ok(value) => {
+                        self.rf.error.clear();
+                        if result.operation == "rf-catalog" { self.rf.apply_catalog(value); }
+                        else {
+                            self.rf.last_result = value;
+                            if let Err(error) = self.request_rf("catalog", serde_json::json!({"read_board":true})) { self.rf.error = error; }
+                        }
+                    },
+                    Err(error) => { self.rf.error = error; },
+                }
+                continue;
+            }
             let is_board_operation = result.operation.starts_with("board-");
             let is_presentation_operation = result.operation.starts_with("presentation-");
             if is_board_operation {
@@ -3182,6 +3200,8 @@ impl PealayerApp {
         use crate::platform::interop::InteropCommand;
 
         match command {
+            InteropCommand::OpenRfManager => { self.rf.open = true; let _ = self.request_rf("catalog", serde_json::json!({"read_board":true})); },
+            InteropCommand::RfControl { operation, params } => { if let Err(error) = self.request_rf(&operation, params) { self.rf.error = error; } },
             InteropCommand::Launch { request } => {
                 let crate::platform::interop::LaunchRequest {
                     sender_working_directory,
@@ -6990,6 +7010,7 @@ impl Default for PealayerApp {
             active_hardware_bindings: std::collections::BTreeSet::new(),
             board_operation: None,
             board_operation_status: String::new(),
+            rf: crate::ui::rf::RfState::default(),
             board_settings_draft: None,
             board_settings_dirty: false,
             board_reboot_armed: false,

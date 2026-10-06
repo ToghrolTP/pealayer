@@ -449,6 +449,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                 // Workspace switcher
                 top_menu_button(ui, app.tr("Workspace"), |ui| {
+                    if ui.button(format!("{} {}",crate::ui::icons::RADIO,app.tr("RF controls…"))).clicked() {
+                        app.rf.open = true;
+                        if let Err(error) = app.request_rf("catalog",serde_json::json!({"read_board":true})) { app.rf.error = error; }
+                        ui.close();
+                    }
+                    ui.separator();
                     for (id, profile) in app.ordered_workspace_profiles() {
                         let active = app.active_workspace_profile.as_deref() == Some(id.as_str());
                         let label = format!(

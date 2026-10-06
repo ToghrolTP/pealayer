@@ -1,4 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
+import { RfManager } from './RfManager';
 import {
   Alert,
   Button,
@@ -287,6 +288,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
         image={<DisconnectOutlined />}
         description={tr(locale, state.controller_connected ? 'No board is connected or advertising capabilities' : 'Connecting to PCController…')}
       />
+      <RfManager rf={state.rf} sendCmd={sendCmd} />
     </section>;
   }
 
@@ -503,6 +505,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
     </div>
 
     <Collapse className="hardware-sections" defaultActiveKey={grouped.map((item) => item.key)} items={grouped} />
+    <RfManager rf={state.rf} sendCmd={sendCmd} />
 
     {strip && <Card className="surface-card strip-control" title={<Space><BulbOutlined />{tr(locale, 'Addressable lighting')}</Space>}>
       <div className="strip-control__grid">

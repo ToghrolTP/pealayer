@@ -4239,7 +4239,11 @@ fn draw_display_text_tool(
     });
 }
 
-fn draw_rf_code_tool(app: &PealayerApp, ui: &mut egui::Ui) {
+fn draw_rf_code_tool(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    if ui.button(format!("{} {}", crate::ui::icons::RADIO, app.tr("Manage RF…"))).clicked() {
+        app.rf.open = true;
+        if let Err(error) = app.request_rf("catalog", serde_json::json!({"read_board":true})) { app.rf.error = error; }
+    }
     let code_id = ui.make_persistent_id("hardware_rf_code");
     let bits_id = ui.make_persistent_id("hardware_rf_bits");
     let protocol_id = ui.make_persistent_id("hardware_rf_protocol");
@@ -10472,6 +10476,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         ui.add_space(8.0);
 
                         hardware_monitor_scroll(ui, |ui| {
+                        if self.app.advertised_hardware().is_some_and(|caps| caps.supports_rf_transmit) {
+                            if ui.button(format!("{} {}",crate::ui::icons::RADIO,self.app.tr("RF controls…"))).clicked() {
+                                self.app.rf.open = true;
+                                if let Err(error) = self.app.request_rf("catalog",serde_json::json!({"read_board":true})) { self.app.rf.error = error; }
+                            }
+                        }
                         if self.app.estop_active {
                             ui.horizontal(|ui| {
                                 let time = ui.input(|i| i.time);

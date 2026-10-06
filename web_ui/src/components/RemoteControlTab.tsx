@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import type { RfSnapshot } from './RfManager';
 import { Button, Select, Slider, Tooltip } from 'antd';
 import {
   FastBackwardOutlined,
@@ -18,6 +19,7 @@ import type { AppearanceState } from '../appearance';
 import type { TimelineWheelPreferences } from '../timelineWheel';
 
 export interface PlayerState {
+  rf?: RfSnapshot;
   remote_browser?: import('./RemoteLocationDialog').RemoteBrowser;
   status?: string;
   messages?: import('../messaging').ToastSnapshot;

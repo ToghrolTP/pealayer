@@ -203,6 +203,8 @@ fn controller_call_allowed_during_estop(method: &str, params: &serde_json::Value
     if method == "controller.peripheral.presentation.update" {
         return true;
     }
+    if matches!(method,"controller.rf.catalog" | "controller.rf.binding.put" | "controller.rf.binding.remove" | "controller.rf.list" | "controller.rf.learn.status" | "controller.rf.learn.cancel" | "controller.rf.remove") { return true; }
+    if method == "controller.rf.map" && params.get("action").and_then(serde_json::Value::as_str) == Some("none") { return true; }
     if method == "controller.estop.set" {
         return params
             .get("active")

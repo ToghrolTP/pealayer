@@ -718,3 +718,6 @@ body {
   .effect-editor__identity, .effect-editor__program, .effect-step-grid { grid-template-columns: 1fr; }
   .effect-editor__wide { grid-column: auto; }
 }
+.rf-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 16px; }
+.rf-manager-modal .ant-modal-body { max-height: min(72vh, 720px); overflow-y: auto; }
+.rf-manager-modal .ant-form-item { margin-bottom: 12px; }

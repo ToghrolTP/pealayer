@@ -797,6 +797,7 @@ fn main() -> eframe::Result {
                 active_hardware_bindings: std::collections::BTreeSet::new(),
                 board_operation: None,
                 board_operation_status: String::new(),
+                rf: crate::ui::rf::RfState::default(),
                 board_settings_draft: None,
                 board_settings_dirty: false,
                 board_reboot_armed: false,

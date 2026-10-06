@@ -119,6 +119,8 @@ impl LaunchReceiptCache {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum InteropCommand {
+    RfControl { operation: String, #[serde(default)] params: Value },
+    OpenRfManager,
     Launch {
         request: LaunchRequest,
     },
@@ -413,6 +415,11 @@ fn valid_workspace_profile_icon(value: &str) -> bool {
 impl InteropCommand {
     pub fn validate(&self) -> Result<(), String> {
         match self {
+            Self::RfControl { operation, params } => {
+                if !crate::ui::rf::OPERATIONS.contains(&operation.as_str()) || !params.is_object() || params.to_string().len() > 32768 {
+                    Err("Invalid RF operation or parameters".to_string())
+                } else { Ok(()) }
+            },
             Self::Launch { request } => request.validate(),
             Self::Seek { seconds } if !seconds.is_finite() => {
                 Err("seek value must be finite".to_string())
@@ -607,7 +614,7 @@ pub fn command_catalog() -> Value {
             "controller_effect.record.save", "controller_effect.record.discard",
             "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm",
             "configure_addressable_strip", "fill_addressable_strip", "clear_addressable_strip",
-            "press_front_panel_key", "board_information"
+            "press_front_panel_key", "board_information", "rf_control", "open_rf_manager"
         ],
         "json_rpc_prefix": "pealayer",
         "discovery": "/api/player/commands"
@@ -780,6 +787,7 @@ impl AppearanceState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerStatusResponse {
+    #[serde(default)] pub rf: Value,
     #[serde(default)]
     pub remote_browser: crate::remote_location::BrowserState,
     #[serde(default)]
@@ -1016,6 +1024,7 @@ fn default_playback_rate() -> f64 {
 impl Default for PlayerStatusResponse {
     fn default() -> Self {
         Self {
+            rf: Value::Null,
             status: String::new(),
             messages: crate::messaging::MessageSnapshot::default(),
             remote_browser: crate::remote_location::BrowserState::default(),
@@ -1105,6 +1114,8 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
             .ok_or_else(|| format!("missing string parameter: {}", names.join(" or ")))
     };
     let command = match request.method.as_str() {
+        "pealayer.rf" | "rf_control" => Some(InteropCommand::RfControl { operation: string(&["operation"])?, params: request.params.get("params").cloned().unwrap_or_else(||serde_json::json!({})) }),
+        "pealayer.rf.open" => Some(InteropCommand::OpenRfManager),
         "play" | "pealayer.play" | "pealayer.player.play" => Some(InteropCommand::Play),
         "pause" | "pealayer.pause" | "pealayer.player.pause" => Some(InteropCommand::Pause),
         "toggle" | "toggle_pause" | "pealayer.toggle" | "pealayer.player.toggle" => {
@@ -1985,7 +1996,7 @@ pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<Interop
     rx
 }
 
-const PCCONTROLLER_ACTIONS: &str = "pealayer.play,pealayer.pause,pealayer.toggle,pealayer.stop,pealayer.next,pealayer.previous,pealayer.chapter.next,pealayer.chapter.previous,pealayer.chapter.set,pealayer.seek,pealayer.seek_to,pealayer.seek_absolute,pealayer.volume.set,pealayer.mute.set,pealayer.mute.toggle,pealayer.rate.set,pealayer.open,pealayer.fullscreen.set,pealayer.fullscreen.toggle,pealayer.workspace.set,pealayer.window.activate,pealayer.window.minimize,pealayer.window.maximize,pealayer.window.restore,pealayer.quit";
+const PCCONTROLLER_ACTIONS: &str = "pealayer.play,pealayer.pause,pealayer.toggle,pealayer.stop,pealayer.next,pealayer.previous,pealayer.chapter.next,pealayer.chapter.previous,pealayer.chapter.set,pealayer.seek,pealayer.seek_to,pealayer.seek_absolute,pealayer.volume.set,pealayer.mute.set,pealayer.mute.toggle,pealayer.rate.set,pealayer.open,pealayer.fullscreen.set,pealayer.fullscreen.toggle,pealayer.workspace.set,pealayer.window.activate,pealayer.window.minimize,pealayer.window.maximize,pealayer.window.restore,pealayer.quit,pealayer.command";
 
 struct ControllerAction {
     command: Option<InteropCommand>,
@@ -2033,6 +2044,7 @@ fn controller_action_from_event(event: &Value, instance_id: &str) -> Option<Cont
         None
     } else {
         match kind.as_str() {
+            "pealayer.command" => serde_json::from_str::<InteropCommand>(value).ok().filter(|command| command.validate().is_ok()),
             "pealayer.play" => Some(InteropCommand::Play),
             "pealayer.pause" => Some(InteropCommand::Pause),
             "pealayer.toggle" => Some(InteropCommand::TogglePause),
@@ -3053,6 +3065,7 @@ mod tests {
                 "pealayer.window.maximize",
                 "pealayer.window.restore",
                 "pealayer.quit",
+                "pealayer.command",
             ]
         );
 
