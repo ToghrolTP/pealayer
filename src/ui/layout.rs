@@ -9183,7 +9183,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 &mut start_ms,
                                                                 0..=max_start_ms,
                                                                 50.0,
-                                                                app.human_readable_time_units,
+                                                                self.app.human_readable_time_units,
                                                             ),
                                                         );
                                                         if editor.drag_started()
@@ -9226,7 +9226,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 &mut duration_ms,
                                                                 50..=3_600_000,
                                                                 50.0,
-                                                                app.human_readable_time_units,
+                                                                self.app.human_readable_time_units,
                                                             ),
                                                         );
                                                         if editor.drag_started()
