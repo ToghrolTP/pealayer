@@ -622,8 +622,10 @@ fn timeline_offset_to_reveal_x(
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct TimelineNavigationTransition {
-    start_offset_x: f32,
-    target_offset_x: f32,
+    start_offset: egui::Vec2,
+    target_offset: egui::Vec2,
+    start_zoom: f32,
+    target_zoom: f32,
     started_at_seconds: f64,
     duration_seconds: f32,
 }
@@ -631,7 +633,7 @@ struct TimelineNavigationTransition {
 fn sample_timeline_navigation_transition(
     transition: TimelineNavigationTransition,
     now_seconds: f64,
-) -> (f32, bool) {
+) -> (egui::Vec2, f32, bool) {
     let duration = f64::from(transition.duration_seconds.max(f32::EPSILON));
     let elapsed = (now_seconds - transition.started_at_seconds).max(0.0);
     let complete = elapsed + 1.0e-6 >= duration;
@@ -643,9 +645,17 @@ fn sample_timeline_navigation_transition(
     // Smoothstep starts and stops gently while remaining deterministic and
     // short enough that navigation never feels disconnected from its action.
     let eased = progress * progress * (3.0 - 2.0 * progress);
-    let offset = f64::from(transition.start_offset_x)
-        + f64::from(transition.target_offset_x - transition.start_offset_x) * eased;
-    (offset as f32, complete)
+    let interpolate = |start: f32, target: f32| {
+        (f64::from(start) + f64::from(target - start) * eased) as f32
+    };
+    (
+        egui::vec2(
+            interpolate(transition.start_offset.x, transition.target_offset.x),
+            interpolate(transition.start_offset.y, transition.target_offset.y),
+        ),
+        interpolate(transition.start_zoom, transition.target_zoom),
+        complete,
+    )
 }
 
 fn timeline_frame_step_ms(media_fps: f64, frame_count: u32) -> u64 {
@@ -5560,23 +5570,25 @@ mod timeline_row_tests {
     #[test]
     fn timeline_navigation_transition_eases_between_exact_endpoints() {
         let transition = TimelineNavigationTransition {
-            start_offset_x: 100.0,
-            target_offset_x: 500.0,
+            start_offset: egui::vec2(100.0, 20.0),
+            target_offset: egui::vec2(500.0, 60.0),
+            start_zoom: 100.0,
+            target_zoom: 200.0,
             started_at_seconds: 10.0,
             duration_seconds: 0.2,
         };
 
         assert_eq!(
             sample_timeline_navigation_transition(transition, 10.0),
-            (100.0, false)
+            (egui::vec2(100.0, 20.0), 100.0, false)
         );
         assert_eq!(
             sample_timeline_navigation_transition(transition, 10.1),
-            (300.0, false)
+            (egui::vec2(300.0, 40.0), 150.0, false)
         );
         assert_eq!(
             sample_timeline_navigation_transition(transition, 10.2),
-            (500.0, true)
+            (egui::vec2(500.0, 60.0), 200.0, true)
         );
     }
 
@@ -14068,23 +14080,34 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let mut timeline_scroll_changed = false;
                             let navigation_transition_id =
                                 timeline_scroll_id.with("navigation-transition");
+                            let mut active_navigation_transition = None;
                             if self.app.timeline_animated_navigation {
                                 if let Some(transition) = ui.data(|data| {
                                     data.get_temp::<TimelineNavigationTransition>(
                                         navigation_transition_id,
                                     )
-                                }) {
+                                    }) {
                                     let now_seconds = ui.input(|input| input.time);
-                                    let (offset_x, complete) =
+                                    let (offset, transition_zoom, complete) =
                                         sample_timeline_navigation_transition(
                                             transition,
                                             now_seconds,
                                         );
-                                    let max_offset = (timeline_content_size.x
-                                        - timeline_viewport.width())
+                                    // The content was laid out with the previous frame's zoom.
+                                    // Clamp against the interpolated target geometry so zoom and
+                                    // its cursor anchor travel together without a one-frame snap.
+                                    let max_offset_x =
+                                        (total_seconds as f32 * transition_zoom
+                                            - timeline_viewport.width())
+                                            .max(0.0);
+                                    let max_offset_y = (timeline_content_size.y
+                                        - timeline_viewport.height())
                                         .max(0.0);
-                                    timeline_scroll_state.offset.x =
-                                        offset_x.clamp(0.0, max_offset);
+                                    timeline_scroll_state.offset = egui::vec2(
+                                        offset.x.clamp(0.0, max_offset_x),
+                                        offset.y.clamp(0.0, max_offset_y),
+                                    );
+                                    self.app.timeline_zoom = transition_zoom;
                                     timeline_scroll_changed = true;
                                     if complete {
                                         ui.data_mut(|data| {
@@ -14093,6 +14116,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             );
                                         });
                                     } else {
+                                        active_navigation_transition = Some(transition);
                                         ui.ctx().request_repaint();
                                     }
                                 }
@@ -14106,46 +14130,108 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             if let Some((wheel_action, pointer_screen_x)) =
                                 pending_timeline_wheel
                             {
-                                // Direct manipulation always wins over a scripted
-                                // navigation transition.
-                                ui.data_mut(|data| {
-                                    data.remove_temp::<TimelineNavigationTransition>(
-                                        navigation_transition_id,
-                                    );
-                                });
-                                match wheel_action {
-                                    TimelineWheelAction::Zoom(delta) => {
-                                        let next_zoom =
-                                            timeline_zoom_from_wheel(zoom, delta);
-                                        let pointer_x_in_viewport =
-                                            pointer_screen_x - timeline_viewport.left();
-                                        timeline_scroll_state.offset.x =
-                                            timeline_offset_for_pointer_zoom(
-                                                timeline_scroll_state.offset.x,
+                                if self.app.timeline_animated_navigation {
+                                    // Retarget an in-flight transition instead of restarting from
+                                    // its old destination. Repeated wheel notches therefore remain
+                                    // responsive while the rendered position eases toward the
+                                    // accumulated target.
+                                    let current_offset = timeline_scroll_state.offset;
+                                    let current_zoom = self.app.timeline_zoom;
+                                    let mut target_offset = active_navigation_transition
+                                        .map_or(current_offset, |transition| {
+                                            transition.target_offset
+                                        });
+                                    let mut target_zoom = active_navigation_transition
+                                        .map_or(current_zoom, |transition| transition.target_zoom);
+                                    match wheel_action {
+                                        TimelineWheelAction::Zoom(delta) => {
+                                            let next_zoom =
+                                                timeline_zoom_from_wheel(target_zoom, delta);
+                                            let pointer_x_in_viewport =
+                                                pointer_screen_x - timeline_viewport.left();
+                                            target_offset.x = timeline_offset_for_pointer_zoom(
+                                                target_offset.x,
                                                 pointer_x_in_viewport,
-                                                zoom,
+                                                target_zoom,
                                                 next_zoom,
                                                 total_seconds,
                                                 timeline_viewport.width(),
                                             );
-                                        self.app.timeline_zoom = next_zoom;
-                                        timeline_scroll_changed = true;
+                                            target_zoom = next_zoom;
+                                        }
+                                        TimelineWheelAction::HorizontalScroll(delta) => {
+                                            let max_offset = (total_seconds as f32 * target_zoom
+                                                - timeline_viewport.width())
+                                                .max(0.0);
+                                            target_offset.x =
+                                                (target_offset.x - delta).clamp(0.0, max_offset);
+                                        }
+                                        TimelineWheelAction::VerticalScroll(delta) => {
+                                            let max_offset = (timeline_content_size.y
+                                                - timeline_viewport.height())
+                                                .max(0.0);
+                                            target_offset.y =
+                                                (target_offset.y - delta).clamp(0.0, max_offset);
+                                        }
                                     }
-                                    TimelineWheelAction::HorizontalScroll(delta) => {
-                                        let max_offset = (timeline_content_size.x
-                                            - timeline_viewport.width())
-                                            .max(0.0);
-                                        timeline_scroll_state.offset.x =
-                                            (timeline_scroll_state.offset.x - delta)
-                                                .clamp(0.0, max_offset);
-                                        timeline_scroll_changed = true;
-                                    }
-                                    TimelineWheelAction::VerticalScroll(delta) => {
-                                        let max_offset = (timeline_content_size.y
-                                            - timeline_viewport.height()).max(0.0);
-                                        timeline_scroll_state.offset.y =
-                                            (timeline_scroll_state.offset.y - delta).clamp(0.0, max_offset);
-                                        timeline_scroll_changed = true;
+                                    let transition = TimelineNavigationTransition {
+                                        start_offset: current_offset,
+                                        target_offset,
+                                        start_zoom: current_zoom,
+                                        target_zoom,
+                                        started_at_seconds: ui.input(|input| input.time),
+                                        duration_seconds: self
+                                            .app
+                                            .timeline_navigation_transition_ms
+                                            as f32
+                                            / 1_000.0,
+                                    };
+                                    ui.data_mut(|data| {
+                                        data.insert_temp(navigation_transition_id, transition);
+                                    });
+                                    ui.ctx().request_repaint();
+                                } else {
+                                    ui.data_mut(|data| {
+                                        data.remove_temp::<TimelineNavigationTransition>(
+                                            navigation_transition_id,
+                                        );
+                                    });
+                                    match wheel_action {
+                                        TimelineWheelAction::Zoom(delta) => {
+                                            let next_zoom =
+                                                timeline_zoom_from_wheel(zoom, delta);
+                                            let pointer_x_in_viewport =
+                                                pointer_screen_x - timeline_viewport.left();
+                                            timeline_scroll_state.offset.x =
+                                                timeline_offset_for_pointer_zoom(
+                                                    timeline_scroll_state.offset.x,
+                                                    pointer_x_in_viewport,
+                                                    zoom,
+                                                    next_zoom,
+                                                    total_seconds,
+                                                    timeline_viewport.width(),
+                                                );
+                                            self.app.timeline_zoom = next_zoom;
+                                            timeline_scroll_changed = true;
+                                        }
+                                        TimelineWheelAction::HorizontalScroll(delta) => {
+                                            let max_offset = (timeline_content_size.x
+                                                - timeline_viewport.width())
+                                                .max(0.0);
+                                            timeline_scroll_state.offset.x =
+                                                (timeline_scroll_state.offset.x - delta)
+                                                    .clamp(0.0, max_offset);
+                                            timeline_scroll_changed = true;
+                                        }
+                                        TimelineWheelAction::VerticalScroll(delta) => {
+                                            let max_offset = (timeline_content_size.y
+                                                - timeline_viewport.height())
+                                                .max(0.0);
+                                            timeline_scroll_state.offset.y =
+                                                (timeline_scroll_state.offset.y - delta)
+                                                    .clamp(0.0, max_offset);
+                                            timeline_scroll_changed = true;
+                                        }
                                     }
                                 }
                             }
@@ -14442,8 +14528,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             data.insert_temp(
                                                 navigation_transition_id,
                                                 TimelineNavigationTransition {
-                                                    start_offset_x: timeline_scroll_state.offset.x,
-                                                    target_offset_x,
+                                                    start_offset: timeline_scroll_state.offset,
+                                                    target_offset: egui::vec2(
+                                                        target_offset_x,
+                                                        timeline_scroll_state.offset.y,
+                                                    ),
+                                                    start_zoom: self.app.timeline_zoom,
+                                                    target_zoom: self.app.timeline_zoom,
                                                     started_at_seconds,
                                                     duration_seconds: self
                                                         .app
