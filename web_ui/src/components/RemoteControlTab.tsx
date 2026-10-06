@@ -17,6 +17,7 @@ import { mediaBasename } from '../mediaLabel';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
 import type { AppearanceState } from '../appearance';
 import type { TimelineWheelPreferences } from '../timelineWheel';
+import type { HardwareMelody } from '../melodyCatalog';
 
 export interface PlayerState {
   rf?: RfSnapshot;
@@ -77,6 +78,7 @@ export interface PlayerState {
     }>;
     telemetry?: Record<string, number | boolean | null>;
     warnings?: Array<{ code: string; severity: string; message: string }>;
+    melodies?: HardwareMelody[];
     settings?: Record<string, number | boolean> | null;
     front_panel?: {
       raw_segments: number[]; brightness: number; blink: boolean; segments_active: boolean;

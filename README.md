@@ -65,7 +65,11 @@ without duplicating PCController's effect steps.
    advertised controls, inspect status, then choose **Finish and edit**. The
    saved PCController take opens on the editor timeline and is also placed at
    the playhead where recording started.
-5. Timeline playback calls `effect play effect:<stable-id>`; lighting cues
+5. **Add melody** reads PCController's current named buzzer catalog and expands
+   the selected notes and gaps into editable sequence steps. Pealayer refreshes
+   on `melodies.changed` and explicitly re-queries when the picker opens, so it
+   never treats a previously displayed list as authoritative.
+6. Timeline playback calls `effect play effect:<stable-id>`; lighting cues
    receive a matching `effect stop` at their authored end. The stored
    definition remains solely in PCController.
 

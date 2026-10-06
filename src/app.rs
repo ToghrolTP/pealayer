@@ -3960,6 +3960,9 @@ impl PealayerApp {
                     false,
                 );
             }
+            InteropCommand::RefreshHardwareCatalog => {
+                self.engine_handle.request_catalog_refresh();
+            }
             InteropCommand::UpdateHardwarePresentation { key, fields } => {
                 let Some(capabilities) = self
                     .advertised_hardware()
@@ -7329,6 +7332,11 @@ fn web_hardware_details(
             "severity": warning.severity,
             "message": warning.message,
         })).collect::<Vec<_>>(),
+        "melodies": capabilities.melodies.iter().map(|melody| serde_json::json!({
+            "name": melody.name,
+            "duration_ms": melody.duration_ms(),
+            "notes": melody.notes,
+        })).collect::<Vec<_>>(),
         "settings": settings,
         "front_panel": front_panel,
         "strip": strip,
@@ -8584,6 +8592,14 @@ mod tests {
     #[test]
     fn web_hardware_details_publish_every_sampled_pwm_channel() {
         let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
+        capabilities.melodies = vec![crate::four_d::controller::HardwareMelody {
+            name: "attention".to_string(),
+            notes: vec![crate::four_d::controller::HardwareMelodyNote {
+                frequency_hz: 880,
+                duration_ms: 100,
+                gap_ms: 25,
+            }],
+        }];
         capabilities.controls = vec![crate::four_d::controller::HardwareControl {
             key: "pwm.3".to_string(),
             kind: "pwm".to_string(),
@@ -8603,6 +8619,8 @@ mod tests {
             web_hardware_details(&capabilities, crate::config::MotionControlMode::default());
         let percent = details["controls"][0]["percent"].as_f64().unwrap();
         assert!((percent - (2048.0 * 100.0 / 4095.0)).abs() < f64::EPSILON);
+        assert_eq!(details["melodies"][0]["name"], "attention");
+        assert_eq!(details["melodies"][0]["duration_ms"], 125);
 
         capabilities.controls[0].key = "pwm.15".to_string();
         capabilities.pwm_channels[0] = crate::four_d::controller::HardwareOutput {

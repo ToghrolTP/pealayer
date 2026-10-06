@@ -28,6 +28,13 @@ effect editor, the Web **Timeline**, and the Web **Effects Library**. All four
 surfaces call the same typed commands and display the same PCController
 recording state; none owns a separate take.
 
+The native and Web editors also expose PCController's named buzzer melodies.
+Opening **Add melody** forces a fresh `controller.melodies.list` request, while
+the `melodies.changed` state event refreshes already-open clients. Choosing a
+melody expands its validated notes and silent gaps into ordinary editable
+buzzer steps; the saved effect therefore stays portable across host-clock and
+device-clock execution without copying a private melody catalog into Pealayer.
+
 ## Terms
 
 | Term | Meaning |

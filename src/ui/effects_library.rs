@@ -524,6 +524,40 @@ pub(crate) fn sequence_duration_ms(steps: &[crate::four_d::controller::HardwareM
         .max(1)
 }
 
+fn append_melody_steps(
+    steps: &mut Vec<crate::four_d::controller::HardwareMacroStep>,
+    melody: &crate::four_d::controller::HardwareMelody,
+) -> Option<usize> {
+    let first = steps.len();
+    let base_us = if steps.is_empty() {
+        0
+    } else {
+        sequence_duration_ms(steps).saturating_mul(1_000)
+    };
+    let mut offset_ms = 0_u64;
+    for note in &melody.notes {
+        steps.push(crate::four_d::controller::HardwareMacroStep {
+            at_us: base_us.saturating_add(offset_ms.saturating_mul(1_000)),
+            kind: "beep".to_string(),
+            frequency_hz: Some(note.frequency_hz),
+            duration_ms: Some(note.duration_ms),
+            ..Default::default()
+        });
+        offset_ms = offset_ms.saturating_add(u64::from(note.duration_ms));
+        if note.gap_ms > 0 {
+            steps.push(crate::four_d::controller::HardwareMacroStep {
+                at_us: base_us.saturating_add(offset_ms.saturating_mul(1_000)),
+                kind: "beep".to_string(),
+                frequency_hz: Some(0),
+                duration_ms: Some(note.gap_ms),
+                ..Default::default()
+            });
+            offset_ms = offset_ms.saturating_add(u64::from(note.gap_ms));
+        }
+    }
+    (steps.len() > first).then_some(first)
+}
+
 #[derive(Clone, Copy, Debug)]
 struct SequenceCueDragState {
     index: usize,
@@ -672,6 +706,7 @@ fn sequence_cue_label(step: &crate::four_d::controller::HardwareMacroStep) -> St
         ),
         "display" => step.text.clone(),
         "rf" => format!("0x{:X}", step.code.unwrap_or_default()),
+        "beep" if step.frequency_hz.unwrap_or_default() == 0 => "Rest".to_string(),
         "beep" => format!("{} Hz", step.frequency_hz.unwrap_or_default()),
         _ => step.kind.clone(),
     }
@@ -1777,7 +1812,7 @@ fn draw_sequence_step_editor(
                                 ui.label("Frequency");
                                 ui.add(
                                     egui::DragValue::new(step.frequency_hz.get_or_insert(1_000))
-                                        .range(1..=20_000)
+                                        .range(0..=20_000)
                                         .suffix(" Hz"),
                                 );
                                 ui.end_row();
@@ -2085,6 +2120,8 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
     let mut start = false;
     let mut finish = false;
     let mut discard = false;
+    let mut selected_melody = None;
+    let mut refresh_melodies = false;
     ui.horizontal_wrapped(|ui| {
         ui.strong("Sequence steps");
         if ui.add_enabled(!active && !busy, egui::Button::new(format!("{} Add step", crate::ui::icons::PLUS))).clicked() {
@@ -2097,6 +2134,39 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
             let selection_id = egui::Id::new(("effect-sequence-selected-cue", draft.reference.clone(), draft.id.clone()));
             ui.data_mut(|data| data.insert_persisted(selection_id, draft.steps.len() - 1));
         }
+        ui.add_enabled_ui(!active && !busy && connected, |ui| {
+            let has_melodies = hardware.as_ref().is_some_and(|value| !value.melodies.is_empty());
+            let response = egui::ComboBox::from_id_salt("effect_add_melody")
+                .selected_text(if has_melodies {
+                    format!("{} Add melody", crate::ui::icons::MUSIC_NOTE)
+                } else {
+                    "No melodies".to_string()
+                })
+                .show_ui(ui, |ui| {
+                    let Some(hardware) = hardware.as_ref() else {
+                        ui.weak("PCController is unavailable");
+                        return;
+                    };
+                    if hardware.melodies.is_empty() {
+                        ui.weak("No configured melodies");
+                    }
+                    for melody in &hardware.melodies {
+                        let duration = crate::duration::format_effect_duration_for_language(
+                            app.language,
+                            melody.duration_ms(),
+                        );
+                        if ui.selectable_label(
+                            false,
+                            format!("{}  {} · {duration}", crate::ui::icons::MUSIC_NOTE, melody.name),
+                        ).clicked() {
+                            selected_melody = Some(melody.clone());
+                            ui.close();
+                        }
+                    }
+                })
+                .response;
+            refresh_melodies = response.clicked();
+        });
         ui.add_enabled_ui(!active && !busy, |ui| {
             egui::ComboBox::from_id_salt("effect_capture_clock").width(160.0)
                 .selected_text(match app.hardware_effect_authoring.capture_mode.as_str() {
@@ -2125,6 +2195,21 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
         if !active { ui.weak(format!("{} · {}", app.effect_library_draft.steps.len(), crate::duration::format_effect_duration_for_language(app.language, sequence_duration_ms(&app.effect_library_draft.steps)))); }
         if !recording.last_error.is_empty() { ui.colored_label(ui.visuals().error_fg_color, &recording.last_error); }
     });
+    if refresh_melodies {
+        // Events keep this catalog current in the background; opening the
+        // picker is also an explicit freshness boundary for user choice.
+        app.engine_handle.request_catalog_refresh();
+    }
+    if let Some(melody) = selected_melody
+        && let Some(first) = append_melody_steps(&mut app.effect_library_draft.steps, &melody)
+    {
+        let selection_id = egui::Id::new((
+            "effect-sequence-selected-cue",
+            app.effect_library_draft.reference.clone(),
+            app.effect_library_draft.id.clone(),
+        ));
+        ui.data_mut(|data| data.insert_persisted(selection_id, first));
+    }
     let result = if start { app.start_hardware_effect_recording() }
         else if finish { app.save_hardware_effect_recording() }
         else if discard { app.discard_hardware_effect_recording() }
@@ -3066,6 +3151,33 @@ mod tests {
         }];
 
         assert_eq!(sequence_duration_ms(&steps), 1_150);
+    }
+
+    #[test]
+    fn named_melody_expands_notes_and_gaps_into_portable_beep_steps() {
+        let melody = crate::four_d::controller::HardwareMelody {
+            name: "attention".to_string(),
+            notes: vec![
+                crate::four_d::controller::HardwareMelodyNote {
+                    frequency_hz: 880,
+                    duration_ms: 100,
+                    gap_ms: 25,
+                },
+                crate::four_d::controller::HardwareMelodyNote {
+                    frequency_hz: 990,
+                    duration_ms: 75,
+                    gap_ms: 0,
+                },
+            ],
+        };
+        let mut steps = Vec::new();
+        assert_eq!(append_melody_steps(&mut steps, &melody), Some(0));
+        assert_eq!(steps.len(), 3);
+        assert_eq!(steps[0].at_us, 0);
+        assert_eq!(steps[1].frequency_hz, Some(0));
+        assert_eq!(steps[1].at_us, 100_000);
+        assert_eq!(steps[2].at_us, 125_000);
+        assert_eq!(sequence_duration_ms(&steps), 200);
     }
 
     #[test]

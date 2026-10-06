@@ -589,6 +589,7 @@ body {
 .effect-editor__identity, .effect-editor__program, .effect-step-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; }
 .effect-editor__wide { grid-column: 1 / -1; }
 .effect-editor__toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.effect-melody-picker { min-width: 190px; }
 .effect-step-list { border-color: var(--line); background: var(--surface-1); }
 .effect-step-title { display: flex; align-items: center; gap: 8px; }
 .effect-step-title > span:last-child { color: var(--muted); font: 11px var(--font-mono); }

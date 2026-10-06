@@ -279,6 +279,7 @@ pub enum InteropCommand {
         channel: u8,
         percent: f64,
     },
+    RefreshHardwareCatalog,
     UpdateHardwarePresentation {
         key: String,
         fields: Value,
@@ -643,7 +644,7 @@ pub fn command_catalog() -> Value {
             "controller_effect.group.create",
             "controller_effect.record.start", "controller_effect.record.status",
             "controller_effect.record.save", "controller_effect.record.discard",
-            "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm",
+            "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm", "refresh_hardware_catalog",
             "configure_addressable_strip", "fill_addressable_strip", "clear_addressable_strip",
             "press_front_panel_key", "board_information", "rf_control", "open_rf_manager"
         ],
@@ -1723,6 +1724,9 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 channel,
                 percent: number(&["percent", "value"])?,
             })
+        }
+        "hardware.catalog.refresh" | "pealayer.hardware.catalog.refresh" => {
+            Some(InteropCommand::RefreshHardwareCatalog)
         }
         "hardware.presentation.update" | "pealayer.hardware.presentation.update" => {
             Some(InteropCommand::UpdateHardwarePresentation {
@@ -3295,6 +3299,15 @@ mod tests {
             command_from_json_rpc(&request).unwrap(),
             Some(InteropCommand::UpdateHardwarePresentation { key, fields })
                 if key == "relay.5" && fields["name"] == "Seat fan" && fields["order"] == 2
+        ));
+
+        let refresh: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"melodies","method":"hardware.catalog.refresh"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&refresh).unwrap(),
+            Some(InteropCommand::RefreshHardwareCatalog)
         ));
     }
 
