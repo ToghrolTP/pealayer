@@ -1160,6 +1160,13 @@ impl ControllerClient {
             } => (writer, reader, next_id),
         };
 
+        // Preparation may compile many frames, but only while playback is
+        // paused. It must not weaken the short clock-feedback deadline.
+        let previous_timeout = reader.get_ref().read_timeout().ok().flatten();
+        if method == "controller.media.timeline.prepare" {
+            let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(15)));
+        }
+
         let id = *next_id;
         *next_id = next_id.wrapping_add(1).max(1);
         let request = json!({
@@ -1189,8 +1196,10 @@ impl ControllerClient {
                 continue;
             }
             if let Some(error) = response.get("error").filter(|value| !value.is_null()) {
+                let _ = reader.get_ref().set_read_timeout(previous_timeout);
                 return Err(controller_json_rpc_error_message(error));
             }
+            let _ = reader.get_ref().set_read_timeout(previous_timeout);
             return Ok(response.get("result").cloned().unwrap_or(Value::Null));
         }
     }

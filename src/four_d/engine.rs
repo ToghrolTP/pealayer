@@ -367,6 +367,8 @@ pub struct EngineHandle {
     lifecycle: Arc<()>,
     pub playback_time_ms: Arc<AtomicU64>,
     pub media_playback: Arc<Mutex<super::media_sync::PlaybackSample>>,
+    pub prepared_timeline: Arc<Mutex<super::media_timeline::PreparedTimeline>>,
+    pub media_clock_owned: Arc<AtomicBool>,
     pub is_playing: Arc<AtomicBool>,
     pub estop_active: Arc<AtomicBool>,
     pub connection_requested: Arc<AtomicBool>,
@@ -396,6 +398,13 @@ pub struct ControllerPushTarget {
 }
 
 impl EngineHandle {
+    pub(crate) fn playback_lifecycle(&self) -> std::sync::Weak<()> { Arc::downgrade(&self.lifecycle) }
+    pub fn attach_playback_clock(&self, mpv:&'static libmpv2::Mpv) {super::media_timeline::observe_mpv(self,mpv);}
+    pub fn request_prepared_play(&self)->bool {
+        if !self.serial_port.lock().is_ok_and(|endpoint| super::controller::is_controller_endpoint(&endpoint)) {return false}
+        if let Ok(mut plan)=self.prepared_timeline.lock() && plan.has_items() {plan.play_requested=true;return true}
+        false
+    }
     pub fn controller_push_target(&self) -> ControllerPushTarget {
         ControllerPushTarget {
             lifecycle: Arc::downgrade(&self.lifecycle),
@@ -615,6 +624,8 @@ pub fn spawn_engine() -> EngineHandle {
     let lifecycle = Arc::new(());
     let playback_time_ms = Arc::new(AtomicU64::new(0));
     let media_playback = Arc::new(Mutex::new(super::media_sync::PlaybackSample::default()));
+    let prepared_timeline=Arc::new(Mutex::new(super::media_timeline::PreparedTimeline::default()));
+    let media_clock_owned=Arc::new(AtomicBool::new(false));
     let is_playing = Arc::new(AtomicBool::new(false));
     let estop_active = Arc::new(AtomicBool::new(false));
     let connection_requested = Arc::new(AtomicBool::new(false));
@@ -630,7 +641,7 @@ pub fn spawn_engine() -> EngineHandle {
 
     let (tx, rx) = mpsc::channel();
     super::media_sync::spawn(Arc::downgrade(&lifecycle), Arc::clone(&media_playback),
-        Arc::clone(&is_connected), Arc::clone(&serial_port));
+        Arc::clone(&is_connected), Arc::clone(&serial_port),Arc::clone(&prepared_timeline));
 
     let engine_time = Arc::clone(&playback_time_ms);
     let engine_playing = Arc::clone(&is_playing);
@@ -668,6 +679,10 @@ pub fn spawn_engine() -> EngineHandle {
             let estop_now = engine_estop.load(Ordering::SeqCst);
             let requested = engine_connection_requested.load(Ordering::Relaxed);
             let mut connected = active_transport.is_some();
+            // PCController owns all media-bound execution for coordinator
+            // transports. Direct serial/virtual console retains its old path.
+            let coordinator_timeline = active_transport.as_ref()
+                .is_some_and(|transport| !transport.is_direct_serial());
             engine_connected.store(connected, Ordering::Relaxed);
 
             // Handle connection/disconnection transitions
@@ -896,7 +911,7 @@ pub fn spawn_engine() -> EngineHandle {
                             .then(|| active_controller_strip_effect_at(&new_queue, current_time))
                             .flatten()
                             .map(str::to_owned);
-                        if active_strip_effect != desired {
+                        if !coordinator_timeline && active_strip_effect != desired {
                             if let Some(ref mut transport) = active_transport {
                                 if let Some(id) = active_strip_effect.as_deref() {
                                     let _ = stop_controller_effect(transport, id);
@@ -951,7 +966,7 @@ pub fn spawn_engine() -> EngineHandle {
                     EngineMessage::Seek(time) => {
                         let resume_strip = engine_playing.load(Ordering::Relaxed)
                             && !engine_estop.load(Ordering::Relaxed);
-                        if connected {
+                        if connected && !coordinator_timeline {
                             if let Some(ref mut transport) = active_transport {
                                 let _ = transport.call_controller(
                                     "controller.command.execute",
@@ -1265,7 +1280,7 @@ pub fn spawn_engine() -> EngineHandle {
             let is_playing_now = engine_playing.load(Ordering::Relaxed) && !estop_now;
 
             // Handle pause state transition
-            if was_playing && !is_playing_now {
+            if !coordinator_timeline && was_playing && !is_playing_now {
                 last_pwm_values.fill(0);
                 if connected {
                     if let Some(ref mut transport) = active_transport {
@@ -1287,7 +1302,7 @@ pub fn spawn_engine() -> EngineHandle {
                     println!("[{}] ALL_OFF (Pause)", port_name);
                 }
             }
-            if !was_playing && is_playing_now {
+            if !coordinator_timeline && !was_playing && is_playing_now {
                 let current_time = engine_time.load(Ordering::Relaxed);
                 let desired =
                     active_controller_strip_effect_at(&controller_strip_effects, current_time)
@@ -1310,7 +1325,7 @@ pub fn spawn_engine() -> EngineHandle {
             }
             was_playing = is_playing_now;
 
-            if is_playing_now {
+            if !coordinator_timeline && is_playing_now {
                 let current_time = engine_time.load(Ordering::Relaxed);
 
                 while current_controller_macro_index < controller_macros.len() {
@@ -1462,6 +1477,8 @@ pub fn spawn_engine() -> EngineHandle {
         lifecycle,
         playback_time_ms,
         media_playback,
+        prepared_timeline,
+        media_clock_owned,
         is_playing,
         estop_active,
         connection_requested,

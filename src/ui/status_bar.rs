@@ -41,6 +41,16 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 if app.status_bar.hardware {
                     draw_hardware_status(app, ui);
                 }
+                if let Ok(plan)=app.engine_handle.prepared_timeline.try_lock() && plan.has_items() {
+                    ui.separator();
+                    let state=if plan.error.is_some(){"Hardware timing fault"}
+                        else if plan.acknowledged_revision!=plan.revision{"Preparing hardware"}
+                        else {"Hardware timeline"};
+                    let color=if plan.error.is_some(){ui.visuals().error_fg_color}else{ui.visuals().text_color()};
+                    ui.colored_label(color,state).on_hover_text(plan.error.clone()
+                        .unwrap_or_else(||format!("Revision {} · {} acknowledged commands · maximum ACK lateness {} ms",plan.revision,
+                            plan.feedback["acknowledged"],plan.feedback["max_ack_lateness_ms"])));
+                }
 
                 if let Some(message) = current_status_message(app) {
                     ui.separator();

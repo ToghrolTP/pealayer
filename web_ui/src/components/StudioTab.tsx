@@ -321,6 +321,11 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         <footer className="effects-panel__footer">
           <span className={`status-light ${state.hardware_connected ? 'is-online' : ''}`} />
           <span>{state.hardware?.board_name || tr(locale, 'No hardware')}</span>
+          {state.hardware_sync && <span title={state.hardware_sync.error ||
+            `Revision ${state.hardware_sync.revision} · ${state.hardware_sync.timeline?.acknowledged || 0}/${state.hardware_sync.timeline?.step_count || 0} ACK · max ${state.hardware_sync.timeline?.max_ack_lateness_ms || 0} ms`}>
+            {state.hardware_sync.error ? tr(locale, 'Hardware timing fault') :
+              state.hardware_sync.revision !== state.hardware_sync.prepared_revision ? tr(locale, 'Preparing hardware') : tr(locale, 'Hardware timeline')}
+          </span>}
           {selected && (
             <span className="effect-selection-actions">
               {selected.editable && <Button type="text" size="small" icon={<EditOutlined />} onClick={() => editEffect(selected)} />}

@@ -825,6 +825,8 @@ pub struct PlayerStatusResponse {
     #[serde(default)]
     pub hardware_error: Option<String>,
     #[serde(default)]
+    pub hardware_sync: serde_json::Value,
+    #[serde(default)]
     pub estop_active: bool,
     #[serde(default)]
     pub hardware: Option<HardwareStatusSummary>,
@@ -1033,6 +1035,7 @@ impl Default for PlayerStatusResponse {
             hardware_transport: None,
             hardware_connected: false,
             hardware_error: None,
+            hardware_sync: serde_json::Value::Null,
             estop_active: false,
             hardware: None,
             recording: false,

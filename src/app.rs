@@ -992,6 +992,13 @@ impl eframe::App for PealayerApp {
                     .ok()
                     .and_then(|transport| transport.clone()),
                 hardware_connected,
+                hardware_sync: self.engine_handle.prepared_timeline.try_lock().ok()
+                    .filter(|plan|plan.has_items()).map(|plan|serde_json::json!({
+                        "revision":plan.revision,"prepared_revision":plan.acknowledged_revision,
+                        "clock_ack_revision":plan.clock_ack_revision,"clock_ack_epoch":plan.clock_ack_epoch,
+                        "ack_age_ms":plan.last_ack.map(|ack|ack.elapsed().as_millis() as u64),
+                        "error":plan.error,"timeline":plan.feedback
+                    })).unwrap_or(serde_json::Value::Null),
                 hardware_error: self
                     .engine_handle
                     .connection_error
@@ -2139,6 +2146,7 @@ impl PealayerApp {
         // No hardware RPC or serial I/O runs on the GUI/render thread.
         if let Ok(mut sample) = self.engine_handle.media_playback.lock() {
             sample.name.clone_from(&self.app_name);
+            if !self.engine_handle.media_clock_owned.load(std::sync::atomic::Ordering::Acquire) {
             sample.duration_ms = (self.duration.is_finite() && self.duration > 0.0)
                 .then_some((self.duration * 1000.0).round() as u64);
             let playing = self.current_video_path.is_some() && !self.is_paused && !self.is_eof
@@ -2149,6 +2157,7 @@ impl PealayerApp {
             sample.playing = playing;
             sample.loaded = self.current_video_path.is_some();
             sample.rate = self.playback_rate.clamp(0.25, 4.0);
+            }
         }
         let taskbar_state = crate::platform::windows::compute_taskbar_state_with_error(
             self.playback_time,
@@ -3716,7 +3725,8 @@ impl PealayerApp {
                     (1, PropertyData::Double(v)) => {
                         // Publish decoded MPV time even when the UI retains an
                         // exact logical seek target or a scrub preview position.
-                        if let Ok(mut sample) = self.engine_handle.media_playback.lock() {
+                        if !self.engine_handle.media_clock_owned.load(std::sync::atomic::Ordering::Acquire)
+                            && let Ok(mut sample) = self.engine_handle.media_playback.lock() {
                             sample.position_ms = (v.max(0.0) * 1000.0).round() as u64;
                             sample.sampled_at = std::time::Instant::now();
                         }
@@ -3821,7 +3831,8 @@ impl PealayerApp {
                         }
                     }
                     (22, PropertyData::Flag(v)) => {
-                        if let Ok(mut sample) = self.engine_handle.media_playback.lock() {
+                        if !self.engine_handle.media_clock_owned.load(std::sync::atomic::Ordering::Acquire)
+                            && let Ok(mut sample) = self.engine_handle.media_playback.lock() {
                             sample.buffering = v;
                         }
                     }
@@ -3851,7 +3862,8 @@ impl PealayerApp {
                     }
                 }
                 Some(Ok(Event::StartFile)) => {
-                    if let Ok(mut sample) = self.engine_handle.media_playback.lock() {
+                    if !self.engine_handle.media_clock_owned.load(std::sync::atomic::Ordering::Acquire)
+                        && let Ok(mut sample) = self.engine_handle.media_playback.lock() {
                         sample.position_ms = 0;
                         sample.buffering = false;
                         sample.sampled_at = std::time::Instant::now();
@@ -3955,7 +3967,8 @@ impl PealayerApp {
         }
         self.reset_scrub_state();
         let _ = self.mpv.command("seek", &["0", "absolute+exact"]);
-        let _ = self.mpv.set_property("pause", false);
+        let pending_hardware = self.engine_handle.request_prepared_play();
+        let _ = self.mpv.set_property("pause", pending_hardware);
         self.is_paused = false;
         self.is_eof = false;
         self.playback_time = 0.0;
@@ -3978,6 +3991,11 @@ impl PealayerApp {
         if self.current_video_path.is_none() {
             return;
         }
+        if self.is_playback_finished() { self.replay(); return; }
+        if self.engine_handle.request_prepared_play() {
+            let _=self.mpv.set_property("pause",true);
+            return;
+        }
         if self.is_playback_finished() {
             self.replay();
         } else {
@@ -3997,6 +4015,7 @@ impl PealayerApp {
 
     /// Pauses playback.
     pub fn pause(&mut self) {
+        if let Ok(mut plan)=self.engine_handle.prepared_timeline.lock(){plan.play_requested=false;}
         if self.current_video_path.is_none() {
             return;
         }
@@ -6077,6 +6096,9 @@ impl PealayerApp {
         );
         let macros = crate::four_d::engine::compile_controller_macros(&self.timeline);
         let strip_effects = crate::four_d::engine::compile_controller_strip_effects(&self.timeline);
+        let analog=self.linked_analog_tracks();
+        let payload=crate::four_d::media_timeline::compile_plan(&self.timeline,&relays,&analog);
+        if let Ok(mut plan)=self.engine_handle.prepared_timeline.lock(){plan.replace(payload);}
         let _ = self
             .engine_handle
             .sender
@@ -6521,7 +6543,8 @@ impl Default for PealayerApp {
         let (web_state_tx, _web_state_rx) = std::sync::mpsc::channel();
         let (_web_cmd_tx, web_cmd_rx) = std::sync::mpsc::channel();
         let (media_cmd_tx, media_cmd_rx) = std::sync::mpsc::channel();
-
+        let engine_handle = crate::four_d::engine::spawn_engine();
+        engine_handle.attach_playback_clock(mpv);
         Self {
             web_only: false,
             app_name: crate::config::resolved_app_name(&crate::config::AppConfig::default()),
@@ -6598,7 +6621,7 @@ impl Default for PealayerApp {
             show_four_d_editor: true,
             dock_state: crate::ui::layout::create_initial_layout(),
             timeline: crate::four_d::models::Timeline::new(),
-            engine_handle: crate::four_d::engine::spawn_engine(),
+            engine_handle,
             recording_session: crate::four_d::curve_record::RecordingSession::new(),
             input_capture: crate::four_d::input_capture::InputCaptureState::new(),
             is_recording: false,

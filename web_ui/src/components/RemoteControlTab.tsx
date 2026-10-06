@@ -46,6 +46,8 @@ export interface PlayerState {
   }>;
   controller_connected?: boolean;
   hardware_connected?: boolean;
+  hardware_sync?: { revision: number; prepared_revision: number; error?: string | null; ack_age_ms?: number | null;
+    timeline?: { state?: string; acknowledged?: number; step_count?: number; max_ack_lateness_ms?: number } } | null;
   controller_effect_groups?: Array<{ name: string; icon: string }>;
   estop_active?: boolean;
   hardware?: {

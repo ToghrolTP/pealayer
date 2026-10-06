@@ -17,6 +17,8 @@ pub struct PlaybackSample {
     pub loaded: bool,
     pub rate: f64,
     pub sampled_at: Instant,
+    pub observed_at: Instant,
+    pub epoch: u64,
 }
 impl Default for PlaybackSample {
     fn default() -> Self {
@@ -29,11 +31,13 @@ impl Default for PlaybackSample {
             loaded: false,
             rate: 1.0,
             sampled_at: Instant::now(),
+            observed_at: Instant::now(),
+            epoch: 1,
         }
     }
 }
 impl PlaybackSample {
-    fn position_now(&self) -> u64 {
+    pub(crate) fn position_now(&self) -> u64 {
         let advance = if self.playing {
             self.sampled_at.elapsed().as_secs_f64() * 1000.0 * self.rate
         } else {
@@ -45,7 +49,8 @@ impl PlaybackSample {
             .min(u32::MAX as u64)
     }
     fn changed_from(&self, previous: &Self) -> bool {
-        self.loaded != previous.loaded
+        self.epoch != previous.epoch
+            || self.loaded != previous.loaded
             || self.playing != previous.playing
             || self.duration_ms != previous.duration_ms
             || self.rate != previous.rate
@@ -58,6 +63,7 @@ pub fn spawn(
     sample: Arc<Mutex<PlaybackSample>>,
     connected: Arc<AtomicBool>,
     endpoint: Arc<Mutex<String>>,
+    timeline: Arc<Mutex<super::media_timeline::PreparedTimeline>>,
 ) {
     std::thread::spawn(move || {
         let id = crate::platform::interop::controller_instance_id();
@@ -83,6 +89,10 @@ pub fn spawn(
                     let _ = old.call("controller.app.instance.remove", json!({"id":id}));
                 }
                 previous = None;
+                if let Ok(mut plan) = timeline.lock() {
+                    plan.acknowledged_revision = 0;
+                    plan.last_ack = None;
+                }
                 if !alive {
                     return;
                 }
@@ -114,8 +124,9 @@ pub fn spawn(
                     }
                 }
             }
-            let interval = if current.playing {
-                Duration::from_millis(100)
+            let has_hardware = timeline.lock().is_ok_and(|plan| plan.has_items());
+            let interval = if current.playing || has_hardware {
+                Duration::from_millis(40)
             } else {
                 Duration::from_secs(1)
             };
@@ -123,18 +134,96 @@ pub fn spawn(
                 .as_ref()
                 .is_none_or(|old| current.changed_from(old))
                 || sent_at.elapsed() >= interval;
+            let pending = timeline.lock().ok().and_then(|plan| {
+                (plan.compilation_error.is_none()
+                    && plan.revision != 0
+                    && plan.revision != plan.acknowledged_revision)
+                    .then(|| (plan.revision, plan.payload.clone()))
+            });
+            if let Some((revision, mut payload)) = pending
+                && let Some(ref mut rpc) = client
+            {
+                if current.playing || current.buffering {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                sequence += 1;
+                if rpc.call("controller.media.playback.update",json!({"client_id":id,"sequence":sequence,"position_ms":current.position_now(),"duration_ms":current.duration_ms,"playing":false,"loaded":current.loaded,"rate":current.rate,"epoch":current.epoch})).is_err() {client=None;previous=None;continue}
+                payload["client_id"] = json!(id);
+                payload["revision"] = json!(revision);
+                match rpc.call("controller.media.timeline.prepare", payload) {
+                    Ok(feedback) => {
+                        if let Ok(mut plan) = timeline.lock()
+                            && plan.revision == revision
+                        {
+                            plan.acknowledged_revision = revision;
+                            plan.feedback = feedback;
+                            plan.error = None;
+                            plan.last_ack = None;
+                        }
+                        previous = None;
+                    }
+                    Err(error) => {
+                        if let Ok(mut plan) = timeline.lock() {
+                            plan.error = Some(format!("Hardware timeline not prepared: {error}"));
+                            plan.play_requested = false;
+                        }
+                        std::thread::sleep(Duration::from_millis(250));
+                        continue;
+                    }
+                }
+            }
             if due && let Some(ref mut rpc) = client {
+                let revision = timeline
+                    .lock()
+                    .map(|plan| plan.acknowledged_revision)
+                    .unwrap_or(0);
+                if current.playing && current.observed_at.elapsed() > Duration::from_millis(250) {
+                    continue;
+                }
                 sequence += 1;
                 let result = rpc.call("controller.media.playback.update",json!({
                     "client_id":id,"sequence":sequence,"position_ms":current.position_now(),
-                    "duration_ms":current.duration_ms,"playing":current.playing,"loaded":current.loaded,"rate":current.rate}));
+                    "duration_ms":current.duration_ms,"playing":current.playing,"loaded":current.loaded,"rate":current.rate,"epoch":current.epoch,"plan_revision":revision}));
                 match result {
-                    Ok(_) => {
+                    Ok(feedback) => {
+                        if let Ok(mut plan) = timeline.lock() {
+                            if feedback["sequence"].as_u64() != Some(sequence)
+                                || feedback["client_id"] != id
+                                || feedback["epoch"].as_u64() != Some(current.epoch)
+                                || feedback["plan_revision"].as_u64().unwrap_or(0) != revision
+                            {
+                                plan.error =
+                                    Some("Hardware clock echo mismatch; playback paused".into());
+                                plan.play_requested = false;
+                            } else {
+                                plan.last_ack = Some(Instant::now());
+                                plan.clock_ack_revision = revision;
+                                plan.clock_ack_epoch = current.epoch;
+                                plan.feedback = feedback["timeline"].clone();
+                                if plan.feedback["state"] == "faulted" {
+                                    plan.error = Some(
+                                        plan.feedback["error"]
+                                            .as_str()
+                                            .unwrap_or("Hardware deadline failure")
+                                            .to_owned(),
+                                    );
+                                    plan.play_requested = false;
+                                }
+                            }
+                        }
                         previous = Some(current.clone());
                         sent_at = Instant::now();
                         last_error.clear();
                     }
                     Err(error) => {
+                        if let Ok(mut plan) = timeline.lock() {
+                            if plan.has_items() {
+                                plan.error =
+                                    Some(format!("Hardware clock acknowledgement failed: {error}"));
+                                plan.play_requested = false;
+                            }
+                        }
                         if error != last_error {
                             eprintln!("Playback sync: {error}");
                             last_error = error;
