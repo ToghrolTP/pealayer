@@ -903,6 +903,18 @@ impl eframe::App for PealayerApp {
                 None => true,
             };
 
+        if !should_broadcast {
+            // A push can wake the last idle frame inside the Web rate limit.
+            // Keep one deadline repaint to publish that final state rather
+            // than leaving the cached API/Web preview one event behind. The
+            // deadline frame broadcasts and schedules no further wakeup.
+            if let Some(last) = self.last_web_broadcast {
+                ui.ctx().request_repaint_after(
+                    web_sync_interval.saturating_sub(now.duration_since(last)),
+                );
+            }
+        }
+
         if should_broadcast {
             self.last_web_broadcast = Some(now);
             let hardware = self.advertised_hardware();
