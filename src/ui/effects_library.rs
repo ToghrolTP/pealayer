@@ -3191,7 +3191,7 @@ mod tests {
         ];
         let mut selected = 0;
         let render = |events, draft: &mut ControllerEffectDraft, selected: &mut usize| {
-            context.run_ui(
+            let mut output = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -3201,7 +3201,9 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| draw_sequence_timeline(ui, draft, selected, true),
-            )
+            );
+            output.textures_delta.clear();
+            output
         };
         render(vec![], &mut draft, &mut selected);
         let output = render(vec![], &mut draft, &mut selected);
