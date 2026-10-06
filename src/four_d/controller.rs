@@ -1047,7 +1047,32 @@ fn controller_json_rpc_error_message(error: &Value) -> String {
         .to_string()
 }
 
+fn same_coordinator_epoch(current: &Value, selected: &Value) -> bool {
+    match (current["host_instance_id"].as_str(), selected["host_instance_id"].as_str()) {
+        (Some(current), Some(selected)) => !current.is_empty() && current == selected,
+        _ => false,
+    }
+}
+
 impl ControllerClient {
+    /// A listener/tunnel can take over an address during a coordinator restart.
+    /// Compare the persistent command stream with a new connection to the
+    /// selected endpoint before allowing RF commands. This is a read-only
+    /// admission check, never a retry of an outcome-uncertain mutation.
+    pub fn verify_selected_coordinator(&mut self) -> Result<(), String> {
+        if matches!(self.backend, ControllerBackend::Embedded(_)) {
+            return Ok(());
+        }
+        let current = self.call("controller.snapshot", json!({}))?;
+        let mut selected = Self::connect_playback_events(&self.endpoint)
+            .map_err(|error| format!("validate selected PCController: {error}"))?;
+        let selected = selected.call("controller.snapshot", json!({}))
+            .map_err(|error| format!("validate selected PCController: {error}"))?;
+        if !same_coordinator_epoch(&current, &selected) {
+            return Err("PCController coordinator identity changed; reconnecting the command stream".into());
+        }
+        Ok(())
+    }
     pub fn connect_playback_events(endpoint: &str) -> Result<Self, String> {
         Self::connect_with_timeouts(endpoint, Duration::from_millis(300), Duration::from_millis(500))
     }
@@ -2391,6 +2416,15 @@ pub fn direct_serial_name(endpoint: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_socket_must_match_selected_coordinator_epoch() {
+        assert!(same_coordinator_epoch(&json!({"host_instance_id":"local"}), &json!({"host_instance_id":"local"})));
+        assert!(!same_coordinator_epoch(&json!({"host_instance_id":"neighbor"}), &json!({"host_instance_id":"local"})));
+        assert!(!same_coordinator_epoch(&json!({"host_instance_id":"old"}), &json!({"host_instance_id":"restarted"})));
+        assert!(!same_coordinator_epoch(&json!({}), &json!({})));
+        assert!(!same_coordinator_epoch(&json!({"host_instance_id":""}), &json!({"host_instance_id":""})));
+    }
     use std::net::TcpListener;
     use std::thread;
 

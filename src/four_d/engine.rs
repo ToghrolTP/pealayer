@@ -26,6 +26,8 @@ fn controller_wire_failed(error: &str) -> bool {
         "read PCController JSON-RPC response:",
         "decode PCController JSON-RPC response:",
         "PCController closed the JSON-RPC connection",
+        "PCController coordinator identity changed;",
+        "validate selected PCController:",
     ]
     .iter()
     .any(|prefix| error.starts_with(prefix))
@@ -123,7 +125,10 @@ impl HardwareTransport {
         &mut self,
     ) -> Result<Option<crate::four_d::controller::HardwareCapabilities>, String> {
         match self {
-            Self::Controller(client) => client.isolated_hardware_capabilities().map(Some),
+            Self::Controller(client) => {
+                client.verify_selected_coordinator()?;
+                client.isolated_hardware_capabilities().map(Some)
+            }
             Self::DirectSerial { .. } => Ok(None),
         }
     }
@@ -134,7 +139,12 @@ impl HardwareTransport {
         params: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
         match self {
-            Self::Controller(client) => client.call(method, params),
+            Self::Controller(client) => {
+                if method.starts_with("controller.rf.") {
+                    client.verify_selected_coordinator()?;
+                }
+                client.call(method, params)
+            }
             Self::DirectSerial { .. } => {
                 Err("this hardware action requires the PCController coordinator".to_string())
             }
@@ -782,6 +792,10 @@ pub fn spawn_engine() -> EngineHandle {
                                             "connected, but capability discovery failed: {error}"
                                         ));
                                     }
+                                    engine_connected.store(false, Ordering::Relaxed);
+                                    connected = false;
+                                    active_transport = None;
+                                    continue;
                                 }
                             }
                             // A coordinator-side renderer can outlive a dropped
@@ -1299,6 +1313,9 @@ pub fn spawn_engine() -> EngineHandle {
                             }
                         }
                         Err(error) => {
+                            if controller_wire_failed(&error) {
+                                engine_connected.store(false, Ordering::Relaxed);
+                            }
                             if let Ok(mut guard) = engine_conn_error.lock() {
                                 *guard =
                                     Some(format!("refresh PCController capabilities: {error}"));
@@ -2221,6 +2238,7 @@ mod tests {
         assert!(controller_wire_failed("encode PCController JSON-RPC request: socket aborted"));
         assert!(controller_wire_failed("read PCController JSON-RPC response: timed out"));
         assert!(controller_wire_failed("PCController closed the JSON-RPC connection"));
+        assert!(controller_wire_failed("PCController coordinator identity changed; reconnecting the command stream"));
         assert!(!controller_wire_failed("RF binding name already exists"));
         assert!(!controller_wire_failed("virtual keyboard is disabled"));
         assert!(!controller_wire_failed("PCController is not connected"));
