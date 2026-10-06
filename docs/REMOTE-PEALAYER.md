@@ -97,8 +97,11 @@ alone does not establish two-host playback or physical hardware correctness.
 ## Current validation checkpoint (2026-10-06)
 
 Compile-only `cargo check --tests --locked` passed. No test suites were executed.
-The first release build passed; the follow-up review changes require a new
-release build. Attempts to launch isolated authority/consumer instances were
+The follow-up Windows release build passed in 2m 14s at source commit
+`e5327d4d511fbcdeacd5fbefffab562f2b1f2872` (40,852,480-byte executable;
+SHA-256 `e5b638209cf26ce1a595488494ea781c0e90aea821f2bcce7d90f3612850b01e`).
+It uses the existing David-PC libmpv runtime, not the Cafe-PC DLL.
+Attempts to launch isolated authority/consumer instances were
 rejected by the execution policy. Native screenshot capture also failed with
 `0x8007041D`. No running player was replaced, no hardware output was tested,
 and no before/after screenshot is available for this feature yet.
