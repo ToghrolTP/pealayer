@@ -15,6 +15,7 @@ struct Preview {
     requests: u64,
     delivered: u64,
     last_error: Option<String>,
+    configuration_error: Option<String>,
 }
 
 static PREVIEW: Mutex<Preview> = Mutex::new(Preview {
@@ -26,6 +27,7 @@ static PREVIEW: Mutex<Preview> = Mutex::new(Preview {
     requests: 0,
     delivered: 0,
     last_error: None,
+    configuration_error: None,
 });
 static REPAINT: OnceLock<eframe::egui::Context> = OnceLock::new();
 
@@ -65,13 +67,19 @@ pub fn configure(hwnd: isize, enabled: bool) -> Result<(), String> {
         // Both attributes are required; SetThumbnailClip alone is not an
         // explicit iconic representation and can leave the whole UI visible.
         for attribute in [DWMWA_HAS_ICONIC_BITMAP, DWMWA_FORCE_ICONIC_REPRESENTATION] {
-            DwmSetWindowAttribute(
+            let result = DwmSetWindowAttribute(
                 HWND(hwnd as *mut _),
                 attribute,
                 (&value as *const BOOL).cast(),
                 std::mem::size_of::<BOOL>() as u32,
             )
-            .map_err(|error| format!("configure video-only DWM thumbnail: {error}"))?;
+            .map_err(|error| format!("configure video-only DWM thumbnail: {error}"));
+            if let Err(error) = result {
+                if let Ok(mut state) = PREVIEW.lock() {
+                    state.configuration_error = Some(error.clone());
+                }
+                return Err(error);
+            }
         }
         let _ = DwmInvalidateIconicBitmaps(HWND(hwnd as *mut _));
     }
@@ -79,6 +87,7 @@ pub fn configure(hwnd: isize, enabled: bool) -> Result<(), String> {
     let _ = hwnd;
     let mut state = PREVIEW.lock().map_err(|_| "thumbnail state unavailable")?;
     state.enabled = enabled;
+    state.configuration_error = None;
     state.frame = None;
     state.captured = None;
     state.requested = None;
@@ -338,37 +347,12 @@ pub fn diagnostics() -> serde_json::Value {
     let Ok(state) = PREVIEW.lock() else {
         return serde_json::json!({"error":"thumbnail state unavailable"});
     };
-    #[cfg(target_os = "windows")]
-    let attributes = unsafe {
-        use windows::Win32::{
-            Foundation::HWND,
-            Graphics::Dwm::{
-                DWMWA_FORCE_ICONIC_REPRESENTATION, DWMWA_HAS_ICONIC_BITMAP, DwmGetWindowAttribute,
-            },
-        };
-        use windows::core::BOOL;
-        let hwnd = HWND(crate::platform::windows::get_registered_hwnd() as *mut _);
-        let mut force = BOOL(0);
-        let mut has = BOOL(0);
-        let sample = DwmGetWindowAttribute(
-            hwnd,
-            DWMWA_FORCE_ICONIC_REPRESENTATION,
-            (&mut force as *mut BOOL).cast(),
-            std::mem::size_of::<BOOL>() as u32,
-        )
-        .and_then(|_| {
-            DwmGetWindowAttribute(
-                hwnd,
-                DWMWA_HAS_ICONIC_BITMAP,
-                (&mut has as *mut BOOL).cast(),
-                std::mem::size_of::<BOOL>() as u32,
-            )
-        });
-        serde_json::json!({"force_iconic":force.as_bool(),"has_iconic_bitmap":has.as_bool(),"error":sample.err().map(|e| e.to_string())})
-    };
-    #[cfg(not(target_os = "windows"))]
-    let attributes = serde_json::Value::Null;
-    serde_json::json!({"video_only":state.enabled,"dwm_attributes":attributes,
+    // These two attributes are documented for Set, not Get. Report the
+    // successfully accepted configuration, not fabricated read-back values.
+    serde_json::json!({"video_only":state.enabled,
+        "dwm_configuration":{"supported":cfg!(target_os="windows"),
+            "force_iconic":state.enabled,"has_iconic_bitmap":state.enabled,
+            "source":"successful DwmSetWindowAttribute calls","error":state.configuration_error},
         "toolbar_icon_size":crate::platform::windows::thumbnail_toolbar_metrics(crate::platform::windows::get_registered_hwnd()).0,
         "frame_size":state.frame.as_ref().map(|f| [f.width(),f.height()]),
         "frame_age_ms":state.captured.map(|at| at.elapsed().as_millis() as u64),
