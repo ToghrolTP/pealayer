@@ -65,6 +65,22 @@ pub enum EffectPresetSource {
     ControllerStrip,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ControllerEffectCatalogKey {
+    Macro(u64),
+    Strip(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ControllerEffectCatalogEntry {
+    key: ControllerEffectCatalogKey,
+    name: String,
+    icon: String,
+    duration_ms: u64,
+    mode: String,
+    lane: crate::four_d::models::ControllerEffectLane,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ControllerEffectDraft {
     pub reference: String,
@@ -159,6 +175,7 @@ pub struct HardwareEffectAuthoringState {
     /// leaving those controls disabled until the next polling cycle.
     pub acknowledged_effect_reference: Option<String>,
     pub status: String,
+    timeline_catalog: Vec<ControllerEffectCatalogEntry>,
 }
 
 impl Default for HardwareEffectAuthoringState {
@@ -175,6 +192,7 @@ impl Default for HardwareEffectAuthoringState {
             pending_saved_macro_id: None,
             acknowledged_effect_reference: None,
             status: String::new(),
+            timeline_catalog: Vec::new(),
         }
     }
 }
@@ -706,6 +724,7 @@ impl eframe::App for PealayerApp {
             self.process_shell_commands(ui.ctx());
         }
         self.process_controller_call_results();
+        self.refresh_controller_effect_timeline_metadata();
         self.poll_external_config(ui.ctx());
 
         // PCController owns the shared latch. A second client or the Web/TUI
@@ -2329,6 +2348,29 @@ impl PealayerApp {
                     .map(controller_strip_effect_preset),
             )
             .collect()
+    }
+
+    /// Refreshes every placed controller-owned cue from PCController's latest
+    /// effect catalog while preserving cue identity and timeline position.
+    ///
+    /// The catalog snapshot prevents a deliberately resized cue from being
+    /// overwritten on every frame. A real catalog edit, reconnect, or rename
+    /// advances the snapshot and updates every template with the same durable
+    /// controller reference, including isolated copies used by multiple cues.
+    fn refresh_controller_effect_timeline_metadata(&mut self) {
+        let Some(capabilities) = self.advertised_hardware() else {
+            return;
+        };
+        let catalog = controller_effect_catalog(&capabilities);
+        if catalog == self.hardware_effect_authoring.timeline_catalog {
+            return;
+        }
+        self.hardware_effect_authoring.timeline_catalog = catalog.clone();
+        if reconcile_controller_effect_templates(&mut self.timeline, &catalog) {
+            self.persist_timeline_track_preferences();
+            self.sync_timeline_engine();
+            self.save_config();
+        }
     }
 
     fn controller_command_argument(value: &str) -> Option<String> {
@@ -6239,6 +6281,87 @@ impl PealayerApp {
     }
 }
 
+fn controller_effect_catalog(
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+) -> Vec<ControllerEffectCatalogEntry> {
+    capabilities
+        .macros
+        .iter()
+        .map(|effect| ControllerEffectCatalogEntry {
+            key: ControllerEffectCatalogKey::Macro(effect.id),
+            name: effect.name.clone(),
+            icon: crate::ui::icons::named_control_icon(&effect.icon)
+                .unwrap_or(crate::ui::icons::SPARKLE)
+                .to_string(),
+            duration_ms: effect.duration_ms.max(1),
+            mode: effect.mode.clone(),
+            lane: controller_macro_lane(effect),
+        })
+        .chain(capabilities.strip_effects.iter().map(|effect| {
+            ControllerEffectCatalogEntry {
+                key: ControllerEffectCatalogKey::Strip(effect.id.clone()),
+                name: effect.name.clone(),
+                icon: crate::ui::icons::named_control_icon(&effect.icon)
+                    .unwrap_or(crate::ui::icons::SPARKLE)
+                    .to_string(),
+                duration_ms: effect.default_duration_ms.unwrap_or(5_000).max(1),
+                mode: effect.engine.clone(),
+                lane: crate::four_d::models::ControllerEffectLane::Lighting,
+            }
+        }))
+        .collect()
+}
+
+fn reconcile_controller_effect_templates(
+    timeline: &mut crate::four_d::models::Timeline,
+    catalog: &[ControllerEffectCatalogEntry],
+) -> bool {
+    let mut changed = false;
+    for template in &mut timeline.templates {
+        let catalog_entry = if let Some(reference) = template.controller_macro.as_ref() {
+            catalog.iter().find(|entry| {
+                matches!(entry.key, ControllerEffectCatalogKey::Macro(id) if id == reference.id)
+            })
+        } else if let Some(reference) = template.controller_strip_effect.as_ref() {
+            catalog.iter().find(|entry| {
+                matches!(&entry.key, ControllerEffectCatalogKey::Strip(id) if id == &reference.id)
+            })
+        } else {
+            None
+        };
+        let Some(catalog_entry) = catalog_entry else {
+            continue;
+        };
+
+        let mut refreshed = match &catalog_entry.key {
+            ControllerEffectCatalogKey::Macro(id) => {
+                crate::four_d::models::Effect::controller_macro(
+                    catalog_entry.name.clone(),
+                    catalog_entry.icon.clone(),
+                    catalog_entry.duration_ms,
+                    *id,
+                    catalog_entry.mode.clone(),
+                )
+            }
+            ControllerEffectCatalogKey::Strip(id) => {
+                crate::four_d::models::Effect::controller_strip_effect(
+                    catalog_entry.name.clone(),
+                    catalog_entry.duration_ms,
+                    id.clone(),
+                )
+            }
+        };
+        refreshed.id = template.id;
+        refreshed.icon.clone_from(&catalog_entry.icon);
+        refreshed.controller_lane = Some(catalog_entry.lane);
+        if *template != refreshed {
+            *template = refreshed;
+            changed = true;
+        }
+    }
+    changed
+}
+
 fn controller_macro_effect_preset(
     hardware_macro: &crate::four_d::controller::HardwareMacro,
 ) -> EffectPreset {
@@ -7075,6 +7198,112 @@ mod tests {
         assert_eq!(effect.duration_ms, 2_500);
         assert!(effect.actions.is_empty());
         assert_eq!(effect.controller_macro.as_ref().map(|cue| cue.id), Some(7));
+    }
+
+    #[test]
+    fn edited_controller_effect_metadata_refreshes_every_placed_timeline_copy() {
+        let first = crate::four_d::models::Effect::controller_macro(
+            "Old name".to_string(),
+            "old-icon".to_string(),
+            1_000,
+            7,
+            "host".to_string(),
+        );
+        let first_id = first.id;
+        let mut isolated = first.clone();
+        isolated.id = uuid::Uuid::new_v4();
+        let isolated_id = isolated.id;
+        let strip = crate::four_d::models::Effect::controller_strip_effect(
+            "Old lighting".to_string(),
+            5_000,
+            "aurora".to_string(),
+        );
+        let strip_id = strip.id;
+        let local = crate::four_d::models::Effect::new(
+            "Local effect".to_string(),
+            "local-icon".to_string(),
+            750,
+            Vec::new(),
+        );
+        let local_id = local.id;
+        let mut timeline = crate::four_d::models::Timeline {
+            templates: vec![first, isolated, strip, local],
+            ..Default::default()
+        };
+        timeline
+            .instances
+            .push(crate::four_d::models::EffectInstance::new(first_id, 1_000));
+        timeline.instances.push(crate::four_d::models::EffectInstance::new(
+            isolated_id,
+            2_000,
+        ));
+        timeline
+            .instances
+            .push(crate::four_d::models::EffectInstance::new(strip_id, 3_000));
+        let original_instances = timeline.instances.clone();
+
+        let capabilities = crate::four_d::controller::HardwareCapabilities {
+            macros: vec![crate::four_d::controller::HardwareMacro {
+                id: 7,
+                name: "Renamed display cue".to_string(),
+                icon: "monitor".to_string(),
+                mode: "mcu".to_string(),
+                duration_ms: 2_750,
+                steps: vec![crate::four_d::controller::HardwareMacroStep {
+                    kind: "display".to_string(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            strip_effects: vec![crate::four_d::controller::HardwareStripEffect {
+                id: "aurora".to_string(),
+                name: "Renamed aurora".to_string(),
+                icon: "sparkle".to_string(),
+                engine: "host".to_string(),
+                default_duration_ms: Some(8_000),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let catalog = super::controller_effect_catalog(&capabilities);
+
+        assert!(super::reconcile_controller_effect_templates(
+            &mut timeline,
+            &catalog
+        ));
+        assert_eq!(timeline.instances, original_instances);
+        for id in [first_id, isolated_id] {
+            let effect = timeline
+                .templates
+                .iter()
+                .find(|effect| effect.id == id)
+                .unwrap();
+            assert_eq!(effect.name, "Renamed display cue");
+            assert_eq!(effect.duration_ms, 2_750);
+            assert_eq!(
+                effect.controller_lane,
+                Some(crate::four_d::models::ControllerEffectLane::Display)
+            );
+            assert_eq!(effect.controller_macro.as_ref().unwrap().mode, "mcu");
+        }
+        let strip = timeline
+            .templates
+            .iter()
+            .find(|effect| effect.id == strip_id)
+            .unwrap();
+        assert_eq!(strip.name, "Renamed aurora");
+        assert_eq!(strip.duration_ms, 8_000);
+        let local = timeline
+            .templates
+            .iter()
+            .find(|effect| effect.id == local_id)
+            .unwrap();
+        assert_eq!(local.name, "Local effect");
+        assert_eq!(local.duration_ms, 750);
+        assert!(!super::reconcile_controller_effect_templates(
+            &mut timeline,
+            &catalog
+        ));
     }
     use super::{
         DroppedFileKind, contextual_window_title, controller_macro_effect_preset, dropped_file_kind,
