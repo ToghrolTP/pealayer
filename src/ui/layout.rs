@@ -1668,6 +1668,16 @@ struct TimelineTrackRow {
     kind: TimelineTrackKind,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TimelineTrackPatch {
+    pub linked: Option<bool>,
+    pub visible: Option<bool>,
+    pub muted: Option<bool>,
+    pub soloed: Option<bool>,
+    pub locked: Option<bool>,
+    pub selected: Option<bool>,
+}
+
 fn timeline_track_row_id(key: &str) -> egui::Id {
     egui::Id::new(("timeline_track_row", key))
 }
@@ -1749,6 +1759,129 @@ fn manage_timeline_track(app: &mut PealayerApp, row: &TimelineTrackRow) {
         TimelineTrackKind::Video(_) => app.open_or_focus_tab(PealayerTab::ProgramMonitor),
         TimelineTrackKind::Relay(_) | TimelineTrackKind::Hardware(_) => {}
     }
+}
+
+pub(crate) fn manage_timeline_track_by_key(
+    app: &mut PealayerApp,
+    key: &str,
+) -> Result<(), String> {
+    let row = all_timeline_track_rows(app)
+        .into_iter()
+        .find(|row| row.key == key)
+        .ok_or_else(|| format!("Timeline track '{key}' is no longer available"))?;
+    manage_timeline_track(app, &row);
+    Ok(())
+}
+
+pub(crate) fn update_timeline_track(
+    app: &mut PealayerApp,
+    key: &str,
+    patch: TimelineTrackPatch,
+) -> Result<(), String> {
+    let row = all_timeline_track_rows(app)
+        .into_iter()
+        .find(|row| row.key == key)
+        .ok_or_else(|| format!("Timeline track '{key}' is no longer available"))?;
+
+    let analog_channel = row
+        .control_key
+        .as_deref()
+        .and_then(|control_key| control_key.strip_prefix("pwm."))
+        .and_then(|channel| channel.parse::<u8>().ok());
+    let supports_audio_mute = matches!(row.kind, TimelineTrackKind::Audio(_));
+    let supports_channel_state = !row.relay_ids.is_empty() || analog_channel.is_some();
+
+    if patch.muted.is_some() && !supports_channel_state && !supports_audio_mute {
+        return Err(format!("'{}' does not support mute", row.name));
+    }
+    if (patch.soloed.is_some() || patch.locked.is_some()) && !supports_channel_state {
+        return Err(format!("'{}' does not support solo or lock", row.name));
+    }
+
+    if let Some(linked) = patch.linked {
+        app.set_timeline_track_linked(key, linked);
+    }
+    if let Some(visible) = patch.visible {
+        app.set_timeline_track_visible(key, visible);
+    }
+    if patch.selected == Some(true) {
+        app.selected_timeline_track = Some(key.to_string());
+    } else if patch.selected == Some(false)
+        && app.selected_timeline_track.as_deref() == Some(key)
+    {
+        app.selected_timeline_track = None;
+    }
+
+    let mut engine_changed = false;
+    if let Some(muted) = patch.muted {
+        if supports_audio_mute {
+            app.set_audio_muted(muted);
+        }
+        for relay in &row.relay_ids {
+            if muted {
+                app.track_muted.insert(*relay);
+            } else {
+                app.track_muted.remove(relay);
+            }
+            engine_changed = true;
+        }
+        if let Some(channel) = analog_channel
+            && let Some(track) = app
+                .timeline
+                .analog_tracks
+                .iter_mut()
+                .find(|track| track.channel == channel)
+        {
+            track.muted = muted;
+            engine_changed = true;
+        }
+    }
+    if let Some(soloed) = patch.soloed {
+        for relay in &row.relay_ids {
+            if soloed {
+                app.track_soloed.insert(*relay);
+            } else {
+                app.track_soloed.remove(relay);
+            }
+            engine_changed = true;
+        }
+        if let Some(channel) = analog_channel
+            && let Some(track) = app
+                .timeline
+                .analog_tracks
+                .iter_mut()
+                .find(|track| track.channel == channel)
+        {
+            track.soloed = soloed;
+            engine_changed = true;
+        }
+    }
+    if let Some(locked) = patch.locked {
+        for relay in &row.relay_ids {
+            if locked {
+                app.track_locked.insert(*relay);
+            } else {
+                app.track_locked.remove(relay);
+            }
+        }
+        if let Some(channel) = analog_channel
+            && let Some(track) = app
+                .timeline
+                .analog_tracks
+                .iter_mut()
+                .find(|track| track.channel == channel)
+        {
+            track.locked = locked;
+            if locked {
+                track.armed = false;
+            }
+            engine_changed = true;
+        }
+    }
+    if engine_changed {
+        app.sync_timeline_engine();
+    }
+    Ok(())
 }
 
 fn media_track_key(row: &TimelineTrackRow) -> Option<crate::app::MediaTrackKey> {
@@ -2168,13 +2301,58 @@ pub(crate) fn web_timeline_tracks(
     all_timeline_track_rows(app)
         .into_iter()
         .map(|row| {
-            let (kind, lane) = match row.kind {
+            let analog_track = row
+                .control_key
+                .as_deref()
+                .and_then(|control_key| control_key.strip_prefix("pwm."))
+                .and_then(|channel| channel.parse::<u8>().ok())
+                .and_then(|channel| {
+                    app.timeline
+                        .analog_tracks
+                        .iter()
+                        .find(|track| track.channel == channel)
+                });
+            let is_audio = matches!(&row.kind, TimelineTrackKind::Audio(_));
+            let supports_channel_state = !row.relay_ids.is_empty() || analog_track.is_some();
+            let muted = if is_audio {
+                app.is_muted
+            } else if !row.relay_ids.is_empty() {
+                row.relay_ids
+                    .iter()
+                    .all(|relay| app.track_muted.contains(relay))
+            } else {
+                analog_track.is_some_and(|track| track.muted)
+            };
+            let soloed = if !row.relay_ids.is_empty() {
+                row.relay_ids
+                    .iter()
+                    .all(|relay| app.track_soloed.contains(relay))
+            } else {
+                analog_track.is_some_and(|track| track.soloed)
+            };
+            let locked = if !row.relay_ids.is_empty() {
+                row.relay_ids
+                    .iter()
+                    .all(|relay| app.track_locked.contains(relay))
+            } else {
+                analog_track.is_some_and(|track| track.locked)
+            };
+            let manageable = row.control_key.is_some()
+                || matches!(
+                    &row.kind,
+                    TimelineTrackKind::Video(_)
+                        | TimelineTrackKind::Audio(_)
+                        | TimelineTrackKind::Subtitle(_)
+                        | TimelineTrackKind::ControllerEffect(_)
+                );
+            let selected = app.selected_timeline_track.as_deref() == Some(row.key.as_str());
+            let (kind, lane) = match &row.kind {
                 TimelineTrackKind::Video(_) => ("video".to_string(), None),
                 TimelineTrackKind::Audio(_) => ("audio".to_string(), None),
                 TimelineTrackKind::Subtitle(_) => ("subtitle".to_string(), None),
                 TimelineTrackKind::ControllerEffect(lane) => (
                     "effect".to_string(),
-                    Some(match lane {
+                    Some(match *lane {
                         crate::four_d::models::ControllerEffectLane::Motion => "motion",
                         crate::four_d::models::ControllerEffectLane::Relay => "relay",
                         crate::four_d::models::ControllerEffectLane::Pwm => "pwm",
@@ -2202,6 +2380,14 @@ pub(crate) fn web_timeline_tracks(
                 linked: row.linked,
                 visible: row.visible,
                 dimmed: row.dimmed,
+                selected,
+                muted,
+                soloed,
+                locked,
+                supports_mute: supports_channel_state || is_audio,
+                supports_solo: supports_channel_state,
+                supports_lock: supports_channel_state,
+                manageable,
             }
         })
         .collect()

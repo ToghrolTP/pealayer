@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AimOutlined,
   AppstoreOutlined,
   ArrowDownOutlined,
   ArrowUpOutlined,
@@ -8,16 +9,24 @@ import {
   ClockCircleOutlined,
   DeleteOutlined,
   DesktopOutlined,
+  DisconnectOutlined,
   EditOutlined,
   FastBackwardOutlined,
   FastForwardOutlined,
   FileTextOutlined,
+  EyeInvisibleOutlined,
+  EyeOutlined,
+  LinkOutlined,
+  LockOutlined,
+  MoreOutlined,
   PauseOutlined,
   PlusOutlined,
   RadarChartOutlined,
   SaveOutlined,
   SettingOutlined,
   SoundOutlined,
+  StopOutlined,
+  UnlockOutlined,
   VideoCameraOutlined,
 } from '@ant-design/icons';
 import { Button, ConfigProvider, Divider, Dropdown, Empty, Input, InputNumber, message, Modal, Popconfirm, Select, Slider, Space, Tooltip } from 'antd';
@@ -180,6 +189,8 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       lane: directControls.some((control) => control.key === lane) ? null : lane,
       control_key: directControls.some((control) => control.key === lane) ? lane : null,
       active: true, enabled: true, linked: true, visible: true, dimmed: false,
+      selected: false, muted: false, soloed: false, locked: false,
+      supports_mute: false, supports_solo: false, supports_lock: false, manageable: false,
     }));
   }, [directControls, state.timeline_tracks, timelineLanes]);
   const workspaceProfiles = useMemo(
@@ -767,9 +778,37 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
               : track.kind === 'audio' ? <SoundOutlined />
                 : track.kind === 'subtitle' ? <FileTextOutlined />
                   : effectGlyph(lane === 'relay' || lane === 'motion' ? 'relay:lane' : lane === 'sequence' ? 'controller' : lane);
+            const updateTrack = (values: Record<string, boolean>) => sendCmd('timeline.track.update', {
+              key: track.key,
+              ...values,
+            });
+            const trackMenu = {
+              items: [
+                ...(track.manageable ? [{ key: 'manage', icon: <SettingOutlined />, label: tr(locale, 'Manage...') }] : []),
+                ...(track.manageable ? [{ type: 'divider' as const }] : []),
+                { key: 'linked', icon: track.linked ? <DisconnectOutlined /> : <LinkOutlined />, label: tr(locale, track.linked ? 'Unlink from timeline' : 'Link to timeline') },
+                { key: 'visible', icon: track.visible ? <EyeInvisibleOutlined /> : <EyeOutlined />, label: tr(locale, track.visible ? 'Hide timeline track' : 'Show timeline track') },
+                ...(track.supports_mute ? [{ key: 'muted', icon: <StopOutlined />, label: tr(locale, track.muted ? 'Unmute' : 'Mute') }] : []),
+                ...(track.supports_solo ? [{ key: 'soloed', icon: <AimOutlined />, label: tr(locale, track.soloed ? 'Unsolo' : 'Solo') }] : []),
+                ...(track.supports_lock ? [{ key: 'locked', icon: track.locked ? <UnlockOutlined /> : <LockOutlined />, label: tr(locale, track.locked ? 'Unlock' : 'Lock') }] : []),
+              ],
+              onClick: ({ key }: { key: string }) => {
+                if (key === 'manage') void sendCmd('timeline.track.manage', { key: track.key });
+                else if (key === 'linked') void updateTrack({ linked: !track.linked });
+                else if (key === 'visible') void updateTrack({ visible: !track.visible });
+                else if (key === 'muted') void updateTrack({ muted: !track.muted });
+                else if (key === 'soloed') void updateTrack({ soloed: !track.soloed });
+                else if (key === 'locked') void updateTrack({ locked: !track.locked });
+              },
+            };
             return (
-              <div className={`timeline-row ${track.dimmed ? 'is-dimmed' : ''} ${track.active ? 'is-active' : ''}`} key={track.key}>
-                <div className="timeline-row__label">
+              <div className={`timeline-row ${track.dimmed ? 'is-dimmed' : ''} ${track.active ? 'is-active' : ''} ${track.selected ? 'is-selected' : ''}`} key={track.key}>
+                <Dropdown trigger={['contextMenu']} menu={trackMenu}>
+                <div
+                  className="timeline-row__label"
+                  onClick={() => updateTrack({ selected: true })}
+                  title={track.detail ? `${track.name} — ${track.detail}` : track.name}
+                >
                   <span>{trackIcon}</span>
                   <span className="timeline-row__identity"><strong>{track.name}</strong>{track.detail && <small title={track.detail}>{track.detail}</small>}</span>
                   {directControl && (
@@ -801,7 +840,18 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                       <Button type="text" size="small" icon={<PlusOutlined />} aria-label={tr(locale, 'Add cue at playhead')} />
                     </Dropdown>
                   )}
+                  <Dropdown trigger={['click']} menu={trackMenu}>
+                    <Button
+                      className="timeline-row__menu"
+                      type="text"
+                      size="small"
+                      icon={<MoreOutlined />}
+                      aria-label={tr(locale, 'Track actions')}
+                      onClick={(event) => event.stopPropagation()}
+                    />
+                  </Dropdown>
                 </div>
+                </Dropdown>
                 <div className="timeline-lane">
                   {effectCues.map((cue) => (
                     (() => {

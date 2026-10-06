@@ -26,7 +26,7 @@ widths, and has been exercised against live state rather than sample data.
 | Front panel | In progress | Live seven-segment data and K1–K4 commands are sourced from PCController | Match the complete egui board-information experience, segment renderer, LCD/settings tabs and contextual commands |
 | Effects library | In progress | Live PCController catalog, groups, create/manage/rename/play/delete, drag source and context menus | Finish group management, all custom picker behavior and visual parity at every responsive width |
 | Effect editor and recording | In progress | Sequence editing and board/app recording share PCController effect contracts | Complete professional multi-lane editor, selection, easing, fades, repeat/blink authoring, offline drafts and conflict handling |
-| Timeline | In progress | Web now receives and renders the native ordered track inventory, including media, effect and hardware lanes; cues move and conditionally resize | Port native selection, keyframes, M/S/L, track context menus, track routing, keyboard editing, snapping, vertical reordering and exact scroll/navigation behavior |
+| Timeline | In progress | Web receives the native ordered track inventory and its authoritative selected, linked, visible, muted, soloed and locked state; row selection, action buttons and right-click menus invoke the same validated Rust commands as egui; cues move and conditionally resize | Complete keyframe editing, browser-native manage dialogs, track routing/selectors, keyboard editing, snapping, vertical reordering and exact scroll/navigation behavior |
 | Media library | In progress | Browse/play/thumbnails and native path requests work; Windows extended path prefixes are removed from breadcrumbs | Add complete file context menus, metadata, safe rename workflows and richer remote-folder parity |
 | Preferences | In progress | Rust-generated preference contract drives the Web controls and appearance is synchronized | Ensure every native setting/control type and import/export workflow is represented and visually verified |
 | Dialogs | In progress | Connection, remote location, channel management, RF management, effect editing and workspace management exist | Add full About, media/track properties, audio, subtitles, board information, update, bindings and remaining native dialogs without duplicating state logic |
@@ -38,16 +38,23 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Next acceptance passes
 
-1. Finish the shared timeline command contract so Web track menus invoke the
-   same select, link, show, mute, solo, lock and manage operations as egui.
-2. Introduce a negotiated video pipeline: direct byte-range media when the
+1. Introduce a negotiated video pipeline: direct byte-range media when the
    browser supports it, otherwise a bounded low-latency encoded stream delivered
    to a canvas with clock and buffer feedback.
-3. Render the shared OSD and configurable footer/status-bar models.
-4. Complete the board-information and front-panel dialogs from advertised
+2. Complete the configurable footer/status-bar visibility and ordering model.
+3. Complete the board-information and front-panel dialogs from advertised
    PCController capabilities—never hardcoded demo values.
-5. Audit every egui modal against its Web renderer and close one measurable row
+4. Audit every egui modal against its Web renderer and close one measurable row
    at a time with dark/light and responsive evidence.
+
+## Completed acceptance checkpoints
+
+- **Shared timeline track controls:** The Rust snapshot now publishes track
+  selection and M/S/L capability/state, and both Web pointer actions and context
+  menus use `pealayer.timeline.track.update` or
+  `pealayer.timeline.track.manage`. Track keys are validated once at the shared
+  transport boundary; the Web client contains no channel-specific mutation
+  rules.
 
 ## Regression rules
 

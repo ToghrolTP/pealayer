@@ -456,12 +456,17 @@ body {
 .timeline-tracks { position: relative; min-height: 80px; padding-block: 8px; background-image: repeating-linear-gradient(90deg, transparent 0, transparent calc(5% - 1px), color-mix(in srgb, var(--line) 38%, transparent) 5%); background-size: calc(100% - 262px) 100%; background-position: 180px 0; background-repeat: repeat-y; }
 .timeline-row { min-width: 680px; height: 42px; display: grid; grid-template-columns: var(--timeline-label-width) minmax(400px, 1fr) var(--timeline-end-width); align-items: center; }
 .timeline-row.is-dimmed { opacity: .48; }
-.timeline-row__label { min-width: 0; padding-inline: 14px; display: flex; align-items: center; gap: 8px; color: var(--text); }
+.timeline-row.is-selected .timeline-row__label { background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: inset 2px 0 var(--accent); }
+.timeline-row__label { min-width: 0; height: 100%; padding-inline: 14px 6px; display: flex; align-items: center; gap: 8px; color: var(--text); cursor: default; user-select: none; }
 .timeline-row__label > span { color: var(--green); }
 .timeline-row__identity { min-width: 0; flex: 1 1 auto; display: grid; align-content: center; gap: 1px; color: var(--text) !important; }
 .timeline-row__identity strong, .timeline-row__identity small { overflow: hidden; text-align: start; text-overflow: ellipsis; white-space: nowrap; }
 .timeline-row__identity strong { font-size: 12px; }
 .timeline-row__identity small { color: var(--subtle); font-size: 9px; }
+.timeline-row__menu { flex: 0 0 auto; opacity: 0; transition: opacity .14s ease; }
+.timeline-row__label:hover .timeline-row__menu,
+.timeline-row__label:focus-within .timeline-row__menu,
+.timeline-row.is-selected .timeline-row__menu { opacity: 1; }
 .timeline-lane { position: relative; height: 26px; border-inline-start: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .timeline-lane::after { content: ''; position: absolute; inset: 50% 0 auto; border-top: 1px solid var(--line-strong); opacity: .7; }
 .timeline-cue { position: absolute; z-index: 2; inset-block-start: 4px; min-width: 22px; height: 19px; overflow: hidden; display: flex; align-items: center; justify-content: space-between; gap: 3px; padding: 0 5px; border: 1px solid color-mix(in srgb, var(--green) 80%, white 10%); border-radius: 4px; background: color-mix(in srgb, var(--green) 72%, #12271b); color: #041008; font: 700 9px ui-sans-serif, sans-serif; cursor: grab; touch-action: none; user-select: none; box-shadow: 0 3px 10px rgba(0, 0, 0, .24); }

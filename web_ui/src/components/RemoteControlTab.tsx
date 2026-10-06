@@ -167,6 +167,14 @@ export interface PlayerState {
     linked: boolean;
     visible: boolean;
     dimmed: boolean;
+    selected: boolean;
+    muted: boolean;
+    soloed: boolean;
+    locked: boolean;
+    supports_mute: boolean;
+    supports_solo: boolean;
+    supports_lock: boolean;
+    manageable: boolean;
   }>;
   osd?: {
     message: string;

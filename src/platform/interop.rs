@@ -215,6 +215,24 @@ pub enum InteropCommand {
         id: String,
         direction: i32,
     },
+    UpdateTimelineTrack {
+        key: String,
+        #[serde(default)]
+        linked: Option<bool>,
+        #[serde(default)]
+        visible: Option<bool>,
+        #[serde(default)]
+        muted: Option<bool>,
+        #[serde(default)]
+        soloed: Option<bool>,
+        #[serde(default)]
+        locked: Option<bool>,
+        #[serde(default)]
+        selected: Option<bool>,
+    },
+    ManageTimelineTrack {
+        key: String,
+    },
     AddEffectCue {
         effect_id: String,
         start_time_ms: u64,
@@ -423,6 +441,15 @@ fn valid_workspace_profile_icon(value: &str) -> bool {
     valid_workspace_profile_id(value)
 }
 
+fn valid_timeline_track_key(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 192
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, ':' | '.' | '-' | '_')
+        })
+}
+
 impl InteropCommand {
     pub fn validate(&self) -> Result<(), String> {
         match self {
@@ -486,6 +513,24 @@ impl InteropCommand {
             }
             Self::OpenBoardInformation { tab } if *tab > 3 => {
                 Err("board information tab must be between 0 and 3".to_string())
+            }
+            Self::UpdateTimelineTrack {
+                key,
+                linked,
+                visible,
+                muted,
+                soloed,
+                locked,
+                selected,
+            } if !valid_timeline_track_key(key)
+                || [linked, visible, muted, soloed, locked, selected]
+                    .iter()
+                    .all(|value| value.is_none()) =>
+            {
+                Err("timeline track update requires a valid key and at least one field".to_string())
+            }
+            Self::ManageTimelineTrack { key } if !valid_timeline_track_key(key) => {
+                Err("timeline track key is invalid".to_string())
             }
             Self::Open { target } if target.trim().is_empty() || target.len() > 32_768 => {
                 Err("media target must contain 1 to 32768 bytes".to_string())
@@ -637,7 +682,7 @@ pub fn command_catalog() -> Value {
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
             "maximize", "restore", "open_preferences", "open_media_information", "open_media_folder", "edit_configuration", "open_board_information", "show_message", "show_osd", "hide_osd", "set_workspace",
             "create_workspace_profile", "update_workspace_profile", "delete_workspace_profile",
-            "move_workspace_profile", "update_config",
+            "move_workspace_profile", "timeline.track.update", "timeline.track.manage", "update_config",
             "reload_config", "add_effect_cue", "update_effect_cue", "remove_effect_cue", "set_recording",
             "get_status", "publish_toast", "dismiss_toast", "quit", "controller_effect_cue.add", "controller_effect.play",
             "controller_effect.stop", "controller_effect.save", "controller_effect.delete",
@@ -1108,6 +1153,22 @@ pub struct WebTimelineTrack {
     pub linked: bool,
     pub visible: bool,
     pub dimmed: bool,
+    #[serde(default)]
+    pub selected: bool,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default)]
+    pub soloed: bool,
+    #[serde(default)]
+    pub locked: bool,
+    #[serde(default)]
+    pub supports_mute: bool,
+    #[serde(default)]
+    pub supports_solo: bool,
+    #[serde(default)]
+    pub supports_lock: bool,
+    #[serde(default)]
+    pub manageable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1576,6 +1637,22 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                     .and_then(Value::as_i64)
                     .and_then(|value| i32::try_from(value).ok())
                     .ok_or_else(|| "missing workspace move direction".to_string())?,
+            })
+        }
+        "timeline.track.update" | "pealayer.timeline.track.update" => {
+            Some(InteropCommand::UpdateTimelineTrack {
+                key: string(&["key", "track"] )?,
+                linked: request.params.get("linked").and_then(Value::as_bool),
+                visible: request.params.get("visible").and_then(Value::as_bool),
+                muted: request.params.get("muted").and_then(Value::as_bool),
+                soloed: request.params.get("soloed").and_then(Value::as_bool),
+                locked: request.params.get("locked").and_then(Value::as_bool),
+                selected: request.params.get("selected").and_then(Value::as_bool),
+            })
+        }
+        "timeline.track.manage" | "pealayer.timeline.track.manage" => {
+            Some(InteropCommand::ManageTimelineTrack {
+                key: string(&["key", "track"] )?,
             })
         }
         "effect_cue.add" | "pealayer.effect_cue.add" | "pealayer.timeline.effect.add" => {
@@ -3281,6 +3358,43 @@ mod tests {
                 capture: true,
             })
         );
+    }
+
+    #[test]
+    fn timeline_track_rpc_uses_one_validated_cross_surface_contract() {
+        let update: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"track","method":"pealayer.timeline.track.update","params":{"key":"hardware:relay.5","visible":false,"muted":true,"selected":true}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&update).unwrap(),
+            Some(InteropCommand::UpdateTimelineTrack {
+                key: "hardware:relay.5".into(),
+                linked: None,
+                visible: Some(false),
+                muted: Some(true),
+                soloed: None,
+                locked: None,
+                selected: Some(true),
+            })
+        );
+
+        let manage: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"track","method":"timeline.track.manage","params":{"track":"hardware:pwm.1"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&manage).unwrap(),
+            Some(InteropCommand::ManageTimelineTrack {
+                key: "hardware:pwm.1".into(),
+            })
+        );
+
+        let empty: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"track","method":"timeline.track.update","params":{"key":"hardware:relay.5"}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&empty).is_err());
     }
 
     #[test]

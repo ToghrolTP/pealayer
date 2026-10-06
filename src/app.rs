@@ -3646,6 +3646,32 @@ impl PealayerApp {
             InteropCommand::MoveWorkspaceProfile { id, direction } => {
                 self.move_workspace_profile(&id, direction);
             }
+            InteropCommand::UpdateTimelineTrack {
+                key,
+                linked,
+                visible,
+                muted,
+                soloed,
+                locked,
+                selected,
+            } => {
+                let patch = crate::ui::layout::TimelineTrackPatch {
+                    linked,
+                    visible,
+                    muted,
+                    soloed,
+                    locked,
+                    selected,
+                };
+                if let Err(error) = crate::ui::layout::update_timeline_track(self, &key, patch) {
+                    self.set_osd(error);
+                }
+            }
+            InteropCommand::ManageTimelineTrack { key } => {
+                if let Err(error) = crate::ui::layout::manage_timeline_track_by_key(self, &key) {
+                    self.set_osd(error);
+                }
+            }
             InteropCommand::AddEffectCue {
                 effect_id,
                 start_time_ms,
