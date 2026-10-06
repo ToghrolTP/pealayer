@@ -39,7 +39,7 @@ for (const name of assets) {
   if (!build.precache.includes(url)) throw new Error(`Versioned asset missing from precache: ${url}`);
   if (!name.endsWith('.js')) continue;
   const script = await readFile(join(dist, 'assets', name), 'utf8');
-  for (const [, , reference] of script.matchAll(/(["'])(\.\.?\/[^"'\\]+|\/assets\/[^"'\\]+)\1/g)) {
+  for (const [, , reference] of script.matchAll(/(["'`])(\.\.?\/[^"'`\\]+|\/assets\/[^"'`\\]+)\1/g)) {
     const target = new URL(reference, `https://local.invalid/assets/${name}`);
     if (assets.includes(target.pathname.split('/').at(-1)) && target.searchParams.get('v') !== build.version) {
       throw new Error(`Unversioned or wrong-version import/preload in ${name}: ${reference}`);

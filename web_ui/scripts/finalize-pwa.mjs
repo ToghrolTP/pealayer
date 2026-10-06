@@ -41,7 +41,7 @@ function versionedReference(reference, from) {
 for (const path of files) {
   if (path.endsWith('.html') || path.endsWith('.js')) {
     const source = await readFile(path, 'utf8');
-    const stamped = source.replace(/(["'])(\.\.?\/[^"'\\]+|\/assets\/[^"'\\]+)\1/g,
+    const stamped = source.replace(/(["'`])(\.\.?\/[^"'`\\]+|\/assets\/[^"'`\\]+)\1/g,
       (match, quote, reference) => `${quote}${versionedReference(reference, path)}${quote}`);
     await writeFile(path, stamped, 'utf8');
   }
