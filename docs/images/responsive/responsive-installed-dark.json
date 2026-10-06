@@ -8,7 +8,23 @@
       }
     ],
     "documentWidth": 320,
-    "panels": [],
+    "panels": [
+      {
+        "className": "studio-panel effects-panel",
+        "scrollWidth": 0,
+        "width": 0
+      },
+      {
+        "className": "studio-panel player-panel-web",
+        "scrollWidth": 0,
+        "width": 0
+      },
+      {
+        "className": "studio-panel timeline-panel-web",
+        "scrollWidth": 0,
+        "width": 0
+      }
+    ],
     "surface": "#/player",
     "theme": "dark",
     "width": 320
@@ -22,7 +38,23 @@
       }
     ],
     "documentWidth": 320,
-    "panels": [],
+    "panels": [
+      {
+        "className": "studio-panel effects-panel",
+        "scrollWidth": 287,
+        "width": 287
+      },
+      {
+        "className": "studio-panel player-panel-web",
+        "scrollWidth": 287,
+        "width": 287
+      },
+      {
+        "className": "studio-panel timeline-panel-web",
+        "scrollWidth": 287,
+        "width": 287
+      }
+    ],
     "surface": "#/timeline",
     "theme": "dark",
     "width": 320
@@ -36,7 +68,23 @@
       }
     ],
     "documentWidth": 320,
-    "panels": [],
+    "panels": [
+      {
+        "className": "studio-panel effects-panel",
+        "scrollWidth": 0,
+        "width": 0
+      },
+      {
+        "className": "studio-panel player-panel-web",
+        "scrollWidth": 0,
+        "width": 0
+      },
+      {
+        "className": "studio-panel timeline-panel-web",
+        "scrollWidth": 0,
+        "width": 0
+      }
+    ],
     "surface": "#/effects",
     "theme": "dark",
     "width": 320

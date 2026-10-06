@@ -54,9 +54,9 @@ emulation does not prove browser-specific touch gestures or safe-area behavior.
 
 ## Installed acceptance checkpoint (2026-10-06)
 
-- Runtime commit: `6578ca7f6a4c5733fda4b24cba4c8340407cc020`.
-- Executable SHA-256: `b349cb4965efe9e1df531d25f2710600c63e863a0e3eb324a23089aabd3d8cb2`.
-- Embedded PWA revision: `82b2fc095c87a0e5`.
+- Final runtime commit: `e246d2b0d7dbc9eac98c676c90229c3841a2cf80`.
+- Executable SHA-256: `cf938336bdf013908eb4cb2edf644a66fb6731c0b912893074c89a9bea817f7a`.
+- Embedded PWA revision: `95b9e14cc0c3d172`.
 - Installed using `/api/update/begin`, byte chunks and `/api/update/finish`;
   verified graceful restart into the canonical installed executable. No force
   termination, manual overwrite or SSH deployment.
@@ -75,6 +75,9 @@ emulation does not prove browser-specific touch gestures or safe-area behavior.
 - Café's direct updater endpoint timed out; Café installation is **not verified**.
   Do not deploy through an ambiguous bridge alias that might resolve locally.
 - PR #46 remains draft/unmerged. No full Rust test suite was run.
+- Screenshots were captured on the first installed fix (`6578ca7`); the final
+  follow-up retains those layouts and keeps both compact timeline timecodes
+  visible. All 98 width checks were repeated against the final installed binary.
 
 ### Same hardware page, 390 × 844 px
 
