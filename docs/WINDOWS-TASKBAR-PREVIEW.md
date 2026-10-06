@@ -88,3 +88,42 @@ At verification time DWM request/delivery counts were zero: the frame and
 configuration were verified, but user-hover shell delivery still requires a
 real taskbar check. The user was asked to provide that screenshot because
 Windows computer-use capture was unavailable. PR 46 remains unmerged.
+
+## Cafe-PC follow-up, 2026-10-06
+
+After the SSH tunnel returned at `asus@localhost:7022`, Cafe-PC was confirmed
+as Windows 10 Enterprise, build 19045. Its running canonical installation was
+updated from `5ddf22e` to the same clean `78d7d75` executable verified above,
+using its own `/api/update/begin`, chunk and finish endpoints over an SSH API
+forward. No executable was copied through SSH and no process was forcibly killed.
+
+- Operation: `update-5d4292de-cf13-48f1-8e52-8dfd1e1ac355`.
+- Receiver acknowledged all 38,867,456 bytes, verified the SHA-256 and returned
+  `restarting` with graceful closure before replacement.
+- Relaunched canonical process: PID 13696, interactive Session 1,
+  `C:\Users\Asus\AppData\Local\Programs\Pealayer\bin\pealayer.exe`.
+- New runtime manifest reports `78d7d75`, `git_dirty: false`, and executable
+  SHA-256 `36e8591f3510c4adee9e1704db4f5611f918413acfeebb9d592049ad1dd48407`.
+- Cafe's distinct libmpv runtime remains unchanged:
+  `0a81c004aae0ee7d512b9a26e38f66281f9591e84e1663215cc3a36a4bde6f6a`,
+  version `v0.41.0-1084-ga1bf4b655`. It was not replaced with David-PC's DLL.
+  Their import libraries are byte-identical, SHA-256
+  `bef1b89f534bc86b33135e1f04fa2d5064b9d48b5de8bc9866665bbf43def793`;
+  the existing EXE could therefore be reused with Cafe's runtime profile.
+  This was a deployment of the existing build, not a claimed second compilation.
+- Cafe's existing host-configuration script persisted its own build profile,
+  libmpv path and generated Cargo configuration. Its native Rust toolchain is
+  `x86_64-pc-windows-gnu`, unlike the local MSVC toolchain.
+- `/healthz`, player status, update manifest, Web index and production icon PNG
+  respond. Playback is paused at 517.268 seconds, duration 6204.245, in NLE.
+  Both taskbar preferences remain enabled. Web assets expose generation
+  `d039b3cafcd11df0`, including the Fuji loader and readable asset names.
+- Cafe's production icon atlas was inspected at its native 16x16 size. This
+  does not constitute an Explorer screenshot or toolbar-action click test.
+
+Actual taskbar acceptance remains pending on both hosts. At the Cafe checkpoint,
+the effective video-only representation was inactive, no frame was cached and
+there were zero DWM requests/deliveries. The enabled preference alone is not
+evidence that Explorer received a video-only bitmap. A real user-hover check with
+the video surface visible is still required; no Windows 10 versus Windows 11
+visual-equivalence claim is made.
