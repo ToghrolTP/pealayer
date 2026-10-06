@@ -49,3 +49,43 @@ production bundle after the application has installed its own verified update.
 
 Real Android/iOS touch-device testing is an additional acceptance gate; viewport
 emulation does not prove browser-specific touch gestures or safe-area behavior.
+
+## Installed acceptance checkpoint (2026-10-06)
+
+- Runtime commit: `6578ca7f6a4c5733fda4b24cba4c8340407cc020`.
+- Executable SHA-256: `b349cb4965efe9e1df531d25f2710600c63e863a0e3eb324a23089aabd3d8cb2`.
+- Embedded PWA revision: `82b2fc095c87a0e5`.
+- Installed using `/api/update/begin`, byte chunks and `/api/update/finish`;
+  verified graceful restart into the canonical installed executable. No force
+  termination, manual overwrite or SSH deployment.
+- Actual installed bundle: all **70 dark-mode** page/width combinations and
+  **28 light-mode** combinations passed content/panel width checks. See the
+  [dark measurements](images/responsive/responsive-installed-dark.json) and
+  [light measurements](images/responsive/responsive-installed-light.json).
+- Phone channel manager and effect editor inspected visually; landscape editor
+  footer bottom measured at 350 px within the 390 px viewport.
+- Preferences scrolled to their final controls on a phone. Named section buttons
+  remain navigable. Normal browser size and the original System theme restored.
+- Paused media position (`1256.089` seconds), NLE workspace, controller connection
+  and existing user effects survived the update. No hardware output was actuated.
+- Screenshots show the live PCController **Virtual Board** already selected by
+  this instance, not a claim of physical hardware verification.
+- Café's direct updater endpoint timed out; Café installation is **not verified**.
+  Do not deploy through an ambiguous bridge alias that might resolve locally.
+- PR #46 remains draft/unmerged. No full Rust test suite was run.
+
+### Same hardware page, 390 × 844 px
+
+| Before | After (dark) | After (light) |
+| --- | --- | --- |
+| ![Collapsed content before](images/responsive/before-hardware-390.jpg) | ![Hardware page after](images/responsive/after-hardware-dark-390.jpg) | ![Light hardware page after](images/responsive/after-hardware-light-390.jpg) |
+
+### Editors and preferences
+
+| Preferences | Channel manager | Effects Library |
+| --- | --- | --- |
+| ![Light preferences](images/responsive/after-preferences-light-390.jpg) | ![Channel manager](images/responsive/after-channel-manager-390.jpg) | ![Effects Library](images/responsive/after-effects-dark-390.jpg) |
+
+![Portrait effect editor](images/responsive/after-effect-editor-390.jpg)
+
+![Landscape editor with reachable footer](images/responsive/after-effect-editor-landscape.jpg)
