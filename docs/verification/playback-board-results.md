@@ -8,17 +8,17 @@ cinema controller. The private media filename and URL are intentionally omitted.
 | --- | --- |
 | Pause and seek to 65 seconds | Received 65000 ms; board ACK current sequence; cells `3f 86 3f 6d` (01:05) |
 | Duration | Actual loaded-media duration 8553450 ms |
-| Normal playback | Advanced 1440 ms during the 1400 ms check; program state Running |
+| Normal playback | Advanced 1434 ms during the 1400 ms check; program state Running |
 | Pause | Advanced 0 ms during the 1200 ms check; program state Idle |
 | Seek to 6000 seconds | Cells `3f 86 66 3f` (01:40 hours/minutes) |
-| 2x playback | Advanced 2078 ms during the 1000 ms check |
+| 2x playback | Advanced 1983 ms during the 1000 ms check |
 | Playback event subscription | 31 `media.playback` state events; both playing and paused present |
-| Client identity | One matching identity `pealayer:desktop-42144`, application/version/commit/OS/architecture and reverse-control actions retained |
+| Client identity | One matching identity `pealayer:desktop-35060`, application/version/commit/OS/architecture and reverse-control actions retained |
 | Restore | Original elapsed position, speed and paused state restored before check completion |
 
 These are observations with polling and scheduling uncertainty, not a
-frame-perfect or hard-real-time timing guarantee. Loopback board RTT rounded
-to 0 ms; this is not an estimate for serial hardware or a remote network.
+frame-perfect or hard-real-time timing guarantee. Loopback board RTT was
+1 ms; this is not an estimate for serial hardware or a remote network.
 
 ## Deployed binaries
 
@@ -26,11 +26,14 @@ Both replacements used the applications' own updater, not manual binary copying.
 
 | Product | Source / replacement evidence |
 | --- | --- |
-| Pealayer | Commit `6a1a98ca4eb2cb868f9641459c47785de2b8374c`; running SHA-256 `9478b58a7e6c4bc529c2f57c3ca087b0236112f5bddbb039561ae4a9939118f0` |
+| Pealayer | Commit `dfd05d441423ecbc6452c543a8c8062c0dbe196a`; running SHA-256 `bc0c37139d61d3970b770c5e742d5781383100f636d8e1972dc870622a7b210b`; own URL updater operation `update-ee7b7a88-a1dd-4dc6-a7df-d7b82bd9dc1b` |
 | PCController | Host source fingerprint `f6fc4d63c74687c7c9a45f1f47ea4fbc1c18fe715fcbca1c2381184d03c4bd38`; replacement SHA-256 `a3ca9ee4b5394a2462c554f2c5f03af4c51f8a3841c29953680e9e631b8f7538`; updater operation `op-cfa87047799ff23c` acknowledged restart, `terminal_verified=true` |
 
 Later verification/documentation commits do not change these deployed binaries.
 Pealayer's libmpv DLL was preserved, not replaced by a different machine's DLL.
+The final combined build includes the concurrent control-intent coalescing
+change `d4d42bd`. Its live acceptance script passed independently with exit 0
+at 00:24:40 UTC, after the canonical application restarted from the new binary.
 
 ## Automated coverage
 
