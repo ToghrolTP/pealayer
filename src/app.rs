@@ -7571,8 +7571,17 @@ fn hardware_connection_was_lost(
 mod tests {
     use super::*;
 
+    static APP_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_app_tests() -> std::sync::MutexGuard<'static, ()> {
+        APP_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn application_shortcuts_dispatch_fullscreen_and_preferences_without_retriggering_transport() {
+        let _lock = lock_app_tests();
         let mut app = PealayerApp::default();
         let ctx = egui::Context::default();
         let frame = |app: &mut PealayerApp, key, modifiers| {
@@ -7618,6 +7627,7 @@ mod tests {
 
     #[test]
     fn shared_media_track_identity_covers_video_audio_and_subtitles() {
+        let _lock = lock_app_tests();
         let mut app = PealayerApp::default();
         app.current_vid = "2".to_string();
         app.current_aid = "5".to_string();
@@ -7749,6 +7759,7 @@ mod tests {
 
     #[test]
     fn deleting_selected_cues_is_grouped_as_one_undoable_timeline_edit() {
+        let _lock = lock_app_tests();
         let mut app = PealayerApp::default();
         let effect = crate::four_d::models::Effect::new(
             "Selected cue".to_string(),
@@ -7930,6 +7941,7 @@ mod tests {
 
     #[test]
     fn playback_position_history_is_bounded_and_deduplicated_by_media_identity() {
+        let _lock = lock_app_tests();
         let mut app = PealayerApp::default();
         app.playback_position_history_limit = 2;
         for (target, position) in [
@@ -7989,6 +8001,7 @@ mod tests {
 
     #[test]
     fn test_lifecycle_hooks_invoke_save_config() {
+        let _lock = lock_app_tests();
         use eframe::App;
         let mut app = PealayerApp::default();
         app.volume = 95.0;
@@ -8042,6 +8055,7 @@ mod tests {
 
     #[test]
     fn fullscreen_startup_uses_an_entry_transition() {
+        let _lock = lock_app_tests();
         let app = PealayerApp::default();
         assert!(!app.was_fullscreen);
         assert!(app.show_four_d_editor);
@@ -8049,6 +8063,7 @@ mod tests {
 
     #[test]
     fn rpc_fullscreen_round_trip_restores_the_staged_nle_workspace() {
+        let _lock = lock_app_tests();
         let mut app = PealayerApp::default();
         let ctx = egui::Context::default();
         app.show_four_d_editor = true;
@@ -8071,6 +8086,7 @@ mod tests {
 
     #[test]
     fn rapid_remote_fullscreen_on_off_restores_nle_before_viewport_entry() {
+        let _lock = lock_app_tests();
         let mut app = PealayerApp::default();
         let ctx = egui::Context::default();
         app.show_four_d_editor = true;
@@ -8093,6 +8109,7 @@ mod tests {
 
     #[test]
     fn two_pending_fullscreen_toggles_cancel_each_other() {
+        let _lock = lock_app_tests();
         let mut app = PealayerApp::default();
         let ctx = egui::Context::default();
         app.show_four_d_editor = true;
@@ -8109,6 +8126,7 @@ mod tests {
 
     #[test]
     fn external_fullscreen_and_workspace_requests_preserve_simple_in_fullscreen() {
+        let _lock = lock_app_tests();
         let mut app = PealayerApp::default();
         app.show_four_d_editor = false;
 
@@ -8131,6 +8149,7 @@ mod tests {
 
     #[test]
     fn workspace_request_during_pending_fullscreen_updates_the_exit_target() {
+        let _lock = lock_app_tests();
         let mut app = PealayerApp::default();
         let ctx = egui::Context::default();
         app.show_four_d_editor = true;
@@ -8268,6 +8287,7 @@ mod tests {
 
     #[test]
     fn interactive_estop_release_is_guarded_until_user_confirms() {
+        let _lock = lock_app_tests();
         let mut app = PealayerApp::default();
         app.estop_active = true;
         app.confirm_estop_release = true;
@@ -8281,6 +8301,7 @@ mod tests {
 
     #[test]
     fn interactive_estop_release_can_use_persisted_no_confirm_preference() {
+        let _lock = lock_app_tests();
         let mut app = PealayerApp::default();
         app.estop_active = true;
         app.confirm_estop_release = false;
@@ -8293,6 +8314,7 @@ mod tests {
 
     #[test]
     fn successful_effect_publish_is_immediately_runnable_before_catalog_refresh() {
+        let _lock = lock_app_tests();
         let mut app = PealayerApp::default();
         assert!(!app.controller_effect_is_advertised("effect:17"));
 
