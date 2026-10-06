@@ -300,6 +300,7 @@ pub enum EngineMessage {
 pub struct EngineHandle {
     lifecycle: Arc<()>,
     pub playback_time_ms: Arc<AtomicU64>,
+    pub media_playback: Arc<Mutex<super::media_sync::PlaybackSample>>,
     pub is_playing: Arc<AtomicBool>,
     pub estop_active: Arc<AtomicBool>,
     pub connection_requested: Arc<AtomicBool>,
@@ -530,6 +531,7 @@ fn should_yield_direct_transport(
 pub fn spawn_engine() -> EngineHandle {
     let lifecycle = Arc::new(());
     let playback_time_ms = Arc::new(AtomicU64::new(0));
+    let media_playback = Arc::new(Mutex::new(super::media_sync::PlaybackSample::default()));
     let is_playing = Arc::new(AtomicBool::new(false));
     let estop_active = Arc::new(AtomicBool::new(false));
     let connection_requested = Arc::new(AtomicBool::new(false));
@@ -544,6 +546,8 @@ pub fn spawn_engine() -> EngineHandle {
     let catalog_refresh_requested = Arc::new(AtomicBool::new(false));
 
     let (tx, rx) = mpsc::channel();
+    super::media_sync::spawn(Arc::downgrade(&lifecycle), Arc::clone(&media_playback),
+        Arc::clone(&is_connected), Arc::clone(&serial_port));
 
     let engine_time = Arc::clone(&playback_time_ms);
     let engine_playing = Arc::clone(&is_playing);
@@ -1353,6 +1357,7 @@ pub fn spawn_engine() -> EngineHandle {
     EngineHandle {
         lifecycle,
         playback_time_ms,
+        media_playback,
         is_playing,
         estop_active,
         connection_requested,

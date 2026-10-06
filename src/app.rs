@@ -2135,6 +2135,21 @@ impl PealayerApp {
     /// Synchronizes playback time, duration, pause state, and error condition
     /// with the Windows taskbar progress state and thumbnail toolbar buttons.
     pub fn update_shell_state(&mut self) {
+        // All native/Web/API commands settle through this actual MPV state.
+        // No hardware RPC or serial I/O runs on the GUI/render thread.
+        if let Ok(mut sample) = self.engine_handle.media_playback.lock() {
+            sample.name.clone_from(&self.app_name);
+            sample.duration_ms = (self.duration.is_finite() && self.duration > 0.0)
+                .then_some((self.duration * 1000.0).round() as u64);
+            let playing = self.current_video_path.is_some() && !self.is_paused && !self.is_eof
+                && !self.is_scrubbing && !self.estop_active && !sample.buffering;
+            if sample.playing != playing {
+                sample.sampled_at = std::time::Instant::now();
+            }
+            sample.playing = playing;
+            sample.loaded = self.current_video_path.is_some();
+            sample.rate = self.playback_rate.clamp(0.25, 4.0);
+        }
         let taskbar_state = crate::platform::windows::compute_taskbar_state_with_error(
             self.playback_time,
             self.duration,
@@ -3699,6 +3714,12 @@ impl PealayerApp {
                     ..
                 })) => match (reply_userdata, change) {
                     (1, PropertyData::Double(v)) => {
+                        // Publish decoded MPV time even when the UI retains an
+                        // exact logical seek target or a scrub preview position.
+                        if let Ok(mut sample) = self.engine_handle.media_playback.lock() {
+                            sample.position_ms = (v.max(0.0) * 1000.0).round() as u64;
+                            sample.sampled_at = std::time::Instant::now();
+                        }
                         if !self.is_scrubbing
                             && self.pending_scrub_commit.is_none()
                             && self.seek_pos.is_none()
@@ -3799,6 +3820,11 @@ impl PealayerApp {
                             self.video_aspect_ratio = v;
                         }
                     }
+                    (22, PropertyData::Flag(v)) => {
+                        if let Ok(mut sample) = self.engine_handle.media_playback.lock() {
+                            sample.buffering = v;
+                        }
+                    }
                     _ => {}
                 },
                 Some(Ok(Event::EndFile(reason))) => {
@@ -3825,6 +3851,11 @@ impl PealayerApp {
                     }
                 }
                 Some(Ok(Event::StartFile)) => {
+                    if let Ok(mut sample) = self.engine_handle.media_playback.lock() {
+                        sample.position_ms = 0;
+                        sample.buffering = false;
+                        sample.sampled_at = std::time::Instant::now();
+                    }
                     self.show_error = None;
                     self.is_eof = false;
                     self.playback_time = 0.0;
@@ -6483,6 +6514,7 @@ impl Default for PealayerApp {
         let _ = mpv_client.observe_property("sub-text", libmpv2::Format::String, 19);
         let _ = mpv_client.observe_property("sub-pos", libmpv2::Format::Double, 20);
         let _ = mpv_client.observe_property("video-out-params/aspect", libmpv2::Format::Double, 21);
+        let _ = mpv_client.observe_property("paused-for-cache", libmpv2::Format::Flag, 22);
         let (_interop_tx, interop_rx) = std::sync::mpsc::channel();
         let (_controller_cmd_tx, controller_cmd_rx) =
             std::sync::mpsc::channel::<crate::platform::interop::ControllerDelivery>();

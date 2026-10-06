@@ -1048,6 +1048,9 @@ fn controller_json_rpc_error_message(error: &Value) -> String {
 }
 
 impl ControllerClient {
+    pub fn connect_playback_events(endpoint: &str) -> Result<Self, String> {
+        Self::connect_with_timeouts(endpoint, Duration::from_millis(300), Duration::from_millis(500))
+    }
     pub fn connect(endpoint: &str) -> Result<Self, String> {
         Self::connect_with_timeouts(endpoint, Duration::from_secs(2), Duration::from_secs(3))
     }

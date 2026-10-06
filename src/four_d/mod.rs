@@ -6,5 +6,6 @@ pub mod engine;
 pub mod history;
 pub mod input_capture;
 pub mod models;
+pub mod media_sync;
 pub mod patterns;
 pub mod protocol;

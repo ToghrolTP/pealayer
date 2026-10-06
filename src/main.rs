@@ -461,6 +461,9 @@ fn main() -> eframe::Result {
                 .observe_property("cache-buffering-state", libmpv2::Format::Int64, 16)
                 .unwrap();
             mpv_client
+                .observe_property("paused-for-cache", libmpv2::Format::Flag, 22)
+                .unwrap();
+            mpv_client
                 .observe_property("speed", libmpv2::Format::Double, 17)
                 .unwrap();
             mpv_client
