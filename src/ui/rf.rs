@@ -11,6 +11,9 @@ pub struct RfState {
     pub error: String,
     pub catalog: Value,
     pub last_result: Value,
+    pub last_operation: String,
+    error_is_catalog: bool,
+    pending_name: String,
     tab: usize,
     last_poll: Instant,
     draft: Value,
@@ -33,7 +36,8 @@ fn new_binding() -> Value {
 impl Default for RfState {
     fn default() -> Self {
         Self { open:false, pending:false, error:String::new(), catalog:Value::Null,
-            last_result:Value::Null, tab:0, last_poll:Instant::now(), draft:new_binding(),
+            last_result:Value::Null, last_operation:String::new(), error_is_catalog:false,
+            pending_name:String::new(), tab:0, last_poll:Instant::now(), draft:new_binding(),
             previous_name:String::new(), allow_keyboard:false, code:String::new(), bits:24,
             protocol:1, pulse_us:0, repeats:1, board_map:json!({"id":0,"action":"none"}) }
     }
@@ -41,7 +45,7 @@ impl Default for RfState {
 
 impl RfState {
     pub fn snapshot(&self) -> Value {
-        json!({"catalog":self.catalog,"pending":self.pending,"error":self.error,"last_result":self.last_result})
+        json!({"catalog":self.catalog,"pending":self.pending,"error":self.error,"last_result":self.last_result,"last_operation":self.last_operation})
     }
     pub fn apply_catalog(&mut self, mut value: Value) {
         if value["connected"].as_bool() == Some(true) && value["entries_sampled"].as_bool() != Some(true) {
@@ -50,13 +54,42 @@ impl RfState {
         }
         self.catalog = value;
     }
+    pub fn complete(&mut self, operation: &str, result: Result<Value, String>) -> bool {
+        self.pending = false;
+        match result {
+            Ok(value) => {
+                if operation != "rf-catalog" || self.error_is_catalog { self.error.clear(); }
+                if operation == "rf-catalog" {
+                    let learning_finished = self.catalog["learning"]["active"] == true && value["learning"]["active"] != true;
+                    self.apply_catalog(value);
+                    return learning_finished;
+                }
+                if operation == "rf-binding.put" && self.draft["name"].as_str() == Some(self.pending_name.as_str()) {
+                    self.previous_name = self.pending_name.clone();
+                }
+                if operation == "rf-binding.remove" && self.previous_name == self.pending_name { self.previous_name.clear(); }
+                self.last_operation = operation.into();
+                self.last_result = value;
+                true
+            }
+            Err(error) => { self.error = error; self.error_is_catalog = operation == "rf-catalog"; false }
+        }
+    }
 }
 
 impl PealayerApp {
     pub(crate) fn request_rf(&mut self, operation: &str, params: Value) -> Result<(), String> {
         if !OPERATIONS.contains(&operation) { return Err("Unknown RF operation".into()); }
-        if self.rf.pending { return Err("An RF operation is still pending".into()); }
+        if self.rf.pending {
+            // Desktop and web readers share one operation queue. Polls must not
+            // overwrite a mutation's result or report a false failure.
+            if operation == "catalog" { return Ok(()); }
+            return Err("An RF operation is still pending".into());
+        }
+        let pending_name = if operation == "binding.put" { params["binding"]["name"].as_str() } else { params["name"].as_str() }.unwrap_or_default().to_owned();
         self.engine_handle.request_controller_call(&format!("rf-{operation}"), &format!("controller.rf.{operation}"), params)?;
+        self.rf.pending_name = pending_name;
+        if operation != "catalog" { self.rf.error.clear(); self.rf.error_is_catalog = false; }
         self.rf.pending = true;
         self.rf.last_poll = Instant::now();
         Ok(())
@@ -240,7 +273,12 @@ pub fn draw(app:&mut PealayerApp, ui:&mut egui::Ui) {
                                 ui.horizontal_wrapped(|ui| {
                                     ui.strong(entry["name"].as_str().filter(|s|!s.is_empty()).unwrap_or("RF button"));
                                     ui.monospace(entry["code_display"].as_str().unwrap_or_default());
-                                    if ui.button("Assign…").clicked() { app.rf.draft=new_binding(); app.rf.draft["name"]=json!(format!("RF {}",entry["id"])); app.rf.draft["match"]["rf_code"]=entry["code"].clone(); app.rf.draft["match"]["rf_bits"]=entry["bits"].clone(); app.rf.draft["match"]["rf_protocol"]=entry["protocol"].clone(); app.rf.previous_name.clear(); app.rf.tab=0; }
+                                    if ui.button("Assign…").clicked() {
+                                        let existing=array(&catalog["bindings"]).into_iter().find(|binding| binding["match"]["rf_code"]==entry["code"] && binding["match"]["rf_bits"]==entry["bits"] && binding["match"]["rf_protocol"]==entry["protocol"] && binding["match"]["gesture"]=="down");
+                                        app.rf.previous_name=existing.as_ref().and_then(|binding|binding["name"].as_str()).unwrap_or_default().into();
+                                        app.rf.draft=existing.unwrap_or_else(|| { let mut binding=new_binding(); binding["name"]=json!(format!("RF {}",entry["id"])); binding["match"]["rf_code"]=entry["code"].clone(); binding["match"]["rf_bits"]=entry["bits"].clone(); binding["match"]["rf_protocol"]=entry["protocol"].clone(); binding });
+                                        app.rf.tab=0;
+                                    }
                                     if ui.add_enabled(!app.rf.pending,egui::Button::new("Transmit")).clicked() { request(app,"transmit",json!({"code":entry["code"],"bits":entry["bits"],"protocol":entry["protocol"],"pulse_us":entry["pulse_us"],"repeats":1})); }
                                     ui.menu_button(crate::ui::icons::DOTS_THREE,|ui| {
                                         if ui.button("Unassign board action").clicked() { request(app,"map",json!({"id":entry["id"],"action":"none"})); ui.close(); }

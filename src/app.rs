@@ -2948,17 +2948,8 @@ impl PealayerApp {
             .unwrap_or_default();
         for result in results {
             if result.operation.starts_with("rf-") {
-                self.rf.pending = false;
-                match result.result {
-                    Ok(value) => {
-                        self.rf.error.clear();
-                        if result.operation == "rf-catalog" { self.rf.apply_catalog(value); }
-                        else {
-                            self.rf.last_result = value;
-                            if let Err(error) = self.request_rf("catalog", serde_json::json!({"read_board":true})) { self.rf.error = error; }
-                        }
-                    },
-                    Err(error) => { self.rf.error = error; },
+                if self.rf.complete(&result.operation, result.result) {
+                    if let Err(error) = self.request_rf("catalog", serde_json::json!({"read_board":true})) { self.rf.error = error; }
                 }
                 continue;
             }

@@ -9,7 +9,7 @@ type Entry = Waveform & { id: number; name?: string; code_display: string; actio
 type Application = { id: string; surface: string; values?: { app_actions?: string } };
 type MappingOption = { action: string; targets: string[]; behaviors: string[] };
 type Catalog = { connected?: boolean; entries?: Entry[]; entries_sampled?: boolean; board_error?: string; bindings?: Binding[]; learning?: { active: boolean; remaining_ms: number; learned: number }; activity?: { id: number; text: string; time: string; rf_code: number; rf_bits: number; rf_protocol: number }[]; hostname?: string; action_types?: string[]; gestures?: string[]; applications?: Application[]; effects?: { name: string; reference: string }[]; peripherals?: { controls: { name: string; actions: { id: string; name?: string; verb?: string }[] }[] }; board_mapping_options?: MappingOption[] };
-export type RfSnapshot = { catalog?: Catalog; pending?: boolean; error?: string; last_result?: unknown };
+export type RfSnapshot = { catalog?: Catalog; pending?: boolean; error?: string; last_result?: unknown; last_operation?: string };
 type Props = { rf?: RfSnapshot; sendCmd: (command: string, payload?: Record<string, unknown>) => void };
 const blank = (): Binding => ({ name: '', enabled: true, cooldown_ms: 250, match: { kind: 'rf.gesture', source: 'rf', rf_code: 0, rf_bits: 24, rf_protocol: 1, gesture: 'down' }, actions: [{ type: 'app', app_target: 'pealayer', app_kind: 'pealayer.toggle', app_value: '' }] });
 const labels: Record<string, string> = { app: 'Application', control: 'Board control', board: 'Controller command', effect: 'Effect', rf: 'RF transmit', 'virtual-key': 'Controller host keyboard', host: 'External program', script: 'Script', emit: 'Event' };
@@ -25,6 +25,13 @@ export const RfManager: React.FC<Props> = ({ rf, sendCmd }) => {
   const [map, setMap] = useState<{ id: number; action: string; target?: string; behavior?: string }>({ id: 0, action: 'none' });
   const catalog = rf?.catalog ?? {};
   const command = (operation: string, params: Record<string, unknown> = {}) => sendCmd('pealayer.rf', { operation, params });
+  useEffect(() => {
+    if (rf?.last_operation === 'rf-binding.put' && Array.isArray(rf.last_result)) {
+      const saved = (rf.last_result as Binding[]).find(binding => binding.name === draft.name && binding.match.rf_code === draft.match.rf_code && binding.match.rf_bits === draft.match.rf_bits && binding.match.rf_protocol === draft.match.rf_protocol && binding.match.gesture === draft.match.gesture);
+      if (saved) setPreviousName(saved.name);
+    }
+    if (rf?.last_operation === 'rf-binding.remove' && Array.isArray(rf.last_result) && !(rf.last_result as Binding[]).some(binding => binding.name === previousName)) setPreviousName('');
+  }, [rf?.last_result, rf?.last_operation]);
   useEffect(() => {
     if (!open) return;
     const timer = window.setInterval(() => { if (!rf?.pending) command('catalog'); }, 1200);
