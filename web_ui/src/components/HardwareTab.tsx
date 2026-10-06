@@ -13,6 +13,7 @@ import {
   InputNumber,
   Modal,
   Segmented,
+  Select,
   Slider,
   Space,
   Tag,
@@ -34,7 +35,10 @@ import {
   EyeInvisibleOutlined,
   EyeOutlined,
   LockOutlined,
+  PlayCircleOutlined,
   PushpinOutlined,
+  ReloadOutlined,
+  StopOutlined,
   UnlockOutlined,
   PoweroffOutlined,
   ThunderboltOutlined,
@@ -106,7 +110,12 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
   const details = state.hardware_details;
   const [stripPixels, setStripPixels] = useState<number | null>(null);
   const [stripColor, setStripColor] = useState('#38D27A');
+  const [stripSecondColor, setStripSecondColor] = useState('#2478FF');
   const [stripBrightness, setStripBrightness] = useState(255);
+  const [stripFps, setStripFps] = useState<number | null>(null);
+  const [stripPixel, setStripPixel] = useState(0);
+  const [stripMode, setStripMode] = useState('solid');
+  const [stripEffectId, setStripEffectId] = useState('');
   const [pwmDrafts, setPwmDrafts] = useState<Record<string, number>>({});
   const [managerOpen, setManagerOpen] = useState(false);
   const [detailKey, setDetailKey] = useState<string | null>(null);
@@ -330,8 +339,30 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
 
   const strip = details.strip;
   const pixels = stripPixels ?? strip?.default_pixels ?? 1;
+  const fps = stripFps ?? strip?.default_fps ?? 20;
   const color = /^#([0-9a-f]{6})$/i.exec(stripColor)?.[1] ?? '000000';
   const rgb = [0, 2, 4].map((offset) => Number.parseInt(color.slice(offset, offset + 2), 16));
+  const secondColor = /^#([0-9a-f]{6})$/i.exec(stripSecondColor)?.[1] ?? '000000';
+  const secondRgb = [0, 2, 4].map((offset) => Number.parseInt(secondColor.slice(offset, offset + 2), 16));
+  const stripEffects = (state.controller_effects ?? []).filter((effect) => effect.kind === 'strip-stream');
+  const activeEffectId = stripEffects.some((effect) => effect.id === stripEffectId)
+    ? stripEffectId
+    : stripEffects[0]?.id ?? '';
+  const availableStripModes = (strip?.modes ?? []).filter((mode) => ['solid', 'pixel', 'frame', 'rainbow', 'effect'].includes(mode));
+  const activeStripMode = availableStripModes.includes(stripMode) ? stripMode : availableStripModes[0] ?? 'solid';
+  const stripFrame = () => Array.from({ length: pixels }, (_, index) => {
+    const ratio = pixels <= 1 ? 0 : index / (pixels - 1);
+    return rgb.map((value, channel) => Math.round(
+      (value + (secondRgb[channel] - value) * ratio) * stripBrightness / 255,
+    ));
+  }).flat();
+  const stripPreviewBackground = activeStripMode === 'rainbow'
+    ? 'linear-gradient(90deg,#ff355e,#ff9f1c,#ffe66d,#2ec4b6,#2478ff,#8b5cf6,#ff355e)'
+    : activeStripMode === 'frame'
+      ? `linear-gradient(90deg,${stripColor},${stripSecondColor})`
+      : activeStripMode === 'pixel'
+        ? `linear-gradient(90deg,var(--surface-0) 0 44%,${stripColor} 44% 56%,var(--surface-0) 56%)`
+        : stripColor;
 
   return <section className="surface-page hardware-page">
     <header className="surface-page__header">
@@ -551,16 +582,53 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
     <Collapse className="hardware-sections" defaultActiveKey={grouped.map((item) => item.key)} items={grouped} />
     <RfManager rf={state.rf} sendCmd={sendCmd} />
 
-    {strip && <Card className="surface-card strip-control" title={<Space><BulbOutlined />{tr(locale, 'Addressable lighting')}</Space>}>
-      <div className="strip-control__grid">
-        <label><span>{tr(locale, 'Pixels')}</span><InputNumber min={strip.minimum_pixels} max={strip.maximum_pixels} value={pixels} onChange={(value) => setStripPixels(value)} /></label>
-        <label><span>{tr(locale, 'Color')}</span><ColorPicker value={stripColor} disabledAlpha onChangeComplete={(value) => setStripColor(value.toHexString().toUpperCase())} /></label>
-        <label><span>{tr(locale, 'Brightness')}</span><Slider min={0} max={255} value={stripBrightness} onChange={setStripBrightness} /></label>
-        <Space wrap>
-          <Button onClick={() => sendCmd('hardware.strip.configure', { pixels })}>{tr(locale, 'Apply pixel count')}</Button>
-          <Button type="primary" onClick={() => sendCmd('hardware.strip.fill', { red: rgb[0], green: rgb[1], blue: rgb[2], brightness: stripBrightness })}>{tr(locale, 'Fill strip')}</Button>
-          <Button onClick={() => sendCmd('hardware.strip.clear')}>{tr(locale, 'Clear')}</Button>
-        </Space>
+    {strip && <Card
+      className={`surface-card strip-control${strip.running ? ' is-running' : ''}`}
+      title={<Space><span className="strip-control__icon"><BulbOutlined /></span><span>{tr(locale, 'Addressable lighting')}</span></Space>}
+      extra={<Space size="small">
+        <Tag color={strip.running ? 'success' : 'default'}>{strip.running ? (strip.active_name || tr(locale, 'Streaming')) : tr(locale, 'Idle')}</Tag>
+        <Tooltip title={tr(locale, 'Refresh status')}><Button type="text" size="small" icon={<ReloadOutlined />} aria-label={tr(locale, 'Refresh status')} onClick={() => sendCmd('hardware.strip.status')} /></Tooltip>
+      </Space>}
+    >
+      <div className="strip-control__preview" aria-label={tr(locale, 'Lighting preview')}>
+        <div style={{ background: stripPreviewBackground, opacity: Math.max(.12, stripBrightness / 255) }} />
+        <span>{pixels} {tr(locale, 'pixels')}</span>
+        <span>{fps} FPS</span>
+      </div>
+
+      <div className="strip-control__configuration">
+        <label><span>{tr(locale, 'Pixel count')}</span><InputNumber min={strip.minimum_pixels} max={strip.maximum_pixels} value={pixels} onChange={(value) => setStripPixels(value)} /></label>
+        <label><span>{tr(locale, 'Frames per second')}</span><InputNumber min={strip.minimum_fps} max={strip.maximum_fps} value={fps} onChange={(value) => setStripFps(value)} /></label>
+        <Button onClick={() => sendCmd('hardware.strip.configure', { pixels })}>{tr(locale, 'Configure')}</Button>
+      </div>
+
+      <Segmented
+        block
+        className="strip-control__modes"
+        value={activeStripMode}
+        onChange={(value) => setStripMode(String(value))}
+        options={availableStripModes.map((mode) => ({
+          value: mode,
+          label: tr(locale, mode === 'solid' ? 'Solid' : mode === 'pixel' ? 'Pixel' : mode === 'frame' ? 'Gradient' : mode === 'rainbow' ? 'Rainbow' : 'Effects'),
+        }))}
+      />
+
+      <div className="strip-control__editor">
+        {['solid', 'pixel', 'frame'].includes(activeStripMode) && <label><span>{tr(locale, 'Color')}</span><ColorPicker value={stripColor} disabledAlpha showText onChangeComplete={(value) => setStripColor(value.toHexString().toUpperCase())} /></label>}
+        {activeStripMode === 'frame' && <label><span>{tr(locale, 'End color')}</span><ColorPicker value={stripSecondColor} disabledAlpha showText onChangeComplete={(value) => setStripSecondColor(value.toHexString().toUpperCase())} /></label>}
+        {activeStripMode === 'pixel' && <label><span>{tr(locale, 'Pixel')}</span><InputNumber min={0} max={Math.max(0, pixels - 1)} value={Math.min(stripPixel, Math.max(0, pixels - 1))} onChange={(value) => setStripPixel(value ?? 0)} /></label>}
+        {['solid', 'pixel', 'frame'].includes(activeStripMode) && <label className="strip-control__brightness"><span>{tr(locale, 'Brightness')} · {Math.round(stripBrightness * 100 / 255)}%</span><Slider min={0} max={255} value={stripBrightness} onChange={setStripBrightness} /></label>}
+        {activeStripMode === 'effect' && <label className="strip-control__effect"><span>{tr(locale, 'Effect')}</span><Select value={activeEffectId || undefined} placeholder={tr(locale, 'No lighting effects')} options={stripEffects.map((effect) => ({ value: effect.id, label: effect.name }))} onChange={setStripEffectId} /></label>}
+      </div>
+
+      <div className="strip-control__actions">
+        {activeStripMode === 'solid' && <Button type="primary" icon={<BulbOutlined />} onClick={() => sendCmd('hardware.strip.fill', { red: rgb[0], green: rgb[1], blue: rgb[2], brightness: stripBrightness })}>{tr(locale, 'Fill strip')}</Button>}
+        {activeStripMode === 'pixel' && <Button type="primary" icon={<BulbOutlined />} onClick={() => sendCmd('hardware.strip.pixel', { pixel: stripPixel, pixels, red: rgb[0], green: rgb[1], blue: rgb[2], brightness: stripBrightness })}>{tr(locale, 'Apply pixel')}</Button>}
+        {activeStripMode === 'frame' && <Button type="primary" icon={<BulbOutlined />} onClick={() => sendCmd('hardware.strip.frame', { pixels, rgb: stripFrame() })}>{tr(locale, 'Send gradient')}</Button>}
+        {activeStripMode === 'rainbow' && <Button type="primary" icon={<PlayCircleOutlined />} onClick={() => sendCmd('hardware.strip.rainbow', { pixels, fps })}>{tr(locale, 'Start rainbow')}</Button>}
+        {activeStripMode === 'effect' && <Button type="primary" icon={<PlayCircleOutlined />} disabled={!activeEffectId} onClick={() => sendCmd('hardware.strip.effect', { id: activeEffectId, pixels, fps })}>{tr(locale, 'Play effect')}</Button>}
+        {strip.running && <Button icon={<StopOutlined />} onClick={() => sendCmd('hardware.strip.stop')}>{tr(locale, 'Stop')}</Button>}
+        <Button onClick={() => sendCmd('hardware.strip.clear')}>{tr(locale, 'Clear')}</Button>
       </div>
     </Card>}
 
