@@ -168,7 +168,7 @@ fn action_editor(ui: &mut egui::Ui, action: &mut Value, catalog:&Value) {
                 choices(ui,"Effect",action,"macro",&effects);
             },
             "board" => text(ui,"Controller command",action,"command"),
-            "virtual-key" => { text(ui,"Controller host key",action,"virtual_key"); number(ui,"Hold (ms)",action,"hold_ms",10,1000); },
+            "virtual-key" => { text(ui,"Controller host key or shortcut",action,"virtual_key"); number(ui,"Hold (ms)",action,"hold_ms",10,1000); },
             "host" | "script" => {
                 let field=if action["type"]=="host" {"executable"} else {"script"};
                 text(ui,"Program",action,field);

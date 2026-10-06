@@ -30,7 +30,9 @@ argument values, e.g. `pealayer.seek` with value `10`.
 Keyboard and program actions run on the displayed **controller hostname**, not
 implicitly on the browser/GUI computer. Native keyboard injection is subject to
 the controller's allowlist and explicit consent. The existing key executor
-supports single virtual keys, not modifier chords. External program/script tasks
+supports single keys and exact modifier chords, e.g. `CTRL+SHIFT+S`; each chord
+needs its own consent and modifiers are released on cancellation or error.
+External program/script tasks
 retain the controller's 30-second timeout; **Launch independently** starts an
 application without waiting for it to close. Host mappings need PCController online;
 existing EEPROM mappings can work independently.
