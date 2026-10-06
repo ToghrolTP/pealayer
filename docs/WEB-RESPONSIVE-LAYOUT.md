@@ -16,6 +16,8 @@ All seven navigation targets fit across the bottom at widths down to 320 px.
 
 - Grid children and video previews shrink without intrinsic image/title widths
   stretching their columns. Phone previews retain their aspect ratio.
+- Compact timeline transport keeps both elapsed and duration visible; its seek
+  slider uses a second row instead of competing with the buttons for space.
 - Phone timeline order: preview, cues, then effects. The ruler and lanes share a
   minimum width and scroll **inside** the timeline, rather than squeezing labels
   together or overflowing the page.
@@ -33,7 +35,7 @@ All seven navigation targets fit across the bottom at widths down to 320 px.
 
 ## Verification
 
-`npm run build` runs 15 inexpensive source-layout guardrails, the existing small
+`npm run build` runs 17 inexpensive source-layout guardrails, the existing small
 Web checks, TypeScript compilation, bundling and installable/offline PWA checks.
 These guardrails are not a substitute for browser testing.
 
