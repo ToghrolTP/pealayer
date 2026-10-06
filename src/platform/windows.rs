@@ -158,6 +158,7 @@ static SHELL_HAS_MEDIA: AtomicBool = AtomicBool::new(false);
 static SHELL_REINITIALIZE: AtomicBool = AtomicBool::new(false);
 static TASKBAR_BUTTON_CREATED_MESSAGE: AtomicU32 = AtomicU32::new(0);
 static TASKBAR_THUMBNAIL_CLIP: Mutex<Option<(isize, Option<[i32; 4]>)>> = Mutex::new(None);
+static THUMBNAIL_METRICS_DIRTY: AtomicBool = AtomicBool::new(true);
 
 #[cfg(target_os = "windows")]
 pub struct GuiOwnershipGuard(windows::Win32::Foundation::HANDLE);
@@ -1578,105 +1579,103 @@ enum ThumbnailGlyph {
 #[cfg(target_os = "windows")]
 fn create_thumbnail_button_icon(
     glyph: ThumbnailGlyph,
+    size: u32,
 ) -> windows::core::Result<windows::Win32::UI::WindowsAndMessaging::HICON> {
-    use windows::Win32::UI::WindowsAndMessaging::CreateIcon;
+    use windows::Win32::{Graphics::Gdi::{CreateBitmap, DeleteObject},
+        UI::WindowsAndMessaging::{CreateIconIndirect, ICONINFO}};
+    let image = thumbnail_icon_pixels(glyph, size);
+    let color = crate::platform::taskbar_preview::bitmap(&image)?;
+    let mask_bytes = vec![0u8; ((size as usize + 15) / 16 * 2) * size as usize];
+    unsafe {
+        let mask = CreateBitmap(size as i32, size as i32, 1, 1, Some(mask_bytes.as_ptr().cast()));
+        if mask.0.is_null() { let _ = DeleteObject(color.into()); return Err(windows::core::Error::from_thread()); }
+        let result = CreateIconIndirect(&ICONINFO { fIcon: true.into(), hbmColor:color, hbmMask:mask, ..Default::default() });
+        let _ = DeleteObject(color.into()); let _ = DeleteObject(mask.into()); result
+    }
+}
 
-    const SIZE: usize = 16;
-    const BYTES_PER_ROW: usize = 2;
-    let mut and_mask = [0xffu8; SIZE * BYTES_PER_ROW];
-    let mut xor_mask = [0u8; SIZE * BYTES_PER_ROW];
-    let mut plot = |x: usize, y: usize| {
-        if x >= SIZE || y >= SIZE {
-            return;
-        }
-        let byte = y * BYTES_PER_ROW + x / 8;
-        let bit = 0x80 >> (x % 8);
-        and_mask[byte] &= !bit;
-        xor_mask[byte] |= bit;
+#[cfg(target_os = "windows")]
+fn thumbnail_icon_pixels(glyph: ThumbnailGlyph, size: u32) -> image::RgbaImage {
+    use ab_glyph::{Font, FontRef, PxScale, point};
+    use crate::ui::icons;
+    let symbol = match glyph {
+        ThumbnailGlyph::Back => icons::REWIND, ThumbnailGlyph::Forward => icons::FAST_FORWARD,
+        ThumbnailGlyph::Play => icons::PLAY, ThumbnailGlyph::Pause => icons::PAUSE,
+        ThumbnailGlyph::Mute => icons::SPEAKER_SLASH, ThumbnailGlyph::Unmute => icons::SPEAKER_HIGH,
+        ThumbnailGlyph::Fullscreen => icons::ARROWS_OUT, ThumbnailGlyph::Restore => icons::ARROWS_IN,
     };
-    let mut line = |mut x0: i32, mut y0: i32, x1: i32, y1: i32| {
-        let dx = (x1 - x0).abs();
-        let sx = if x0 < x1 { 1 } else { -1 };
-        let dy = -(y1 - y0).abs();
-        let sy = if y0 < y1 { 1 } else { -1 };
-        let mut error = dx + dy;
-        loop {
-            if x0 >= 0 && y0 >= 0 {
-                plot(x0 as usize, y0 as usize);
-            }
-            if x0 == x1 && y0 == y1 {
-                break;
-            }
-            let twice = 2 * error;
-            if twice >= dy {
-                error += dy;
-                x0 += sx;
-            }
-            if twice <= dx {
-                error += dx;
-                y0 += sy;
-            }
-        }
-    };
-
-    match glyph {
-        ThumbnailGlyph::Back | ThumbnailGlyph::Forward => {
-            let forward = matches!(glyph, ThumbnailGlyph::Forward);
-            let (tip, edge) = if forward { (11, 5) } else { (4, 10) };
-            for y in 4..=11 {
-                line(edge, 7, tip, y);
-            }
-            let bar = if forward { 12 } else { 3 };
-            line(bar, 4, bar, 11);
-        }
-        ThumbnailGlyph::Play => {
-            for y in 3..=12 {
-                line(5, 7, 5 + (y - 3) / 2, y);
-            }
-        }
-        ThumbnailGlyph::Pause => {
-            for x in [5, 6, 9, 10] {
-                line(x, 4, x, 11);
-            }
-        }
-        ThumbnailGlyph::Mute | ThumbnailGlyph::Unmute => {
-            line(3, 6, 5, 6);
-            line(3, 9, 5, 9);
-            line(5, 6, 8, 3);
-            line(5, 9, 8, 12);
-            line(8, 3, 8, 12);
-            if matches!(glyph, ThumbnailGlyph::Mute) {
-                line(10, 5, 13, 10);
-                line(13, 5, 10, 10);
-            } else {
-                line(10, 5, 12, 7);
-                line(12, 7, 10, 10);
-            }
-        }
-        ThumbnailGlyph::Fullscreen | ThumbnailGlyph::Restore => {
-            let inset = if matches!(glyph, ThumbnailGlyph::Restore) {
-                2
-            } else {
-                0
-            };
-            let lo = 3 + inset;
-            let hi = 12 - inset;
-            line(lo, lo, lo + 3, lo);
-            line(lo, lo, lo, lo + 3);
-            line(hi - 3, lo, hi, lo);
-            line(hi, lo, hi, lo + 3);
-            line(lo, hi - 3, lo, hi);
-            line(lo, hi, lo + 3, hi);
-            line(hi - 3, hi, hi, hi);
-            line(hi, hi - 3, hi, hi);
+    let mut image = image::RgbaImage::new(size,size);
+    let font = FontRef::try_from_slice(egui_phosphor::Variant::Regular.font_bytes()).expect("bundled Phosphor font");
+    let glyph = font.glyph_id(symbol.chars().next().expect("Phosphor glyph"));
+    let scale = PxScale::from(size as f32 * 0.9);
+    if let Some(outline) = font.outline_glyph(glyph.with_scale(scale)) {
+        let bounds = outline.px_bounds();
+        let position = point((size as f32-bounds.width())*0.5-bounds.min.x,
+            (size as f32-bounds.height())*0.5-bounds.min.y);
+        if let Some(outline) = font.outline_glyph(glyph.with_scale_and_position(scale,position)) {
+            let bounds = outline.px_bounds();
+            let light = native_taskbar_light_theme();
+            let color = if light { [32,32,32] } else { [245,245,245] };
+            outline.draw(|x,y,coverage| {
+                let x=bounds.min.x.floor() as i32+x as i32;
+                let y=bounds.min.y.floor() as i32+y as i32;
+                if x>=0 && y>=0 && x<size as i32 && y<size as i32 {
+                    image.put_pixel(x as u32,y as u32,image::Rgba([color[0],color[1],color[2],(coverage*255.0).round() as u8]));
+                }
+            });
         }
     }
+    image
+}
 
-    unsafe { CreateIcon(None, 16, 16, 1, 1, and_mask.as_ptr(), xor_mask.as_ptr()) }
+#[cfg(target_os = "windows")]
+fn native_taskbar_light_theme() -> bool {
+    winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+        .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize")
+        .ok().and_then(|key| key.get_value::<u32,_>("SystemUsesLightTheme").ok()).is_some_and(|v| v!=0)
+}
+
+pub fn thumbnail_toolbar_metrics(hwnd: isize) -> (u32,bool) {
+    #[cfg(target_os = "windows")]
+    {
+        static METRICS: Mutex<Option<(isize, std::time::Instant, (u32,bool))>> = Mutex::new(None);
+        let mut cached = METRICS.lock().unwrap_or_else(|error| error.into_inner());
+        let dirty = THUMBNAIL_METRICS_DIRTY.swap(false, Ordering::AcqRel);
+        if !dirty && let Some((owner, at, metrics)) = *cached {
+            if owner == hwnd && at.elapsed() < std::time::Duration::from_secs(1) { return metrics; }
+        }
+        #[link(name = "user32")]
+        unsafe extern "system" { fn GetDpiForWindow(hwnd: isize) -> u32; fn GetSystemMetricsForDpi(index:i32,dpi:u32)->i32; }
+        let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
+        let metrics = (unsafe { GetSystemMetricsForDpi(49,dpi) }.clamp(16,64) as u32,native_taskbar_light_theme());
+        *cached = Some((hwnd,std::time::Instant::now(),metrics)); metrics
+    }
+    #[cfg(not(target_os = "windows"))]
+    { let _=hwnd; (16,false) }
+}
+
+/// Diagnostic atlas uses the exact same rasterizer as the native HICONs.
+pub fn thumbnail_toolbar_png() -> Option<Vec<u8>> {
+    #[cfg(target_os = "windows")]
+    {
+        let size = thumbnail_toolbar_metrics(get_registered_hwnd()).0;
+        let mut atlas = image::RgbaImage::new(size*8,size);
+        for (index,glyph) in [ThumbnailGlyph::Back,ThumbnailGlyph::Play,ThumbnailGlyph::Pause,
+            ThumbnailGlyph::Forward,ThumbnailGlyph::Mute,ThumbnailGlyph::Unmute,
+            ThumbnailGlyph::Fullscreen,ThumbnailGlyph::Restore].into_iter().enumerate() {
+            image::imageops::overlay(&mut atlas,&thumbnail_icon_pixels(glyph,size),index as i64*size as i64,0);
+        }
+        let mut out=std::io::Cursor::new(Vec::new());
+        atlas.write_to(&mut out,image::ImageFormat::Png).ok()?;
+        Some(out.into_inner())
+    }
+    #[cfg(not(target_os = "windows"))]
+    { None }
 }
 
 #[cfg(target_os = "windows")]
 fn taskbar_thumbnail_buttons(
+    hwnd: isize,
     is_paused: bool,
     is_muted: bool,
     is_fullscreen: bool,
@@ -1731,7 +1730,7 @@ fn taskbar_thumbnail_buttons(
     let icons = specs
         .iter()
         .map(|(_, glyph)| {
-            create_thumbnail_button_icon(*glyph)
+            create_thumbnail_button_icon(*glyph, thumbnail_toolbar_metrics(hwnd).0)
                 .map_err(|error| format!("create thumbnail-toolbar icon: {error}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -1776,7 +1775,7 @@ pub fn init_taskbar_thumbnail_toolbar(hwnd_raw: isize, enabled: bool) -> Result<
         taskbar
             .HrInit()
             .map_err(|e| format!("ITaskbarList3::HrInit failed: {e}"))?;
-        let (buttons, icons) = taskbar_thumbnail_buttons(true, false, false, false, enabled)?;
+        let (buttons, icons) = taskbar_thumbnail_buttons(hwnd_raw, true, false, false, false, enabled)?;
         let result = taskbar
             .ThumbBarAddButtons(hwnd, &buttons)
             .map_err(|e| format!("ThumbBarAddButtons failed: {e}"));
@@ -1821,7 +1820,7 @@ pub fn update_taskbar_thumbnail_buttons(
             .HrInit()
             .map_err(|e| format!("ITaskbarList3::HrInit failed: {e}"))?;
         let (buttons, icons) =
-            taskbar_thumbnail_buttons(is_paused, is_muted, is_fullscreen, has_media, enabled)?;
+            taskbar_thumbnail_buttons(hwnd_raw, is_paused, is_muted, is_fullscreen, has_media, enabled)?;
         let result = taskbar
             .ThumbBarUpdateButtons(hwnd, &buttons)
             .map_err(|e| format!("ThumbBarUpdateButtons failed: {e}"));
@@ -1878,8 +1877,8 @@ pub fn configure_video_taskbar_thumbnail(hwnd_raw: isize) -> Result<(), String> 
     update_video_taskbar_thumbnail(hwnd_raw, None)
 }
 
-/// Crops Windows' live DWM taskbar preview to the current video surface. A
-/// `None` rectangle restores the ordinary full-window thumbnail. The shell is
+/// Supplies the MPV-only iconic representation. A `None` rectangle restores
+/// Windows' ordinary full-window thumbnail. The shell is
 /// only called when the effective rectangle changes, so publishing the video
 /// layout every frame does not add idle COM traffic.
 #[cfg(target_os = "windows")]
@@ -1888,7 +1887,6 @@ pub fn update_video_taskbar_thumbnail(
     video_rect: Option<[i32; 4]>,
 ) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::Foundation::RECT;
     use windows::Win32::System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     };
@@ -1898,6 +1896,7 @@ pub fn update_video_taskbar_thumbnail(
         return Err("invalid window handle (HWND is 0)".to_string());
     }
     let normalized = video_rect.filter(|rect| rect[2] > rect[0] && rect[3] > rect[1]);
+    crate::platform::taskbar_preview::configure(hwnd_raw, normalized.is_some())?;
     if TASKBAR_THUMBNAIL_CLIP
         .lock()
         .is_ok_and(|cached| *cached == Some((hwnd_raw, normalized)))
@@ -1912,19 +1911,14 @@ pub fn update_video_taskbar_thumbnail(
         taskbar
             .HrInit()
             .map_err(|error| format!("initialize taskbar thumbnail service: {error}"))?;
-        let rect = normalized.map(|rect| RECT {
-            left: rect[0],
-            top: rect[1],
-            right: rect[2],
-            bottom: rect[3],
-        });
+        // The iconic bitmap already contains video only; clear the legacy
+        // client-coordinate crop instead of applying a second crop to it.
         taskbar
             .SetThumbnailClip(
                 hwnd,
-                rect.as_ref()
-                    .map_or(std::ptr::null(), |rect| rect as *const RECT),
+                std::ptr::null(),
             )
-            .map_err(|error| format!("set taskbar video thumbnail crop: {error}"))?;
+            .map_err(|error| format!("clear legacy taskbar thumbnail crop: {error}"))?;
     }
     if let Ok(mut cached) = TASKBAR_THUMBNAIL_CLIP.lock() {
         *cached = Some((hwnd_raw, normalized));
@@ -1989,8 +1983,17 @@ unsafe extern "system" fn shell_window_proc(
 
     observe_native_window_message(message);
 
+    if matches!(message, 0x02e0 | 0x031a | 0x001a) { // DPI/theme/system settings
+        THUMBNAIL_METRICS_DIRTY.store(true, Ordering::Release);
+    }
+
+    if crate::platform::taskbar_preview::handle_request(hwnd.0 as isize, message, lparam.0) {
+        return LRESULT(0);
+    }
+
     let taskbar_created = TASKBAR_BUTTON_CREATED_MESSAGE.load(Ordering::Acquire);
     if taskbar_created != 0 && message == taskbar_created {
+        crate::platform::taskbar_preview::reset_shell();
         SHELL_REINITIALIZE.store(true, Ordering::Release);
     }
 

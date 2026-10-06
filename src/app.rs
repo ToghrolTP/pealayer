@@ -577,7 +577,7 @@ pub struct PealayerApp {
     pub window_handle: Option<isize>,
     pub shell_initialized: bool,
     pub(crate) last_taskbar_state: Option<crate::platform::windows::TaskbarState>,
-    pub(crate) last_thumbnail_button_state: Option<(bool, bool, bool, bool, bool)>,
+    pub(crate) last_thumbnail_button_state: Option<(bool, bool, bool, bool, bool, (u32, bool))>,
     pub(crate) last_update_notice_state: Option<String>,
 }
 
@@ -729,6 +729,7 @@ impl eframe::App for PealayerApp {
         }
 
         if !self.web_only {
+            crate::platform::taskbar_preview::register_repaint(ui.ctx());
             self.ensure_shell_initialized();
             self.process_shell_commands(ui.ctx());
         }
@@ -2294,6 +2295,7 @@ impl PealayerApp {
             self.was_fullscreen,
             self.current_video_path.is_some(),
             self.windows_thumbnail_toolbar,
+            crate::platform::windows::thumbnail_toolbar_metrics(hwnd),
         );
         if self.shell_initialized
             && hwnd != 0

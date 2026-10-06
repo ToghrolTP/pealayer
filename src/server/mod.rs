@@ -771,6 +771,16 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
             dispatch_ipc_payload(state, String::from_utf8_lossy(&request.body).trim()),
         ),
         ("GET", "/api/player/frame") => player_frame_response(&request.target, state),
+        ("GET", "/api/player/taskbar-preview") => HttpResponse::json(200,"OK",
+            crate::platform::taskbar_preview::diagnostics().to_string()),
+        ("GET", "/api/player/taskbar-preview.png") => match crate::platform::taskbar_preview::frame_png() {
+            Some(bytes) => HttpResponse::bytes(200,"OK","image/png",bytes),
+            None => HttpResponse::text(404,"Not Found","No MPV taskbar frame is available"),
+        },
+        ("GET", "/api/player/taskbar-icons.png") => match crate::platform::windows::thumbnail_toolbar_png() {
+            Some(bytes) => HttpResponse::bytes(200,"OK","image/png",bytes),
+            None => HttpResponse::text(404,"Not Found","Windows thumbnail toolbar is unavailable"),
+        },
         ("GET", "/api/player/seek-thumbnail") => {
             player_seek_thumbnail_response(&request.target, state)
         }
@@ -801,7 +811,8 @@ fn denied_web_capability(
             | ("POST", "/api/ipc")
     );
     let file_route = path.starts_with("/api/fs/") || path.starts_with("/api/remote/")
-        || matches!(path, "/api/player/frame" | "/api/player/seek-thumbnail");
+        || matches!(path, "/api/player/frame" | "/api/player/seek-thumbnail"
+            | "/api/player/taskbar-preview" | "/api/player/taskbar-preview.png" | "/api/player/taskbar-icons.png");
     let update_route = path.starts_with("/api/update/");
     if configuration_route && !web.web_allow_configuration {
         return Some("configuration");

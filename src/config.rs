@@ -577,7 +577,7 @@ pub struct AppConfig {
     pub window_magnetic_snap_distance: u32,
     pub windows_mica_backdrop: bool,
     pub windows_dwm_theming: bool,
-    /// Crop the Windows taskbar preview to the live video surface instead of
+    /// Supply the MPV framebuffer as the Windows taskbar preview instead of
     /// showing the complete application chrome.
     pub windows_video_taskbar_thumbnail: bool,
     /// Show native playback actions below the Windows taskbar preview.
