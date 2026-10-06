@@ -502,6 +502,11 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
             "در حالت تغییر وضعیت، جهت تا انتخاب فرمان بعدی فعال می‌ماند. در حالت نگه‌داشتن، با رهاکردن دکمه فرمان توقف فرستاده می‌شود."
         }
         "Video surface" => "سطح ویدئو",
+        "Numeric input" => "ورودی عددی",
+        "Human-readable time units" => "واحدهای زمانی خوانا",
+        "Automatically normalize time fields to units such as s, min, and h. Disable to always display milliseconds." => {
+            "نمایش خودکار زمان با واحدهای خوانا مانند ثانیه، دقیقه و ساعت؛ برای نمایش همیشگی میلی‌ثانیه غیرفعال کنید."
+        }
         "Keyboard shortcuts" => "میان‌برهای صفحه‌کلید",
         "Enable in-app keyboard shortcuts and hardware bindings" => {
             "فعال‌سازی میان‌برها و کلیدهای سخت‌افزاری داخل برنامه"

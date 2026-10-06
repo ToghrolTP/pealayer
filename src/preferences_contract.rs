@@ -597,6 +597,18 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             2_000.0,
             10.0,
         ),
+        {
+            let mut control = PreferenceControl::boolean(
+                "human_readable_time_units",
+                "input",
+                "Numeric input",
+                "Human-readable time units",
+            );
+            control.description = Some(
+                "Automatically normalize time fields to units such as s, min, and h. Disable to always display milliseconds.",
+            );
+            control
+        },
         PreferenceControl::boolean(
             "keyboard_shortcuts_enabled",
             "input",
@@ -1468,6 +1480,31 @@ mod tests {
             assert_eq!(control.minimum, Some(min));
             assert_eq!(control.maximum, Some(max));
         }
+    }
+
+    #[test]
+    fn human_readable_time_units_are_enabled_by_default_and_shared() {
+        let config = crate::config::AppConfig::default();
+        assert!(config.human_readable_time_units);
+        assert!(
+            serde_json::from_str::<crate::config::AppConfig>("{}")
+                .unwrap()
+                .human_readable_time_units
+        );
+
+        let controls = preference_controls(&config);
+        let control = controls
+            .iter()
+            .find(|control| control.key == "human_readable_time_units")
+            .expect("missing time-unit preference");
+        assert!(matches!(control.kind, PreferenceControlKind::Boolean));
+        assert_eq!(control.section, "input");
+        assert_eq!(control.group, "Numeric input");
+
+        let patched = config
+            .apply_patch(&serde_json::json!({"human_readable_time_units": false}))
+            .unwrap();
+        assert!(!patched.human_readable_time_units);
     }
 
     #[test]

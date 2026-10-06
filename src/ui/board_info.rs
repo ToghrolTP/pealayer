@@ -590,6 +590,7 @@ fn settings(
                     &mut settings.stream_period_ms,
                     0..=u16::MAX as u64,
                     10.0,
+                    app.human_readable_time_units,
                 ))
                 .on_hover_text(app.tr("Use 0 to disable periodic telemetry"));
             });
@@ -758,10 +759,19 @@ fn settings(
                     );
                 });
                 setting_control(ui, &app.tr("Exit hold"), |ui| {
-                    ui.add(
-                        egui::Slider::new(&mut settings.motion_exit_hold_seconds, 1..=31)
-                            .suffix(" s"),
-                    );
+                    let mut hold_ms = u64::from(settings.motion_exit_hold_seconds) * 1_000;
+                    if ui
+                        .add(crate::duration::time_value_drag(
+                            &mut hold_ms,
+                            1_000..=31_000,
+                            1_000.0,
+                            app.human_readable_time_units,
+                        ))
+                        .changed()
+                    {
+                        settings.motion_exit_hold_seconds =
+                            hold_ms.div_ceil(1_000).clamp(1, 31) as u8;
+                    }
                 });
                 if capabilities.supports_motion_break_setting {
                     setting_control(ui, &app.tr("Motion break"), |ui| {
@@ -769,6 +779,7 @@ fn settings(
                             &mut settings.motion_break_ms,
                             1..=255,
                             1.0,
+                            app.human_readable_time_units,
                         ));
                     });
                 }

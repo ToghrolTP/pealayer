@@ -4181,6 +4181,7 @@ fn draw_display_text_tool(
                     &mut duration_ms,
                     250..=60_000,
                     250.0,
+                    app.human_readable_time_units,
                 ));
                 if ui
                     .add_enabled(
@@ -9182,6 +9183,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 &mut start_ms,
                                                                 0..=max_start_ms,
                                                                 50.0,
+                                                                app.human_readable_time_units,
                                                             ),
                                                         );
                                                         if editor.drag_started()
@@ -9224,6 +9226,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 &mut duration_ms,
                                                                 50..=3_600_000,
                                                                 50.0,
+                                                                app.human_readable_time_units,
                                                             ),
                                                         );
                                                         if editor.drag_started()
@@ -12251,6 +12254,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                             &mut exact_time,
                                                             0..=(total_seconds * 1_000.0).round() as u64,
                                                             1.0,
+                                                            self.app.human_readable_time_units,
                                                         ))
                                                         .changed()
                                                         && exact_time != marker.time_ms
