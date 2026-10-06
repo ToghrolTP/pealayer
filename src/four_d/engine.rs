@@ -1,3 +1,4 @@
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -268,6 +269,68 @@ pub struct ControllerCallResult {
     pub result: Result<serde_json::Value, String>,
 }
 
+#[derive(Debug)]
+struct PendingControllerIntent {
+    method: String,
+    params: serde_json::Value,
+    refresh_catalog: bool,
+}
+
+/// A bounded, fair latest-value queue for live hardware controls.
+///
+/// Motion buttons, relays, and PWM sliders represent desired state rather
+/// than an audit log. Replacing an older pending value for the same stable
+/// control key prevents a slow board acknowledgement from building an
+/// unbounded FIFO of stale movement commands. The insertion-order side queue
+/// keeps different controls moving fairly under concurrent input.
+#[derive(Debug, Default)]
+struct PendingControllerIntents {
+    order: VecDeque<String>,
+    latest: HashMap<String, PendingControllerIntent>,
+}
+
+impl PendingControllerIntents {
+    fn replace(
+        &mut self,
+        control_key: String,
+        method: String,
+        params: serde_json::Value,
+        refresh_catalog: bool,
+    ) {
+        let is_new = !self.latest.contains_key(&control_key);
+        self.latest.insert(
+            control_key.clone(),
+            PendingControllerIntent {
+                method,
+                params,
+                refresh_catalog,
+            },
+        );
+        if is_new {
+            self.order.push_back(control_key);
+        }
+    }
+
+    fn pop_front(&mut self) -> Option<(String, PendingControllerIntent)> {
+        while let Some(control_key) = self.order.pop_front() {
+            if let Some(intent) = self.latest.remove(&control_key) {
+                return Some((control_key, intent));
+            }
+        }
+        None
+    }
+
+    fn clear(&mut self) {
+        self.order.clear();
+        self.latest.clear();
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.latest.len()
+    }
+}
+
 pub enum EngineMessage {
     UpdateQueue(Vec<CompiledAction>),
     UpdateControllerMacros(Vec<CompiledControllerMacro>),
@@ -292,8 +355,11 @@ pub enum EngineMessage {
         method: String,
         params: serde_json::Value,
     },
-    InvokeControllerAction {
-        action_id: String,
+    CoalescedControllerIntent {
+        control_key: String,
+        method: String,
+        params: serde_json::Value,
+        refresh_catalog: bool,
     },
 }
 
@@ -360,6 +426,23 @@ impl EngineHandle {
     pub fn request_catalog_refresh(&self) {
         self.catalog_refresh_requested
             .store(true, Ordering::Relaxed);
+    }
+
+    pub fn queue_controller_intent(
+        &self,
+        control_key: impl Into<String>,
+        method: impl Into<String>,
+        params: serde_json::Value,
+        refresh_catalog: bool,
+    ) -> Result<(), String> {
+        self.sender
+            .send(EngineMessage::CoalescedControllerIntent {
+                control_key: control_key.into(),
+                method: method.into(),
+                params,
+                refresh_catalog,
+            })
+            .map_err(|_| "hardware engine is unavailable".to_string())
     }
 
     pub fn set_emergency_stop(&self, active: bool) {
@@ -577,6 +660,7 @@ pub fn spawn_engine() -> EngineHandle {
         let mut last_owner_check = std::time::Instant::now();
         let mut last_capability_refresh = std::time::Instant::now();
         let mut last_connect_attempt: Option<std::time::Instant> = None;
+        let mut pending_controller_intents = PendingControllerIntents::default();
 
         let mut active_transport: Option<HardwareTransport> = None;
 
@@ -759,6 +843,10 @@ pub fn spawn_engine() -> EngineHandle {
             }
 
             if estop_now && !was_estop {
+                // Never let an intent accepted before E-STOP execute after the
+                // emergency release. Fresh input is evaluated against the
+                // latched safety state below.
+                pending_controller_intents.clear();
                 last_pwm_values.fill(0);
                 active_strip_effect = None;
                 if connected {
@@ -923,6 +1011,7 @@ pub fn spawn_engine() -> EngineHandle {
                         }
                     }
                     EngineMessage::ReconfigureEndpoint { endpoint, connect } => {
+                        pending_controller_intents.clear();
                         if let Some(ref mut transport) = active_transport {
                             let _ = transport.call_controller(
                                 "controller.command.execute",
@@ -992,43 +1081,58 @@ pub fn spawn_engine() -> EngineHandle {
                             results.push_back(ControllerCallResult { operation, result });
                         }
                     }
-                    EngineMessage::InvokeControllerAction { action_id } => {
-                        if engine_estop.load(Ordering::SeqCst) {
-                            if let Ok(mut guard) = engine_conn_error.lock() {
-                                *guard = Some(format!(
-                                    "controller action {action_id} blocked while E-STOP is active"
-                                ));
-                            }
-                            continue;
-                        }
-                        if connected {
-                            if let Some(ref mut transport) = active_transport {
-                                match transport.call_controller(
-                                    "controller.action.invoke",
-                                    serde_json::json!({"action_id": action_id}),
-                                ) {
-                                    Ok(_) => {
-                                        // Pull an authoritative snapshot immediately. Push
-                                        // events remain the lowest-latency path, while this
-                                        // closes the race for coordinators that do not emit
-                                        // state changes for semantic actions yet.
-                                        engine_catalog_refresh_requested
-                                            .store(true, Ordering::Relaxed);
-                                    }
-                                    Err(error) => {
-                                        if let Ok(mut guard) = engine_conn_error.lock() {
-                                            *guard =
-                                                Some(format!("invoke controller action: {error}"));
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    EngineMessage::CoalescedControllerIntent {
+                        control_key,
+                        method,
+                        params,
+                        refresh_catalog,
+                    } => {
+                        pending_controller_intents.replace(
+                            control_key,
+                            method,
+                            params,
+                            refresh_catalog,
+                        );
                     }
                 }
             }
             if channel_disconnected {
                 break;
+            }
+
+            // Dispatch at most one acknowledged live-control RPC per engine
+            // pass. All input above is drained and coalesced first, so a slow
+            // PCController/board can delay one in-flight call but can never
+            // create a stale command train that starves feedback and recovery.
+            if let Some((control_key, intent)) = pending_controller_intents.pop_front() {
+                if engine_estop.load(Ordering::SeqCst)
+                    && !controller_call_allowed_during_estop(&intent.method, &intent.params)
+                {
+                    if let Ok(mut guard) = engine_conn_error.lock() {
+                        *guard = Some(format!(
+                            "controller intent for {control_key} blocked while E-STOP is active"
+                        ));
+                    }
+                } else if connected
+                    && let Some(ref mut transport) = active_transport
+                {
+                    match transport.call_controller(&intent.method, intent.params) {
+                        Ok(_) if intent.refresh_catalog => {
+                            // Push events remain the lowest-latency path. This
+                            // pull closes the race for older coordinators that
+                            // do not publish the corresponding state change.
+                            engine_catalog_refresh_requested.store(true, Ordering::Relaxed);
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            if let Ok(mut guard) = engine_conn_error.lock() {
+                                *guard = Some(format!(
+                                    "apply controller intent for {control_key}: {error}"
+                                ));
+                            }
+                        }
+                    }
+                }
             }
 
             if !engine_connected.load(Ordering::Relaxed) && active_transport.is_some() {
@@ -1618,6 +1722,80 @@ pub fn evaluate_relay_state(
 mod tests {
     use super::*;
     use crate::four_d::models::{AtomicAction, Effect, EffectInstance, Timeline};
+
+    #[test]
+    fn rapid_motion_intents_stay_bounded_and_keep_the_final_stop() {
+        let mut pending = PendingControllerIntents::default();
+
+        // Fifteen commands per second for fifteen seconds used to form a FIFO
+        // behind acknowledged controller calls. A live control now occupies
+        // exactly one pending slot regardless of input duration or rate.
+        for index in 0..225 {
+            let action_id = if index % 2 == 0 {
+                "seat.a.down"
+            } else {
+                "seat.a.up"
+            };
+            pending.replace(
+                "seat.a".to_string(),
+                "controller.action.invoke".to_string(),
+                serde_json::json!({"action_id": action_id}),
+                true,
+            );
+        }
+        pending.replace(
+            "seat.a".to_string(),
+            "controller.action.invoke".to_string(),
+            serde_json::json!({"action_id": "seat.a.stop"}),
+            true,
+        );
+
+        assert_eq!(pending.len(), 1);
+        let (control_key, intent) = pending.pop_front().expect("final motion intent");
+        assert_eq!(control_key, "seat.a");
+        assert_eq!(intent.method, "controller.action.invoke");
+        assert_eq!(intent.params["action_id"], "seat.a.stop");
+        assert!(intent.refresh_catalog);
+        assert_eq!(pending.len(), 0);
+    }
+
+    #[test]
+    fn rapid_hardware_intents_remain_fair_across_controls() {
+        let mut pending = PendingControllerIntents::default();
+        pending.replace(
+            "seat.a".to_string(),
+            "controller.action.invoke".to_string(),
+            serde_json::json!({"action_id": "seat.a.up"}),
+            true,
+        );
+        pending.replace(
+            "relay.5".to_string(),
+            "controller.command.execute".to_string(),
+            serde_json::json!({"command": "relay 5 on"}),
+            false,
+        );
+        pending.replace(
+            "seat.a".to_string(),
+            "controller.action.invoke".to_string(),
+            serde_json::json!({"action_id": "seat.a.stop"}),
+            true,
+        );
+        pending.replace(
+            "pwm.0".to_string(),
+            "controller.pwm.set".to_string(),
+            serde_json::json!({"channel": 0, "value": 4095}),
+            false,
+        );
+
+        assert_eq!(pending.len(), 3);
+        let (first_key, first) = pending.pop_front().expect("seat intent");
+        let (second_key, _) = pending.pop_front().expect("relay intent");
+        let (third_key, _) = pending.pop_front().expect("pwm intent");
+        assert_eq!(first_key, "seat.a");
+        assert_eq!(first.params["action_id"], "seat.a.stop");
+        assert_eq!(second_key, "relay.5");
+        assert_eq!(third_key, "pwm.0");
+    }
 
     #[test]
     fn compiles_controller_macro_as_one_video_synchronized_cue() {

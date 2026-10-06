@@ -1337,9 +1337,11 @@ fn send_pwm_raw_with(
     channel: u8,
     raw: u16,
 ) {
-    let _ = sender.send(crate::four_d::engine::EngineMessage::ControllerCall {
+    let _ = sender.send(crate::four_d::engine::EngineMessage::CoalescedControllerIntent {
+        control_key: format!("pwm.{channel}"),
         method: "controller.pwm.set".to_string(),
         params: serde_json::json!({"channel": channel, "value": raw}),
+        refresh_catalog: false,
     });
 }
 
@@ -3219,31 +3221,35 @@ pub(crate) fn contextual_stop_action<'a>(
         .flatten()
 }
 
-fn invoke_advertised_action(app: &PealayerApp, action_id: &str) {
-    let _ = app.engine_handle.sender.send(
-        crate::four_d::engine::EngineMessage::InvokeControllerAction {
-            action_id: action_id.to_string(),
-        },
+fn invoke_advertised_action(app: &PealayerApp, control_key: &str, action_id: &str) {
+    let _ = app.engine_handle.queue_controller_intent(
+        control_key,
+        "controller.action.invoke",
+        serde_json::json!({"action_id": action_id}),
+        true,
     );
 }
 
-fn invoke_held_motion_action(app: &PealayerApp, action_id: &str) {
+pub(crate) fn invoke_held_motion_action(
+    app: &PealayerApp,
+    control_key: &str,
+    action_id: &str,
+) {
     let mut parts = action_id.split('.');
     if parts.next() == Some("raw-motion")
         && let (Some(side), Some(verb), None) = (parts.next(), parts.next(), parts.next())
         && matches!(side, "left" | "right")
         && matches!(verb, "up" | "down" | "stop")
     {
-        let _ =
-            app.engine_handle
-                .sender
-                .send(crate::four_d::engine::EngineMessage::ControllerCall {
-                    method: "controller.command.execute".to_string(),
-                    params: serde_json::json!({"command": format!("relay side {side} {verb}")}),
-                });
+        let _ = app.engine_handle.queue_controller_intent(
+            control_key,
+            "controller.command.execute",
+            serde_json::json!({"command": format!("relay side {side} {verb}")}),
+            false,
+        );
         return;
     }
-    invoke_advertised_action(app, action_id);
+    invoke_advertised_action(app, control_key, action_id);
 }
 
 pub(crate) fn update_held_motion_action(
@@ -3265,15 +3271,21 @@ pub(crate) fn update_held_motion_action(
         primary_down,
     ) {
         HoldMotionTransition::Start => {
-            if let Some((_, previous_stop)) = app.held_motion_action.take() {
-                invoke_held_motion_action(app, &previous_stop);
+            if let Some((_, previous_stop, previous_control_key)) =
+                app.held_motion_action.take()
+            {
+                invoke_held_motion_action(app, &previous_control_key, &previous_stop);
             }
             crate::ui::hardware_control::invoke_action(app, control, action);
-            app.held_motion_action = Some((action_id.to_string(), stop.id.clone()));
+            app.held_motion_action = Some((
+                action_id.to_string(),
+                stop.id.clone(),
+                control.key.clone(),
+            ));
         }
         HoldMotionTransition::Stop => {
-            if let Some((_, stop)) = app.held_motion_action.take() {
-                invoke_held_motion_action(app, &stop);
+            if let Some((_, stop, control_key)) = app.held_motion_action.take() {
+                invoke_held_motion_action(app, &control_key, &stop);
             }
         }
         HoldMotionTransition::None => {}
@@ -3415,14 +3427,7 @@ fn draw_control_context_menu(
                 )
                 .clicked()
             {
-                let _ = app.engine_handle.sender.send(
-                    crate::four_d::engine::EngineMessage::ControllerCall {
-                        method: "controller.command.execute".to_string(),
-                        params: serde_json::json!({
-                            "command": format!("relay {relay_id} {}", if state { "on" } else { "off" })
-                        }),
-                    },
-                );
+                crate::ui::hardware_control::set_relay(app, relay_id, state);
                 ui.close();
             }
         }
@@ -4361,14 +4366,7 @@ fn draw_compact_control_card(
                     && let Some(id) = relay_id
                 {
                     let turn_on = indicator_state != ControlIndicatorState::Active;
-                    let _ = app.engine_handle.sender.send(
-                        crate::four_d::engine::EngineMessage::ControllerCall {
-                            method: "controller.command.execute".to_string(),
-                            params: serde_json::json!({
-                                "command": format!("relay {id} {}", if turn_on { "on" } else { "off" }),
-                            }),
-                        },
-                    );
+                    crate::ui::hardware_control::set_relay(app, id, turn_on);
                 }
                 if app.prefix_relay_identifiers && let Some(id) = relay_id {
                     ui.label(
@@ -4578,14 +4576,7 @@ fn draw_compact_control_card(
                                 )
                                 .on_hover_text(label);
                             if hardware_control_activated(app, ui, &response) {
-                                let _ = app.engine_handle.sender.send(
-                                    crate::four_d::engine::EngineMessage::ControllerCall {
-                                        method: "controller.command.execute".to_string(),
-                                        params: serde_json::json!({
-                                            "command": format!("relay {id} {}", if state { "on" } else { "off" })
-                                        }),
-                                    },
-                                );
+                                crate::ui::hardware_control::set_relay(app, id, state);
                             }
                         }
                     });
@@ -4677,14 +4668,7 @@ fn draw_control_card(
                             && let Some(id) = relay_id
                         {
                             let turn_on = indicator_state != ControlIndicatorState::Active;
-                            let _ = app.engine_handle.sender.send(
-                    crate::four_d::engine::EngineMessage::ControllerCall {
-                        method: "controller.command.execute".to_string(),
-                        params: serde_json::json!({
-                            "command": format!("relay {id} {}", if turn_on { "on" } else { "off" }),
-                        }),
-                    },
-                );
+                            crate::ui::hardware_control::set_relay(app, id, turn_on);
                         }
                         if app.prefix_relay_identifiers
                             && let Some(id) = relay_id
@@ -5005,16 +4989,8 @@ fn draw_control_card(
                                     })
                                     .inner;
                                 if hardware_control_activated(app, &uis[index], &response) {
-                                    let _ = app.engine_handle.sender.send(
-                                        crate::four_d::engine::EngineMessage::ControllerCall {
-                                            method: "controller.command.execute".to_string(),
-                                            params: serde_json::json!({
-                                                "command": format!(
-                                                    "relay {relay_id} {}",
-                                                    if state { "on" } else { "off" }
-                                                )
-                                            }),
-                                        },
+                                    crate::ui::hardware_control::set_relay(
+                                        app, relay_id, state,
                                     );
                                 }
                             }
@@ -5113,17 +5089,7 @@ fn draw_compact_relay_group(
                             pending_drop = Some(drop);
                         }
                         if response.clicked() {
-                            let _ = app.engine_handle.sender.send(
-                                crate::four_d::engine::EngineMessage::ControllerCall {
-                                    method: "controller.command.execute".to_string(),
-                                    params: serde_json::json!({
-                                        "command": format!(
-                                            "relay {relay_id} {}",
-                                            if active { "off" } else { "on" }
-                                        )
-                                    }),
-                                },
-                            );
+                            crate::ui::hardware_control::set_relay(app, relay_id, !active);
                         }
                         response.context_menu(|ui| {
                             ui.horizontal(|ui| {
@@ -5205,17 +5171,7 @@ fn draw_compact_relay_group(
                                 ))
                                 .clicked()
                             {
-                                let _ = app.engine_handle.sender.send(
-                                    crate::four_d::engine::EngineMessage::ControllerCall {
-                                        method: "controller.command.execute".to_string(),
-                                        params: serde_json::json!({
-                                            "command": format!(
-                                                "relay {relay_id} {}",
-                                                if active { "off" } else { "on" }
-                                            )
-                                        }),
-                                    },
-                                );
+                                crate::ui::hardware_control::set_relay(app, relay_id, !active);
                                 ui.close();
                             }
                             if ui
