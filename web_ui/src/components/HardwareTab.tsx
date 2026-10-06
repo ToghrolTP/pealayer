@@ -306,7 +306,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
           <UsbOutlined /> {details.port?.display_name || details.port?.friendly_name || details.port?.name || tr(locale, 'No board port')}
         </Typography.Text>
       </div>
-      <Space>
+      <Space wrap>
         {state.hardware_connected && <Button icon={<ToolOutlined />} onClick={() => setManagerOpen(true)}>{tr(locale, 'Manage channels')}</Button>}
         <Tag color={state.hardware_connected ? 'success' : 'warning'}>{state.hardware_connected ? tr(locale, 'Connected') : tr(locale, 'Board unavailable')}</Tag>
         <Button

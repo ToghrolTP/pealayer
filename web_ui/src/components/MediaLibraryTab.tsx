@@ -253,6 +253,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
             dataSource={filteredEntries}
             columns={columns}
             rowKey="path"
+            scroll={{ x: 640 }}
             pagination={{ pageSize: 15, showSizeChanger: true }}
             style={{ marginTop: 8 }}
           />

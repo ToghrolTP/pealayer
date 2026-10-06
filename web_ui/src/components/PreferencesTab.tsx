@@ -469,6 +469,7 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
                 key={item.id}
                 type="button"
                 className={item.id === section ? 'is-active' : ''}
+                aria-pressed={item.id === section}
                 onClick={() => setSection(item.id)}
               >
                 {sectionIcons[item.id] ?? <SettingOutlined />}

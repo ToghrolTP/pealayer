@@ -86,6 +86,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
             type="text"
             icon={<GlobalOutlined />}
             className="connection-target-button"
+            aria-label={tr(locale, 'Connect to another Pealayer')}
             onClick={() => setConnectionOpen(true)}
           />
         </Tooltip>
