@@ -84,6 +84,29 @@ pub struct HardwareMotionState {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HardwareMelodyNote {
+    pub frequency_hz: u16,
+    pub duration_ms: u16,
+    #[serde(default)]
+    pub gap_ms: u16,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HardwareMelody {
+    pub name: String,
+    pub notes: Vec<HardwareMelodyNote>,
+}
+
+impl HardwareMelody {
+    pub fn duration_ms(&self) -> u64 {
+        self.notes
+            .iter()
+            .map(|note| u64::from(note.duration_ms) + u64::from(note.gap_ms))
+            .sum()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareCapabilities {
     pub board_connected: bool,
     pub board_name: String,
@@ -116,6 +139,7 @@ pub struct HardwareCapabilities {
     pub warnings: Vec<HardwareWarning>,
     pub strip_control: Option<HardwareStripControl>,
     pub strip_effects: Vec<HardwareStripEffect>,
+    pub melodies: Vec<HardwareMelody>,
     pub macros: Vec<HardwareMacro>,
     pub effect_groups: Vec<HardwareEffectGroup>,
     pub effect_recording: HardwareEffectRecording,
@@ -1271,6 +1295,10 @@ impl ControllerClient {
     pub fn hardware_capabilities(&mut self) -> Result<HardwareCapabilities, String> {
         let snapshot = self.call("controller.snapshot", json!({}))?;
         let peripherals = self.call("controller.peripherals.get", json!({}))?;
+        // Named melodies are host configuration, not board capability data.
+        // Keep the whole catalog usable with older coordinators that do not
+        // expose this method yet by treating method absence as an empty list.
+        let melodies = self.call("controller.melodies.list", json!({})).ok();
         let pwm_values = self.call("controller.pwm.values", json!({})).ok();
         // controller.snapshot already carries the latest authoritative
         // front-panel state. A synchronous controller.front_panel call waits
@@ -1282,6 +1310,7 @@ impl ControllerClient {
         if let Some(values) = pwm_values.as_ref() {
             apply_pwm_values(&mut capabilities.telemetry, values);
         }
+        capabilities.melodies = melodies.as_ref().map(parse_melodies).unwrap_or_default();
         Ok(capabilities)
     }
 
@@ -1297,6 +1326,41 @@ impl ControllerClient {
         let mut catalog_client = Self::connect(&self.endpoint)?;
         catalog_client.hardware_capabilities()
     }
+}
+
+fn parse_melodies(value: &Value) -> Vec<HardwareMelody> {
+    let Some(values) = value.as_array() else {
+        return Vec::new();
+    };
+    let mut names = std::collections::BTreeSet::new();
+    values
+        .iter()
+        .take(32)
+        .filter_map(|value| serde_json::from_value::<HardwareMelody>(value.clone()).ok())
+        .filter_map(|mut melody| {
+            melody.name = melody.name.trim().to_string();
+            let normalized_name = melody.name.to_ascii_lowercase();
+            let valid_notes = !melody.notes.is_empty()
+                && melody.notes.len() <= 64
+                && melody.notes.iter().all(|note| {
+                    note.duration_ms > 0
+                        && note.duration_ms <= 5_000
+                        && (note.frequency_hz == 0
+                            || (20..=20_000).contains(&note.frequency_hz))
+                        && note.gap_ms <= 5_000
+                })
+                && melody.duration_ms() <= 5 * 60 * 1_000;
+            if melody.name.is_empty()
+                || melody.name.len() > 64
+                || !valid_notes
+                || !names.insert(normalized_name)
+            {
+                None
+            } else {
+                Some(melody)
+            }
+        })
+        .collect()
 }
 
 fn apply_pwm_values(telemetry: &mut HardwareTelemetry, values: &Value) -> bool {
@@ -2373,6 +2437,7 @@ fn parse_hardware_capabilities_with_front_panel(
         warnings,
         strip_control,
         strip_effects,
+        melodies: Vec::new(),
         macros,
         effect_groups: snapshot
             .get("effect_groups")
@@ -2825,10 +2890,18 @@ mod tests {
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
-            for call in 0..3 {
+            let expected = [
+                "controller.ping",
+                "controller.snapshot",
+                "controller.peripherals.get",
+                "controller.melodies.list",
+                "controller.pwm.values",
+            ];
+            for call in 0..5 {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
                 let request: Value = serde_json::from_str(line.trim()).unwrap();
+                assert_eq!(request["method"], expected[call]);
                 let response = match call {
                     0 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"ok":true}}),
                     1 => json!({"jsonrpc":"2.0","id":request["id"],"result":{
@@ -2841,6 +2914,11 @@ mod tests {
                         }
                     }}),
                     2 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"peripherals":[]}}),
+                    3 => json!({"jsonrpc":"2.0","id":request["id"],"result":[{
+                        "name": "attention",
+                        "notes": [{"frequency_hz": 880, "duration_ms": 100, "gap_ms": 25}]
+                    }]}),
+                    4 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"values":[]}}),
                     _ => unreachable!(),
                 };
                 writeln!(stream, "{response}").unwrap();
@@ -2854,7 +2932,25 @@ mod tests {
             capabilities.front_panel.unwrap().raw_segments,
             vec![63, 6, 91, 79]
         );
+        assert_eq!(capabilities.melodies.len(), 1);
+        assert_eq!(capabilities.melodies[0].name, "attention");
         server.join().unwrap();
+    }
+
+    #[test]
+    fn melody_catalog_parser_keeps_only_valid_unique_definitions() {
+        let parsed = parse_melodies(&json!([
+            {"name":" Attention ","notes":[
+                {"frequency_hz":880,"duration_ms":100,"gap_ms":25},
+                {"frequency_hz":0,"duration_ms":40}
+            ]},
+            {"name":"attention","notes":[{"frequency_hz":440,"duration_ms":100}]},
+            {"name":"bad-frequency","notes":[{"frequency_hz":10,"duration_ms":100}]},
+            {"name":"bad-duration","notes":[{"frequency_hz":440,"duration_ms":0}]}
+        ]));
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].name, "Attention");
+        assert_eq!(parsed[0].duration_ms(), 165);
     }
 
     #[test]

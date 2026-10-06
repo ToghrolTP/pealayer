@@ -2,6 +2,19 @@ use crate::mpv::render::RenderContextWrapper;
 use eframe::egui;
 use std::sync::{Arc, Mutex};
 
+const IDLE_WEB_SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+fn effective_web_sync_interval(
+    configured: std::time::Duration,
+    playback_or_operation_active: bool,
+) -> std::time::Duration {
+    if playback_or_operation_active {
+        configured
+    } else {
+        configured.max(IDLE_WEB_SYNC_INTERVAL)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DragMode {
     Move,
@@ -977,8 +990,19 @@ impl eframe::App for PealayerApp {
             &web_config,
             ui.ctx().theme() == egui::Theme::Dark,
         );
-        let web_sync_interval =
+        let configured_web_sync_interval =
             std::time::Duration::from_millis(u64::from(web_config.web_sync_interval_ms));
+        let web_sync_active = (self.current_video_path.is_some() && !self.is_paused)
+            || self.is_scrubbing
+            || self.pending_scrub_commit.is_some()
+            || self.hardware_effect_authoring.pending_operation.is_some()
+            || self.board_operation.is_some();
+        // Real controller, WebSocket, media and input changes request their own
+        // repaint. Keep the configured fast cadence only while work is active;
+        // an idle/paused player needs a low-rate status backstop, not a full NLE
+        // recomposition ten times per second.
+        let web_sync_interval =
+            effective_web_sync_interval(configured_web_sync_interval, web_sync_active);
         let now = std::time::Instant::now();
         let appearance_changed =
             crate::platform::interop::get_live_appearance().as_ref() != Some(&appearance);
@@ -1089,6 +1113,8 @@ impl eframe::App for PealayerApp {
             let chapters = self.media_chapters();
             let current_chapter_index = self.active_media_chapter().map(|chapter| chapter.index);
             let status_resp = crate::platform::interop::PlayerStatusResponse {
+                application: crate::platform::interop::ApplicationIdentity::current(&self.app_name),
+                runtime: crate::platform::interop::runtime_identity(),
                 rf: self.rf.snapshot(),
                 remote_browser: crate::remote_location::snapshot(),
                 messages,
@@ -3956,6 +3982,9 @@ impl PealayerApp {
                     serde_json::json!({"channel": channel, "value": value}),
                     false,
                 );
+            }
+            InteropCommand::RefreshHardwareCatalog => {
+                self.engine_handle.request_catalog_refresh();
             }
             InteropCommand::UpdateHardwarePresentation { key, fields } => {
                 let Some(capabilities) = self
@@ -7326,6 +7355,11 @@ fn web_hardware_details(
             "severity": warning.severity,
             "message": warning.message,
         })).collect::<Vec<_>>(),
+        "melodies": capabilities.melodies.iter().map(|melody| serde_json::json!({
+            "name": melody.name,
+            "duration_ms": melody.duration_ms(),
+            "notes": melody.notes,
+        })).collect::<Vec<_>>(),
         "settings": settings,
         "front_panel": front_panel,
         "strip": strip,
@@ -7743,6 +7777,20 @@ mod tests {
         APP_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[test]
+    fn web_sync_uses_fast_cadence_only_while_playback_or_operations_are_active() {
+        let configured = std::time::Duration::from_millis(100);
+        assert_eq!(effective_web_sync_interval(configured, true), configured);
+        assert_eq!(
+            effective_web_sync_interval(configured, false),
+            std::time::Duration::from_secs(1)
+        );
+        assert_eq!(
+            effective_web_sync_interval(std::time::Duration::from_secs(2), false),
+            std::time::Duration::from_secs(2)
+        );
     }
 
     #[test]
@@ -8567,6 +8615,14 @@ mod tests {
     #[test]
     fn web_hardware_details_publish_every_sampled_pwm_channel() {
         let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
+        capabilities.melodies = vec![crate::four_d::controller::HardwareMelody {
+            name: "attention".to_string(),
+            notes: vec![crate::four_d::controller::HardwareMelodyNote {
+                frequency_hz: 880,
+                duration_ms: 100,
+                gap_ms: 25,
+            }],
+        }];
         capabilities.controls = vec![crate::four_d::controller::HardwareControl {
             key: "pwm.3".to_string(),
             kind: "pwm".to_string(),
@@ -8586,6 +8642,8 @@ mod tests {
             web_hardware_details(&capabilities, crate::config::MotionControlMode::default());
         let percent = details["controls"][0]["percent"].as_f64().unwrap();
         assert!((percent - (2048.0 * 100.0 / 4095.0)).abs() < f64::EPSILON);
+        assert_eq!(details["melodies"][0]["name"], "attention");
+        assert_eq!(details["melodies"][0]["duration_ms"], 125);
 
         capabilities.controls[0].key = "pwm.15".to_string();
         capabilities.pwm_channels[0] = crate::four_d::controller::HardwareOutput {

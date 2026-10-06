@@ -65,7 +65,11 @@ without duplicating PCController's effect steps.
    advertised controls, inspect status, then choose **Finish and edit**. The
    saved PCController take opens on the editor timeline and is also placed at
    the playhead where recording started.
-5. Timeline playback calls `effect play effect:<stable-id>`; lighting cues
+5. **Add melody** reads PCController's current named buzzer catalog and expands
+   the selected notes and gaps into editable sequence steps. Pealayer refreshes
+   on `melodies.changed` and explicitly re-queries when the picker opens, so it
+   never treats a previously displayed list as authoritative.
+6. Timeline playback calls `effect play effect:<stable-id>`; lighting cues
    receive a matching `effect stop` at their authored end. The stored
    definition remains solely in PCController.
 
@@ -321,10 +325,10 @@ notifications, and vibration remain capability/secure-context dependent.
 
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `GET` | `/api/player/status` | Returns playback state, including `duration`, `seekable`, `live`, `buffered_until`, and `buffering_percent` |
+| `GET` | `/api/player/status` | Returns playback state plus self-diagnostics in `application` and `runtime`, including build/commit, PID/session, the unified control endpoints, executable fingerprint, and adjacent libmpv fingerprint |
 | `GET` | `/api/player/commands` | Discovers the shared typed command contract and supported transports |
 | `POST` | `/api/player/command` | Dispatches player commands (JSON payload), including local files and remote media URLs |
-| `POST` | `/api/rpc` | JSON-RPC 2.0 methods such as `pealayer.play`, `pealayer.seek`, `pealayer.open`, and `pealayer.status` |
+| `POST` | `/api/rpc` | JSON-RPC 2.0 methods such as `pealayer.play`, `pealayer.seek`, `pealayer.open`, and `pealayer.status`; status includes the same `application` and `runtime` self-diagnostics as the REST snapshot |
 | `POST` | `/api/ipc` | CLI and single-instance command transport; accepts legacy command JSON or newline-compatible JSON-RPC payloads |
 | `POST` | `/api/osd` | Shows a message using optional anchor/X-Y percentages, font size, icon, colors, timeout, padding, and corner radius; an empty message hides it |
 | `DELETE` | `/api/osd` | Immediately hides the currently displayed OSD and status-bar message |

@@ -32,6 +32,7 @@ import { SeekThumbnailPreview } from './SeekThumbnailPreview';
 import { MediaSurface } from './MediaSurface';
 import { defaultTimelineWheelPreferences, timelineWheelAction, timelineZoomAtPointer } from '../timelineWheel';
 import type { TimelineWheelPreferences } from '../timelineWheel';
+import { appendMelodySteps, sequenceDurationMs } from '../melodyCatalog';
 
 interface StudioTabProps {
   state: PlayerState;
@@ -288,6 +289,13 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       }],
     });
   };
+  const addMelody = (name: string) => {
+    if (!effectDraft) return;
+    const melody = state.hardware_details?.melodies?.find((item) => item.name === name);
+    if (!melody) return;
+    const steps = appendMelodySteps(effectDraft.steps ?? [], melody);
+    setEffectDraft({ ...effectDraft, steps, duration_ms: sequenceDurationMs(steps) });
+  };
 
   return (
     <div className={`studio-suite studio-suite--${surface}`}>
@@ -424,6 +432,19 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                 <div className="sequence-editor-web__toolbar">
                   <ConfigProvider componentDisabled={false}><EffectRecorder state={state} sendCmd={sendCmd} locale={locale} effect={effectPayload(effectDraft)} onSequenceChange={(steps, id) => setEffectDraft((current) => current ? { ...current, steps, id: String(id), reference: `effect:${id}`, is_new: false } : current)} /></ConfigProvider>
                   <Button icon={<PlusOutlined />} onClick={addSequenceStep}>{tr(locale, 'Add step')}</Button>
+                  <Select
+                    className="effect-melody-picker"
+                    disabled={captureBusy || !state.controller_connected}
+                    placeholder={<><SoundOutlined /> {tr(locale, 'Add melody')}</>}
+                    value={undefined}
+                    options={(state.hardware_details?.melodies ?? []).map((melody) => ({
+                      value: melody.name,
+                      label: `${melody.name} · ${melody.duration_ms} ms`,
+                    }))}
+                    notFoundContent={tr(locale, 'No configured melodies')}
+                    onOpenChange={(open) => { if (open) void sendCmd('hardware.catalog.refresh'); }}
+                    onChange={addMelody}
+                  />
                   <span>{(effectDraft.steps ?? []).length} {tr(locale, 'actions')}</span>
                 </div>
                 <div className="sequence-step-list">

@@ -279,6 +279,7 @@ pub enum InteropCommand {
         channel: u8,
         percent: f64,
     },
+    RefreshHardwareCatalog,
     UpdateHardwarePresentation {
         key: String,
         fields: Value,
@@ -643,7 +644,7 @@ pub fn command_catalog() -> Value {
             "controller_effect.group.create",
             "controller_effect.record.start", "controller_effect.record.status",
             "controller_effect.record.save", "controller_effect.record.discard",
-            "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm",
+            "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm", "refresh_hardware_catalog",
             "configure_addressable_strip", "fill_addressable_strip", "clear_addressable_strip",
             "press_front_panel_key", "board_information", "rf_control", "open_rf_manager"
         ],
@@ -816,8 +817,186 @@ impl AppearanceState {
     }
 }
 
+/// Build identity reported by every control transport. This deliberately
+/// excludes paths and host names so a remote coordinator can identify a
+/// Pealayer build without leaking user- or machine-specific information.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ApplicationIdentity {
+    pub name: String,
+    pub version: String,
+    pub commit: String,
+    pub dirty: bool,
+    pub platform: String,
+    pub arch: String,
+}
+
+impl ApplicationIdentity {
+    pub fn current(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            commit: env!("PEALAYER_GIT_COMMIT").to_string(),
+            dirty: env!("PEALAYER_GIT_DIRTY") == "true",
+            platform: std::env::consts::OS.to_string(),
+            arch: std::env::consts::ARCH.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RuntimeControlEndpoints {
+    pub port: u16,
+    pub web_ui: String,
+    pub health: String,
+    pub ipc: String,
+    pub json_rpc: String,
+    pub websocket: String,
+}
+
+impl RuntimeControlEndpoints {
+    fn current() -> Self {
+        let port = crate::config::control_port();
+        Self {
+            port,
+            web_ui: format!("http://127.0.0.1:{port}/"),
+            health: format!("http://127.0.0.1:{port}/healthz"),
+            ipc: format!("http://127.0.0.1:{port}/api/ipc"),
+            json_rpc: format!("http://127.0.0.1:{port}/api/rpc"),
+            websocket: format!("ws://127.0.0.1:{port}/ws"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RuntimeExecutableIdentity {
+    pub file_name: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+}
+
+/// Immutable process/runtime facts that are safe to expose through local IPC
+/// and authenticated/shared HTTP control. The potentially expensive file
+/// fingerprints are populated once in the background.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeIdentity {
+    pub process_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<u32>,
+    pub inspection: String,
+    pub control: RuntimeControlEndpoints,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable: Option<RuntimeExecutableIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub libmpv: Option<crate::update::LibmpvRuntimeIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl RuntimeIdentity {
+    fn pending() -> Self {
+        Self {
+            process_id: std::process::id(),
+            session_id: current_process_session_id(),
+            inspection: "pending".to_string(),
+            control: RuntimeControlEndpoints::current(),
+            executable: None,
+            libmpv: None,
+            error: None,
+        }
+    }
+}
+
+impl Default for RuntimeIdentity {
+    fn default() -> Self {
+        Self {
+            process_id: 0,
+            session_id: None,
+            inspection: "unavailable".to_string(),
+            control: RuntimeControlEndpoints::default(),
+            executable: None,
+            libmpv: None,
+            error: None,
+        }
+    }
+}
+
+fn current_process_session_id() -> Option<u32> {
+    #[cfg(target_os = "windows")]
+    {
+        return crate::platform::windows::current_session_id().ok();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
+}
+
+/// Return cached self-diagnostics without hashing the executable or libmpv on
+/// the UI/status publisher thread. A caller may briefly observe `pending` and
+/// poll the same status method until it becomes `ready` or `error`.
+pub fn runtime_identity() -> RuntimeIdentity {
+    static IDENTITY: std::sync::OnceLock<
+        std::sync::Arc<std::sync::Mutex<RuntimeIdentity>>,
+    > = std::sync::OnceLock::new();
+    let identity = IDENTITY.get_or_init(|| {
+        let identity = std::sync::Arc::new(std::sync::Mutex::new(RuntimeIdentity::pending()));
+        let background_identity = std::sync::Arc::clone(&identity);
+        let spawn_result = thread::Builder::new()
+            .name("pealayer-runtime-inspection".to_string())
+            .spawn(move || {
+                let result = crate::update::current_manifest().and_then(|manifest| {
+                    let executable = std::env::current_exe()
+                        .map_err(|error| format!("resolve current executable: {error}"))?;
+                    let file_name = executable
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("pealayer")
+                        .to_string();
+                    Ok((
+                        RuntimeExecutableIdentity {
+                            file_name,
+                            size_bytes: manifest.size,
+                            sha256: manifest.sha256,
+                        },
+                        manifest.libmpv_runtime,
+                    ))
+                });
+                if let Ok(mut current) = background_identity.lock() {
+                    match result {
+                        Ok((executable, libmpv)) => {
+                            current.inspection = "ready".to_string();
+                            current.executable = Some(executable);
+                            current.libmpv = libmpv;
+                            current.error = None;
+                        }
+                        Err(error) => {
+                            current.inspection = "error".to_string();
+                            current.error = Some(error);
+                        }
+                    }
+                }
+            });
+        if let Err(error) = spawn_result
+            && let Ok(mut current) = identity.lock()
+        {
+            current.inspection = "error".to_string();
+            current.error = Some(format!("start runtime inspection: {error}"));
+        }
+        identity
+    });
+    let snapshot = identity
+        .lock()
+        .map(|identity| identity.clone())
+        .unwrap_or_default();
+    snapshot
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerStatusResponse {
+    #[serde(default)]
+    pub application: ApplicationIdentity,
+    #[serde(default)]
+    pub runtime: RuntimeIdentity,
     #[serde(default)] pub rf: Value,
     #[serde(default)]
     pub remote_browser: crate::remote_location::BrowserState,
@@ -1098,6 +1277,8 @@ fn default_playback_rate() -> f64 {
 impl Default for PlayerStatusResponse {
     fn default() -> Self {
         Self {
+            application: ApplicationIdentity::default(),
+            runtime: RuntimeIdentity::default(),
             rf: Value::Null,
             status: String::new(),
             messages: crate::messaging::MessageSnapshot::default(),
@@ -1578,6 +1759,9 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 channel,
                 percent: number(&["percent", "value"])?,
             })
+        }
+        "hardware.catalog.refresh" | "pealayer.hardware.catalog.refresh" => {
+            Some(InteropCommand::RefreshHardwareCatalog)
         }
         "hardware.presentation.update" | "pealayer.hardware.presentation.update" => {
             Some(InteropCommand::UpdateHardwarePresentation {
@@ -2970,6 +3154,16 @@ mod tests {
     #[test]
     fn test_status_response_serialization() {
         let resp = PlayerStatusResponse {
+            application: ApplicationIdentity::current("Pealayer Test"),
+            runtime: RuntimeIdentity {
+                inspection: "ready".to_string(),
+                executable: Some(RuntimeExecutableIdentity {
+                    file_name: "pealayer.exe".to_string(),
+                    size_bytes: 42,
+                    sha256: "a".repeat(64),
+                }),
+                ..RuntimeIdentity::default()
+            },
             status: "ok".to_string(),
             playing: true,
             estop_active: true,
@@ -2987,6 +3181,8 @@ mod tests {
         assert!(json.contains("\"volume\":80.0"));
         assert!(json.contains("\"fullscreen\":true"));
         assert!(json.contains("\"estop_active\":true"));
+        assert!(json.contains("\"name\":\"Pealayer Test\""));
+        assert!(json.contains("\"file_name\":\"pealayer.exe\""));
     }
 
     #[test]
@@ -3138,6 +3334,15 @@ mod tests {
             command_from_json_rpc(&request).unwrap(),
             Some(InteropCommand::UpdateHardwarePresentation { key, fields })
                 if key == "relay.5" && fields["name"] == "Seat fan" && fields["order"] == 2
+        ));
+
+        let refresh: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"melodies","method":"hardware.catalog.refresh"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&refresh).unwrap(),
+            Some(InteropCommand::RefreshHardwareCatalog)
         ));
     }
 

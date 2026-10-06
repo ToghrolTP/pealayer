@@ -58,6 +58,14 @@ impl PlaybackSample {
     }
 }
 
+fn playback_publish_interval(sample: &PlaybackSample) -> Duration {
+    if sample.playing {
+        Duration::from_millis(40)
+    } else {
+        Duration::from_secs(1)
+    }
+}
+
 pub fn spawn(
     lifecycle: Weak<()>,
     sample: Arc<Mutex<PlaybackSample>>,
@@ -124,12 +132,10 @@ pub fn spawn(
                     }
                 }
             }
-            let has_hardware = timeline.lock().is_ok_and(|plan| plan.has_items());
-            let interval = if current.playing || has_hardware {
-                Duration::from_millis(40)
-            } else {
-                Duration::from_secs(1)
-            };
+            // A prepared hardware timeline does not make a paused media clock
+            // active. Publish at 25 Hz only while playback advances; explicit
+            // state changes still bypass the interval through changed_from().
+            let interval = playback_publish_interval(&current);
             let due = previous
                 .as_ref()
                 .is_none_or(|old| current.changed_from(old))
@@ -312,5 +318,16 @@ mod tests {
         value.rate = 2.;
         value.duration_ms = Some(11_000);
         assert_eq!(value.position_now(), 11_000);
+    }
+
+    #[test]
+    fn paused_hardware_timeline_uses_idle_publish_cadence() {
+        let mut value = PlaybackSample::default();
+        assert_eq!(playback_publish_interval(&value), Duration::from_secs(1));
+        value.playing = true;
+        assert_eq!(
+            playback_publish_interval(&value),
+            Duration::from_millis(40)
+        );
     }
 }

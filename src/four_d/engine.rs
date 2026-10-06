@@ -588,7 +588,10 @@ impl ControllerPushTarget {
             }
         }
         if matches!(method, "controller.state" | "controller.event")
-            && params.get("kind").and_then(serde_json::Value::as_str) == Some("peripherals.changed")
+            && matches!(
+                params.get("kind").and_then(serde_json::Value::as_str),
+                Some("peripherals.changed" | "melodies.changed")
+            )
         {
             if let Some(refresh) = self.catalog_refresh_requested.upgrade() {
                 refresh.store(true, Ordering::Relaxed);
@@ -2567,6 +2570,18 @@ mod tests {
         assert!(target.apply_notification(
             "controller.state",
             &serde_json::json!({"kind": "peripherals.changed", "action": "refresh"}),
+        ));
+        assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn melody_change_notification_requests_authoritative_catalog_refresh() {
+        let handle = spawn_engine();
+        let target = handle.controller_push_target();
+        assert!(!handle.catalog_refresh_requested.load(Ordering::Relaxed));
+        assert!(target.apply_notification(
+            "controller.state",
+            &serde_json::json!({"kind": "melodies.changed", "action": "refresh"}),
         ));
         assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
     }

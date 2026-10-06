@@ -15,6 +15,8 @@ const fa: Record<string, string> = {
   'Player': 'پخش‌کننده',
   'Timeline': 'خط زمانی',
   'Effects Library': 'کتابخانهٔ افکت‌ها',
+  'Add melody': 'افزودن ملودی',
+  'No configured melodies': 'ملودی پیکربندی‌شده‌ای نیست',
   'New group': 'گروه جدید',
   'action': 'عملیات',
   'Total duration': 'مدت کل',

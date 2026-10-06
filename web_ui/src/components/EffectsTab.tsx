@@ -30,6 +30,7 @@ import {
   PlayCircleOutlined,
   PlusOutlined,
   SaveOutlined,
+  SoundOutlined,
   StopOutlined,
   UnorderedListOutlined,
 } from '@ant-design/icons';
@@ -40,6 +41,7 @@ import { EffectRecorder } from './EffectRecorder';
 import { GroupSelect } from './GroupSelect';
 import { EffectGroupDialog } from './EffectGroupDialog';
 import recordingColors from '../../../assets/themes/recording-colors.json';
+import { appendMelodySteps, sequenceDurationMs } from '../melodyCatalog';
 
 interface EffectsTabProps {
   state: PlayerState;
@@ -174,6 +176,13 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
     const steps = [...draft.steps];
     [steps[index], steps[destination]] = [steps[destination], steps[index]];
     setDraft({ ...draft, steps });
+  };
+  const addMelody = (name: string) => {
+    if (!draft) return;
+    const melody = state.hardware_details?.melodies?.find((item) => item.name === name);
+    if (!melody) return;
+    const steps = appendMelodySteps(draft.steps, melody);
+    setDraft({ ...draft, steps, duration_ms: sequenceDurationMs(steps) });
   };
 
   const save = async () => {
@@ -341,6 +350,19 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
           <div className="effect-editor__toolbar"><strong>{tr(locale, 'Sequence steps')}</strong><Space wrap>
             <EffectRecorder state={state} sendCmd={sendCmd} locale={locale} effect={draftPayload(draft)} onSequenceChange={(steps, id) => setDraft((current) => current ? { ...current, id: String(id), reference: `effect:${id}`, is_new: false, steps } : current)} />
             <Button disabled={captureBusy} icon={<PlusOutlined />} onClick={() => setDraft({ ...draft, steps: [...draft.steps, defaultStep()] })}>{tr(locale, 'Add step')}</Button>
+            <Select
+              className="effect-melody-picker"
+              disabled={captureBusy || !state.controller_connected}
+              placeholder={<><SoundOutlined /> {tr(locale, 'Add melody')}</>}
+              value={undefined}
+              options={(state.hardware_details?.melodies ?? []).map((melody) => ({
+                value: melody.name,
+                label: `${melody.name} · ${melody.duration_ms} ms`,
+              }))}
+              notFoundContent={tr(locale, 'No configured melodies')}
+              onOpenChange={(open) => { if (open) void sendCmd('hardware.catalog.refresh'); }}
+              onChange={addMelody}
+            />
             <Popconfirm title={tr(locale, 'Delete all sequence steps?')} onConfirm={() => setDraft({ ...draft, steps: [] })}><Button disabled={captureBusy || draft.steps.length === 0} icon={<DeleteOutlined />}>{tr(locale, 'Clear steps')}</Button></Popconfirm>
           </Space></div>
           <ConfigProvider componentDisabled={captureBusy}>
