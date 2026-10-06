@@ -635,7 +635,6 @@ fn main() -> eframe::Result {
                 sub_visibility: true,
                 sub_font_size: loaded_config.subtitle_font_size,
                 numeric_input_steps: loaded_config.numeric_input_steps.clone(),
-                human_readable_time_units: loaded_config.human_readable_time_units,
                 sub_delay: loaded_config.subtitle_delay_seconds,
                 sub_position_percent: loaded_config.subtitle_position_percent,
                 current_sid: "no".to_string(),
