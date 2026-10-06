@@ -803,6 +803,7 @@ fn main() -> eframe::Result {
                 auto_connect_hardware: loaded_config.auto_connect_hardware,
                 click_player_to_toggle: loaded_config.click_player_to_toggle,
                 show_subseconds: loaded_config.show_subseconds,
+                human_readable_time_units: loaded_config.human_readable_time_units,
                 seekbar_hover_thumbnails: loaded_config.seekbar_hover_thumbnails,
                 nle_seekbar_hover_thumbnails: loaded_config.nle_seekbar_hover_thumbnails,
                 seekbar_thumbnail_preview:
