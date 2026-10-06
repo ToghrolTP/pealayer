@@ -1089,6 +1089,8 @@ impl eframe::App for PealayerApp {
             let chapters = self.media_chapters();
             let current_chapter_index = self.active_media_chapter().map(|chapter| chapter.index);
             let status_resp = crate::platform::interop::PlayerStatusResponse {
+                application: crate::platform::interop::ApplicationIdentity::current(&self.app_name),
+                runtime: crate::platform::interop::runtime_identity(),
                 rf: self.rf.snapshot(),
                 remote_browser: crate::remote_location::snapshot(),
                 messages,
