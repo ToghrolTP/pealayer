@@ -226,6 +226,8 @@ Hardware discovery and connection are enabled by default and can be disabled in 
 
 PCController's peripheral catalog is authoritative for stable control/action keys and mutable names, icons, and groups. Pealayer renders semantic controls only from advertised action IDs, invokes them through `controller.action.invoke`, and edits channel names through the presentation contract. Older coordinators remain rename-compatible through `controller.peripherals.set`. Renames made in PCController WebUI/TUI are refreshed into Pealayer after the `peripherals.changed` notification (with periodic catalog refresh as recovery), while saved projects continue to identify hardware by stable keys rather than labels.
 
+Live motion, relay, and PWM input uses bounded latest-intent delivery per stable control key. Pealayer drains and coalesces rapid UI/API input before issuing one acknowledged controller RPC per engine pass, so a slow board reply cannot build a stale command FIFO or starve feedback. Different controls retain fair insertion order, the final stop/off/value always replaces an older pending value for that control, and E-STOP or endpoint changes discard pre-existing intents.
+
 Seat direction indicators use PCController's semantic per-side motion state.
 While the firmware safely disables a side before reversing its direction relay,
 Pealayer continues to show the accepted `requested` direction and marks it as

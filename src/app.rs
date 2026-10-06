@@ -454,7 +454,7 @@ pub struct PealayerApp {
     pub(crate) right_hold_action: crate::config::PlayerDragAction,
     pub(crate) fullscreen_video_background: crate::config::VideoBackground,
     pub(crate) motion_control_mode: crate::config::MotionControlMode,
-    pub(crate) held_motion_action: Option<(String, String)>,
+    pub(crate) held_motion_action: Option<(String, String, String)>,
     pub(crate) compact_hardware_controls: bool,
     pub(crate) compact_timeline_tracks: bool,
     pub(crate) timeline_header_wheel_vertical_scroll: bool,
@@ -686,12 +686,12 @@ impl eframe::App for PealayerApp {
         // is released. This remains active even if a repaint moves the cursor
         // outside the original button or the panel is hidden mid-gesture.
         if !ui.input(|input| input.pointer.primary_down())
-            && let Some((_, stop_action)) = self.held_motion_action.take()
+            && let Some((_, stop_action, control_key)) = self.held_motion_action.take()
         {
-            let _ = self.engine_handle.sender.send(
-                crate::four_d::engine::EngineMessage::InvokeControllerAction {
-                    action_id: stop_action,
-                },
+            crate::ui::layout::invoke_held_motion_action(
+                self,
+                &control_key,
+                &stop_action,
             );
         }
 
@@ -3520,11 +3520,11 @@ impl PealayerApp {
             }
             InteropCommand::SetHardwarePwm { channel, percent } => {
                 let value = (percent.clamp(0.0, 100.0) * 4095.0 / 100.0).round() as u16;
-                let _ = self.engine_handle.sender.send(
-                    crate::four_d::engine::EngineMessage::ControllerCall {
-                        method: "controller.pwm.set".to_string(),
-                        params: serde_json::json!({"channel": channel, "value": value}),
-                    },
+                let _ = self.engine_handle.queue_controller_intent(
+                    format!("pwm.{channel}"),
+                    "controller.pwm.set",
+                    serde_json::json!({"channel": channel, "value": value}),
+                    false,
                 );
             }
             InteropCommand::UpdateHardwarePresentation { key, fields } => {

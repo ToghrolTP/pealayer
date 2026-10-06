@@ -110,18 +110,24 @@ fn action_dispatch(control: &HardwareControl, action: &HardwareAction) -> Hardwa
 }
 
 pub(crate) fn invoke_action(app: &PealayerApp, control: &HardwareControl, action: &HardwareAction) {
-    let message = match action_dispatch(control, action) {
-        HardwareActionDispatch::Advertised(action_id) => {
-            crate::four_d::engine::EngineMessage::InvokeControllerAction { action_id }
-        }
-        HardwareActionDispatch::ControllerCommand(command) => {
-            crate::four_d::engine::EngineMessage::ControllerCall {
-                method: "controller.command.execute".to_string(),
-                params: serde_json::json!({"command": command}),
-            }
-        }
+    let (method, params, refresh_catalog) = match action_dispatch(control, action) {
+        HardwareActionDispatch::Advertised(action_id) => (
+            "controller.action.invoke",
+            serde_json::json!({"action_id": action_id}),
+            true,
+        ),
+        HardwareActionDispatch::ControllerCommand(command) => (
+            "controller.command.execute",
+            serde_json::json!({"command": command}),
+            false,
+        ),
     };
-    let _ = app.engine_handle.sender.send(message);
+    let _ = app.engine_handle.queue_controller_intent(
+        control.key.clone(),
+        method,
+        params,
+        refresh_catalog,
+    );
 }
 
 /// Dispatch an advertised action through the same routing policy used by the
@@ -148,27 +154,25 @@ pub(crate) fn invoke_action_by_id(
     Ok(())
 }
 
-fn set_relay(app: &PealayerApp, relay: u8, on: bool) {
-    let _ = app
-        .engine_handle
-        .sender
-        .send(crate::four_d::engine::EngineMessage::ControllerCall {
-            method: "controller.command.execute".to_string(),
-            params: serde_json::json!({
-                "command": format!("relay {relay} {}", if on { "on" } else { "off" })
-            }),
-        });
+pub(crate) fn set_relay(app: &PealayerApp, relay: u8, on: bool) {
+    let _ = app.engine_handle.queue_controller_intent(
+        format!("relay.{relay}"),
+        "controller.command.execute",
+        serde_json::json!({
+            "command": format!("relay {relay} {}", if on { "on" } else { "off" })
+        }),
+        false,
+    );
 }
 
 pub(crate) fn set_pwm(app: &PealayerApp, channel: u8, percent: f64) {
     let raw = (percent.clamp(0.0, 100.0) * 4095.0 / 100.0).round() as u16;
-    let _ = app
-        .engine_handle
-        .sender
-        .send(crate::four_d::engine::EngineMessage::ControllerCall {
-            method: "controller.pwm.set".to_string(),
-            params: serde_json::json!({"channel": channel, "value": raw}),
-        });
+    let _ = app.engine_handle.queue_controller_intent(
+        format!("pwm.{channel}"),
+        "controller.pwm.set",
+        serde_json::json!({"channel": channel, "value": raw}),
+        false,
+    );
 }
 
 pub(crate) fn managed_controls(capabilities: &HardwareCapabilities) -> Vec<HardwareControl> {
