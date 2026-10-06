@@ -19,6 +19,9 @@ const files = (await filesBelow(dist))
   .filter((path) => relative(dist, path).replaceAll(sep, '/') !== 'sw.js')
   .sort();
 const digest = createHash('sha256');
+// Stamping rules are part of the build's bytes too: changing this recipe must
+// invalidate caches even when Vite's raw inputs/output are unchanged.
+digest.update(await readFile(fileURLToPath(import.meta.url)));
 for (const path of files) {
   digest.update(relative(dist, path).replaceAll(sep, '/'));
   digest.update(await readFile(path));
