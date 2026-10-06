@@ -9171,6 +9171,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let mut update_start_to = None;
                             let mut update_duration_to = None;
                             let mut update_relay_to = None;
+                            let mut update_direct_value_to = None;
 
                             if let Some(idx) = instance_idx {
                                 let selected_cue_label = self.app.tr("Selected cue");
@@ -9179,6 +9180,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let timing_subtitle = self.app.tr("Exact timeline placement and length");
                                 let start_time_label = self.app.tr("Starts");
                                 let duration_label = self.app.tr("Duration");
+                                let fixed_duration_help = self.app.tr("Duration is defined by the recorded effect");
+                                let direct_channel_value_label = self.app.tr("Direct channel value");
+                                let state_label = self.app.tr("State");
+                                let on_label = self.app.tr("On");
+                                let off_label = self.app.tr("Off");
                                 let hardware_target_label = self.app.tr("Hardware target");
                                 let source_label = self.app.tr("Source");
                                 let unavailable_output_label = self.app.tr("Unavailable output");
@@ -9323,24 +9329,33 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 ui.with_layout(
                                                     egui::Layout::right_to_left(egui::Align::Center),
                                                     |ui| {
-                                                        let mut duration_ms = template.duration_ms;
-                                                        let editor = ui.add(
-                                                            crate::duration::time_value_drag(
-                                                                &mut duration_ms,
-                                                                50..=3_600_000,
-                                                                50.0,
-                                                                self.app.human_readable_time_units,
-                                                            ),
-                                                        );
-                                                        if editor.drag_started()
-                                                            || (editor.changed() && !editor.dragged())
-                                                        {
-                                                            push_undo = true;
-                                                        }
-                                                        if editor.changed() {
-                                                            isolate_instance = true;
-                                                            update_duration_to = Some(duration_ms);
-                                                            timeline_dirty = true;
+                                                        if template.duration_resizable() {
+                                                            let mut duration_ms = template.duration_ms;
+                                                            let editor = ui.add(
+                                                                crate::duration::time_value_drag(
+                                                                    &mut duration_ms,
+                                                                    50..=3_600_000,
+                                                                    50.0,
+                                                                    self.app.human_readable_time_units,
+                                                                ),
+                                                            );
+                                                            if editor.drag_started()
+                                                                || (editor.changed() && !editor.dragged())
+                                                            {
+                                                                push_undo = true;
+                                                            }
+                                                            if editor.changed() {
+                                                                isolate_instance = true;
+                                                                update_duration_to = Some(duration_ms);
+                                                                timeline_dirty = true;
+                                                            }
+                                                        } else {
+                                                            ui.label(
+                                                                crate::duration::format_effect_duration_for_language(
+                                                                    display_language,
+                                                                    template.duration_ms,
+                                                                ),
+                                                            ).on_hover_text(&fixed_duration_help);
                                                         }
                                                     },
                                                 );
@@ -9353,7 +9368,36 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     let is_controller_owned = template.controller_macro.is_some()
                                         || template.controller_strip_effect.is_some();
                                     let current_relay_id = template.actions.first().map(|a| a.relay_id).unwrap_or(0);
-                                    if !is_controller_owned {
+                                    if let Some(direct) = template.direct_control.as_ref() {
+                                        let is_relay = direct.control_key.starts_with("relay.");
+                                        effect_controls_card(
+                                            ui,
+                                            panel_width,
+                                            if is_relay { crate::ui::icons::PLUG } else { crate::ui::icons::LIGHTBULB },
+                                            &direct_channel_value_label,
+                                            Some(&direct.control_key),
+                                            false,
+                                            |ui| {
+                                                let mut value = direct.value_basis_points;
+                                                if is_relay {
+                                                    ui.horizontal(|ui| {
+                                                        ui.label(egui::RichText::new(&state_label).weak());
+                                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                            ui.selectable_value(&mut value, 0, format!("{}  {}", crate::ui::icons::STOP_CIRCLE, off_label));
+                                                            ui.selectable_value(&mut value, 10_000, format!("{}  {}", crate::ui::icons::POWER, on_label));
+                                                        });
+                                                    });
+                                                } else {
+                                                    let mut percent = f64::from(value) / 100.0;
+                                                    draw_pwm_editor_row(ui, &mut percent, true);
+                                                    value = (percent.clamp(0.0, 100.0) * 100.0).round() as u16;
+                                                }
+                                                if value != direct.value_basis_points {
+                                                    update_direct_value_to = Some(value);
+                                                }
+                                            },
+                                        );
+                                    } else if !is_controller_owned {
                                     let is_mismatched = !template.target.is_compatible_with_relay(current_relay_id);
                                     if is_mismatched {
                                         let configured_name = template
@@ -9575,6 +9619,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         tmpl.target = crate::four_d::models::HardwareTarget::Relay(new_relay);
                                     }
                                 }
+                            }
+
+                            if let Some(value) = update_direct_value_to {
+                                if let Err(error) = self.app.update_direct_control_cue_value(id, value) {
+                                    self.app.set_osd(error);
+                                }
+                                ui.ctx().request_repaint();
                             }
 
                             if let Some(eff_id) = relocate_effect_id {
@@ -11640,6 +11691,42 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     control,
                                                 );
                                                 ui.separator();
+                                                if relay_id_from_control_key(control_key).is_some() {
+                                                    ui.menu_button(
+                                                        format!("{}  {}", crate::ui::icons::PLUS, self.app.tr("Add cue at playhead")),
+                                                        |ui| {
+                                                            for (label, value, icon) in [
+                                                                (self.app.tr("On"), 10_000, crate::ui::icons::POWER),
+                                                                (self.app.tr("Off"), 0, crate::ui::icons::STOP_CIRCLE),
+                                                            ] {
+                                                                if ui.button(format!("{icon}  {label}")).clicked() {
+                                                                    let start = (self.app.playback_time * 1_000.0).round().max(0.0) as u64;
+                                                                    if let Err(error) = self.app.add_direct_control_cue(control_key, value, start, 1_000) {
+                                                                        self.app.set_osd(error);
+                                                                    }
+                                                                    ui.close();
+                                                                }
+                                                            }
+                                                        },
+                                                    );
+                                                    ui.separator();
+                                                } else if is_pwm_control(control) {
+                                                    ui.menu_button(
+                                                        format!("{}  {}", crate::ui::icons::PLUS, self.app.tr("Add value cue at playhead")),
+                                                        |ui| {
+                                                            for percent in [0_u16, 25, 50, 75, 100] {
+                                                                if ui.button(format!("{percent}%")).clicked() {
+                                                                    let start = (self.app.playback_time * 1_000.0).round().max(0.0) as u64;
+                                                                    if let Err(error) = self.app.add_direct_control_cue(control_key, percent * 100, start, 1_000) {
+                                                                        self.app.set_osd(error);
+                                                                    }
+                                                                    ui.close();
+                                                                }
+                                                            }
+                                                        },
+                                                    );
+                                                    ui.separator();
+                                                }
                                             }
                                             if ui
                                                 .button(format!(
@@ -11708,12 +11795,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let mut analog_track_action: Option<(String, bool, bool)> = None;
                                 let mut analog_rename_action: Option<(String, String)> = None;
                                 let mut analog_manage_action: Option<String> = None;
+                                let mut analog_direct_cue_action: Option<(String, u16)> = None;
                                 let hide_timeline_track_label =
                                     self.app.tr("Hide timeline track");
                                 let unlink_timeline_track_label =
                                     self.app.tr("Unlink from timeline");
                                 let rename_track_label = self.app.tr("Rename");
                                 let manage_track_label = self.app.tr("Manage...");
+                                let add_value_cue_label = self.app.tr("Add value cue at playhead");
                                 let analog_menu_capabilities = timeline_order_capabilities.clone();
                                 let analog_menu_controls = timeline_order_controls.clone();
                                 let analog_menu_sender = self.app.engine_handle.sender.clone();
@@ -12076,6 +12165,21 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     pwm_raw(percent),
                                                     pwm_response,
                                                 );
+                                                if ui
+                                                    .button(format!(
+                                                        "{}  {} ({:.2}%)",
+                                                        crate::ui::icons::PLUS,
+                                                        add_value_cue_label,
+                                                        percent,
+                                                    ))
+                                                    .clicked()
+                                                {
+                                                    analog_direct_cue_action = Some((
+                                                        control_key.clone(),
+                                                        (percent.clamp(0.0, 100.0) * 100.0).round() as u16,
+                                                    ));
+                                                    ui.close();
+                                                }
                                             }
                                             ui.separator();
                                         }
@@ -12162,6 +12266,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         {
                                             open_control_dialog(self.app, &capabilities, &control);
                                         }
+                                    }
+                                }
+                                if let Some((control_key, value)) = analog_direct_cue_action {
+                                    let start = (self.app.playback_time * 1_000.0).round().max(0.0) as u64;
+                                    if let Err(error) = self.app.add_direct_control_cue(
+                                        &control_key,
+                                        value,
+                                        start,
+                                        1_000,
+                                    ) {
+                                        self.app.set_osd(error);
                                     }
                                 }
                                 if analog_tracks_changed {
@@ -12653,7 +12768,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             if let Some(effect) = self.app.timeline.templates.iter().find(|t| t.id == instance.effect_id) {
                                                 let is_controller_owned = effect.controller_macro.is_some()
                                                     || effect.controller_strip_effect.is_some();
-                                                let (track_index, relay_id) = if is_controller_owned {
+                                                let duration_resizable = effect.duration_resizable();
+                                                let (track_index, relay_id, analog_y, selected_track_key) = if is_controller_owned {
                                                     let lane = effect
                                                         .controller_lane
                                                         .unwrap_or(crate::four_d::models::ControllerEffectLane::Sequence);
@@ -12663,7 +12779,27 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     else {
                                                         continue;
                                                     };
-                                                    (index, None)
+                                                    (index, None, None, None)
+                                                } else if let Some(direct) = effect.direct_control.as_ref()
+                                                    && let Some(channel) = direct.control_key.strip_prefix("pwm.").and_then(|value| value.parse::<u8>().ok())
+                                                {
+                                                    if let Some(analog_index) = self.app.timeline.analog_tracks.iter()
+                                                        .filter(|track| visible_analog_track_ids.contains(&track.id))
+                                                        .position(|track| track.channel == channel)
+                                                    {
+                                                        (
+                                                            usize::MAX,
+                                                            None,
+                                                            Some(tracks_top + track_area_height + analog_index as f32 * timeline_analog_height),
+                                                            Some(crate::four_d::models::hardware_timeline_track_key(&direct.control_key)),
+                                                        )
+                                                    } else if let Some(index) = timeline_rows.iter().position(|row| {
+                                                        row.kind == TimelineTrackKind::Hardware(direct.control_key.clone())
+                                                    }) {
+                                                        (index, None, None, None)
+                                                    } else {
+                                                        continue;
+                                                    }
                                                 } else {
                                                     let Some(relay_id) = effect.actions.first().map(|a| a.relay_id) else {
                                                         continue;
@@ -12671,15 +12807,20 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     let Some(index) = timeline_row_for_relay(&timeline_rows, relay_id) else {
                                                         continue;
                                                     };
-                                                    (index, Some(relay_id))
+                                                    (index, Some(relay_id), None, None)
                                                 };
                                                 let is_mismatched = relay_id
                                                     .is_some_and(|relay_id| !effect.target.is_compatible_with_relay(relay_id));
-                                                let track_y = timeline_track_row_top(
+                                                let track_y = analog_y.unwrap_or_else(|| timeline_track_row_top(
                                                     rect.min.y,
                                                     track_index,
                                                     timeline_track_height,
-                                                );
+                                                ));
+                                                let cue_row_height = if analog_y.is_some() {
+                                                    timeline_analog_height
+                                                } else {
+                                                    timeline_track_height
+                                                };
 
                                                 let start_x = rect.min.x + (instance.start_time_ms as f32 * px_per_ms);
                                                 let end_x = start_x + (effect.duration_ms.max(1) as f32 * px_per_ms);
@@ -12688,7 +12829,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     egui::pos2(start_x, track_y + 4.0),
                                                     egui::pos2(
                                                         end_x.max(start_x + 8.0),
-                                                        track_y + timeline_track_height - 4.0,
+                                                        track_y + cue_row_height - 4.0,
                                                     ),
                                                 );
 
@@ -12762,7 +12903,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                                 if is_hovered && self.app.active_drag.is_none() {
                                                     if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
-                                                        let mode = crate::app::classify_clip_drag_mode(clip_rect.left(), clip_rect.right(), mouse_pos.x);
+                                                        let mode = if duration_resizable {
+                                                            crate::app::classify_clip_drag_mode(clip_rect.left(), clip_rect.right(), mouse_pos.x)
+                                                        } else {
+                                                            crate::app::DragMode::Move
+                                                        };
                                                         match mode {
                                                             crate::app::DragMode::ResizeLeft => {
                                                                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -12781,16 +12926,16 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                                 if clip_response.double_clicked() {
                                                     clicked_any_clip = true;
-                                                    self.app.selected_timeline_track = timeline_rows
+                                                    self.app.selected_timeline_track = selected_track_key.clone().or_else(|| timeline_rows
                                                         .get(track_index)
-                                                        .map(|row| row.key.clone());
+                                                        .map(|row| row.key.clone()));
                                                     manage_cue_id = Some(instance.id);
                                                 } else if clip_response.clicked() {
                                                     let is_ctrl = ui.ctx().input(|i| i.modifiers.command || i.modifiers.ctrl);
                                                     clicked_any_clip = true;
-                                                    self.app.selected_timeline_track = timeline_rows
+                                                    self.app.selected_timeline_track = selected_track_key.clone().or_else(|| timeline_rows
                                                         .get(track_index)
-                                                        .map(|row| row.key.clone());
+                                                        .map(|row| row.key.clone()));
                                                     if is_ctrl {
                                                         if self.app.selected_instance_ids.contains(&instance.id) {
                                                             self.app.selected_instance_ids.remove(&instance.id);
@@ -12809,9 +12954,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     && !is_track_locked
                                                 {
                                                     clicked_any_clip = true;
-                                                    self.app.selected_timeline_track = timeline_rows
+                                                    self.app.selected_timeline_track = selected_track_key.clone().or_else(|| timeline_rows
                                                         .get(track_index)
-                                                        .map(|row| row.key.clone());
+                                                        .map(|row| row.key.clone()));
                                                     let is_ctrl = ui.ctx().input(|i| i.modifiers.command || i.modifiers.ctrl);
                                                     if !self.app.selected_instance_ids.contains(&instance.id) {
                                                         if !is_ctrl {
@@ -12832,7 +12977,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                             .map(|p| p.x)
                                                             .unwrap_or(mouse_pos.x);
 
-                                                        let drag_mode = crate::app::classify_clip_drag_mode(clip_rect.left(), clip_rect.right(), press_x);
+                                                        let drag_mode = if duration_resizable {
+                                                            crate::app::classify_clip_drag_mode(clip_rect.left(), clip_rect.right(), press_x)
+                                                        } else {
+                                                            crate::app::DragMode::Move
+                                                        };
                                                         started_drag = Some((instance.id, drag_mode, instance.start_time_ms, effect.duration_ms, press_x, initial_positions));
                                                     }
                                                 }
@@ -12864,7 +13013,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 // Visual handle grips
                                                 let left_active = hovered_handle == Some(crate::app::DragMode::ResizeLeft);
                                                 let right_active = hovered_handle == Some(crate::app::DragMode::ResizeRight);
-                                                render_clip_handles(&painter, clip_rect, left_active, right_active, alpha);
+                                                if duration_resizable {
+                                                    render_clip_handles(&painter, clip_rect, left_active, right_active, alpha);
+                                                }
 
                                                 // Clip name label
                                                 let displayed_effect_name = crate::ui::i18n::visual_text(display_language, &effect.name);
@@ -12906,7 +13057,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             // Visual handle grips
                                             let left_active = self.app.active_drag.as_ref().map(|d| d.mode) == Some(crate::app::DragMode::ResizeLeft);
                                             let right_active = self.app.active_drag.as_ref().map(|d| d.mode) == Some(crate::app::DragMode::ResizeRight);
-                                            render_clip_handles(&painter, clip_rect, left_active, right_active, 255);
+                                            if effect.duration_resizable() {
+                                                render_clip_handles(&painter, clip_rect, left_active, right_active, 255);
+                                            }
 
                                             // Clip name label
                                             let displayed_effect_name = crate::ui::i18n::visual_text(display_language, &effect.name);
@@ -13033,7 +13186,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     crate::app::DragMode::Move => {
                                                         // Vertical track switching
                                                         let mut target_relay = None;
-                                                        if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
+                                                        let moving_direct_pwm = self.app.timeline.instances.iter()
+                                                            .find(|instance| instance.id == drag_state.instance_id)
+                                                            .and_then(|instance| self.app.timeline.templates.iter().find(|template| template.id == instance.effect_id))
+                                                            .and_then(|template| template.direct_control.as_ref())
+                                                            .is_some_and(|cue| cue.control_key.starts_with("pwm."));
+                                                        if !moving_direct_pwm && let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                                     let relative_y = mouse_pos.y - tracks_top;
                                                     let track_index = (relative_y
                                                                 / timeline_track_height)

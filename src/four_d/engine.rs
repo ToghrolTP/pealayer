@@ -294,6 +294,14 @@ pub struct CompiledControllerStripEffect {
     pub start: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledDirectPwmCue {
+    pub start_time_ms: u64,
+    pub end_time_ms: u64,
+    pub channel: u8,
+    pub value_basis_points: u16,
+}
+
 #[derive(Debug, Clone)]
 pub struct ControllerCallResult {
     pub operation: String,
@@ -367,6 +375,7 @@ pub enum EngineMessage {
     UpdateControllerMacros(Vec<CompiledControllerMacro>),
     UpdateControllerStripEffects(Vec<CompiledControllerStripEffect>),
     UpdateAnalogTracks(Vec<crate::four_d::curve::AnalogTrack>),
+    UpdateDirectPwmCues(Vec<CompiledDirectPwmCue>),
     LiveActuatorOverride {
         channel: u8,
         value: u8,
@@ -727,6 +736,7 @@ pub fn spawn_engine() -> EngineHandle {
         let mut current_controller_strip_effect_index = 0;
         let mut active_strip_effect: Option<String> = None;
         let mut analog_tracks: Vec<crate::four_d::curve::AnalogTrack> = Vec::new();
+        let mut direct_pwm_cues: Vec<CompiledDirectPwmCue> = Vec::new();
         let mut last_pwm_values = [0u8; 16];
         let mut was_playing = false;
         let mut was_estop = false;
@@ -1001,6 +1011,10 @@ pub fn spawn_engine() -> EngineHandle {
                     }
                     EngineMessage::UpdateAnalogTracks(tracks) => {
                         analog_tracks = tracks;
+                        last_pwm_values.fill(0);
+                    }
+                    EngineMessage::UpdateDirectPwmCues(cues) => {
+                        direct_pwm_cues = cues;
                         last_pwm_values.fill(0);
                     }
                     EngineMessage::LiveActuatorOverride { channel, value } => {
@@ -1519,21 +1533,44 @@ pub fn spawn_engine() -> EngineHandle {
                 let analog_solo_active = analog_tracks
                     .iter()
                     .any(|track| track.enabled && track.soloed);
-                for track in &analog_tracks {
-                    if (track.channel as usize) < 16 {
-                        let ch = track.channel as usize;
-                        let outputs = track.allows_output(analog_solo_active);
-                        let val = if outputs {
-                            track.evaluate_u8(current_time)
-                        } else {
-                            0
-                        };
+                let pwm_channels = analog_tracks
+                    .iter()
+                    .map(|track| track.channel)
+                    .chain(direct_pwm_cues.iter().map(|cue| cue.channel))
+                    .collect::<std::collections::BTreeSet<_>>();
+                for channel in pwm_channels {
+                    if (channel as usize) < 16 {
+                        let ch = channel as usize;
+                        // Direct value cues are layered in timeline order and
+                        // temporarily override a curve. When the interval ends,
+                        // the underlying curve (or zero) is restored.
+                        let direct = direct_pwm_cues.iter().rev().find(|cue| {
+                            cue.channel == channel
+                                && current_time >= cue.start_time_ms
+                                && current_time < cue.end_time_ms
+                        });
+                        let val = direct.map(|cue| {
+                            ((u32::from(cue.value_basis_points) * 255 + 5_000) / 10_000) as u8
+                        }).unwrap_or_else(|| {
+                            analog_tracks
+                                .iter()
+                                .rev()
+                                .find(|track| track.channel == channel)
+                                .map(|track| {
+                                    if track.allows_output(analog_solo_active) {
+                                        track.evaluate_u8(current_time)
+                                    } else {
+                                        0
+                                    }
+                                })
+                                .unwrap_or(0)
+                        });
                         if val != last_pwm_values[ch] {
                             last_pwm_values[ch] = val;
                             if connected {
                                 if let Some(ref mut transport) = active_transport {
                                     let cmd = Command::PwmSet {
-                                        channel: track.channel,
+                                        channel,
                                         value: val,
                                     };
                                     if let Err(e) = transport.send(cmd) {
@@ -1628,6 +1665,7 @@ pub fn compile_timeline(
         // Evaluate desired state based on Z-Index
         for relay_id in relay_ids.iter().copied() {
             let mut desired_state = false;
+            let mut has_active_state = false;
 
             let is_ignored = muted.contains(&relay_id) || (has_solo && !soloed.contains(&relay_id));
 
@@ -1661,6 +1699,7 @@ pub fn compile_timeline(
 
                             if let Some(state) = latest_action_state {
                                 desired_state = state;
+                                has_active_state = true;
                                 break; // Stop looking at lower layers
                             }
                         }
@@ -1668,11 +1707,11 @@ pub fn compile_timeline(
                 }
             }
 
-            if desired_state
-                != current_relay_states
-                    .get(&relay_id)
-                    .copied()
-                    .unwrap_or(false)
+            // `Off` is an authored command too. Treat the first sampled state
+            // as unknown rather than assuming the physical relay is already
+            // off, otherwise a standalone Off cue would compile to nothing.
+            if (has_active_state || current_relay_states.contains_key(&relay_id))
+                && current_relay_states.get(&relay_id).copied() != Some(desired_state)
             {
                 compiled.push(CompiledAction {
                     time_ms: t,
@@ -1685,6 +1724,40 @@ pub fn compile_timeline(
     }
 
     compiled
+}
+
+pub fn compile_direct_pwm_cues(timeline: &Timeline) -> Vec<CompiledDirectPwmCue> {
+    timeline
+        .instances
+        .iter()
+        .filter_map(|instance| {
+            let effect = timeline
+                .templates
+                .iter()
+                .find(|template| template.id == instance.effect_id)?;
+            let direct = effect.direct_control.as_ref()?;
+            let channel = direct
+                .control_key
+                .strip_prefix("pwm.")?
+                .parse::<u8>()
+                .ok()?;
+            if channel >= 16
+                || !timeline
+                    .track_state(&crate::four_d::models::hardware_timeline_track_key(
+                        &direct.control_key,
+                    ))
+                    .linked
+            {
+                return None;
+            }
+            Some(CompiledDirectPwmCue {
+                start_time_ms: instance.start_time_ms,
+                end_time_ms: instance.start_time_ms.saturating_add(effect.duration_ms),
+                channel,
+                value_basis_points: direct.value_basis_points,
+            })
+        })
+        .collect()
 }
 
 fn spawn_peer_engine() -> EngineHandle {
@@ -1747,7 +1820,7 @@ fn spawn_peer_engine() -> EngineHandle {
                         EngineMessage::LiveActuatorOverride {channel,value}=>{let _=client.queue("/api/peer/hardware",serde_json::to_value(Command::PwmSet {channel,value}).unwrap_or_default());}
                         // Only the authority schedules outputs. Local cue edits
                         // are sent through the shared timeline session endpoint.
-                        EngineMessage::UpdateQueue(_) | EngineMessage::UpdateControllerMacros(_) | EngineMessage::UpdateControllerStripEffects(_) | EngineMessage::UpdateAnalogTracks(_) | EngineMessage::Seek(_) | EngineMessage::ReconfigureEndpoint {..}=>{}
+                        EngineMessage::UpdateQueue(_) | EngineMessage::UpdateControllerMacros(_) | EngineMessage::UpdateControllerStripEffects(_) | EngineMessage::UpdateAnalogTracks(_) | EngineMessage::UpdateDirectPwmCues(_) | EngineMessage::Seek(_) | EngineMessage::ReconfigureEndpoint {..}=>{}
                     }
             }
             if !connected.load(Ordering::Relaxed){pending.clear();deadlines.clear();}
@@ -2032,6 +2105,54 @@ mod tests {
             false,
         );
         assert!(compile_controller_macros(&timeline).is_empty());
+    }
+
+    #[test]
+    fn compiles_direct_pwm_value_as_a_bounded_resizable_interval() {
+        let mut timeline = Timeline::new();
+        let effect = Effect::direct_control(
+            "House lights".into(),
+            String::new(),
+            1_250,
+            "pwm.12".into(),
+            3_750,
+            None,
+        );
+        let effect_id = effect.id;
+        timeline.templates.push(effect);
+        timeline.instances.push(EffectInstance::new(effect_id, 4_000));
+        assert_eq!(
+            compile_direct_pwm_cues(&timeline),
+            vec![CompiledDirectPwmCue {
+                start_time_ms: 4_000,
+                end_time_ms: 5_250,
+                channel: 12,
+                value_basis_points: 3_750,
+            }]
+        );
+        timeline.set_track_linked("hardware:pwm.12", false);
+        assert!(compile_direct_pwm_cues(&timeline).is_empty());
+    }
+
+    #[test]
+    fn standalone_direct_relay_off_is_not_optimized_away() {
+        let mut timeline = Timeline::new();
+        let effect = Effect::direct_control(
+            "Relay off".into(),
+            String::new(),
+            1_000,
+            "relay.5".into(),
+            0,
+            Some(5),
+        );
+        let effect_id = effect.id;
+        timeline.templates.push(effect);
+        timeline.instances.push(EffectInstance::new(effect_id, 2_000));
+        let compiled = compile_timeline(&timeline, &Default::default(), &Default::default());
+        assert_eq!(compiled.len(), 1);
+        assert_eq!(compiled[0].time_ms, 2_000);
+        assert_eq!(compiled[0].relay_id, 5);
+        assert!(!compiled[0].state);
     }
 
     #[test]

@@ -124,6 +124,8 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   const [workspaceName, setWorkspaceName] = useState('');
   const [workspaceIcon, setWorkspaceIcon] = useState('window');
   const [cuePreviews, setCuePreviews] = useState<Record<string, { start_time_ms: number; duration_ms: number }>>({});
+  const [directCueControl, setDirectCueControl] = useState<string | null>(null);
+  const [directCuePercent, setDirectCuePercent] = useState(50);
   const [activeCueDrag, setActiveCueDrag] = useState<null | {
     id: string;
     mode: 'move' | 'resize-left' | 'resize-right';
@@ -150,11 +152,20 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
     : tr(locale, 'No Media Playing');
   const seekPercent = durationSeconds > 0 ? (currentSeconds / durationSeconds) * 100 : 0;
   const activeSeek = seekDraft ?? seekPercent;
+  const directControls = useMemo(
+    () => (state.hardware_details?.controls ?? []).filter((control) =>
+      !control.hidden && (control.kind === 'relay' || control.kind === 'pwm' || control.kind === 'mosfet')),
+    [state.hardware_details?.controls],
+  );
   const timelineLanes = useMemo(() => {
     const order = ['motion', 'relay', 'pwm', 'lighting', 'display', 'rf', 'audio', 'sequence', 'composite'];
     const active = new Set(effects.map((effect) => effect.lane || 'sequence'));
-    return order.filter((lane) => active.has(lane));
-  }, [effects]);
+    const lanes = order.filter((lane) => active.has(lane));
+    directControls.forEach((control) => {
+      if (!lanes.includes(control.key)) lanes.push(control.key);
+    });
+    return lanes;
+  }, [directControls, effects]);
   const workspaceProfiles = useMemo(
     () => [...(state.workspace_profiles ?? [])].sort((left, right) => left.order - right.order || left.name.localeCompare(right.name)),
     [state.workspace_profiles],
@@ -716,11 +727,41 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             const laneEffects = effects.filter((effect) => (effect.lane || 'sequence') === lane);
             const laneEffectIds = new Set(laneEffects.map((effect) => effect.id));
             const effectCues = cues.filter((cue) => laneEffectIds.has(cue.effect_id));
+            const directControl = directControls.find((control) => control.key === lane);
             return (
               <div className="timeline-row" key={lane}>
                 <div className="timeline-row__label">
                   <span>{effectGlyph(lane === 'relay' || lane === 'motion' ? 'relay:lane' : lane === 'sequence' ? 'controller' : lane)}</span>
-                  <strong>{lane.charAt(0).toUpperCase() + lane.slice(1)}</strong>
+                  <strong>{directControl?.name ?? (lane.charAt(0).toUpperCase() + lane.slice(1))}</strong>
+                  {directControl && (
+                    <Dropdown
+                      trigger={['click']}
+                      menu={{
+                        items: directControl.kind === 'relay'
+                          ? [
+                            { key: '10000', label: tr(locale, 'On') },
+                            { key: '0', label: tr(locale, 'Off') },
+                          ]
+                          : [0, 25, 50, 75, 100].map((value) => ({ key: String(value * 100), label: `${value}%` }))
+                            .concat([{ key: 'custom', label: tr(locale, 'Custom value...') }]),
+                        onClick: ({ key }) => {
+                          if (key === 'custom') {
+                            setDirectCuePercent(50);
+                            setDirectCueControl(directControl.key);
+                          } else {
+                            sendCmd('direct_cue.add', {
+                              control_key: directControl.key,
+                              value_basis_points: Number(key),
+                              start_time_ms: Math.max(0, Math.round(currentSeconds * 1000)),
+                              duration_ms: 1000,
+                            });
+                          }
+                        },
+                      }}
+                    >
+                      <Button type="text" size="small" icon={<PlusOutlined />} aria-label={tr(locale, 'Add cue at playhead')} />
+                    </Dropdown>
+                  )}
                 </div>
                 <div className="timeline-lane">
                   {effectCues.map((cue) => (
@@ -737,7 +778,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                         left: `${(placement.start_time_ms / timelineDurationMs) * 100}%`,
                         width: `${Math.max(1.2, (placement.duration_ms / timelineDurationMs) * 100)}%`,
                       }}
-                      title={`${cue.name} · ${formatTime(placement.start_time_ms / 1000)} · ${tr(locale, 'Drag to move; use the edges to resize')}`}
+                      title={`${cue.name} · ${formatTime(placement.start_time_ms / 1000)} · ${tr(locale, cue.resizable ? 'Drag to move; use the edges to resize' : 'Recorded effect · drag to move')}`}
                       onPointerDown={(event) => {
                         if (event.button !== 0 || (event.target as HTMLElement).closest('.timeline-cue__delete')) return;
                         event.preventDefault();
@@ -745,9 +786,9 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                         const laneRect = event.currentTarget.parentElement?.getBoundingClientRect();
                         const edge = Math.min(12, cueRect.width * .3);
                         const localX = event.clientX - cueRect.left;
-                        const mode = localX <= edge
+                        const mode = cue.resizable && localX <= edge
                           ? 'resize-left'
-                          : localX >= cueRect.width - edge
+                          : cue.resizable && localX >= cueRect.width - edge
                             ? 'resize-right'
                             : 'move';
                         setActiveCueDrag({
@@ -773,7 +814,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                         sendCmd('seek_to', { seconds: placement.start_time_ms / 1000 });
                       }}
                     >
-                      <span className="timeline-cue__resize timeline-cue__resize--left" aria-hidden="true" />
+                      {cue.resizable && <span className="timeline-cue__resize timeline-cue__resize--left" aria-hidden="true" />}
                       <span>{cue.name}</span>
                       <Button
                         className="timeline-cue__delete"
@@ -785,7 +826,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                           sendCmd('remove_effect_cue', { instance_id: cue.id });
                         }}
                       />
-                      <span className="timeline-cue__resize timeline-cue__resize--right" aria-hidden="true" />
+                      {cue.resizable && <span className="timeline-cue__resize timeline-cue__resize--right" aria-hidden="true" />}
                     </div>
                       );
                     })()
@@ -799,6 +840,43 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         </div>
         </div>
       </section>
+      <Modal
+        open={directCueControl !== null}
+        title={tr(locale, 'Add PWM value cue')}
+        okText={tr(locale, 'Add cue')}
+        cancelText={tr(locale, 'Cancel')}
+        onCancel={() => setDirectCueControl(null)}
+        onOk={() => {
+          if (!directCueControl) return;
+          sendCmd('direct_cue.add', {
+            control_key: directCueControl,
+            value_basis_points: Math.round(directCuePercent * 100),
+            start_time_ms: Math.max(0, Math.round(currentSeconds * 1000)),
+            duration_ms: 1000,
+          });
+          setDirectCueControl(null);
+        }}
+      >
+        <Space.Compact block>
+          <Slider
+            style={{ flex: 1 }}
+            min={0}
+            max={100}
+            step={0.01}
+            value={directCuePercent}
+            onChange={setDirectCuePercent}
+          />
+          <InputNumber
+            min={0}
+            max={100}
+            step={0.01}
+            precision={2}
+            value={directCuePercent}
+            addonAfter="%"
+            onChange={(value) => setDirectCuePercent(Number(value ?? 0))}
+          />
+        </Space.Compact>
+      </Modal>
     </div>
   );
 };

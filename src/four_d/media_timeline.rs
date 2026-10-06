@@ -103,30 +103,66 @@ pub fn compile_plan(
     }
     let mut actions = relays.iter().enumerate().map(|(i, edge)| json!({"id":format!("relay-{i}"),"time_ms":edge.time_ms,
         "step":{"kind":"relay","target":edge.relay_id.saturating_sub(1),"value":u8::from(edge.state)}})).collect::<Vec<_>>();
+    let direct_pwm = engine::compile_direct_pwm_cues(timeline);
     let solo = analog.iter().any(|track| track.enabled && track.soloed);
-    for track in analog.iter().filter(|track| track.allows_output(solo)) {
-        let Some(last) = track.keyframes.last() else {
-            continue;
-        };
-        if last.time_ms / 34 > 200_000 {
-            return Err("PWM curve exceeds prepared sample capacity; shorten or split it".into());
+    let pwm_channels = analog
+        .iter()
+        .filter(|track| track.allows_output(solo))
+        .map(|track| track.channel)
+        .chain(direct_pwm.iter().map(|cue| cue.channel))
+        .collect::<std::collections::BTreeSet<_>>();
+    for channel in pwm_channels {
+        let track = analog
+            .iter()
+            .rev()
+            .find(|track| track.channel == channel && track.allows_output(solo));
+        let channel_cues = direct_pwm
+            .iter()
+            .filter(|cue| cue.channel == channel)
+            .collect::<Vec<_>>();
+        let last_curve_time = track
+            .and_then(|track| track.keyframes.last())
+            .map_or(0, |keyframe| keyframe.time_ms);
+        let last_cue_time = channel_cues
+            .iter()
+            .map(|cue| cue.end_time_ms)
+            .max()
+            .unwrap_or(0);
+        let end = last_curve_time.max(last_cue_time);
+        if end / 34 > 200_000 {
+            return Err("PWM timeline exceeds prepared sample capacity; shorten or split it".into());
         }
-        let mut at = 0;
+        let mut times = (0..=end / 34)
+            .map(|sample| sample * 34)
+            .collect::<Vec<_>>();
+        if times.last().copied() != Some(end) {
+            times.push(end);
+        }
+        for cue in &channel_cues {
+            times.push(cue.start_time_ms);
+            times.push(cue.end_time_ms);
+        }
+        times.sort_unstable();
+        times.dedup();
         let mut previous = None;
-        loop {
-            let value = (track.evaluate(at) * 4095.0).round() as u16;
+        for at in times {
+            let direct = channel_cues.iter().rev().find(|cue| {
+                at >= cue.start_time_ms && at < cue.end_time_ms
+            });
+            let value = direct.map_or_else(
+                || track.map_or(0, |track| (track.evaluate(at) * 4095.0).round() as u16),
+                |cue| {
+                    ((u32::from(cue.value_basis_points) * 4095 + 5_000) / 10_000) as u16
+                },
+            );
             if previous != Some(value) {
-                actions.push(json!({"id":format!("curve-{}-{at}",track.id),"time_ms":at,
-                    "step":{"kind":"pwm","target":track.channel,"value":value}}));
+                actions.push(json!({"id":format!("pwm-{channel}-{at}"),"time_ms":at,
+                    "step":{"kind":"pwm","target":channel,"value":value}}));
                 previous = Some(value);
             }
             if actions.len() > 65535 {
                 return Err("Timeline exceeds prepared action capacity; split the project".into());
             }
-            if at == last.time_ms {
-                break;
-            }
-            at = (at + 34).min(last.time_ms);
         }
     }
     if cues.len() > 4096 || actions.len() > 65535 {
@@ -279,6 +315,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::four_d::models::{Effect, EffectInstance, Timeline};
     #[test]
     fn revision_is_content_driven_and_requires_clock_arming_ack() {
         let mut plan = PreparedTimeline::default();
@@ -303,5 +340,33 @@ mod tests {
         plan.replace(Err("too many actions".into()));
         assert!(plan.has_items());
         assert!(!plan.ready_for(1));
+    }
+
+    #[test]
+    fn prepared_plan_contains_exact_direct_pwm_start_and_release() {
+        let mut timeline = Timeline::new();
+        let effect = Effect::direct_control(
+            "PWM cue".into(),
+            String::new(),
+            1_000,
+            "pwm.3".into(),
+            5_000,
+            None,
+        );
+        let effect_id = effect.id;
+        timeline.templates.push(effect);
+        timeline.instances.push(EffectInstance::new(effect_id, 10_000));
+        let plan = compile_plan(&timeline, &[], &[]).expect("direct PWM plan");
+        let actions = plan["actions"].as_array().expect("prepared actions");
+        assert!(actions.iter().any(|action| {
+            action["time_ms"] == 10_000
+                && action["step"]["target"] == 3
+                && action["step"]["value"] == 2_048
+        }));
+        assert!(actions.iter().any(|action| {
+            action["time_ms"] == 11_000
+                && action["step"]["target"] == 3
+                && action["step"]["value"] == 0
+        }));
     }
 }

@@ -75,6 +75,29 @@ pub struct ControllerStripEffectCue {
     pub id: String,
 }
 
+/// A directly-authored value held by one advertised hardware channel for the
+/// cue's visible interval. Unlike a recorded/controller-owned sequence this
+/// has no intrinsic program length, so its timeline placement may be resized.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DirectControlCue {
+    /// Stable PCController capability key, for example `relay.5` or `pwm.10`.
+    pub control_key: String,
+    /// Exact normalized value in basis points (0..=10_000).
+    pub value_basis_points: u16,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CueDurationPolicy {
+    /// Migration-safe policy: infer from the cue's authoritative source.
+    #[default]
+    Auto,
+    /// The referenced program owns its duration; placement is move-only.
+    Intrinsic,
+    /// The timeline interval owns its duration and exposes resize handles.
+    Resizable,
+}
+
 /// Capability-derived timeline lane for a PCController-owned effect.
 ///
 /// This is presentation metadata, not a second effect definition: the living
@@ -149,6 +172,12 @@ pub struct Effect {
     pub controller_strip_effect: Option<ControllerStripEffectCue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controller_lane: Option<ControllerEffectLane>,
+    /// Optional direct channel value. These cues are authored and resized in
+    /// Pealayer; recorded macros and lighting programs remain intrinsic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_control: Option<DirectControlCue>,
+    #[serde(default)]
+    pub duration_policy: CueDurationPolicy,
 }
 
 impl Effect {
@@ -163,6 +192,8 @@ impl Effect {
             controller_macro: None,
             controller_strip_effect: None,
             controller_lane: None,
+            direct_control: None,
+            duration_policy: CueDurationPolicy::Auto,
         }
     }
 
@@ -183,6 +214,8 @@ impl Effect {
             controller_macro: None,
             controller_strip_effect: None,
             controller_lane: None,
+            direct_control: None,
+            duration_policy: CueDurationPolicy::Auto,
         }
     }
 
@@ -203,6 +236,8 @@ impl Effect {
             controller_macro: Some(ControllerMacroCue { id: macro_id, mode }),
             controller_strip_effect: None,
             controller_lane: Some(ControllerEffectLane::Sequence),
+            direct_control: None,
+            duration_policy: CueDurationPolicy::Intrinsic,
         }
     }
 
@@ -217,6 +252,56 @@ impl Effect {
             controller_macro: None,
             controller_strip_effect: Some(ControllerStripEffectCue { id: effect_id }),
             controller_lane: Some(ControllerEffectLane::Lighting),
+            direct_control: None,
+            duration_policy: CueDurationPolicy::Intrinsic,
+        }
+    }
+
+    /// Whether this placement represents a sustained value whose interval is
+    /// authored on the media timeline. Controller-owned recordings and strip
+    /// programs carry their own timing and therefore are move-only.
+    pub fn duration_resizable(&self) -> bool {
+        match self.duration_policy {
+            CueDurationPolicy::Intrinsic => false,
+            CueDurationPolicy::Resizable => true,
+            CueDurationPolicy::Auto => {
+                self.controller_macro.is_none() && self.controller_strip_effect.is_none()
+            }
+        }
+    }
+
+    pub fn direct_control(
+        name: String,
+        icon: String,
+        duration_ms: u64,
+        control_key: String,
+        value_basis_points: u16,
+        relay_id: Option<u8>,
+    ) -> Self {
+        let normalized = value_basis_points.min(10_000);
+        let actions = relay_id
+            .filter(|id| *id != 0)
+            .map(|relay_id| vec![AtomicAction {
+                relay_id,
+                state: normalized >= 5_000,
+                offset_ms: 0,
+            }])
+            .unwrap_or_default();
+        Self {
+            id: Uuid::new_v4(),
+            name,
+            icon,
+            duration_ms: duration_ms.max(100),
+            target: relay_id.map(HardwareTarget::for_relay).unwrap_or(HardwareTarget::Any),
+            actions,
+            controller_macro: None,
+            controller_strip_effect: None,
+            controller_lane: None,
+            direct_control: Some(DirectControlCue {
+                control_key,
+                value_basis_points: normalized,
+            }),
+            duration_policy: CueDurationPolicy::Resizable,
         }
     }
 }
@@ -374,6 +459,30 @@ mod tests {
         assert!(timeline.analog_tracks.is_empty());
         assert!(timeline.keyframes.is_empty());
         assert!(timeline.track_states.is_empty());
+    }
+
+    #[test]
+    fn recorded_programs_are_move_only_but_direct_values_are_resizable() {
+        let recorded = Effect::controller_macro(
+            "Recorded".into(),
+            String::new(),
+            2_000,
+            7,
+            "automatic".into(),
+        );
+        let lighting = Effect::controller_strip_effect("Lighting".into(), 3_000, "live-id".into());
+        let relay = Effect::direct_control(
+            "Relay on".into(),
+            String::new(),
+            1_000,
+            "relay.5".into(),
+            10_000,
+            Some(5),
+        );
+        assert!(!recorded.duration_resizable());
+        assert!(!lighting.duration_resizable());
+        assert!(relay.duration_resizable());
+        assert_eq!(relay.actions[0].state, true);
     }
 
     #[test]

@@ -148,6 +148,9 @@ export interface PlayerState {
     start_time_ms: number;
     duration_ms: number;
     duration_display: string;
+    resizable: boolean;
+    control_key?: string | null;
+    value_basis_points?: number | null;
   }>;
   update?: {
     operation_id?: string | null;

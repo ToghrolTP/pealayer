@@ -1163,8 +1163,11 @@ impl eframe::App for PealayerApp {
                         lane: effect
                             .controller_lane
                             .map(controller_effect_lane_name)
-                            .unwrap_or("sequence")
-                            .to_string(),
+                            .map(str::to_owned)
+                            .or_else(|| {
+                                effect.direct_control.as_ref().map(|cue| cue.control_key.clone())
+                            })
+                            .unwrap_or_else(|| "sequence".to_string()),
                     })
                     .collect(),
                 controller_effects,
@@ -1192,6 +1195,15 @@ impl eframe::App for PealayerApp {
                                         self.language,
                                         effect.duration_ms,
                                     ),
+                                resizable: effect.duration_resizable(),
+                                control_key: effect
+                                    .direct_control
+                                    .as_ref()
+                                    .map(|cue| cue.control_key.clone()),
+                                value_basis_points: effect
+                                    .direct_control
+                                    .as_ref()
+                                    .map(|cue| cue.value_basis_points),
                             })
                     })
                     .collect(),
@@ -3513,7 +3525,9 @@ impl PealayerApp {
                 // Duration is placement-specific. Give a resized cue its own
                 // template so another placement of the reusable effect never
                 // changes underneath the user.
-                let resolved_effect_id = if template.duration_ms != duration_ms {
+                let resolved_effect_id = if template.duration_resizable()
+                    && template.duration_ms != duration_ms
+                {
                     let mut placement_template = template;
                     placement_template.id = uuid::Uuid::new_v4();
                     update_effect_duration(&mut placement_template, duration_ms);
@@ -3530,6 +3544,32 @@ impl PealayerApp {
                 self.selected_instance_ids.clear();
                 self.selected_instance_ids.insert(instance_id);
                 self.sync_timeline_engine();
+            }
+            InteropCommand::AddDirectControlCue {
+                control_key,
+                value_basis_points,
+                start_time_ms,
+                duration_ms,
+            } => {
+                if let Err(error) = self.add_direct_control_cue(
+                    &control_key,
+                    value_basis_points,
+                    start_time_ms,
+                    duration_ms,
+                ) {
+                    self.set_osd(error);
+                }
+            }
+            InteropCommand::UpdateDirectControlCueValue {
+                instance_id,
+                value_basis_points,
+            } => {
+                let result = uuid::Uuid::parse_str(&instance_id)
+                    .map_err(|_| "Cue is no longer available".to_string())
+                    .and_then(|id| self.update_direct_control_cue_value(id, value_basis_points));
+                if let Err(error) = result {
+                    self.set_osd(error);
+                }
             }
             InteropCommand::AddControllerEffectCue {
                 reference,
@@ -6595,6 +6635,7 @@ impl PealayerApp {
         );
         let macros = crate::four_d::engine::compile_controller_macros(&self.timeline);
         let strip_effects = crate::four_d::engine::compile_controller_strip_effects(&self.timeline);
+        let direct_pwm = crate::four_d::engine::compile_direct_pwm_cues(&self.timeline);
         let analog=self.linked_analog_tracks();
         let payload=crate::four_d::media_timeline::compile_plan(&self.timeline,&relays,&analog);
         if let Ok(mut plan)=self.engine_handle.prepared_timeline.lock(){plan.replace(payload);}
@@ -6612,6 +6653,110 @@ impl PealayerApp {
         let _ = self.engine_handle.sender.send(
             crate::four_d::engine::EngineMessage::UpdateAnalogTracks(self.linked_analog_tracks()),
         );
+        let _ = self.engine_handle.sender.send(
+            crate::four_d::engine::EngineMessage::UpdateDirectPwmCues(direct_pwm),
+        );
+    }
+
+    /// Adds a directly-authored state/value interval to an advertised channel.
+    /// These placements are intentionally distinct from recorded effects: the
+    /// user owns their duration and PCController still owns the physical key.
+    pub fn add_direct_control_cue(
+        &mut self,
+        control_key: &str,
+        value_basis_points: u16,
+        start_time_ms: u64,
+        duration_ms: u64,
+    ) -> Result<uuid::Uuid, String> {
+        let control = self
+            .engine_handle
+            .hardware_capabilities
+            .lock()
+            .ok()
+            .and_then(|catalog| catalog.as_ref()?.controls.iter().find(|item| item.key == control_key).cloned())
+            .ok_or_else(|| format!("Channel '{control_key}' is not advertised by PCController"))?;
+        let relay_id = control_key
+            .strip_prefix("relay.")
+            .and_then(|value| value.parse::<u8>().ok())
+            .filter(|id| *id != 0);
+        let is_pwm = matches!(control.kind.as_str(), "pwm" | "mosfet")
+            || control_key.starts_with("pwm.");
+        if relay_id.is_none() && !is_pwm {
+            return Err(format!("Channel '{}' does not support direct value cues", control.name));
+        }
+        let value = value_basis_points.min(10_000);
+        let value_label = if relay_id.is_some() {
+            if value >= 5_000 { "On".to_string() } else { "Off".to_string() }
+        } else {
+            format!("{:.2}%", f32::from(value) / 100.0)
+        };
+        let template = crate::four_d::models::Effect::direct_control(
+            format!("{} · {}", control.name, value_label),
+            control.icon.clone(),
+            duration_ms,
+            control.key.clone(),
+            value,
+            relay_id,
+        );
+        let template_id = template.id;
+        let instance = crate::four_d::models::EffectInstance::new(template_id, start_time_ms);
+        let instance_id = instance.id;
+        self.undo_stack.push(self.snapshot_timeline());
+        self.timeline.templates.push(template);
+        self.timeline.instances.push(instance);
+        self.timeline
+            .track_states
+            .entry(crate::four_d::models::hardware_timeline_track_key(control_key))
+            .or_default();
+        self.selected_instance_ids.clear();
+        self.selected_instance_ids.insert(instance_id);
+        self.selected_timeline_track = Some(crate::four_d::models::hardware_timeline_track_key(control_key));
+        self.sync_timeline_engine();
+        Ok(instance_id)
+    }
+
+    pub fn update_direct_control_cue_value(
+        &mut self,
+        instance_id: uuid::Uuid,
+        value_basis_points: u16,
+    ) -> Result<(), String> {
+        let effect_id = self
+            .timeline
+            .instances
+            .iter()
+            .find(|instance| instance.id == instance_id)
+            .map(|instance| instance.effect_id)
+            .ok_or_else(|| "Cue is no longer available".to_string())?;
+        self.undo_stack.push(self.snapshot_timeline());
+        let isolated = self.isolate_template_for_instance(instance_id).unwrap_or(effect_id);
+        let effect = self
+            .timeline
+            .templates
+            .iter_mut()
+            .find(|template| template.id == isolated)
+            .ok_or_else(|| "Cue effect is no longer available".to_string())?;
+        let direct = effect
+            .direct_control
+            .as_mut()
+            .ok_or_else(|| "This recorded effect has no direct value".to_string())?;
+        let value = value_basis_points.min(10_000);
+        direct.value_basis_points = value;
+        let base_name = effect
+            .name
+            .split_once(" · ")
+            .map_or(effect.name.as_str(), |(base, _)| base)
+            .to_string();
+        let value_label = if direct.control_key.starts_with("relay.") {
+            if value >= 5_000 { "On".to_string() } else { "Off".to_string() }
+        } else {
+            format!("{:.2}%", f32::from(value) / 100.0)
+        };
+        effect.name = format!("{base_name} · {value_label}");
+        for action in &mut effect.actions {
+            action.state = value >= 5_000;
+        }
+        self.sync_timeline_engine();
+        Ok(())
     }
 
     pub fn restore_timeline_snapshot(

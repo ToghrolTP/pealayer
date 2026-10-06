@@ -227,6 +227,16 @@ pub enum InteropCommand {
         start_time_ms: u64,
         duration_ms: u64,
     },
+    AddDirectControlCue {
+        control_key: String,
+        value_basis_points: u16,
+        start_time_ms: u64,
+        duration_ms: u64,
+    },
+    UpdateDirectControlCueValue {
+        instance_id: String,
+        value_basis_points: u16,
+    },
     AddControllerEffectCue {
         reference: String,
         start_time_ms: u64,
@@ -501,6 +511,27 @@ impl InteropCommand {
                     "cue update requires a valid UUID and duration from 1 ms to 24 hours"
                         .to_string(),
                 )
+            }
+            Self::AddDirectControlCue {
+                control_key,
+                value_basis_points,
+                duration_ms,
+                ..
+            } if control_key.trim().is_empty()
+                || control_key.len() > 128
+                || *value_basis_points > 10_000
+                || *duration_ms < 100
+                || *duration_ms > 86_400_000 =>
+            {
+                Err("direct cue requires a channel key, 0..100% value, and 100 ms..24 hour duration".to_string())
+            }
+            Self::UpdateDirectControlCueValue {
+                instance_id,
+                value_basis_points,
+            } if uuid::Uuid::parse_str(instance_id.trim()).is_err()
+                || *value_basis_points > 10_000 =>
+            {
+                Err("direct cue value requires a valid UUID and 0..100% value".to_string())
             }
             Self::AddControllerEffectCue { reference, .. }
             | Self::PlayControllerEffect { reference }
@@ -905,6 +936,11 @@ pub struct WebEffectCue {
     pub start_time_ms: u64,
     pub duration_ms: u64,
     pub duration_display: String,
+    pub resizable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_basis_points: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1356,6 +1392,49 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                     .get("duration_ms")
                     .and_then(Value::as_u64)
                     .ok_or_else(|| "missing cue duration_ms".to_string())?,
+            })
+        }
+        "direct_cue.add" | "pealayer.direct_cue.add" | "pealayer.timeline.direct.add" => {
+            Some(InteropCommand::AddDirectControlCue {
+                control_key: string(&["control_key", "channel"])?,
+                value_basis_points: request
+                    .params
+                    .get("value_basis_points")
+                    .and_then(Value::as_u64)
+                    .or_else(|| {
+                        request.params.get("percent").and_then(Value::as_f64).map(|value| {
+                            (value.clamp(0.0, 100.0) * 100.0).round() as u64
+                        })
+                    })
+                    .and_then(|value| u16::try_from(value).ok())
+                    .ok_or_else(|| "missing direct cue value".to_string())?,
+                start_time_ms: request
+                    .params
+                    .get("start_time_ms")
+                    .or_else(|| request.params.get("time_ms"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+                duration_ms: request
+                    .params
+                    .get("duration_ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1_000),
+            })
+        }
+        "direct_cue.value" | "pealayer.direct_cue.value" => {
+            Some(InteropCommand::UpdateDirectControlCueValue {
+                instance_id: string(&["instance_id", "cue_id"])?,
+                value_basis_points: request
+                    .params
+                    .get("value_basis_points")
+                    .and_then(Value::as_u64)
+                    .or_else(|| {
+                        request.params.get("percent").and_then(Value::as_f64).map(|value| {
+                            (value.clamp(0.0, 100.0) * 100.0).round() as u64
+                        })
+                    })
+                    .and_then(|value| u16::try_from(value).ok())
+                    .ok_or_else(|| "missing direct cue value".to_string())?,
             })
         }
         "controller_effect_cue.add" | "pealayer.controller_effect_cue.add" => {
