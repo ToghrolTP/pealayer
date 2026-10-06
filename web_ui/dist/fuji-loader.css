@@ -1,5 +1,6 @@
 /* Shared by the pre-JavaScript shell and React loading surfaces. */
 .fuji-loader {
+  box-sizing: border-box;
   display: grid;
   place-items: center;
   align-content: center;

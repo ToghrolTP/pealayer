@@ -61,4 +61,5 @@ const svg = await readFile(new URL('../public/fuji-loader.svg', import.meta.url)
 assert.match(css, /prefers-reduced-motion/);
 assert.match(svg, /prefers-reduced-motion/);
 assert.match(css, /height: 131px/, 'Stable loader footprint');
+assert.match(css, /box-sizing: border-box/, 'Bootstrap must fit before the main stylesheet arrives');
 console.log('Readable/versioned asset cache and Fuji loader guardrails passed.');
