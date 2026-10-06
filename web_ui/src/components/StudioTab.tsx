@@ -19,11 +19,12 @@ import {
   SoundOutlined,
   VideoCameraOutlined,
 } from '@ant-design/icons';
-import { Button, Divider, Dropdown, Empty, Input, InputNumber, message, Modal, Popconfirm, Select, Slider, Space, Tooltip } from 'antd';
+import { Button, ConfigProvider, Divider, Dropdown, Empty, Input, InputNumber, message, Modal, Popconfirm, Select, Slider, Space, Tooltip } from 'antd';
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
 import { EffectIconPicker, effectGlyph as configuredEffectGlyph } from '../effectIcons';
 import { EffectRecorder } from './EffectRecorder';
+import recordingColors from '../../../assets/themes/recording-colors.json';
 import { mediaBasename } from '../mediaLabel';
 import { formatTimelineTime } from '../timelineTime';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
@@ -110,6 +111,13 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   const [selectedEffect, setSelectedEffect] = useState<string | null>(null);
   const [effectEditorOpen, setEffectEditorOpen] = useState(false);
   const [effectDraft, setEffectDraft] = useState<Record<string, any> | null>(null);
+  const captureBusy = Boolean(state.effect_recording?.active || state.effect_recording?.pending);
+  const effectPayload = (draft: Record<string, any>) => {
+    const { programText, steps, engine, ...payload } = draft;
+    return { ...payload, program: draft.kind === 'sequence' ? {
+      steps: steps ?? [], properties: { ...(draft.program?.properties ?? {}), mode: engine ?? 'auto', color: draft.color ?? 'violet' },
+    } : JSON.parse(programText || '{}') };
+  };
   const [seekDraft, setSeekDraft] = useState<number | null>(null);
   const [workspaceManagerOpen, setWorkspaceManagerOpen] = useState(false);
   const [workspaceName, setWorkspaceName] = useState('');
@@ -234,7 +242,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       default_pixels: effect.default_pixels ?? 100,
       is_new: false,
     } : {
-      reference: '', id: '', name: '', icon: 'sparkle', category: 'Effects', description: '',
+      reference: '', id: String(Array.from({ length: 256 }, (_, id) => id).find((id) => !controllerEffects.some((effect) => effect.id === String(id))) ?? ''), name: '', icon: 'sparkle', category: 'Effects', description: '',
       kind: 'sequence', programText: '{}', steps: [], engine: 'auto',
       color: 'violet', default_fps: 20, duration_ms: 1, default_pixels: 100,
       is_new: true,
@@ -344,38 +352,24 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       <Modal
         title={effectDraft?.is_new ? tr(locale, 'New effect') : tr(locale, 'Effect properties')}
         open={effectEditorOpen}
-        onCancel={() => setEffectEditorOpen(false)}
+        onCancel={() => { if (!captureBusy) setEffectEditorOpen(false); }}
+        closable={!captureBusy}
+        maskClosable={!captureBusy}
+        keyboard={!captureBusy}
+        okButtonProps={{ disabled: captureBusy }}
+        cancelButtonProps={{ disabled: captureBusy }}
         okText={tr(locale, 'Save')}
         width={640}
         onOk={() => {
           if (!effectDraft) return;
-          let program = {};
-          if (effectDraft.kind === 'sequence') {
-            program = {
-              steps: effectDraft.steps ?? [],
-              properties: { mode: effectDraft.engine ?? 'auto', color: effectDraft.color ?? 'violet' },
-            };
-          } else {
-            try {
-              program = JSON.parse(effectDraft.programText || '{}');
-            } catch {
-              void message.error(tr(locale, 'Program must be valid JSON'));
-              return;
-            }
-          }
-          const { programText, steps, engine, ...payload } = effectDraft;
-          sendCmd('controller_effect.save', { ...payload, program });
+          try { sendCmd('controller_effect.save', effectPayload(effectDraft)); }
+          catch { void message.error(tr(locale, 'Program must be valid JSON')); return; }
           window.localStorage.removeItem('pealayer.effect-working-draft');
           setEffectEditorOpen(false);
         }}
       >
         {effectDraft && (
-          <div className="effect-editor-grid">
-            {effectDraft.is_new && effectDraft.kind === 'sequence' && (
-              <div className="effect-editor-grid__wide">
-                <EffectRecorder state={state} sendCmd={sendCmd} locale={locale} compact />
-              </div>
-            )}
+          <ConfigProvider componentDisabled={captureBusy}><div className="effect-editor-grid">
             <label><span>{tr(locale, 'Type')}</span><Select value={effectDraft.kind} options={[{ value: 'sequence', label: tr(locale, 'Timed sequence') }, { value: 'strip-stream', label: tr(locale, 'Addressable lighting') }]} onChange={(kind) => setEffectDraft({ ...effectDraft, kind })} /></label>
             <label><span>{tr(locale, 'ID')}</span><Input value={effectDraft.id} onChange={(event) => setEffectDraft({ ...effectDraft, id: event.target.value })} /></label>
             <label><span>{tr(locale, 'Name')}</span><Input value={effectDraft.name} onChange={(event) => setEffectDraft({ ...effectDraft, name: event.target.value })} /></label>
@@ -385,7 +379,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             <label><span>{tr(locale, 'Duration (ms)')}</span><InputNumber min={1} value={effectDraft.duration_ms} onChange={(duration_ms) => setEffectDraft({ ...effectDraft, duration_ms: duration_ms ?? 1 })} /></label>
             {effectDraft.kind === 'strip-stream' && <label><span>{tr(locale, 'Frames per second')}</span><InputNumber min={1} max={120} value={effectDraft.default_fps} onChange={(default_fps) => setEffectDraft({ ...effectDraft, default_fps: default_fps ?? 20 })} /></label>}
             {effectDraft.kind === 'strip-stream' && <label><span>{tr(locale, 'Pixels')}</span><InputNumber min={1} value={effectDraft.default_pixels} onChange={(default_pixels) => setEffectDraft({ ...effectDraft, default_pixels: default_pixels ?? 100 })} /></label>}
-            {effectDraft.kind === 'sequence' && <label><span>{tr(locale, 'Color')}</span><Input value={effectDraft.color} onChange={(event) => setEffectDraft({ ...effectDraft, color: event.target.value })} /></label>}
+            {effectDraft.kind === 'sequence' && <label><span>{tr(locale, 'Color')}</span><Select disabled={captureBusy} value={effectDraft.color} onChange={(color) => setEffectDraft({ ...effectDraft, color })} options={recordingColors.map((color) => ({ value: color.id, label: <span className="recording-color-option"><span className="recording-color-swatch" style={{ backgroundColor: color.hex }} />{tr(locale, color.label)}</span> }))} /></label>}
             {effectDraft.kind === 'sequence' && <label><span>{tr(locale, 'Execution')}</span><Select value={effectDraft.engine ?? 'auto'} options={[
               { value: 'auto', label: tr(locale, 'Automatic (recommended)') },
               { value: 'host', label: tr(locale, 'Host clock') },
@@ -396,6 +390,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
               <div className="effect-editor-grid__wide sequence-editor-web">
                 <Divider titlePlacement="start" plain>{tr(locale, 'Sequence steps')}</Divider>
                 <div className="sequence-editor-web__toolbar">
+                  <ConfigProvider componentDisabled={false}><EffectRecorder state={state} sendCmd={sendCmd} locale={locale} effect={effectPayload(effectDraft)} onSequenceChange={(steps, id) => setEffectDraft((current) => current ? { ...current, steps, id: String(id), reference: `effect:${id}`, is_new: false } : current)} /></ConfigProvider>
                   <Button icon={<PlusOutlined />} onClick={addSequenceStep}>{tr(locale, 'Add step')}</Button>
                   <span>{(effectDraft.steps ?? []).length} {tr(locale, 'actions')}</span>
                 </div>
@@ -446,7 +441,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                 </div>
               </div>
             )}
-          </div>
+          </div></ConfigProvider>
         )}
       </Modal>
 

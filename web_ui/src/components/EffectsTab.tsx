@@ -3,6 +3,7 @@ import {
   Button,
   Card,
   Collapse,
+  ConfigProvider,
   ColorPicker,
   Dropdown,
   Empty,
@@ -38,6 +39,7 @@ import { EffectIconPicker, effectGlyph, effectIconOptions } from '../effectIcons
 import { EffectRecorder } from './EffectRecorder';
 import { GroupSelect } from './GroupSelect';
 import { EffectGroupDialog } from './EffectGroupDialog';
+import recordingColors from '../../../assets/themes/recording-colors.json';
 
 interface EffectsTabProps {
   state: PlayerState;
@@ -102,12 +104,22 @@ const programParts = (program: unknown) => {
   return { steps: [], properties: {} };
 };
 
+// Publishing and capture share exactly the same edited effect definition.
+const draftPayload = (draft: EffectDraft): Record<string, unknown> => ({
+  ...draft,
+  program: draft.kind === 'sequence' ? {
+    steps: draft.steps.map((step) => ({ ...step, at_us: Math.max(0, Math.round(step.at_us)) })),
+    properties: { ...draft.properties, color: draft.color },
+  } : JSON.parse(draft.programText || '{}'),
+});
+
 export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }) => {
   const effects = state.controller_effects ?? [];
   const [draft, setDraft] = useState<EffectDraft | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [inlineEdit, setInlineEdit] = useState<InlineEffectEdit | null>(null);
   const [newGroupName, setNewGroupName] = useState<string | null>(null);
+  const captureBusy = Boolean(state.effect_recording?.active || state.effect_recording?.pending);
   const selectedEffect = effects.find((effect) => effect.reference === selected);
   const grouped = useMemo(() => {
     const groups = new Map<string, typeof effects>();
@@ -127,7 +139,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       description: effect.description,
       kind: effect.kind,
       duration_ms: effect.duration_ms,
-      color: String(parts.properties.color ?? '#38D27A'),
+      color: String(parts.properties.color ?? 'green'),
       default_fps: effect.default_fps ?? 20,
       default_pixels: effect.default_pixels ?? 100,
       steps: parts.steps,
@@ -135,9 +147,9 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       programText: effect.kind === 'strip-stream' ? JSON.stringify(effect.program ?? {}, null, 2) : '{}',
       is_new: false,
     } : {
-      reference: '', id: '', name: '', icon: 'plug', category: category ?? 'Motion', description: '', kind: 'sequence',
-      duration_ms: 1000, color: '#38D27A', default_fps: 20, default_pixels: 100,
-      steps: [defaultStep()], properties: { mode: 'host', timing_tolerance_us: 0, keep_outputs_on_cancel: false },
+      reference: '', id: String(Array.from({ length: 256 }, (_, id) => id).find((id) => !effects.some((effect) => effect.id === String(id))) ?? ''), name: '', icon: 'plug', category: category ?? 'Motion', description: '', kind: 'sequence',
+      duration_ms: 1000, color: 'green', default_fps: 20, default_pixels: 100,
+      steps: [], properties: { mode: 'auto', timing_tolerance_us: 0, keep_outputs_on_cancel: false },
       programText: '{}', is_new: true,
     });
   };
@@ -165,31 +177,8 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
 
   const save = () => {
     if (!draft) return;
-    let program: unknown;
-    if (draft.kind === 'sequence') {
-      program = {
-        steps: draft.steps.map((step) => ({ ...step, at_us: Math.max(0, Math.round(step.at_us)) })),
-        properties: { ...draft.properties, color: draft.color },
-      };
-    } else {
-      try { program = JSON.parse(draft.programText || '{}'); }
-      catch { void message.error(tr(locale, 'Program must be valid JSON')); return; }
-    }
-    sendCmd('controller_effect.save', {
-      reference: draft.reference,
-      id: draft.id,
-      name: draft.name,
-      icon: draft.icon,
-      category: draft.category,
-      description: draft.description,
-      kind: draft.kind,
-      duration_ms: draft.duration_ms,
-      color: draft.color,
-      default_fps: draft.default_fps,
-      default_pixels: draft.default_pixels,
-      program,
-      is_new: draft.is_new,
-    });
+    try { sendCmd('controller_effect.save', draftPayload(draft)); }
+    catch { void message.error(tr(locale, 'Program must be valid JSON')); return; }
     setDraft(null);
   };
 
@@ -205,7 +194,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       description: effect.description,
       kind: effect.kind,
       duration_ms: effect.duration_ms,
-      color: String(parts.properties.color ?? '#38D27A'),
+      color: String(parts.properties.color ?? 'green'),
       default_fps: effect.default_fps ?? 20,
       default_pixels: effect.default_pixels ?? 100,
       program: effect.program,
@@ -321,15 +310,18 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       className="effect-editor-modal"
       title={draft?.is_new ? tr(locale, 'New effect') : tr(locale, 'Manage effect')}
       open={Boolean(draft)}
-      onCancel={() => setDraft(null)}
+      onCancel={() => { if (!captureBusy) setDraft(null); }}
+      closable={!captureBusy}
+      maskClosable={!captureBusy}
+      keyboard={!captureBusy}
+      cancelButtonProps={{ disabled: captureBusy }}
       onOk={save}
       okText={tr(locale, 'Save')}
-      okButtonProps={{ icon: <SaveOutlined /> }}
+      okButtonProps={{ icon: <SaveOutlined />, disabled: captureBusy || !draft?.name.trim() }}
       width={900}
     >
       {draft && <div className="effect-editor">
-        {draft.is_new && draft.kind === 'sequence' && <EffectRecorder state={state} sendCmd={sendCmd} locale={locale} onNewGroup={() => setNewGroupName('')} />}
-        <div className="effect-editor__identity">
+        <ConfigProvider componentDisabled={captureBusy}><div className="effect-editor__identity">
           <label><span>{tr(locale, 'Type')}</span><Select value={draft.kind} options={[{ value: 'sequence', label: tr(locale, 'Sequence') }, { value: 'strip-stream', label: tr(locale, 'Lighting') }]} onChange={(kind) => setDraft({ ...draft, kind })} /></label>
           <label><span>{tr(locale, 'ID')}</span><Input value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} /></label>
           <label><span>{tr(locale, 'Name')}</span><Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
@@ -337,10 +329,15 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
           <label><span>{tr(locale, 'Group')}</span><GroupSelect value={draft.category} groups={(state.controller_effect_groups ?? []).map((group) => group.name)} locale={locale} onChange={(category) => setDraft({ ...draft, category })} onCreate={() => setNewGroupName('')} /></label>
           <label className="effect-editor__wide"><span>{tr(locale, 'Description')}</span><Input value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
           <label><span>{tr(locale, 'Duration')}</span><InputNumber min={1} addonAfter="ms" value={draft.duration_ms} onChange={(duration_ms) => setDraft({ ...draft, duration_ms: duration_ms ?? 1 })} /></label>
-          <label><span>{tr(locale, 'Color')}</span><ColorPicker value={draft.color} disabledAlpha onChangeComplete={(color) => setDraft({ ...draft, color: color.toHexString().toUpperCase() })} /></label>
-        </div>
+          <label><span>{tr(locale, 'Color')}</span>{draft.kind === 'sequence' ? <Select disabled={captureBusy} value={draft.color} onChange={(color) => setDraft({ ...draft, color })} options={recordingColors.map((color) => ({ value: color.id, label: <span className="recording-color-option"><span className="recording-color-swatch" style={{ backgroundColor: color.hex }} />{tr(locale, color.label)}</span> }))} /> : <ColorPicker value={draft.color} disabledAlpha onChangeComplete={(color) => setDraft({ ...draft, color: color.toHexString().toUpperCase() })} />}</label>
+        </div></ConfigProvider>
         {draft.kind === 'sequence' ? <>
-          <div className="effect-editor__toolbar"><strong>{tr(locale, 'Sequence steps')}</strong><Button icon={<PlusOutlined />} onClick={() => setDraft({ ...draft, steps: [...draft.steps, defaultStep()] })}>{tr(locale, 'Add step')}</Button></div>
+          <div className="effect-editor__toolbar"><strong>{tr(locale, 'Sequence steps')}</strong><Space wrap>
+            <EffectRecorder state={state} sendCmd={sendCmd} locale={locale} effect={draftPayload(draft)} onSequenceChange={(steps, id) => setDraft((current) => current ? { ...current, id: String(id), reference: `effect:${id}`, is_new: false, steps } : current)} />
+            <Button disabled={captureBusy} icon={<PlusOutlined />} onClick={() => setDraft({ ...draft, steps: [...draft.steps, defaultStep()] })}>{tr(locale, 'Add step')}</Button>
+            <Popconfirm title={tr(locale, 'Delete all sequence steps?')} onConfirm={() => setDraft({ ...draft, steps: [] })}><Button disabled={captureBusy || draft.steps.length === 0} icon={<DeleteOutlined />}>{tr(locale, 'Clear steps')}</Button></Popconfirm>
+          </Space></div>
+          <ConfigProvider componentDisabled={captureBusy}>
           <Collapse className="effect-step-list" defaultActiveKey={draft.steps.map((_, index) => String(index))} items={draft.steps.map((step, index) => ({
             key: String(index),
             label: <span className="effect-step-title"><Tag>{index + 1}</Tag><strong>{step.kind}</strong><span>{(step.at_us / 1000).toLocaleString()} ms</span></span>,
@@ -365,7 +362,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
               <label><span>{tr(locale, 'Brightness')}</span><InputNumber min={0} max={255} value={step.brightness} onChange={(brightness) => updateStep(index, { brightness: brightness ?? undefined })} /></label>
               <label><span>{tr(locale, 'Payload')}</span><Input value={step.payload_hex} onChange={(event) => updateStep(index, { payload_hex: event.target.value })} /></label>
             </div>,
-          }))} />
+          }))} /></ConfigProvider>
         </> : <div className="effect-editor__program">
           <label><span>{tr(locale, 'Frames per second')}</span><InputNumber min={1} max={120} value={draft.default_fps} onChange={(default_fps) => setDraft({ ...draft, default_fps: default_fps ?? 20 })} /></label>
           <label><span>{tr(locale, 'Pixels')}</span><InputNumber min={1} value={draft.default_pixels} onChange={(default_pixels) => setDraft({ ...draft, default_pixels: default_pixels ?? 100 })} /></label>

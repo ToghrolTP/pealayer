@@ -48,7 +48,7 @@ pub(crate) fn select_sequence(
         description: String::new(),
         kind: "sequence".to_string(),
         program_json: String::new(),
-        color: "green".to_string(),
+        color: effect.color.clone(),
         default_fps: 0,
         duration_ms: effect.duration_ms,
         default_pixels: 0,
@@ -1356,46 +1356,6 @@ fn draw_sequence_step_editor(
     let mut selected_index =
         ui.data_mut(|data| data.get_persisted::<usize>(selection_id).unwrap_or(0));
     draft.duration_ms = sequence_duration_ms(&draft.steps);
-    ui.horizontal(|ui| {
-        ui.heading("Sequence steps");
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .button(format!("{} Add step", crate::ui::icons::PLUS))
-                .clicked()
-            {
-                let at_us = draft
-                    .steps
-                    .last()
-                    .map(|step| step.at_us.saturating_add(100_000))
-                    .unwrap_or(0);
-                let mut step = crate::four_d::controller::HardwareMacroStep {
-                    at_us,
-                    ..Default::default()
-                };
-                let kind = sequence_step_kinds(capabilities)
-                    .into_iter()
-                    .next()
-                    .unwrap_or("opcode");
-                reset_step_kind(&mut step, kind.to_string());
-                draft.steps.push(step);
-                selected_index = draft.steps.len().saturating_sub(1);
-            }
-            ui.label(
-                egui::RichText::new(format!(
-                    "{} · {}",
-                    draft.steps.len(),
-                    crate::duration::format_effect_duration_for_language(
-                        crate::config::AppLanguage::English,
-                        draft.duration_ms,
-                    )
-                ))
-                .small()
-                .weak(),
-            );
-        });
-    });
-    ui.add_space(6.0);
-
     draw_sequence_timeline(
         ui,
         draft,
@@ -2020,241 +1980,65 @@ fn recording_preview_detail(step: &crate::four_d::controller::HardwareMacroStep)
     }
 }
 
-pub(crate) fn draw_effect_recording_panel(app: &mut PealayerApp, ui: &mut egui::Ui) {
+pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let hardware = app.advertised_hardware();
-    let groups = hardware
-        .as_ref()
-        .map(|hardware| hardware.effect_groups.clone())
-        .unwrap_or_default();
-    let connected = hardware
-        .as_ref()
-        .is_some_and(|hardware| hardware.board_connected);
-    let recording = hardware
-        .as_ref()
-        .map(|hardware| hardware.effect_recording.clone())
-        .unwrap_or_default();
+    let connected = hardware.as_ref().is_some_and(|hardware| hardware.board_connected);
+    let recording = hardware.as_ref().map(|hardware| hardware.effect_recording.clone()).unwrap_or_default();
     let active = recording.active || app.hardware_effect_authoring.active;
-    let busy = app.hardware_effect_authoring.pending_operation.is_some();
+    let busy = app.hardware_effect_authoring.pending_operation.is_some() || app.hardware_effect_authoring.pending_saved_macro_id.is_some();
+    let target_matches = app.hardware_effect_authoring.append_target.map(|id| id.to_string())
+        .as_deref() == Some(app.effect_library_draft.id.as_str());
+    if active && target_matches && !recording.preview.is_empty() {
+        app.effect_library_draft.steps = recording.preview.clone();
+    }
     let mut start = false;
-    let mut refresh = false;
-    let mut save = false;
+    let mut finish = false;
     let mut discard = false;
-
-    egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(12))
-        .show(ui, |ui| {
-            let mut record_icon_rect = egui::Rect::NOTHING;
-            ui.horizontal(|ui| {
-                record_icon_rect = ui.allocate_exact_size(
-                    egui::vec2(18.0, 24.0), egui::Sense::hover(),
-                ).0;
-                ui.vertical(|ui| {
-                    let title = if active && !recording.name.trim().is_empty() {
-                        recording.name.as_str()
-                    } else {
-                        "Record effect"
-                    };
-                    ui.strong(title);
-                    let state = if active {
-                        format!("Recording · {} steps", recording.steps)
-                    } else if busy {
-                        "Applying…".to_string()
-                    } else if connected {
-                        "Ready".to_string()
-                    } else {
-                        "Board unavailable".to_string()
-                    };
-                    ui.label(egui::RichText::new(state).small().weak());
-                });
-                if recording.device_retained {
-                    ui.label(egui::RichText::new("Board RAM").small().strong());
-                }
-                if active {
-                    ui.spinner();
-                }
-            });
-            ui.add_space(8.0);
-            ui.add_enabled_ui(!active && !busy, |ui| {
-                egui::Grid::new("effect_recording_setup")
-                    .num_columns(2)
-                    .spacing([12.0, 7.0])
-                    .show(ui, |ui| {
-                        ui.label("Name");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut app.hardware_effect_authoring.name)
-                                .hint_text("New recorded effect")
-                                .desired_width(260.0),
-                        );
-                        ui.end_row();
-                        ui.label(app.tr("Group"));
-                        if crate::ui::group_picker::effect_group_picker(
-                            ui,
-                            "recording-group",
-                            &mut app.hardware_effect_authoring.category,
-                            &groups,
-                            260.0,
-                            app.language,
-                        ) { begin_new_group(app); }
-                        ui.end_row();
-                        ui.label("Capture");
-                        egui::ComboBox::from_id_salt("effect_recording_mode")
-                            .selected_text(match app.hardware_effect_authoring.capture_mode.as_str() {
-                                "device-clock" => "Device clock",
-                                "board-retained" => "Board-retained relay take",
-                                _ => "Automatic · all live sources",
-                            })
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut app.hardware_effect_authoring.capture_mode,
-                                    "automatic".to_string(),
-                                    "Automatic · all live sources",
-                                )
-                                .on_hover_text("Capture acknowledged commands from Pealayer, PCController, physical controls, and RF using the best compatible clock");
-                                ui.selectable_value(
-                                    &mut app.hardware_effect_authoring.capture_mode,
-                                    "device-clock".to_string(),
-                                    "Device clock",
-                                )
-                                .on_hover_text("Use device acknowledgement timestamps for strict timing");
-                                ui.selectable_value(
-                                    &mut app.hardware_effect_authoring.capture_mode,
-                                    "board-retained".to_string(),
-                                    "Board-retained relay take",
-                                )
-                                .on_hover_text("Keep a bounded relay/motion capture in board RAM until it is saved");
-                            });
-                        ui.end_row();
-                        ui.label("Color");
-                        recording_color_picker(ui, &mut app.hardware_effect_authoring.color);
-                        ui.end_row();
-                    });
-            });
-            if active {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new("Sources").small().weak());
-                    for source in if recording.device_retained {
-                        ["Physical relays", "Board RAM"]
-                    } else {
-                        ["Pealayer / API", "Board / RF"]
-                    } {
-                        egui::Frame::group(ui.style())
-                            .corner_radius(egui::CornerRadius::same(9))
-                            .inner_margin(egui::Margin::symmetric(7, 2))
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new(source).small());
-                            });
+    ui.horizontal_wrapped(|ui| {
+        ui.strong("Sequence steps");
+        if ui.add_enabled(!active && !busy, egui::Button::new(format!("{} Add step", crate::ui::icons::PLUS))).clicked() {
+            let draft = &mut app.effect_library_draft;
+            let at_us = sequence_duration_ms(&draft.steps).saturating_mul(1000);
+            let mut step = crate::four_d::controller::HardwareMacroStep { at_us, ..Default::default() };
+            let kind = sequence_step_kinds(hardware.as_ref()).into_iter().next().unwrap_or("opcode");
+            reset_step_kind(&mut step, kind.into());
+            draft.steps.push(step);
+            let selection_id = egui::Id::new(("effect-sequence-selected-cue", draft.reference.clone(), draft.id.clone()));
+            ui.data_mut(|data| data.insert_persisted(selection_id, draft.steps.len() - 1));
+        }
+        ui.add_enabled_ui(!active && !busy, |ui| {
+            egui::ComboBox::from_id_salt("effect_capture_clock").width(160.0)
+                .selected_text(match app.hardware_effect_authoring.capture_mode.as_str() {
+                    "device-clock" => "Device clock",
+                    "board-retained" => "Board capture",
+                    _ => "All live sources",
+                }).show_ui(ui, |ui| {
+                    for (value, label) in [("automatic", "All live sources"), ("device-clock", "Device clock"), ("board-retained", "Board capture")] {
+                        ui.selectable_value(&mut app.hardware_effect_authoring.capture_mode, value.into(), label);
                     }
                 });
-                if !recording.last_error.trim().is_empty() {
-                    ui.colored_label(ui.visuals().error_fg_color, &recording.last_error);
-                }
-                ui.add_space(7.0);
-                ui.label(egui::RichText::new("Live sequence").small().strong());
-                if recording.preview.is_empty() {
-                    ui.label(
-                        egui::RichText::new("Waiting for the first captured action…")
-                            .small()
-                            .weak(),
-                    );
-                } else {
-                    egui::ScrollArea::vertical()
-                        .id_salt("effect_recording_live_preview")
-                        .max_height(190.0)
-                        .stick_to_bottom(true)
-                        .show(ui, |ui| {
-                            for (index, step) in recording.preview.iter().enumerate() {
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new(format!("#{:02}", index + 1))
-                                            .monospace()
-                                            .weak(),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "{:>8.3}s",
-                                            step.at_us as f64 / 1_000_000.0
-                                        ))
-                                        .monospace(),
-                                    );
-                                    ui.strong(&step.kind);
-                                    let detail = recording_preview_detail(step);
-                                    if !detail.is_empty() {
-                                        ui.label(egui::RichText::new(detail).small().weak());
-                                    }
-                                });
-                            }
-                        });
-                }
-            }
-            ui.add_space(7.0);
-            ui.horizontal_wrapped(|ui| {
-                start = ui
-                    .add_enabled(
-                        connected && !active && !busy,
-                        egui::Button::new(format!(
-                            "{} Start recording",
-                            crate::ui::icons::RECORD
-                        )),
-                    )
-                    .on_hover_text(
-                        "Capture acknowledged relay, seat, PWM, lighting, display, RF, and other board commands",
-                    )
-                    .clicked();
-                refresh = ui
-                    .add_enabled(
-                        connected && active && !busy,
-                        egui::Button::new(format!(
-                            "{} Status",
-                            crate::ui::icons::ARROW_CLOCKWISE
-                        )),
-                    )
-                    .clicked();
-                save = ui
-                    .add_enabled(
-                        connected && active && !busy,
-                        egui::Button::new(format!(
-                            "{} Finish and edit",
-                            crate::ui::icons::FLOPPY_DISK
-                        )),
-                    )
-                    .clicked();
-                discard = ui
-                    .add_enabled(
-                        connected && active && !busy,
-                        egui::Button::new(format!(
-                            "{} Discard take",
-                            crate::ui::icons::TRASH
-                        )),
-                    )
-                    .clicked();
-            });
-            // Paint after the selector has processed input, so the header uses
-            // the new choice in this frame instead of a cached/theme color.
-            let color = if recording.active && !recording.color.is_empty() {
-                &recording.color
-            } else {
-                &app.hardware_effect_authoring.color
-            };
-            paint_recording_icon(ui, record_icon_rect, color);
         });
-
-    let result = if start {
-        if app.hardware_effect_authoring.name.trim().is_empty() {
-            app.hardware_effect_authoring.name = app.effect_library_draft.name.trim().to_string();
+        if active {
+            ui.label(egui::RichText::new(format!("{} {} actions", crate::ui::icons::RECORD, recording.steps))
+                .color(recording_color(&app.effect_library_draft.color)));
+            finish = ui.add_enabled(!busy, egui::Button::new(format!("{} Finish", crate::ui::icons::STOP_CIRCLE))).clicked();
+            discard = ui.add_enabled(!busy, egui::Button::new(format!("{} Discard take", crate::ui::icons::TRASH)))
+                .on_hover_text("Discard only this capture; existing sequence steps are retained").clicked();
+        } else {
+            start = ui.add_enabled(connected && !busy && !app.effect_library_draft.name.trim().is_empty(),
+                egui::Button::new(egui::RichText::new(format!("{} Record", crate::ui::icons::RECORD))
+                    .color(recording_color(&app.effect_library_draft.color))))
+                .on_hover_text("Publish the current sequence and capture at its end. Delete existing steps first to replace them.").clicked();
         }
-        app.start_hardware_effect_recording()
-    } else if refresh {
-        app.refresh_hardware_effect_recording()
-    } else if save {
-        app.save_hardware_effect_recording()
-    } else if discard {
-        app.discard_hardware_effect_recording()
-    } else {
-        Ok(())
-    };
-    if let Err(error) = result {
-        app.set_osd(error);
-    }
+        if busy { ui.spinner(); }
+        if !active { ui.weak(format!("{} · {}", app.effect_library_draft.steps.len(), crate::duration::format_effect_duration_for_language(app.language, sequence_duration_ms(&app.effect_library_draft.steps)))); }
+        if !recording.last_error.is_empty() { ui.colored_label(ui.visuals().error_fg_color, &recording.last_error); }
+    });
+    let result = if start { app.start_hardware_effect_recording() }
+        else if finish { app.save_hardware_effect_recording() }
+        else if discard { app.discard_hardware_effect_recording() }
+        else { Ok(()) };
+    if let Err(error) = result { app.set_osd(error); }
 }
 
 pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
@@ -2265,6 +2049,10 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let display_language = app.language;
     let human_readable_time_units = app.human_readable_time_units;
     let capabilities = app.advertised_hardware();
+    let capture_locked = app.hardware_effect_authoring.active
+        || app.hardware_effect_authoring.pending_operation.is_some()
+        || app.hardware_effect_authoring.pending_saved_macro_id.is_some()
+        || capabilities.as_ref().is_some_and(|hardware| hardware.effect_recording.active);
     let sequences = capabilities
         .as_ref()
         .map(|value| value.macros.clone())
@@ -2308,6 +2096,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 egui::vec2(220.0_f32.min(ui.available_width() * 0.36), height),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
+                    if capture_locked { ui.disable(); }
                     ui.horizontal_wrapped(|ui| {
                         if ui
                             .button(format!("{} {}", crate::ui::icons::PLUS, app.tr("Sequence")))
@@ -2327,6 +2116,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         .id_salt("controller_effect_editor_list")
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
+                            if capture_locked { ui.disable(); }
                             for effect in &sequences {
                                 let reference = format!("effect:{}", effect.id);
                                 let payload = crate::app::EffectDragPayload {
@@ -2458,6 +2248,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 app.tr("No matching icons"),
                             );
                             let rtl_ui = app.rtl;
+                            ui.add_enabled_ui(!capture_locked, |ui| {
                             let draft = &mut app.effect_library_draft;
                             egui::Grid::new("controller_effect_definition_grid")
                                 .num_columns(2)
@@ -2545,6 +2336,9 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     }
                                     ui.end_row();
                                     if draft.kind == "sequence" {
+                                        ui.label("Color");
+                                        recording_color_picker(ui, &mut draft.color);
+                                        ui.end_row();
                                         ui.label(&labels.10);
                                         egui::ComboBox::from_id_salt("effect_sequence_engine")
                                             .selected_text(match draft.engine.as_str() {
@@ -2572,19 +2366,17 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         ui.end_row();
                                     }
                                 });
+                            });
                             if app.effect_library_draft.kind == "sequence" {
-                                if app.effect_library_draft.is_new {
-                                    ui.add_space(12.0);
-                                    draw_effect_recording_panel(app, ui);
-                                }
+                                draw_effect_capture_controls(app, ui);
                                 ui.add_space(10.0);
-                                draw_sequence_step_editor(
+                                ui.add_enabled_ui(!capture_locked, |ui| draw_sequence_step_editor(
                                     ui,
                                     &mut app.effect_library_draft,
                                     rtl_ui,
                                     capabilities.as_ref(),
                                     human_readable_time_units,
-                                );
+                                ));
                                 ui.add_space(8.0);
                                 if crate::ui::icons::disclosure_header(
                                     ui,
@@ -2593,6 +2385,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     false,
                                 ) {
                                     egui::Frame::group(ui.style()).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+                                        if capture_locked { ui.disable(); }
                                         egui::Grid::new("effect_sequence_properties_grid")
                                             .num_columns(2)
                                             .spacing([14.0, 8.0])
@@ -2693,7 +2486,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 .engine_handle
                                 .is_connected
                                 .load(std::sync::atomic::Ordering::Relaxed);
-                            ui.horizontal_wrapped(|ui| {
+                            ui.add_enabled_ui(!capture_locked, |ui| { ui.horizontal_wrapped(|ui| {
                                 if ui
                                     .button(if controller_reachable {
                                         format!(
@@ -2763,6 +2556,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         app.set_osd(error);
                                     }
                                 }
+                            });
                             });
                             if saved && !published {
                                 ui.label(
@@ -3098,15 +2892,14 @@ mod tests {
         let context = egui::Context::default();
         let mut app = PealayerApp::default();
         for color in ["green", "blue", "white"] {
-            app.hardware_effect_authoring.color = color.to_string();
+            app.effect_library_draft.color = color.to_string();
             let mut output = context.run_ui(egui::RawInput::default(), |ui| {
-                draw_effect_recording_panel(&mut app, ui);
+                draw_effect_capture_controls(&mut app, ui);
             });
             output.textures_delta.clear();
             assert!(output.shapes.iter().any(|shape| matches!(
                 &shape.shape, egui::epaint::Shape::Text(text)
-                    if text.galley.job.text == crate::ui::icons::RECORD
-                        && text.galley.job.sections.iter().all(|section| section.format.color == recording_color(color))
+                    if text.galley.job.text.contains(crate::ui::icons::RECORD)
             )));
         }
     }

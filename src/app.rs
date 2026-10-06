@@ -151,6 +151,9 @@ pub struct HardwareEffectAuthoringState {
     pub anchor_ms: u64,
     pub pending_operation: Option<String>,
     pub pending_saved_macro_id: Option<u64>,
+    pub record_after_publish: Option<(String, String)>,
+    pub append_target: Option<u64>,
+    pub append_discarded: bool,
     /// The most recent effect whose upsert was acknowledged by PCController.
     ///
     /// Catalog refreshes are asynchronous, so the cached capability snapshot
@@ -173,6 +176,9 @@ impl Default for HardwareEffectAuthoringState {
             anchor_ms: 0,
             pending_operation: None,
             pending_saved_macro_id: None,
+            record_after_publish: None,
+            append_target: None,
+            append_discarded: false,
             acknowledged_effect_reference: None,
             status: String::new(),
         }
@@ -1080,7 +1086,7 @@ impl eframe::App for PealayerApp {
                             overwritten: recording.overwritten,
                             started_at: recording.started_at.clone(),
                             last_error: recording.last_error.clone(),
-                            pending: self.hardware_effect_authoring.pending_operation.is_some(),
+                            pending: self.hardware_effect_authoring.pending_operation.is_some() || self.hardware_effect_authoring.pending_saved_macro_id.is_some(),
                         }
                     })
                     .unwrap_or_else(|| crate::platform::interop::WebEffectRecording {
@@ -1089,7 +1095,7 @@ impl eframe::App for PealayerApp {
                         mode: self.hardware_effect_authoring.capture_mode.clone(),
                         category: self.hardware_effect_authoring.category.clone(),
                         color: self.hardware_effect_authoring.color.clone(),
-                        pending: self.hardware_effect_authoring.pending_operation.is_some(),
+                        pending: self.hardware_effect_authoring.pending_operation.is_some() || self.hardware_effect_authoring.pending_saved_macro_id.is_some(),
                         ..Default::default()
                     }),
                 effects: self
@@ -2365,7 +2371,7 @@ impl PealayerApp {
         operation: &str,
         command: String,
     ) -> Result<(), String> {
-        if self.hardware_effect_authoring.pending_operation.is_some() {
+        if self.hardware_effect_authoring.pending_operation.is_some() || self.hardware_effect_authoring.pending_saved_macro_id.is_some() {
             return Err("another hardware effect operation is still running".to_string());
         }
         if !self
@@ -2389,36 +2395,18 @@ impl PealayerApp {
     }
 
     pub(crate) fn start_hardware_effect_recording(&mut self) -> Result<(), String> {
-        let name = Self::controller_command_argument(&self.hardware_effect_authoring.name)
-            .ok_or_else(|| {
-                "Effect name must be 1–64 letters, numbers, spaces, dashes, or underscores"
-                    .to_string()
-            })?;
-        self.hardware_effect_authoring.anchor_ms =
-            (self.seek_pos.unwrap_or(self.playback_time).max(0.0) * 1_000.0) as u64;
-        let category = Self::controller_command_argument(&self.hardware_effect_authoring.category)
-            .ok_or_else(|| {
-                "Effect category must be 1–64 letters, numbers, spaces, dashes, or underscores"
-                    .to_string()
-            })?;
-        let color = self
-            .hardware_effect_authoring
-            .color
-            .trim()
-            .to_ascii_lowercase();
-        if !matches!(
-            color.as_str(),
-            "red" | "blue" | "violet" | "purple" | "green" | "white"
-        ) {
-            return Err("Effect color must be red, blue, violet, green, or white".to_string());
+        if self.effect_library_draft.kind != "sequence" {
+            return Err("Select a sequence to capture into".into());
         }
-        let operation = match self.hardware_effect_authoring.capture_mode.as_str() {
-            "device-clock" => "start-mcu",
-            "board-retained" => "start-board",
-            _ => "start",
-        };
-        let command = format!("effect record {operation} {name} {category} {color}");
-        self.request_hardware_effect_command("macro-start", command)
+        if self.hardware_effect_authoring.active {
+            return Err("Finish or discard the current capture first".into());
+        }
+        self.save_controller_effect()?;
+        self.hardware_effect_authoring.record_after_publish = Some((
+            format!("effect:{}", self.effect_library_draft.id),
+            self.hardware_effect_authoring.capture_mode.clone(),
+        ));
+        Ok(())
     }
 
     pub(crate) fn refresh_hardware_effect_recording(&mut self) -> Result<(), String> {
@@ -2604,6 +2592,9 @@ impl PealayerApp {
     }
 
     pub(crate) fn save_controller_effect(&mut self) -> Result<(), String> {
+        if self.hardware_effect_authoring.active || self.advertised_hardware().is_some_and(|hardware| hardware.effect_recording.active) {
+            return Err("Finish or discard capture before publishing edits".into());
+        }
         let mut draft = self.effect_library_draft.clone();
         if draft.kind == "sequence" {
             draft.steps.sort_by_key(|step| step.at_us);
@@ -2965,13 +2956,16 @@ impl PealayerApp {
                         }
                         "macro-save" => {
                             self.hardware_effect_authoring.active = false;
+                            self.hardware_effect_authoring.append_discarded = false;
                             self.hardware_effect_authoring.pending_saved_macro_id =
                                 saved_effect_id(&output);
                             self.engine_handle.request_catalog_refresh();
                         }
                         "macro-discard" => {
                             self.hardware_effect_authoring.active = false;
-                            self.hardware_effect_authoring.pending_saved_macro_id = None;
+                            self.hardware_effect_authoring.append_discarded = true;
+                            self.hardware_effect_authoring.pending_saved_macro_id = self.hardware_effect_authoring.append_target;
+                            self.engine_handle.request_catalog_refresh();
                         }
                         "effect-preview" | "strip-rainbow" => {
                             self.hardware_effect_authoring.preview_active = true;
@@ -3003,14 +2997,23 @@ impl PealayerApp {
                             self.board_operation_status = self.tr("Physical front panel refreshed");
                         }
                         "effect-save" => {
-                            let reference =
-                                format!("effect:{}", self.effect_library_draft.id.trim());
+                            let reference = self.hardware_effect_authoring.record_after_publish.as_ref()
+                                .map(|(target, _)| target.clone())
+                                .unwrap_or_else(|| format!("effect:{}", self.effect_library_draft.id.trim()));
                             self.effect_library_draft.reference = reference.clone();
                             self.effect_library_draft.is_new = false;
                             self.hardware_effect_authoring
                                 .acknowledge_effect_publish(&reference);
                             self.save_config();
                             self.engine_handle.request_catalog_refresh();
+                            if let Some((target, mode)) = self.hardware_effect_authoring.record_after_publish.take() {
+                                self.hardware_effect_authoring.append_discarded = false;
+                                self.hardware_effect_authoring.append_target = target.strip_prefix("effect:").and_then(|id|id.parse().ok());
+                                if let Err(error) = self.request_hardware_effect_command("macro-start", format!("effect record append {target} {mode}")) {
+                                    self.hardware_effect_authoring.append_target = None;
+                                    self.set_osd(error);
+                                }
+                            }
                         }
                         "effect-delete" => {
                             self.hardware_effect_authoring
@@ -3048,6 +3051,8 @@ impl PealayerApp {
                     }
                 }
                 Err(error) => {
+                    if result.operation == "effect-save" { self.hardware_effect_authoring.record_after_publish = None; }
+                    if result.operation == "macro-start" { self.hardware_effect_authoring.append_target = None; }
                     if result.operation == "effect-preview" {
                         self.hardware_effect_authoring.preview_active = false;
                     }
@@ -3070,13 +3075,33 @@ impl PealayerApp {
         let Some(id) = self.hardware_effect_authoring.pending_saved_macro_id else {
             return;
         };
-        let Some(hardware_macro) = self
-            .advertised_hardware()
-            .and_then(|capabilities| capabilities.macros.into_iter().find(|item| item.id == id))
+        let Some(capabilities) = self.advertised_hardware() else { return; };
+        let Some(hardware_macro) = capabilities.macros.iter().find(|item| item.id == id).cloned()
         else {
             return;
         };
         let effect = controller_macro_effect_preset(&hardware_macro).effect;
+        if self.hardware_effect_authoring.append_target == Some(id) {
+            // A save ACK may arrive before the refreshed catalog. Do not reload
+            // the old prefix into the editor or its existing timeline cues.
+            let recording = &capabilities.effect_recording;
+            if recording.active || u64::from(recording.id) != id { return; }
+            if !self.hardware_effect_authoring.append_discarded
+                && serde_json::to_value(&hardware_macro.steps).ok() != serde_json::to_value(&recording.preview).ok() { return; }
+            for template in &mut self.timeline.templates {
+                if template.controller_macro.as_ref().is_some_and(|cue|cue.id == id) {
+                    let identity = template.id;
+                    *template = effect.clone();
+                    template.id = identity;
+                }
+            }
+            crate::ui::effects_library::select_sequence(self, &hardware_macro);
+            self.hardware_effect_authoring.pending_saved_macro_id = None;
+            self.hardware_effect_authoring.append_target = None;
+            self.hardware_effect_authoring.status.clear();
+            self.sync_timeline_engine();
+            return;
+        }
         let effect_id = effect.id;
         self.undo_stack.push(self.snapshot_timeline());
         self.timeline.templates.push(effect);
@@ -3451,6 +3476,10 @@ impl PealayerApp {
                 }
             }
             InteropCommand::SaveControllerEffect { effect } => {
+                if self.hardware_effect_authoring.active || self.hardware_effect_authoring.pending_operation.is_some() {
+                    self.set_osd("Finish the current hardware effect operation first".into());
+                    return;
+                }
                 let steps = if effect.kind == "sequence" {
                     let value = effect
                         .program
@@ -3492,8 +3521,8 @@ impl PealayerApp {
                     engine: properties
                         .and_then(|value| value.get("mode"))
                         .and_then(serde_json::Value::as_str)
-                        .filter(|mode| matches!(*mode, "host" | "mcu"))
-                        .unwrap_or("host")
+                        .filter(|mode| matches!(*mode, "auto" | "host" | "mcu"))
+                        .unwrap_or("auto")
                         .to_string(),
                     steps,
                     label: property_string("label"),
@@ -3521,11 +3550,28 @@ impl PealayerApp {
                 category,
                 color,
                 mode,
+                effect,
             } => {
+                if let Some(effect) = effect {
+                    if self.hardware_effect_authoring.active || self.hardware_effect_authoring.pending_operation.is_some() {
+                        self.set_osd("Finish the current hardware effect operation first".into());
+                        return;
+                    }
+                    self.hardware_effect_authoring.capture_mode = mode.clone();
+                    self.apply_interop_command(ctx, InteropCommand::SaveControllerEffect { effect }, source);
+                    if self.hardware_effect_authoring.pending_operation.as_deref() == Some("effect-save") {
+                        let target = format!("effect:{}", self.effect_library_draft.id);
+                        self.hardware_effect_authoring.record_after_publish = Some((target, mode));
+                    }
+                    return;
+                }
                 self.hardware_effect_authoring.name = name;
                 self.hardware_effect_authoring.category = category;
                 self.hardware_effect_authoring.color = color;
                 self.hardware_effect_authoring.capture_mode = mode;
+                self.effect_library_draft.name = self.hardware_effect_authoring.name.clone();
+                self.effect_library_draft.category = self.hardware_effect_authoring.category.clone();
+                self.effect_library_draft.color = self.hardware_effect_authoring.color.clone();
                 if let Err(error) = self.start_hardware_effect_recording() {
                     self.set_osd(error);
                     return;
@@ -5528,9 +5574,7 @@ impl PealayerApp {
         self.status_bar = config.status_bar;
         self.workspace_profiles = config.workspace_profiles.clone();
         self.active_workspace_profile = config.active_workspace_profile.clone();
-        if let Some(draft) = config.effect_working_draft.clone() {
-            self.effect_library_draft = draft;
-        }
+        self.effect_library_draft = config.effect_working_draft.clone().unwrap_or_default();
         crate::platform::windows::configure_window_composition(
             self.windows_dwm_theming,
             self.windows_mica_backdrop,

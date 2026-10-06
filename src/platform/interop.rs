@@ -248,6 +248,8 @@ pub enum InteropCommand {
         category: String,
         color: String,
         mode: String,
+        #[serde(default)]
+        effect: Option<WebControllerEffectDraft>,
     },
     RefreshControllerEffectRecording,
     SaveControllerEffectRecording,
@@ -515,6 +517,7 @@ impl InteropCommand {
                 category,
                 color,
                 mode,
+                ..
             } if name.trim().is_empty()
                 || name.len() > 64
                 || category.trim().is_empty()
@@ -532,6 +535,12 @@ impl InteropCommand {
                     "effect recording name, category, color, or capture mode is invalid"
                         .to_string(),
                 )
+            }
+            Self::StartControllerEffectRecording { effect: Some(effect), .. } => {
+                if effect.kind != "sequence" {
+                    return Err("Capture requires a sequence effect".into());
+                }
+                effect.validate()
             }
             Self::ShowMessage { message } if message.chars().count() > 2_048 => {
                 Err("message must not exceed 2048 characters".to_string())
@@ -1375,6 +1384,7 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         }
         "controller_effect.record.start" | "pealayer.controller_effect.record.start" => {
             Some(InteropCommand::StartControllerEffectRecording {
+                effect: request.params.get("effect").cloned().map(serde_json::from_value).transpose().map_err(|error|format!("invalid capture effect: {error}"))?,
                 name: string(&["name"])?,
                 category: request
                     .params
