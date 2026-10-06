@@ -201,7 +201,20 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                     * 1000.0;
                 let discontinuity =
                     loaded && !buffering && (next - clock.position_now() as f64).abs() > 250.0;
-                let rebase = path != previous_path || restarted || discontinuity;
+                let rebase = path != previous_path || restarted;
+                // Clock drift/stalls are not deliberate seeks. Never clear a
+                // timing fault or skip past cues merely because the clock jumped.
+                if discontinuity
+                    && !rebase
+                    && coordinator
+                    && let Ok(mut prepared) = plan.lock()
+                    && prepared.has_items()
+                {
+                    prepared.error = Some(
+                        "Media clock discontinuity without a seek; hardware playback paused".into(),
+                    );
+                    prepared.play_requested = false;
+                }
                 if rebase {
                     clock.epoch = clock.epoch.saturating_add(1);
                     if coordinator

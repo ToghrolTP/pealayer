@@ -679,10 +679,6 @@ pub fn spawn_engine() -> EngineHandle {
             let estop_now = engine_estop.load(Ordering::SeqCst);
             let requested = engine_connection_requested.load(Ordering::Relaxed);
             let mut connected = active_transport.is_some();
-            // PCController owns all media-bound execution for coordinator
-            // transports. Direct serial/virtual console retains its old path.
-            let coordinator_timeline = active_transport.as_ref()
-                .is_some_and(|transport| !transport.is_direct_serial());
             engine_connected.store(connected, Ordering::Relaxed);
 
             // Handle connection/disconnection transitions
@@ -881,6 +877,9 @@ pub fn spawn_engine() -> EngineHandle {
             was_estop = estop_now;
 
             // Check for new messages (non-blocking)
+            // Evaluate after connection changes, including the first connect.
+            let coordinator_timeline = active_transport.as_ref()
+                .is_some_and(|transport| !transport.is_direct_serial());
             let mut channel_disconnected = false;
             loop {
                 let msg = match rx.try_recv() {
