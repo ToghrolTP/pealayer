@@ -31,9 +31,27 @@ if (!template.includes('__CACHE_VERSION__') || !template.includes('__PRECACHE_MA
 digest.update('sw.js');
 digest.update(template);
 const version = digest.digest('hex').slice(0, 16);
+// Keep the content revision in URLs, not filenames. Stamp only references to
+// assets actually emitted by this build, including lazy/preloaded chunks.
+const assets = new Set(files.filter(path => relative(dist, path).replaceAll(sep, '/').startsWith('assets/')));
+function versionedReference(reference, from) {
+  const target = reference.startsWith('/') ? join(dist, reference.slice(1)) : resolve(dirname(from), reference);
+  return assets.has(target) ? `${reference}?v=${version}` : reference;
+}
+for (const path of files) {
+  if (path.endsWith('.html') || path.endsWith('.js')) {
+    const source = await readFile(path, 'utf8');
+    const stamped = source.replace(/(["'])(\.\.?\/[^"'\\]+|\/assets\/[^"'\\]+)\1/g,
+      (match, quote, reference) => `${quote}${versionedReference(reference, path)}${quote}`);
+    await writeFile(path, stamped, 'utf8');
+  }
+}
 const precache = [
   '/',
-  ...files.map((path) => `/${relative(dist, path).replaceAll(sep, '/')}`),
+  ...files.map((path) => {
+    const url = `/${relative(dist, path).replaceAll(sep, '/')}`;
+    return assets.has(path) ? `${url}?v=${version}` : url;
+  }),
   '/manifest.webmanifest',
   '/api/runtime/app-icon',
   '/api/runtime/app-icon-192.png',

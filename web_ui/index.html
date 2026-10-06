@@ -13,6 +13,7 @@
     <link rel="apple-touch-icon" href="/api/runtime/app-icon-192.png" />
     <title>Pealayer Web Remote</title>
     <link rel="icon" type="image/png" href="/api/runtime/app-icon" />
+    <link rel="stylesheet" href="/fuji-loader.css" />
     <style>
       body {
         margin: 0;
@@ -24,7 +25,7 @@
     </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div class="fuji-loader fuji-loader--boot" role="status" aria-live="polite"><img src="/fuji-loader.svg" alt="" width="232" height="131" /><span>Loading…</span></div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

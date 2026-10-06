@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 144" fill="none">
+  <defs>
+    <linearGradient id="mountain" x1="96" y1="51" x2="148" y2="126" gradientUnits="userSpaceOnUse"><stop stop-color="#a99af3"/><stop offset="1" stop-color="#5356a2"/></linearGradient>
+    <linearGradient id="lake" x1="128" y1="116" x2="128" y2="141" gradientUnits="userSpaceOnUse"><stop stop-color="#9287d2" stop-opacity=".38"/><stop offset="1" stop-color="#9287d2" stop-opacity="0"/></linearGradient>
+    <radialGradient id="dawn"><stop stop-color="#ffab8f" stop-opacity=".22"/><stop offset="1" stop-color="#ffab8f" stop-opacity="0"/></radialGradient>
+    <clipPath id="horizon"><path d="M0 0h256v116H0z"/></clipPath>
+  </defs>
+  <style>
+    .sun{transform-origin:170px 63px;animation:dawn 3.6s ease-in-out infinite}
+    .cloud{animation:drift 5s ease-in-out infinite alternate}
+    .cloud.far{animation-delay:-2.5s}
+    .ripple{transform-origin:128px 127px;animation:ripple 3.6s ease-in-out infinite}
+    @keyframes dawn{0%,100%{transform:translateY(3px);opacity:.72}50%{transform:translateY(-3px);opacity:1}}
+    @keyframes drift{from{transform:translateX(-5px)}to{transform:translateX(5px)}}
+    @keyframes ripple{0%,100%{transform:scaleX(.8);opacity:.4}50%{transform:scaleX(1);opacity:.8}}
+    @media(prefers-reduced-motion:reduce){.sun,.cloud,.ripple{animation:none}}
+  </style>
+  <g clip-path="url(#horizon)">
+    <circle cx="162" cy="74" r="62" fill="url(#dawn)"/>
+    <circle class="sun" cx="170" cy="63" r="18" fill="#efa487"/>
+    <path class="cloud far" d="M38 62h37m-27 5h44" stroke="#a4a8c5" stroke-opacity=".5" stroke-width="2" stroke-linecap="round"/>
+    <path class="cloud" d="M178 83h35m-45 6h30" stroke="#a4a8c5" stroke-opacity=".5" stroke-width="2" stroke-linecap="round"/>
+    <path d="M44 116c26-13 46-38 70-67h27c17 23 32 43 70 67H44Z" fill="url(#mountain)"/>
+    <path d="m114 49-18 22 12-3 10 6 11-12 9 10 14-8-11-15h-27Z" fill="#f2efff"/>
+    <path d="m129 62-14 54h48l-25-44-9-10Z" fill="#242954" fill-opacity=".18"/>
+    <path d="M31 116h194" stroke="#979ab8" stroke-opacity=".42" stroke-linecap="round"/>
+  </g>
+  <path d="m59 119 58 22h23l57-22H59Z" fill="url(#lake)"/>
+  <path class="ripple" d="M100 126h56m-47 6h38" stroke="#9287d2" stroke-opacity=".5" stroke-linecap="round"/>
+</svg>

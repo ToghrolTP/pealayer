@@ -1,40 +1,42 @@
-const PRECACHE = 'pealayer-precache-95b9e14cc0c3d172';
-const RUNTIME = 'pealayer-runtime-95b9e14cc0c3d172';
+const PRECACHE = 'pealayer-precache-b4ffac9d174c0a7e';
+const RUNTIME = 'pealayer-runtime-b4ffac9d174c0a7e';
 const PRECACHE_URLS = [
   "/",
-  "/assets/DeleteOutlined-4ZN86VK3.js",
-  "/assets/DesktopOutlined-D8K15JLE.js",
-  "/assets/EditOutlined-znOOb3uB.js",
-  "/assets/EffectRecorder-CYj49Oi_.js",
-  "/assets/EffectsTab-BLwkUD3Y.js",
-  "/assets/ExperimentOutlined-DqFd4C5N.js",
-  "/assets/GroupSelect-DPb3ipY2.js",
-  "/assets/HardwareTab-DTJqTYGq.js",
-  "/assets/MediaLibraryTab-Ce59piYM.js",
-  "/assets/PlayerInfoTab-C774jN2W.js",
-  "/assets/PlusOutlined-DjPg-FwS.js",
-  "/assets/PoweroffOutlined-Bdp236F-.js",
-  "/assets/PreferencesTab-BZh1HBIZ.js",
-  "/assets/RemoteControlTab-CMJeJRno.js",
-  "/assets/SafetyCertificateOutlined-Cm0RLRZf.js",
-  "/assets/SaveOutlined-DVGeYuIC.js",
-  "/assets/SeekThumbnailPreview-D6OWnhUJ.js",
-  "/assets/StudioTab-UX49_3vA.js",
-  "/assets/VideoCameraOutlined-F99UUR77.js",
-  "/assets/WifiOutlined-wlggCDI1.js",
-  "/assets/card-C3ZhEKOt.js",
-  "/assets/color-picker-Bsf2GdjK.js",
-  "/assets/index-B8EuuzGy.js",
-  "/assets/index-BwFv2342.css",
-  "/assets/jsx-runtime-AFcmMaSu.js",
-  "/assets/message-DRwuKd7R.js",
-  "/assets/popconfirm-Du8cC4DP.js",
-  "/assets/rolldown-runtime-CbXtAM7H.js",
-  "/assets/row-r3lmpsX1.js",
-  "/assets/select-BcNaH51l.js",
-  "/assets/slider-CWUzJxLE.js",
-  "/assets/typography-DPo35_hF.js",
-  "/assets/useBreakpoint-CLES_WsJ.js",
+  "/assets/DeleteOutlined.js?v=b4ffac9d174c0a7e",
+  "/assets/DesktopOutlined.js?v=b4ffac9d174c0a7e",
+  "/assets/EditOutlined.js?v=b4ffac9d174c0a7e",
+  "/assets/EffectRecorder.js?v=b4ffac9d174c0a7e",
+  "/assets/EffectsTab.js?v=b4ffac9d174c0a7e",
+  "/assets/ExperimentOutlined.js?v=b4ffac9d174c0a7e",
+  "/assets/GroupSelect.js?v=b4ffac9d174c0a7e",
+  "/assets/HardwareTab.js?v=b4ffac9d174c0a7e",
+  "/assets/MediaLibraryTab.js?v=b4ffac9d174c0a7e",
+  "/assets/PlayerInfoTab.js?v=b4ffac9d174c0a7e",
+  "/assets/PlusOutlined.js?v=b4ffac9d174c0a7e",
+  "/assets/PoweroffOutlined.js?v=b4ffac9d174c0a7e",
+  "/assets/PreferencesTab.js?v=b4ffac9d174c0a7e",
+  "/assets/RemoteControlTab.js?v=b4ffac9d174c0a7e",
+  "/assets/SafetyCertificateOutlined.js?v=b4ffac9d174c0a7e",
+  "/assets/SaveOutlined.js?v=b4ffac9d174c0a7e",
+  "/assets/SeekThumbnailPreview.js?v=b4ffac9d174c0a7e",
+  "/assets/StudioTab.js?v=b4ffac9d174c0a7e",
+  "/assets/VideoCameraOutlined.js?v=b4ffac9d174c0a7e",
+  "/assets/WifiOutlined.js?v=b4ffac9d174c0a7e",
+  "/assets/app.css?v=b4ffac9d174c0a7e",
+  "/assets/app.js?v=b4ffac9d174c0a7e",
+  "/assets/card.js?v=b4ffac9d174c0a7e",
+  "/assets/color-picker.js?v=b4ffac9d174c0a7e",
+  "/assets/jsx-runtime.js?v=b4ffac9d174c0a7e",
+  "/assets/message.js?v=b4ffac9d174c0a7e",
+  "/assets/popconfirm.js?v=b4ffac9d174c0a7e",
+  "/assets/rolldown-runtime.js?v=b4ffac9d174c0a7e",
+  "/assets/row.js?v=b4ffac9d174c0a7e",
+  "/assets/select.js?v=b4ffac9d174c0a7e",
+  "/assets/slider.js?v=b4ffac9d174c0a7e",
+  "/assets/typography.js?v=b4ffac9d174c0a7e",
+  "/assets/useBreakpoint.js?v=b4ffac9d174c0a7e",
+  "/fuji-loader.css",
+  "/fuji-loader.svg",
   "/index.html",
   "/manifest.webmanifest",
   "/api/runtime/app-icon",
@@ -62,7 +64,7 @@ self.addEventListener('activate', (event) => {
         .filter((key) => key.startsWith('pealayer-') && ![PRECACHE, RUNTIME].includes(key))
         .map((key) => caches.delete(key))))
       .then(() => self.clients.claim())
-      .then(() => notifyClients({ type: 'PEALAYER_SW_READY', version: '95b9e14cc0c3d172' })),
+      .then(() => notifyClients({ type: 'PEALAYER_SW_READY', version: 'b4ffac9d174c0a7e' })),
   );
 });
 
@@ -94,14 +96,22 @@ self.addEventListener('fetch', (event) => {
           if (response.ok) void caches.open(RUNTIME).then((cache) => cache.put('/', response.clone()));
           return response;
         })
-        .catch(async () => (await caches.match('/')) || (await caches.match('/index.html')) || Response.error()),
+        .catch(async () => (await (await caches.open(RUNTIME)).match('/'))
+          || (await (await caches.open(PRECACHE)).match('/index.html')) || Response.error()),
     );
     return;
   }
 
-  const immutableAsset = url.pathname.startsWith('/assets/');
-  if (immutableAsset || precached) {
-    event.respondWith(caches.match(request).then((cached) => cached || fetch(request)));
+  const versionedAsset = url.pathname.startsWith('/assets/') && url.searchParams.has('v');
+  if (versionedAsset) {
+    // Exact versioned URL lookup, never ignoreSearch or cross-generation
+    // caches.match: clean filenames must not return bytes from another build.
+    event.respondWith(caches.open(PRECACHE).then(cache => cache.match(request)).then(cached => cached || fetch(request)));
+    return;
+  }
+  if (precached || url.pathname.startsWith('/assets/')) {
+    event.respondWith(fetch(request, { cache: 'no-cache' })
+      .catch(async () => (await (await caches.open(PRECACHE)).match(request)) || Response.error()));
     return;
   }
 

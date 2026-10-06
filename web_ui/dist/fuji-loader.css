@@ -1,0 +1,20 @@
+/* Shared by the pre-JavaScript shell and React loading surfaces. */
+.fuji-loader {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  min-height: 200px;
+  padding: 24px;
+  color: var(--muted, #aaaaba);
+  font: 500 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  letter-spacing: .02em;
+  animation: fuji-reveal 180ms ease-out both;
+}
+.fuji-loader img { display: block; width: min(232px, 100%); height: 131px; object-fit: contain; }
+.fuji-loader--boot { min-height: 100dvh; background: var(--canvas, #181818); }
+@keyframes fuji-reveal { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-color-scheme: light) {
+  html:not([data-theme]) .fuji-loader--boot { background: #eeeeee; color: #5e6a78; }
+}
+@media (prefers-reduced-motion: reduce) { .fuji-loader { animation: none; } }

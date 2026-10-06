@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useState, useRef } from 'react';
-import { Alert, ConfigProvider, theme, Layout, Menu, Spin } from 'antd';
+import { Alert, ConfigProvider, theme, Layout, Menu } from 'antd';
 import {
   AppstoreOutlined,
   BulbOutlined,
@@ -11,6 +11,8 @@ import {
 } from '@ant-design/icons';
 import { HeaderBar } from './components/HeaderBar';
 import { SharedToasts } from './components/SharedToasts';
+import { FujiLoader } from './components/FujiLoader';
+import { WebViewBoundary } from './components/WebViewBoundary';
 import { RemoteLocationDialog } from './components/RemoteLocationDialog';
 import './remote-location.css';
 import type { PlayerState } from './components/RemoteControlTab';
@@ -552,7 +554,8 @@ const App: React.FC = () => {
               window.localStorage.setItem(`pealayer.scroll.${activeTab}.left`, String(event.currentTarget.scrollLeft));
             }}
           >
-            <React.Suspense fallback={<div className="surface-loading"><Spin size="large" /></div>}>
+            <WebViewBoundary key={activeTab} locale={runtime?.locale || 'en'}>
+            <React.Suspense fallback={<FujiLoader locale={runtime?.locale || 'en'} />}>
             {activeTab === 'timeline' && (
               <StudioTab
                 state={state}
@@ -610,6 +613,7 @@ const App: React.FC = () => {
               />
             )}
             </React.Suspense>
+            </WebViewBoundary>
           </Content>
         </Layout>
       </Layout>

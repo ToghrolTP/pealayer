@@ -778,7 +778,7 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
         ("GET", "/api/fs/thumbnail") => thumbnail_response(&request.target),
         ("POST", "/api/fs/rename") => rename_response(&request.body),
         ("POST", "/api/fs/trash") => trash_response(&request.body),
-        ("GET", _) => static_response(path, state),
+        ("GET", _) => static_response(&request.target, state),
         _ => HttpResponse::text(404, "Not Found", "Not Found"),
     }
 }
@@ -1351,12 +1351,21 @@ fn trash_response(body: &[u8]) -> HttpResponse {
     }
 }
 
-fn static_response(path: &str, state: &ControlState) -> HttpResponse {
-    let cache_control = if path.starts_with("/assets/") {
-        "public, max-age=31536000, immutable"
-    } else {
-        "no-cache"
-    };
+fn static_response(target: &str, state: &ControlState) -> HttpResponse {
+    let path = target.split('?').next().unwrap_or("/");
+    // Filenames are stable across builds. Never apply immutable HTTP caching;
+    // the PWA uses exact versioned URLs and generation-specific caches.
+    let cache_control = "no-cache";
+    if path.starts_with("/assets/") && let Some(requested) = query_value(target, "v") {
+        let build = std::fs::read(state.web_dist_root.join("pwa-build.json")).ok()
+            .or_else(|| EMBEDDED_WEB_UI.get_file("pwa-build.json").map(|file| file.contents().to_vec()));
+        if let Some(build) = build.and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            && build["version"].as_str().is_some_and(|current| current != requested)
+        {
+            return HttpResponse::text(409, "Conflict", "Web UI updated; reload to use the current version")
+                .with_cache_control("no-cache");
+        }
+    }
     if !state.web_dist_root.as_os_str().is_empty() {
         let target = web_asset_path(&state.web_dist_root, path)
             .unwrap_or_else(|| state.web_dist_root.join("__invalid_request_path__"));

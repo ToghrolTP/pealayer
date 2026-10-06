@@ -6,10 +6,10 @@ import {
   ColorPicker,
   Input,
   Select,
-  Spin,
   Switch,
   Typography,
 } from 'antd';
+import { FujiLoader } from './FujiLoader';
 import {
   BgColorsOutlined,
   BarsOutlined,
@@ -461,7 +461,7 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
 
       {status && <Alert showIcon type={status.kind} message={status.text} closable onClose={() => setStatus(null)} />}
 
-      {loading && !contract ? <div className="preferences-page__loading"><Spin /></div> : contract && (
+      {loading && !contract ? <FujiLoader locale={locale} /> : contract && (
         <div className="preferences-layout">
           <nav className="preferences-rail" aria-label={tr(locale, 'Preference sections')}>
             {contract.sections.map((item) => (

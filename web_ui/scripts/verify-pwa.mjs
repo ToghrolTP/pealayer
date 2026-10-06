@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readdir } from 'node:fs/promises';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const dist = join(root, 'dist');
@@ -29,5 +30,23 @@ for (const match of index.matchAll(/(?:src|href)="\.?(\/assets\/[^"]+)"/g)) {
 }
 if (!Array.isArray(build.precache) || build.precache.length < 5) {
   throw new Error('PWA precache manifest is unexpectedly empty');
+}
+const assets = await readdir(join(dist, 'assets'));
+if (!assets.includes('app.js') || !assets.includes('app.css')) throw new Error('Readable app.js/app.css entry names are missing');
+for (const name of assets) {
+  if (/-[A-Za-z0-9_-]{8}\.(js|css)$/.test(name)) throw new Error(`Hashed asset suffix returned: ${name}`);
+  const url = `/assets/${name}?v=${build.version}`;
+  if (!build.precache.includes(url)) throw new Error(`Versioned asset missing from precache: ${url}`);
+  if (!name.endsWith('.js')) continue;
+  const script = await readFile(join(dist, 'assets', name), 'utf8');
+  for (const [, , reference] of script.matchAll(/(["'])(\.\.?\/[^"'\\]+|\/assets\/[^"'\\]+)\1/g)) {
+    const target = new URL(reference, `https://local.invalid/assets/${name}`);
+    if (assets.includes(target.pathname.split('/').at(-1)) && target.searchParams.get('v') !== build.version) {
+      throw new Error(`Unversioned or wrong-version import/preload in ${name}: ${reference}`);
+    }
+  }
+}
+for (const name of ['fuji-loader.css', 'fuji-loader.svg']) {
+  if (!build.precache.includes(`/${name}`)) throw new Error(`Loader not available offline: ${name}`);
 }
 console.log(`Verified installable/offline PWA ${build.version} (${build.precache.length} resources)`);

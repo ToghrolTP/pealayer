@@ -54,14 +54,22 @@ self.addEventListener('fetch', (event) => {
           if (response.ok) void caches.open(RUNTIME).then((cache) => cache.put('/', response.clone()));
           return response;
         })
-        .catch(async () => (await caches.match('/')) || (await caches.match('/index.html')) || Response.error()),
+        .catch(async () => (await (await caches.open(RUNTIME)).match('/'))
+          || (await (await caches.open(PRECACHE)).match('/index.html')) || Response.error()),
     );
     return;
   }
 
-  const immutableAsset = url.pathname.startsWith('/assets/');
-  if (immutableAsset || precached) {
-    event.respondWith(caches.match(request).then((cached) => cached || fetch(request)));
+  const versionedAsset = url.pathname.startsWith('/assets/') && url.searchParams.has('v');
+  if (versionedAsset) {
+    // Exact versioned URL lookup, never ignoreSearch or cross-generation
+    // caches.match: clean filenames must not return bytes from another build.
+    event.respondWith(caches.open(PRECACHE).then(cache => cache.match(request)).then(cached => cached || fetch(request)));
+    return;
+  }
+  if (precached || url.pathname.startsWith('/assets/')) {
+    event.respondWith(fetch(request, { cache: 'no-cache' })
+      .catch(async () => (await (await caches.open(PRECACHE)).match(request)) || Response.error()));
     return;
   }
 

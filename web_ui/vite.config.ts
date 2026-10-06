@@ -17,5 +17,15 @@ export default defineConfig({
     outDir: 'dist',
     assetsDir: 'assets',
     emptyOutDir: true,
+    // Readable filenames; finalize-pwa stamps references with the build
+    // revision so browser/offline caches still distinguish deployments.
+    rolldownOptions: {
+      output: {
+        entryFileNames: 'assets/app.js',
+        chunkFileNames: 'assets/[name].js',
+        assetFileNames: ({ names }) => names?.[0] === 'index.css'
+          ? 'assets/app.css' : 'assets/[name][extname]',
+      },
+    },
   },
 });
