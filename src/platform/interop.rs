@@ -2161,6 +2161,7 @@ pub fn json_rpc_error(id: &Value, code: i32, message: &str) -> String {
 static LIVE_STATUS: std::sync::RwLock<Option<PlayerStatusResponse>> = std::sync::RwLock::new(None);
 static LIVE_CONFIG: std::sync::RwLock<Option<crate::config::AppConfig>> =
     std::sync::RwLock::new(None);
+static LIVE_CONFIG_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn set_live_status(status: PlayerStatusResponse) {
     if let Ok(mut lock) = LIVE_STATUS.write() {
@@ -2199,7 +2200,15 @@ pub fn get_live_status() -> PlayerStatusResponse {
 pub fn set_live_config(config: crate::config::AppConfig) {
     if let Ok(mut lock) = LIVE_CONFIG.write() {
         *lock = Some(config);
+        LIVE_CONFIG_REVISION.fetch_add(1, std::sync::atomic::Ordering::Release);
     }
+}
+
+/// Monotonic signal for consumers that only need to react when configuration
+/// changes. This avoids cloning the complete application configuration from a
+/// per-frame rendering path just to discover that it is unchanged.
+pub fn live_config_revision() -> u64 {
+    LIVE_CONFIG_REVISION.load(std::sync::atomic::Ordering::Acquire)
 }
 
 pub fn get_live_config() -> crate::config::AppConfig {

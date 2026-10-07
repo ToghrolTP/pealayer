@@ -124,6 +124,17 @@ pub fn icon_mime(path: &Path) -> &'static str {
 
 pub fn sync_native_window_icon(ctx: &egui::Context, state: PlaybackIconState) {
     set_current_state(state);
+    let revision = crate::platform::interop::live_config_revision();
+    let stamp = (state, revision);
+    let already_synced = ctx.data_mut(|data| {
+        data.get_temp::<(PlaybackIconState, u64)>(egui::Id::new(
+            "pealayer-playback-window-icon-stamp",
+        )) == Some(stamp)
+    });
+    if already_synced {
+        return;
+    }
+
     let config = crate::platform::interop::get_live_config();
     let key = resolved_icon_path(&config, state)
         .map(|path| format!("{}:{}", state.as_str(), path.display()))
@@ -152,6 +163,9 @@ pub fn sync_native_window_icon(ctx: &egui::Context, state: PlaybackIconState) {
             egui::ViewportCommand::Icon(Some(std::sync::Arc::new(icon))),
         );
     }
+    ctx.data_mut(|data| {
+        data.insert_temp(egui::Id::new("pealayer-playback-window-icon-stamp"), stamp);
+    });
 }
 
 #[cfg(test)]
