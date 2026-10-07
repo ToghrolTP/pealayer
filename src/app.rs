@@ -2344,6 +2344,10 @@ impl PealayerApp {
                     .and_then(|_| {
                         crate::platform::windows::init_taskbar_thumbnail_toolbar(
                             hwnd,
+                            self.is_paused,
+                            self.is_muted,
+                            self.was_fullscreen,
+                            self.current_video_path.is_some(),
                             self.windows_thumbnail_toolbar,
                         )
                     })

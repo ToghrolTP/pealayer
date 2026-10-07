@@ -163,6 +163,15 @@ static SHELL_REINITIALIZE: AtomicBool = AtomicBool::new(false);
 static TASKBAR_BUTTON_CREATED_MESSAGE: AtomicU32 = AtomicU32::new(0);
 static TASKBAR_THUMBNAIL_CLIP: Mutex<Option<(isize, Option<[i32; 4]>)>> = Mutex::new(None);
 static THUMBNAIL_METRICS_DIRTY: AtomicBool = AtomicBool::new(true);
+static THUMBNAIL_TOOLBAR_ADDED_HWND: AtomicIsize = AtomicIsize::new(0);
+static THUMBNAIL_TOOLBAR_ADD_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+static THUMBNAIL_TOOLBAR_ADD_SUCCESSES: AtomicU64 = AtomicU64::new(0);
+static THUMBNAIL_TOOLBAR_UPDATE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+static THUMBNAIL_TOOLBAR_UPDATE_SUCCESSES: AtomicU64 = AtomicU64::new(0);
+static TASKBAR_BUTTON_CREATED_EVENTS: AtomicU64 = AtomicU64::new(0);
+static THUMBNAIL_TOOLBAR_ENABLED: AtomicBool = AtomicBool::new(false);
+static THUMBNAIL_TOOLBAR_HAS_MEDIA: AtomicBool = AtomicBool::new(false);
+static THUMBNAIL_TOOLBAR_LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 #[cfg(target_os = "windows")]
 static THUMBNAIL_TOOLBAR_ICONS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 
@@ -1803,7 +1812,14 @@ fn taskbar_thumbnail_buttons(
 }
 
 #[cfg(target_os = "windows")]
-pub fn init_taskbar_thumbnail_toolbar(hwnd_raw: isize, enabled: bool) -> Result<(), String> {
+pub fn init_taskbar_thumbnail_toolbar(
+    hwnd_raw: isize,
+    is_paused: bool,
+    is_muted: bool,
+    is_fullscreen: bool,
+    has_media: bool,
+    enabled: bool,
+) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
@@ -1822,23 +1838,62 @@ pub fn init_taskbar_thumbnail_toolbar(hwnd_raw: isize, enabled: bool) -> Result<
         taskbar
             .HrInit()
             .map_err(|e| format!("ITaskbarList3::HrInit failed: {e}"))?;
-        let (buttons, icons) = taskbar_thumbnail_buttons(hwnd_raw, true, false, false, false, enabled)?;
-        let result = taskbar
-            .ThumbBarAddButtons(hwnd, &buttons)
-            .map_err(|e| format!("ThumbBarAddButtons failed: {e}"));
+        THUMBNAIL_TOOLBAR_ENABLED.store(enabled, Ordering::Relaxed);
+        THUMBNAIL_TOOLBAR_HAS_MEDIA.store(has_media, Ordering::Relaxed);
+        let (buttons, icons) = taskbar_thumbnail_buttons(
+            hwnd_raw,
+            is_paused,
+            is_muted,
+            is_fullscreen,
+            has_media,
+            enabled,
+        )?;
+        THUMBNAIL_TOOLBAR_ADD_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+        let add_result = taskbar.ThumbBarAddButtons(hwnd, &buttons);
+        let result = match add_result {
+            Ok(()) => {
+                THUMBNAIL_TOOLBAR_ADD_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(add_error) => {
+                // A toolbar already accepted by Explorer rejects a duplicate
+                // Add with E_INVALIDARG. Updating that toolbar is a successful
+                // recovery, not an initialization failure that should hide it.
+                THUMBNAIL_TOOLBAR_UPDATE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+                taskbar.ThumbBarUpdateButtons(hwnd, &buttons).map(|()| {
+                    THUMBNAIL_TOOLBAR_UPDATE_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+                }).map_err(|update_error| format!(
+                    "ThumbBarAddButtons failed: {add_error}; ThumbBarUpdateButtons recovery failed: {update_error}"
+                ))
+            }
+        };
         if result.is_ok() {
             // Explorer may consume HICONs after this COM call returns. Keep
             // the current state atlas alive until the next update.
             retain_thumbnail_toolbar_icons(icons);
+            THUMBNAIL_TOOLBAR_ADDED_HWND.store(hwnd_raw, Ordering::Release);
+            if let Ok(mut error) = THUMBNAIL_TOOLBAR_LAST_ERROR.lock() {
+                *error = None;
+            }
         } else {
             destroy_thumbnail_toolbar_icons(icons);
+            if let Ok(mut error) = THUMBNAIL_TOOLBAR_LAST_ERROR.lock() {
+                *error = result.as_ref().err().cloned();
+            }
         }
         result
     }
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn init_taskbar_thumbnail_toolbar(_hwnd_raw: isize, _enabled: bool) -> Result<(), String> {
+pub fn init_taskbar_thumbnail_toolbar(
+    _hwnd_raw: isize,
+    _is_paused: bool,
+    _is_muted: bool,
+    _is_fullscreen: bool,
+    _has_media: bool,
+    _enabled: bool,
+) -> Result<(), String> {
     Ok(())
 }
 
@@ -1869,15 +1924,41 @@ pub fn update_taskbar_thumbnail_buttons(
         taskbar
             .HrInit()
             .map_err(|e| format!("ITaskbarList3::HrInit failed: {e}"))?;
+        THUMBNAIL_TOOLBAR_ENABLED.store(enabled, Ordering::Relaxed);
+        THUMBNAIL_TOOLBAR_HAS_MEDIA.store(has_media, Ordering::Relaxed);
         let (buttons, icons) =
             taskbar_thumbnail_buttons(hwnd_raw, is_paused, is_muted, is_fullscreen, has_media, enabled)?;
-        let result = taskbar
-            .ThumbBarUpdateButtons(hwnd, &buttons)
-            .map_err(|e| format!("ThumbBarUpdateButtons failed: {e}"));
+        THUMBNAIL_TOOLBAR_UPDATE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+        let update_result = taskbar.ThumbBarUpdateButtons(hwnd, &buttons);
+        let result = match update_result {
+            Ok(()) => {
+                THUMBNAIL_TOOLBAR_UPDATE_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(update_error) => {
+                // Explorer may recreate the taskbar button without Pealayer
+                // observing the broadcast during a focus/minimize transition.
+                // Re-add the toolbar immediately instead of waiting for a
+                // future state change that may never occur.
+                THUMBNAIL_TOOLBAR_ADD_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+                taskbar.ThumbBarAddButtons(hwnd, &buttons).map(|()| {
+                    THUMBNAIL_TOOLBAR_ADD_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+                }).map_err(|add_error| format!(
+                    "ThumbBarUpdateButtons failed: {update_error}; ThumbBarAddButtons recovery failed: {add_error}"
+                ))
+            }
+        };
         if result.is_ok() {
             retain_thumbnail_toolbar_icons(icons);
+            THUMBNAIL_TOOLBAR_ADDED_HWND.store(hwnd_raw, Ordering::Release);
+            if let Ok(mut error) = THUMBNAIL_TOOLBAR_LAST_ERROR.lock() {
+                *error = None;
+            }
         } else {
             destroy_thumbnail_toolbar_icons(icons);
+            if let Ok(mut error) = THUMBNAIL_TOOLBAR_LAST_ERROR.lock() {
+                *error = result.as_ref().err().cloned();
+            }
         }
         result
     }
@@ -2068,6 +2149,8 @@ unsafe extern "system" fn shell_window_proc(
 
     let taskbar_created = TASKBAR_BUTTON_CREATED_MESSAGE.load(Ordering::Acquire);
     if taskbar_created != 0 && message == taskbar_created {
+        TASKBAR_BUTTON_CREATED_EVENTS.fetch_add(1, Ordering::Relaxed);
+        THUMBNAIL_TOOLBAR_ADDED_HWND.store(0, Ordering::Release);
         crate::platform::taskbar_preview::reset_shell();
         SHELL_REINITIALIZE.store(true, Ordering::Release);
         crate::platform::taskbar_preview::request_repaint();
@@ -2231,6 +2314,17 @@ pub fn shell_command_diagnostics() -> serde_json::Value {
         "has_media": SHELL_HAS_MEDIA.load(Ordering::Relaxed),
         "paused": SHELL_PAUSED.load(Ordering::Relaxed),
         "muted": SHELL_MUTED.load(Ordering::Relaxed),
+        "thumbnail_toolbar": {
+            "added_hwnd": THUMBNAIL_TOOLBAR_ADDED_HWND.load(Ordering::Acquire),
+            "enabled": THUMBNAIL_TOOLBAR_ENABLED.load(Ordering::Relaxed),
+            "has_media": THUMBNAIL_TOOLBAR_HAS_MEDIA.load(Ordering::Relaxed),
+            "add_attempts": THUMBNAIL_TOOLBAR_ADD_ATTEMPTS.load(Ordering::Relaxed),
+            "add_successes": THUMBNAIL_TOOLBAR_ADD_SUCCESSES.load(Ordering::Relaxed),
+            "update_attempts": THUMBNAIL_TOOLBAR_UPDATE_ATTEMPTS.load(Ordering::Relaxed),
+            "update_successes": THUMBNAIL_TOOLBAR_UPDATE_SUCCESSES.load(Ordering::Relaxed),
+            "taskbar_button_created_events": TASKBAR_BUTTON_CREATED_EVENTS.load(Ordering::Relaxed),
+            "last_error": THUMBNAIL_TOOLBAR_LAST_ERROR.lock().ok().and_then(|error| error.clone()),
+        },
     })
 }
 
