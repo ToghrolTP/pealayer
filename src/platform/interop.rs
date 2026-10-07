@@ -2763,6 +2763,15 @@ fn gate_controller_subscription_message(
     Ok(Vec::new())
 }
 
+fn controller_subscription_params() -> Value {
+    serde_json::json!({
+        "topics":["state","events","status","opcodes"],
+        "interval_ms":500,
+        "state_interval_ms":250,
+        "after_id":0
+    })
+}
+
 fn run_pccontroller_action_bridge(
     tx: &std::sync::mpsc::Sender<ControllerDelivery>,
     egui_ctx: &eframe::egui::Context,
@@ -2789,12 +2798,7 @@ fn run_pccontroller_action_bridge(
         .send(controller_rpc(
             next_id,
             "controller.subscribe",
-            serde_json::json!({
-                "topics":["state","events","status","opcodes"],
-                "interval_ms":100,
-                "state_interval_ms":100,
-                "after_id":0
-            }),
+            controller_subscription_params(),
         ))
         .map_err(|error| format!("subscribe to PCController actions: {error}"))?;
     next_id += 1;
@@ -2968,6 +2972,18 @@ pub fn spawn_pccontroller_action_bridge(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controller_subscription_keeps_edges_immediate_and_bounds_continuous_frames() {
+        let params = controller_subscription_params();
+        assert_eq!(params["interval_ms"], 500);
+        assert_eq!(params["state_interval_ms"], 250);
+        assert!(params["topics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|topic| topic == "events"));
+    }
 
     #[test]
     fn remote_folder_json_rpc_ipc_parity() {
