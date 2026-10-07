@@ -1999,6 +1999,7 @@ fn default_hardware_track_state(
             // Raw diagnostic channels remain available from the track picker,
             // while semantic controls are the default authoring surface.
             visible: !is_non_user_control(capabilities, control),
+            ..Default::default()
         },
     )
 }
@@ -10020,7 +10021,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let mut update_start_to = None;
                             let mut update_duration_to = None;
                             let mut update_relay_to = None;
-                            let mut update_direct_value_to = None;
+                            let mut update_direct_cue_to = None;
 
                             if let Some(idx) = instance_idx {
                                 let selected_cue_label = self.app.tr("Selected cue");
@@ -10051,6 +10052,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let mode_label = self.app.tr("Mode");
                                 let effect_label = self.app.tr("Effect");
                                 let untitled_effect_label = self.app.tr("Untitled effect");
+                                let envelope_label = self.app.tr("Envelope");
+                                let hold_label = self.app.tr("Hold");
+                                let fade_label = self.app.tr("Fade");
+                                let blink_label = self.app.tr("Blink");
+                                let breathe_label = self.app.tr("Breathe");
+                                let start_value_label = self.app.tr("Start value");
+                                let end_value_label = self.app.tr("End value");
+                                let easing_label = self.app.tr("Easing");
+                                let linear_label = self.app.tr("Linear");
+                                let ease_in_label = self.app.tr("Ease in");
+                                let ease_out_label = self.app.tr("Ease out");
+                                let ease_in_out_label = self.app.tr("Ease in/out");
+                                let smooth_step_label = self.app.tr("Smooth step");
+                                let step_label = self.app.tr("Step");
+                                let cycle_label = self.app.tr("Cycle");
+                                let on_time_label = self.app.tr("On time");
                                 let max_secs = if self.app.duration > 0.0 {
                                     self.app.duration
                                 } else {
@@ -10073,6 +10090,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     let displayed_kind = self.app.tr(kind_label);
                                     let displayed_ownership = self.app.tr(ownership_label);
                                     let template = &mut self.app.timeline.templates[t_idx];
+                                    let direct_duration_ms = template.duration_ms;
                                     let summary_title = if template.name.trim().is_empty() {
                                         untitled_effect_label
                                     } else {
@@ -10227,22 +10245,107 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             Some(&direct.control_key),
                                             false,
                                             |ui| {
-                                                let mut value = direct.value_basis_points;
+                                                let mut edited = direct.clone();
                                                 if is_relay {
                                                     ui.horizontal(|ui| {
                                                         ui.label(egui::RichText::new(&state_label).weak());
                                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                            ui.selectable_value(&mut value, 0, format!("{}  {}", crate::ui::icons::STOP_CIRCLE, off_label));
-                                                            ui.selectable_value(&mut value, 10_000, format!("{}  {}", crate::ui::icons::POWER, on_label));
+                                                            ui.selectable_value(&mut edited.value_basis_points, 0, format!("{}  {}", crate::ui::icons::STOP_CIRCLE, off_label));
+                                                            ui.selectable_value(&mut edited.value_basis_points, 10_000, format!("{}  {}", crate::ui::icons::POWER, on_label));
                                                         });
                                                     });
                                                 } else {
-                                                    let mut percent = f64::from(value) / 100.0;
-                                                    draw_pwm_editor_row(ui, &mut percent, true);
-                                                    value = (percent.clamp(0.0, 100.0) * 100.0).round() as u16;
+                                                    ui.horizontal(|ui| {
+                                                        ui.label(egui::RichText::new(&envelope_label).weak());
+                                                        egui::ComboBox::from_id_salt(("direct-cue-envelope", id))
+                                                            .selected_text(match edited.envelope {
+                                                                crate::four_d::models::DirectControlEnvelope::Hold => hold_label.clone(),
+                                                                crate::four_d::models::DirectControlEnvelope::Fade => fade_label.clone(),
+                                                                crate::four_d::models::DirectControlEnvelope::Blink => blink_label.clone(),
+                                                                crate::four_d::models::DirectControlEnvelope::Breathe => breathe_label.clone(),
+                                                            })
+                                                            .show_ui(ui, |ui| {
+                                                                ui.selectable_value(&mut edited.envelope, crate::four_d::models::DirectControlEnvelope::Hold, &hold_label);
+                                                                ui.selectable_value(&mut edited.envelope, crate::four_d::models::DirectControlEnvelope::Fade, &fade_label);
+                                                                ui.selectable_value(&mut edited.envelope, crate::four_d::models::DirectControlEnvelope::Blink, &blink_label);
+                                                                ui.selectable_value(&mut edited.envelope, crate::four_d::models::DirectControlEnvelope::Breathe, &breathe_label);
+                                                            });
+                                                    });
+                                                    if edited.envelope != crate::four_d::models::DirectControlEnvelope::Hold {
+                                                        let mut start = f64::from(edited.start_value_basis_points.unwrap_or(0)) / 100.0;
+                                                        ui.label(egui::RichText::new(&start_value_label).weak());
+                                                        draw_pwm_editor_row(ui, &mut start, true);
+                                                        edited.start_value_basis_points = Some((start.clamp(0.0, 100.0) * 100.0).round() as u16);
+                                                    }
+                                                    let mut end = f64::from(edited.value_basis_points) / 100.0;
+                                                    ui.label(egui::RichText::new(&end_value_label).weak());
+                                                    draw_pwm_editor_row(ui, &mut end, true);
+                                                    edited.value_basis_points = (end.clamp(0.0, 100.0) * 100.0).round() as u16;
+
+                                                    if matches!(edited.envelope, crate::four_d::models::DirectControlEnvelope::Fade | crate::four_d::models::DirectControlEnvelope::Breathe) {
+                                                        ui.horizontal(|ui| {
+                                                            ui.label(egui::RichText::new(&easing_label).weak());
+                                                            egui::ComboBox::from_id_salt(("direct-cue-easing", id))
+                                                                .selected_text(format!("{:?}", edited.easing))
+                                                                .show_ui(ui, |ui| {
+                                                                    use crate::four_d::models::AutomationEasing as E;
+                                                                    for (value, label) in [(E::Linear, &linear_label), (E::EaseIn, &ease_in_label), (E::EaseOut, &ease_out_label), (E::EaseInOut, &ease_in_out_label), (E::SmoothStep, &smooth_step_label), (E::Step, &step_label)] {
+                                                                        ui.selectable_value(&mut edited.easing, value, label);
+                                                                    }
+                                                                });
+                                                        });
+                                                    }
+                                                    if matches!(edited.envelope, crate::four_d::models::DirectControlEnvelope::Blink | crate::four_d::models::DirectControlEnvelope::Breathe) {
+                                                        ui.horizontal(|ui| {
+                                                            ui.label(egui::RichText::new(&cycle_label).weak());
+                                                            ui.add(egui::DragValue::new(&mut edited.cycle_ms).range(20..=60_000).suffix(" ms"));
+                                                            if edited.envelope == crate::four_d::models::DirectControlEnvelope::Blink {
+                                                                let mut duty = f64::from(edited.duty_cycle_basis_points) / 100.0;
+                                                                ui.label(egui::RichText::new(&on_time_label).weak());
+                                                                ui.add(egui::DragValue::new(&mut duty).range(1.0..=99.0).suffix("%"));
+                                                                edited.duty_cycle_basis_points = (duty * 100.0).round() as u16;
+                                                            }
+                                                        });
+                                                    }
+
+                                                    let graph_size = egui::vec2(ui.available_width(), 72.0);
+                                                    let (graph_rect, _) = ui.allocate_exact_size(graph_size, egui::Sense::hover());
+                                                    ui.painter().rect_filled(graph_rect, 6.0, ui.visuals().faint_bg_color);
+                                                    ui.painter().rect_stroke(graph_rect, 6.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
+                                                    let duration = direct_duration_ms.max(1);
+                                                    let points = (0..=64).map(|sample| {
+                                                        let elapsed = duration * sample / 64;
+                                                        let value = f32::from(edited.value_at(elapsed, duration)) / 10_000.0;
+                                                        egui::pos2(
+                                                            egui::lerp(graph_rect.left()..=graph_rect.right(), sample as f32 / 64.0),
+                                                            egui::lerp(graph_rect.bottom()..=graph_rect.top(), value),
+                                                        )
+                                                    }).collect::<Vec<_>>();
+                                                    ui.painter().add(egui::Shape::line(points, egui::Stroke::new(2.0, ui.visuals().selection.bg_fill)));
+                                                    // Direct manipulation of the envelope endpoints;
+                                                    // the easing selector remains its curve shape control.
+                                                    for (handle, value, x) in [
+                                                        (0, edited.start_value_basis_points.unwrap_or(0), graph_rect.left() + 7.0),
+                                                        (1, edited.value_basis_points, graph_rect.right() - 7.0),
+                                                    ] {
+                                                        if handle == 0 && edited.envelope == crate::four_d::models::DirectControlEnvelope::Hold { continue; }
+                                                        let y = egui::lerp(graph_rect.bottom()..=graph_rect.top(), f32::from(value) / 10_000.0);
+                                                        let center = egui::pos2(x, y.clamp(graph_rect.top() + 5.0, graph_rect.bottom() - 5.0));
+                                                        let response = ui.interact(
+                                                            egui::Rect::from_center_size(center, egui::vec2(16.0, 18.0)),
+                                                            ui.id().with(("envelope-handle", id, handle)), egui::Sense::drag(),
+                                                        ).on_hover_text(if handle == 0 { &start_value_label } else { &end_value_label });
+                                                        if response.dragged() && let Some(pointer) = response.interact_pointer_pos() {
+                                                            let value = ((graph_rect.bottom() - pointer.y) / graph_rect.height() * 10_000.0).round().clamp(0.0, 10_000.0) as u16;
+                                                            if handle == 0 { edited.start_value_basis_points = Some(value); }
+                                                            else { edited.value_basis_points = value; }
+                                                        }
+                                                        ui.painter().circle_filled(center, 4.0, ui.visuals().selection.bg_fill);
+                                                        ui.painter().circle_stroke(center, 4.0, egui::Stroke::new(1.0, ui.visuals().text_color()));
+                                                    }
                                                 }
-                                                if value != direct.value_basis_points {
-                                                    update_direct_value_to = Some(value);
+                                                if edited != *direct {
+                                                    update_direct_cue_to = Some(edited);
                                                 }
                                             },
                                         );
@@ -10470,8 +10573,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 }
                             }
 
-                            if let Some(value) = update_direct_value_to {
-                                if let Err(error) = self.app.update_direct_control_cue_value(id, value) {
+                            if let Some(cue) = update_direct_cue_to {
+                                if let Err(error) = self.app.update_direct_control_cue(id, cue) {
                                     self.app.set_osd(error);
                                 }
                                 ui.ctx().request_repaint();
@@ -11978,6 +12081,32 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         &row.key, visible,
                                                     );
                                                 }
+                                                if row.control_key.as_deref().is_some_and(|key| key.starts_with("pwm.") || key.starts_with("relay.")) {
+                                                    let state = self.app.timeline.track_state(&row.key);
+                                                    let mut preview = state.scrub_preview_enabled(&row.key);
+                                                    if ui
+                                                        .add_enabled(
+                                                            linked,
+                                                            egui::Checkbox::new(
+                                                                &mut preview,
+                                                                self.app.tr("Preview output while scrubbing"),
+                                                            ),
+                                                        )
+                                                        .on_hover_text(self.app.tr(
+                                                            "PWM preview is enabled by default. Relay preview requires explicit permission.",
+                                                        ))
+                                                        .changed()
+                                                    {
+                                                        self.app.set_timeline_track_scrub_preview(
+                                                            &row.key,
+                                                            if preview {
+                                                                crate::four_d::models::ScrubPreviewPolicy::Enabled
+                                                            } else {
+                                                                crate::four_d::models::ScrubPreviewPolicy::Disabled
+                                                            },
+                                                        );
+                                                    }
+                                                }
                                                 ui.separator();
                                                 if media_track_key(row).is_some()
                                                     && ui
@@ -12606,6 +12735,43 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 }
                                                 ui.close();
                                             }
+                                            let preview_state = self.app.timeline.track_state(&track_row.key);
+                                            let mut preview = preview_state.scrub_preview_enabled(&track_row.key);
+                                            if ui
+                                                .add_enabled(
+                                                    control_key.starts_with("pwm.") || control_key.starts_with("relay."),
+                                                    egui::Checkbox::new(&mut preview, self.app.tr("Preview output while scrubbing")),
+                                                )
+                                                .on_hover_text(self.app.tr(
+                                                    "PWM preview is enabled by default. Relay preview requires explicit permission. Motion and opaque sequences cannot be safely reconstructed while scrubbing.",
+                                                ))
+                                                .changed()
+                                            {
+                                                self.app.set_timeline_track_scrub_preview(
+                                                    &track_row.key,
+                                                    if preview {
+                                                        crate::four_d::models::ScrubPreviewPolicy::Enabled
+                                                    } else {
+                                                        crate::four_d::models::ScrubPreviewPolicy::Disabled
+                                                    },
+                                                );
+                                            }
+                                            let mut latency_ms = preview_state.latency_compensation_us as f64 / 1_000.0;
+                                            ui.horizontal(|ui| {
+                                                ui.label(self.app.tr("Latency compensation"));
+                                                let response = ui.add(
+                                                    egui::DragValue::new(&mut latency_ms)
+                                                        .range(-2_000.0..=2_000.0)
+                                                        .speed(0.1)
+                                                        .suffix(" ms"),
+                                                );
+                                                if response.changed() {
+                                                    self.app.set_timeline_track_latency_compensation_us(
+                                                        &track_row.key,
+                                                        (latency_ms * 1_000.0).round() as i64,
+                                                    );
+                                                }
+                                            });
                                             ui.separator();
                                         }
                                         if ui

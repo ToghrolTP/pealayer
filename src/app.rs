@@ -4608,7 +4608,8 @@ impl PealayerApp {
                             .load(std::sync::atomic::Ordering::Acquire)
                             && let Ok(mut sample) = self.engine_handle.media_playback.lock()
                         {
-                            sample.position_ms = (v.max(0.0) * 1000.0).round() as u64;
+                            sample.position_us = (v.max(0.0) * 1_000_000.0).round() as u64;
+                            sample.position_ms = sample.position_us / 1_000;
                             sample.sampled_at = std::time::Instant::now();
                         }
                         if !self.is_scrubbing
@@ -4767,6 +4768,7 @@ impl PealayerApp {
                         .load(std::sync::atomic::Ordering::Acquire)
                         && let Ok(mut sample) = self.engine_handle.media_playback.lock()
                     {
+                        sample.position_us = 0;
                         sample.position_ms = 0;
                         sample.buffering = false;
                         sample.sampled_at = std::time::Instant::now();
@@ -5505,6 +5507,7 @@ impl PealayerApp {
         }
 
         self.seek_pos = Some(clamped);
+        self.preview_hardware_at((clamped * 1_000.0).round().max(0.0) as u64);
         let _ = self.seek_controller.request_scrub(clamped);
     }
 
@@ -5525,6 +5528,7 @@ impl PealayerApp {
         }
 
         self.seek_pos = Some(clamped);
+        self.preview_hardware_at((clamped * 1_000.0).round().max(0.0) as u64);
         let request_id = self.seek_controller.request_commit(clamped);
         self.pending_scrub_commit = Some(PendingScrubCommit {
             request_id,
@@ -6212,8 +6216,7 @@ impl PealayerApp {
         cfg.pause_on_hardware_disconnect = self.pause_on_hardware_disconnect;
         cfg.click_player_to_toggle = self.click_player_to_toggle;
         cfg.double_click_interval_ms = self.double_click_interval_ms;
-        cfg.hold_fast_forward_wait_for_double_click =
-            self.hold_fast_forward_wait_for_double_click;
+        cfg.hold_fast_forward_wait_for_double_click = self.hold_fast_forward_wait_for_double_click;
         cfg.playback_speed = self.configured_playback_speed;
         cfg.temporary_fast_forward_speed = self.temporary_fast_forward_speed;
         cfg.subtitle_font_size = self.sub_font_size;
@@ -7426,7 +7429,7 @@ impl PealayerApp {
             self.osd_message = None;
             self.clear_native_video_osd();
         } else {
-            self.show_native_video_osd(&msg, self.osd_timeout_seconds, None);
+            self.clear_native_video_osd();
             self.osd_message = Some((msg, std::time::Instant::now()));
         }
     }
@@ -7439,11 +7442,7 @@ impl PealayerApp {
         if msg.trim().is_empty() {
             self.clear_osd();
         } else {
-            self.show_native_video_osd(
-                &msg,
-                options.timeout_seconds.unwrap_or(self.osd_timeout_seconds),
-                options.icon.as_deref(),
-            );
+            self.clear_native_video_osd();
             self.osd_message = Some((msg, std::time::Instant::now()));
             self.osd_display_options = Some(options);
         }
@@ -7455,32 +7454,11 @@ impl PealayerApp {
         self.clear_native_video_osd();
     }
 
-    fn show_native_video_osd(
-        &self,
-        message: &str,
-        timeout_seconds: f32,
-        requested_icon: Option<&str>,
-    ) {
-        #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
-        if self.active_windows_video_renderer == crate::config::WindowsVideoRenderer::D3D11 {
-            let duration = (timeout_seconds.max(0.25) * 1000.0).round().to_string();
-            let native_text = crate::ui::video::osd_text_with_icon(requested_icon, message);
-            // mpv's OSD is composed into the video swapchain, so it remains
-            // visible above the zero-copy DirectComposition surface and in a
-            // detached video window. Use the same Phosphor icon selection as
-            // egui; the bundled Phosphor face is registered with mpv's font
-            // directory during startup. The egui overlay remains authoritative
-            // for the OpenGL path and Web/API state.
-            let _ = self
-                .mpv_client
-                .command("show-text", &[&native_text, &duration]);
-        }
-    }
-
     fn clear_native_video_osd(&self) {
         #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
         if self.active_windows_video_renderer == crate::config::WindowsVideoRenderer::D3D11 {
             let _ = self.mpv_client.command("show-text", &["", "0"]);
+            let _ = self.mpv_client.command("osd-overlay", &["7302", "none", ""]);
         }
     }
 
@@ -7681,6 +7659,71 @@ impl PealayerApp {
         self.persist_timeline_track_preferences();
     }
 
+    pub(crate) fn set_timeline_track_scrub_preview(
+        &mut self,
+        key: &str,
+        policy: crate::four_d::models::ScrubPreviewPolicy,
+    ) {
+        let mut state = self.timeline.track_state(key);
+        if state.scrub_preview == policy {
+            return;
+        }
+        self.undo_stack.push(self.snapshot_timeline());
+        state.scrub_preview = policy;
+        self.timeline.track_states.insert(key.to_string(), state);
+        self.persist_timeline_track_preferences();
+    }
+
+    pub(crate) fn set_timeline_track_latency_compensation_us(&mut self, key: &str, value: i64) {
+        let mut state = self.timeline.track_state(key);
+        let value = value.clamp(-2_000_000, 2_000_000);
+        if state.latency_compensation_us == value {
+            return;
+        }
+        self.undo_stack.push(self.snapshot_timeline());
+        state.latency_compensation_us = value;
+        self.timeline.track_states.insert(key.to_string(), state);
+        self.persist_timeline_track_preferences();
+        self.sync_timeline_engine();
+    }
+
+    /// Reconstruct the authored state at the target instead of replaying every
+    /// event crossed by the seek. PWM is automatic; relays are explicit opt-in
+    /// and motion/controller macros remain disabled for scrub safety.
+    fn preview_hardware_at(&self, time_ms: u64) {
+        if self
+            .engine_handle
+            .estop_active
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
+        let analog = self.linked_analog_tracks();
+        for (channel, value) in
+            crate::four_d::engine::preview_pwm_values_at(&self.timeline, &analog, time_ms)
+        {
+            let _ = self.engine_handle.queue_controller_intent(
+                format!("pwm.{channel}"),
+                "controller.pwm.set",
+                serde_json::json!({"channel": channel, "value": value}),
+                false,
+            );
+        }
+        for (relay, state) in crate::four_d::engine::preview_relay_values_at(
+            &self.timeline,
+            time_ms,
+            &self.track_muted,
+            &self.track_soloed,
+        ) {
+            let _ = self.engine_handle.queue_controller_intent(
+                format!("relay.{relay}"),
+                "controller.command.execute",
+                serde_json::json!({"command": format!("relay {relay} {}", if state { "on" } else { "off" })}),
+                false,
+            );
+        }
+    }
+
     pub(crate) fn set_timeline_tracks_linked(
         &mut self,
         keys: impl IntoIterator<Item = String>,
@@ -7869,6 +7912,28 @@ impl PealayerApp {
         instance_id: uuid::Uuid,
         value_basis_points: u16,
     ) -> Result<(), String> {
+        let mut cue = self
+            .timeline
+            .instances
+            .iter()
+            .find(|instance| instance.id == instance_id)
+            .and_then(|instance| {
+                self.timeline
+                    .templates
+                    .iter()
+                    .find(|template| template.id == instance.effect_id)
+            })
+            .and_then(|effect| effect.direct_control.clone())
+            .ok_or_else(|| "This recorded effect has no direct value".to_string())?;
+        cue.value_basis_points = value_basis_points.min(10_000);
+        self.update_direct_control_cue(instance_id, cue)
+    }
+
+    pub fn update_direct_control_cue(
+        &mut self,
+        instance_id: uuid::Uuid,
+        mut cue: crate::four_d::models::DirectControlCue,
+    ) -> Result<(), String> {
         let effect_id = self
             .timeline
             .instances
@@ -7886,18 +7951,22 @@ impl PealayerApp {
             .iter_mut()
             .find(|template| template.id == isolated)
             .ok_or_else(|| "Cue effect is no longer available".to_string())?;
-        let direct = effect
-            .direct_control
-            .as_mut()
-            .ok_or_else(|| "This recorded effect has no direct value".to_string())?;
-        let value = value_basis_points.min(10_000);
-        direct.value_basis_points = value;
+        cue.value_basis_points = cue.value_basis_points.min(10_000);
+        cue.start_value_basis_points = cue.start_value_basis_points.map(|value| value.min(10_000));
+        cue.cycle_ms = cue.cycle_ms.clamp(20, 60_000);
+        cue.duty_cycle_basis_points = cue.duty_cycle_basis_points.min(10_000);
+        let value = cue.value_basis_points;
+        let is_relay = cue.control_key.starts_with("relay.");
+        if is_relay {
+            cue.start_value_basis_points = None;
+            cue.envelope = crate::four_d::models::DirectControlEnvelope::Hold;
+        }
         let base_name = effect
             .name
             .split_once(" · ")
             .map_or(effect.name.as_str(), |(base, _)| base)
             .to_string();
-        let value_label = if direct.control_key.starts_with("relay.") {
+        let value_label = if is_relay {
             if value >= 5_000 {
                 "On".to_string()
             } else {
@@ -7910,6 +7979,7 @@ impl PealayerApp {
         for action in &mut effect.actions {
             action.state = value >= 5_000;
         }
+        effect.direct_control = Some(cue);
         self.sync_timeline_engine();
         Ok(())
     }

@@ -232,8 +232,23 @@ fn controller_call_allowed_during_estop(method: &str, params: &serde_json::Value
     if method == "controller.peripheral.presentation.update" {
         return true;
     }
-    if matches!(method,"controller.rf.catalog" | "controller.rf.binding.put" | "controller.rf.binding.remove" | "controller.rf.list" | "controller.rf.learn.status" | "controller.rf.learn.cancel" | "controller.rf.remove") { return true; }
-    if method == "controller.rf.map" && params.get("action").and_then(serde_json::Value::as_str) == Some("none") { return true; }
+    if matches!(
+        method,
+        "controller.rf.catalog"
+            | "controller.rf.binding.put"
+            | "controller.rf.binding.remove"
+            | "controller.rf.list"
+            | "controller.rf.learn.status"
+            | "controller.rf.learn.cancel"
+            | "controller.rf.remove"
+    ) {
+        return true;
+    }
+    if method == "controller.rf.map"
+        && params.get("action").and_then(serde_json::Value::as_str) == Some("none")
+    {
+        return true;
+    }
     if method == "controller.estop.set" {
         return params
             .get("active")
@@ -300,6 +315,31 @@ pub struct CompiledDirectPwmCue {
     pub end_time_ms: u64,
     pub channel: u8,
     pub value_basis_points: u16,
+    pub start_value_basis_points: Option<u16>,
+    pub envelope: crate::four_d::models::DirectControlEnvelope,
+    pub easing: crate::four_d::models::AutomationEasing,
+    pub cycle_ms: u32,
+    pub duty_cycle_basis_points: u16,
+}
+
+impl CompiledDirectPwmCue {
+    pub fn value_at(&self, time_ms: u64) -> u16 {
+        crate::four_d::models::DirectControlCue {
+            // Envelope evaluation does not need a routing key. Avoid an
+            // allocation for every playback/plan sample.
+            control_key: String::new(),
+            value_basis_points: self.value_basis_points,
+            start_value_basis_points: self.start_value_basis_points,
+            envelope: self.envelope,
+            easing: self.easing,
+            cycle_ms: self.cycle_ms,
+            duty_cycle_basis_points: self.duty_cycle_basis_points,
+        }
+        .value_at(
+            time_ms.saturating_sub(self.start_time_ms),
+            self.end_time_ms.saturating_sub(self.start_time_ms),
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -414,7 +454,9 @@ type StateNotifier = Arc<dyn Fn() + Send + Sync>;
 fn notify_state_change(notifier: &Mutex<Option<StateNotifier>>) {
     // Never invoke an interface callback while holding the engine's lock.
     let callback = notifier.lock().ok().and_then(|slot| slot.clone());
-    if let Some(callback) = callback { callback(); }
+    if let Some(callback) = callback {
+        callback();
+    }
 }
 
 pub struct EngineHandle {
@@ -454,13 +496,30 @@ pub struct ControllerPushTarget {
 
 impl EngineHandle {
     pub fn set_state_notifier(&self, notify: impl Fn() + Send + Sync + 'static) {
-        if let Ok(mut slot) = self.state_notifier.lock() { *slot = Some(Arc::new(notify)); }
+        if let Ok(mut slot) = self.state_notifier.lock() {
+            *slot = Some(Arc::new(notify));
+        }
     }
-    pub(crate) fn playback_lifecycle(&self) -> std::sync::Weak<()> { Arc::downgrade(&self.lifecycle) }
-    pub fn attach_playback_clock(&self, mpv:&'static libmpv2::Mpv) {super::media_timeline::observe_mpv(self,mpv);}
-    pub fn request_prepared_play(&self)->bool {
-        if !self.serial_port.lock().is_ok_and(|endpoint| super::controller::is_controller_endpoint(&endpoint)) {return false}
-        if let Ok(mut plan)=self.prepared_timeline.lock() && plan.has_items() {plan.play_requested=true;return true}
+    pub(crate) fn playback_lifecycle(&self) -> std::sync::Weak<()> {
+        Arc::downgrade(&self.lifecycle)
+    }
+    pub fn attach_playback_clock(&self, mpv: &'static libmpv2::Mpv) {
+        super::media_timeline::observe_mpv(self, mpv);
+    }
+    pub fn request_prepared_play(&self) -> bool {
+        if !self
+            .serial_port
+            .lock()
+            .is_ok_and(|endpoint| super::controller::is_controller_endpoint(&endpoint))
+        {
+            return false;
+        }
+        if let Ok(mut plan) = self.prepared_timeline.lock()
+            && plan.has_items()
+        {
+            plan.play_requested = true;
+            return true;
+        }
         false
     }
     pub fn controller_push_target(&self) -> ControllerPushTarget {
@@ -544,10 +603,16 @@ impl ControllerPushTarget {
     /// tunnel shares the endpoint during a restart. A subscription must not
     /// replace the identity that the authoritative RPC catalog established.
     pub(crate) fn matches_source_instance(&self, instance_id: &str) -> bool {
-        self.hardware_capabilities.upgrade().and_then(|capabilities| {
-            capabilities.lock().ok().and_then(|slot| slot.as_ref().map(|value|
-                !instance_id.is_empty() && value.host_instance_id == instance_id))
-        }).unwrap_or(false)
+        self.hardware_capabilities
+            .upgrade()
+            .and_then(|capabilities| {
+                capabilities.lock().ok().and_then(|slot| {
+                    slot.as_ref().map(|value| {
+                        !instance_id.is_empty() && value.host_instance_id == instance_id
+                    })
+                })
+            })
+            .unwrap_or(false)
     }
 
     /// Returns the selected WebSocket URL only while the user wants a
@@ -693,12 +758,16 @@ fn should_yield_direct_transport(
 }
 
 pub fn spawn_engine() -> EngineHandle {
-    if crate::peer::active() { return spawn_peer_engine(); }
+    if crate::peer::active() {
+        return spawn_peer_engine();
+    }
     let lifecycle = Arc::new(());
     let playback_time_ms = Arc::new(AtomicU64::new(0));
     let media_playback = Arc::new(Mutex::new(super::media_sync::PlaybackSample::default()));
-    let prepared_timeline=Arc::new(Mutex::new(super::media_timeline::PreparedTimeline::default()));
-    let media_clock_owned=Arc::new(AtomicBool::new(false));
+    let prepared_timeline = Arc::new(Mutex::new(
+        super::media_timeline::PreparedTimeline::default(),
+    ));
+    let media_clock_owned = Arc::new(AtomicBool::new(false));
     let is_playing = Arc::new(AtomicBool::new(false));
     let estop_active = Arc::new(AtomicBool::new(false));
     let connection_requested = Arc::new(AtomicBool::new(false));
@@ -714,8 +783,13 @@ pub fn spawn_engine() -> EngineHandle {
     let state_notifier = Arc::new(Mutex::new(None));
 
     let (tx, rx) = mpsc::channel();
-    super::media_sync::spawn(Arc::downgrade(&lifecycle), Arc::clone(&media_playback),
-        Arc::clone(&is_connected), Arc::clone(&serial_port),Arc::clone(&prepared_timeline));
+    super::media_sync::spawn(
+        Arc::downgrade(&lifecycle),
+        Arc::clone(&media_playback),
+        Arc::clone(&is_connected),
+        Arc::clone(&serial_port),
+        Arc::clone(&prepared_timeline),
+    );
 
     let engine_time = Arc::clone(&playback_time_ms);
     let engine_playing = Arc::clone(&is_playing);
@@ -958,7 +1032,8 @@ pub fn spawn_engine() -> EngineHandle {
 
             // Check for new messages (non-blocking)
             // Evaluate after connection changes, including the first connect.
-            let coordinator_timeline = active_transport.as_ref()
+            let coordinator_timeline = active_transport
+                .as_ref()
                 .is_some_and(|transport| !transport.is_direct_serial());
             let mut channel_disconnected = false;
             loop {
@@ -1136,11 +1211,20 @@ pub fn spawn_engine() -> EngineHandle {
                         engine_connection_requested.store(connect, Ordering::Relaxed);
                         last_connect_attempt = None;
                     }
-                    EngineMessage::ReplyControllerCall { method, params, reply } => {
-                        let result = if engine_estop.load(Ordering::SeqCst) && !controller_call_allowed_during_estop(&method, &params) {
+                    EngineMessage::ReplyControllerCall {
+                        method,
+                        params,
+                        reply,
+                    } => {
+                        let result = if engine_estop.load(Ordering::SeqCst)
+                            && !controller_call_allowed_during_estop(&method, &params)
+                        {
                             Err("hardware command blocked while E-STOP is active".to_string())
                         } else {
-                            active_transport.as_mut().ok_or_else(|| "PCController is not connected".to_string()).and_then(|transport| transport.call_controller(&method, params))
+                            active_transport
+                                .as_mut()
+                                .ok_or_else(|| "PCController is not connected".to_string())
+                                .and_then(|transport| transport.call_controller(&method, params))
                         };
                         let _ = reply.send(result);
                     }
@@ -1230,9 +1314,7 @@ pub fn spawn_engine() -> EngineHandle {
                             "controller intent for {control_key} blocked while E-STOP is active"
                         ));
                     }
-                } else if connected
-                    && let Some(ref mut transport) = active_transport
-                {
+                } else if connected && let Some(ref mut transport) = active_transport {
                     match transport.call_controller(&intent.method, intent.params) {
                         Ok(_) if intent.refresh_catalog => {
                             // Push events remain the lowest-latency path. This
@@ -1552,22 +1634,25 @@ pub fn spawn_engine() -> EngineHandle {
                                 && current_time >= cue.start_time_ms
                                 && current_time < cue.end_time_ms
                         });
-                        let val = direct.map(|cue| {
-                            ((u32::from(cue.value_basis_points) * 255 + 5_000) / 10_000) as u8
-                        }).unwrap_or_else(|| {
-                            analog_tracks
-                                .iter()
-                                .rev()
-                                .find(|track| track.channel == channel)
-                                .map(|track| {
-                                    if track.allows_output(analog_solo_active) {
-                                        track.evaluate_u8(current_time)
-                                    } else {
-                                        0
-                                    }
-                                })
-                                .unwrap_or(0)
-                        });
+                        let val = direct
+                            .map(|cue| {
+                                ((u32::from(cue.value_at(current_time)) * 255 + 5_000) / 10_000)
+                                    as u8
+                            })
+                            .unwrap_or_else(|| {
+                                analog_tracks
+                                    .iter()
+                                    .rev()
+                                    .find(|track| track.channel == channel)
+                                    .map(|track| {
+                                        if track.allows_output(analog_solo_active) {
+                                            track.evaluate_u8(current_time)
+                                        } else {
+                                            0
+                                        }
+                                    })
+                                    .unwrap_or(0)
+                            });
                         if val != last_pwm_values[ch] {
                             last_pwm_values[ch] = val;
                             if connected {
@@ -1758,80 +1843,255 @@ pub fn compile_direct_pwm_cues(timeline: &Timeline) -> Vec<CompiledDirectPwmCue>
                 end_time_ms: instance.start_time_ms.saturating_add(effect.duration_ms),
                 channel,
                 value_basis_points: direct.value_basis_points,
+                start_value_basis_points: direct.start_value_basis_points,
+                envelope: direct.envelope,
+                easing: direct.easing,
+                cycle_ms: direct.cycle_ms,
+                duty_cycle_basis_points: direct.duty_cycle_basis_points,
             })
         })
         .collect()
 }
 
+/// Reconstructs the exact safe-to-preview PWM state at an arbitrary media
+/// position. This is deliberately state evaluation, not event replay: seeking
+/// over a cue never emits all of the historical samples that were crossed.
+pub fn preview_pwm_values_at(
+    timeline: &Timeline,
+    analog_tracks: &[crate::four_d::curve::AnalogTrack],
+    time_ms: u64,
+) -> std::collections::BTreeMap<u8, u16> {
+    let direct = compile_direct_pwm_cues(timeline);
+    let any_soloed = analog_tracks
+        .iter()
+        .any(|track| track.enabled && track.soloed);
+    analog_tracks
+        .iter()
+        .map(|track| track.channel)
+        .chain(direct.iter().map(|cue| cue.channel))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|channel| {
+            let key = crate::four_d::models::hardware_timeline_track_key(&format!("pwm.{channel}"));
+            let state = timeline.track_state(&key);
+            if !state.linked || !state.scrub_preview_enabled(&key) {
+                return None;
+            }
+            let value = direct
+                .iter()
+                .rev()
+                .find(|cue| {
+                    cue.channel == channel
+                        && time_ms >= cue.start_time_ms
+                        && time_ms < cue.end_time_ms
+                })
+                .map(|cue| cue.value_at(time_ms))
+                .unwrap_or_else(|| {
+                    analog_tracks
+                        .iter()
+                        .rev()
+                        .find(|track| track.channel == channel)
+                        .map(|track| {
+                            if track.allows_output(any_soloed) {
+                                (track.evaluate(time_ms) * 10_000.0).round() as u16
+                            } else {
+                                0
+                            }
+                        })
+                        .unwrap_or(0)
+                })
+                .min(10_000);
+            Some((channel, ((u32::from(value) * 4095 + 5_000) / 10_000) as u16))
+        })
+        .collect()
+}
+
+/// Relay preview is opt-in because an arbitrary relay may move equipment.
+/// Only explicitly enabled tracks are reconstructed while scrubbing.
+pub fn preview_relay_values_at(
+    timeline: &Timeline,
+    time_ms: u64,
+    muted: &std::collections::BTreeSet<u8>,
+    soloed: &std::collections::BTreeSet<u8>,
+) -> std::collections::BTreeMap<u8, bool> {
+    timeline
+        .templates
+        .iter()
+        .flat_map(|effect| effect.actions.iter().map(|action| action.relay_id))
+        .filter(|relay| *relay != 0)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|relay| {
+            let key = crate::four_d::models::hardware_timeline_track_key(&format!("relay.{relay}"));
+            let state = timeline.track_state(&key);
+            (state.linked
+                && state.scrub_preview == crate::four_d::models::ScrubPreviewPolicy::Enabled)
+                .then(|| {
+                    (
+                        relay,
+                        evaluate_relay_state(timeline, relay, time_ms, muted, soloed),
+                    )
+                })
+        })
+        .collect()
+}
+
 fn spawn_peer_engine() -> EngineHandle {
-    let lifecycle=Arc::new(());
-    let (tx,rx)=mpsc::channel();
-    let handle=EngineHandle {
-        lifecycle:lifecycle.clone(),playback_time_ms:Arc::new(AtomicU64::new(0)),media_playback:Arc::new(Mutex::new(super::media_sync::PlaybackSample::default())),
-        prepared_timeline:Arc::new(Mutex::new(super::media_timeline::PreparedTimeline::default())),media_clock_owned:Arc::new(AtomicBool::new(false)),
-        is_playing:Arc::new(AtomicBool::new(false)),estop_active:Arc::new(AtomicBool::new(false)),connection_requested:Arc::new(AtomicBool::new(true)),is_connected:Arc::new(AtomicBool::new(false)),
-        serial_port:Arc::new(Mutex::new(crate::peer::client().unwrap().origin.to_string())),active_transport:Arc::new(Mutex::new(Some("pealayer:remote".into()))),
-        connection_error:Arc::new(Mutex::new(None)),hardware_capabilities:Arc::new(Mutex::new(None)),controller_call_results:Arc::new(Mutex::new(VecDeque::new())),
-        catalog_refresh_requested:Arc::new(AtomicBool::new(false)),state_notifier:Arc::new(Mutex::new(None)),sender:tx,
+    let lifecycle = Arc::new(());
+    let (tx, rx) = mpsc::channel();
+    let handle = EngineHandle {
+        lifecycle: lifecycle.clone(),
+        playback_time_ms: Arc::new(AtomicU64::new(0)),
+        media_playback: Arc::new(Mutex::new(super::media_sync::PlaybackSample::default())),
+        prepared_timeline: Arc::new(Mutex::new(
+            super::media_timeline::PreparedTimeline::default(),
+        )),
+        media_clock_owned: Arc::new(AtomicBool::new(false)),
+        is_playing: Arc::new(AtomicBool::new(false)),
+        estop_active: Arc::new(AtomicBool::new(false)),
+        connection_requested: Arc::new(AtomicBool::new(true)),
+        is_connected: Arc::new(AtomicBool::new(false)),
+        serial_port: Arc::new(Mutex::new(
+            crate::peer::client().unwrap().origin.to_string(),
+        )),
+        active_transport: Arc::new(Mutex::new(Some("pealayer:remote".into()))),
+        connection_error: Arc::new(Mutex::new(None)),
+        hardware_capabilities: Arc::new(Mutex::new(None)),
+        controller_call_results: Arc::new(Mutex::new(VecDeque::new())),
+        catalog_refresh_requested: Arc::new(AtomicBool::new(false)),
+        state_notifier: Arc::new(Mutex::new(None)),
+        sender: tx,
     };
-    let owner=Arc::downgrade(&lifecycle);
-    let capabilities=handle.hardware_capabilities.clone();
-    let connected=handle.is_connected.clone();
-    let estop=handle.estop_active.clone();
-    let results=handle.controller_call_results.clone();
-    let errors=handle.connection_error.clone();
-    let notifier=handle.state_notifier.clone();
+    let owner = Arc::downgrade(&lifecycle);
+    let capabilities = handle.hardware_capabilities.clone();
+    let connected = handle.is_connected.clone();
+    let estop = handle.estop_active.clone();
+    let results = handle.controller_call_results.clone();
+    let errors = handle.connection_error.clone();
+    let notifier = handle.state_notifier.clone();
     thread::spawn(move || {
-        let client=crate::peer::client().unwrap();
-        let mut revision=0;
-        let mut pending=PendingControllerIntents::default();
-        let mut deadlines=HashMap::new();
-        while owner.strong_count()>0 {
-            if let Some(snapshot)=client.snapshot() {
-                connected.store(snapshot.received.elapsed()<Duration::from_secs(2),Ordering::Relaxed);
-                if snapshot.revision!=revision {
-                revision=snapshot.revision;
-                if let Ok(mut value)=capabilities.lock(){*value=snapshot.session.hardware;}
-                estop.store(snapshot.session.status.get("estop_active").and_then(serde_json::Value::as_bool).unwrap_or(false),Ordering::SeqCst);
-                if let Ok(mut error)=errors.lock(){*error=client.error.lock().ok().and_then(|value|value.clone());}
+        let client = crate::peer::client().unwrap();
+        let mut revision = 0;
+        let mut pending = PendingControllerIntents::default();
+        let mut deadlines = HashMap::new();
+        while owner.strong_count() > 0 {
+            if let Some(snapshot) = client.snapshot() {
+                connected.store(
+                    snapshot.received.elapsed() < Duration::from_secs(2),
+                    Ordering::Relaxed,
+                );
+                if snapshot.revision != revision {
+                    revision = snapshot.revision;
+                    if let Ok(mut value) = capabilities.lock() {
+                        *value = snapshot.session.hardware;
+                    }
+                    estop.store(
+                        snapshot
+                            .session
+                            .status
+                            .get("estop_active")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false),
+                        Ordering::SeqCst,
+                    );
+                    if let Ok(mut error) = errors.lock() {
+                        *error = client.error.lock().ok().and_then(|value| value.clone());
+                    }
                 }
             }
-            let mut incoming=Vec::new();
+            let mut incoming = Vec::new();
             match rx.recv_timeout(Duration::from_millis(20)) {
-                Ok(message)=>incoming.push(message),
-                Err(mpsc::RecvTimeoutError::Timeout)=>{},
-                Err(mpsc::RecvTimeoutError::Disconnected)=>break,
+                Ok(message) => incoming.push(message),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
             incoming.extend(rx.try_iter());
             for message in incoming {
-                    let call=|method:String,params:serde_json::Value| client.post("/api/peer/controller",&serde_json::json!({"method":method,"params":params}));
-                    match message {
-                        EngineMessage::TrackedControllerCall {operation,method,params}=>{
-                            let result=call(method,params);
-                            if let Ok(mut values)=results.lock(){values.push_back(ControllerCallResult {operation,result});}
-                            notify_state_change(&notifier);
+                let call = |method: String, params: serde_json::Value| {
+                    client.post(
+                        "/api/peer/controller",
+                        &serde_json::json!({"method":method,"params":params}),
+                    )
+                };
+                match message {
+                    EngineMessage::TrackedControllerCall {
+                        operation,
+                        method,
+                        params,
+                    } => {
+                        let result = call(method, params);
+                        if let Ok(mut values) = results.lock() {
+                            values.push_back(ControllerCallResult { operation, result });
                         }
-                        EngineMessage::ReplyControllerCall {method,params,reply}=>{let _=reply.send(call(method,params));}
-                        EngineMessage::CoalescedControllerIntent {control_key,method,params,refresh_catalog,created}=>{
-                            deadlines.insert(control_key.clone(),created);
-                            pending.replace(control_key,method,params,refresh_catalog);
-                        }
-                        EngineMessage::ControllerCall {method,params}=>{
-                            if let Err(error)=call(method,params) && let Ok(mut slot)=errors.lock(){*slot=Some(error)}
-                        }
-                        EngineMessage::SendCommand(command)=>{let _=client.queue("/api/peer/hardware",serde_json::to_value(command).unwrap_or_default());}
-                        EngineMessage::LiveActuatorOverride {channel,value}=>{let _=client.queue("/api/peer/hardware",serde_json::to_value(Command::PwmSet {channel,value}).unwrap_or_default());}
-                        // Only the authority schedules outputs. Local cue edits
-                        // are sent through the shared timeline session endpoint.
-                        EngineMessage::UpdateQueue(_) | EngineMessage::UpdateControllerMacros(_) | EngineMessage::UpdateControllerStripEffects(_) | EngineMessage::UpdateAnalogTracks(_) | EngineMessage::UpdateDirectPwmCues(_) | EngineMessage::Seek(_) | EngineMessage::ReconfigureEndpoint {..}=>{}
+                        notify_state_change(&notifier);
                     }
+                    EngineMessage::ReplyControllerCall {
+                        method,
+                        params,
+                        reply,
+                    } => {
+                        let _ = reply.send(call(method, params));
+                    }
+                    EngineMessage::CoalescedControllerIntent {
+                        control_key,
+                        method,
+                        params,
+                        refresh_catalog,
+                        created,
+                    } => {
+                        deadlines.insert(control_key.clone(), created);
+                        pending.replace(control_key, method, params, refresh_catalog);
+                    }
+                    EngineMessage::ControllerCall { method, params } => {
+                        if let Err(error) = call(method, params)
+                            && let Ok(mut slot) = errors.lock()
+                        {
+                            *slot = Some(error)
+                        }
+                    }
+                    EngineMessage::SendCommand(command) => {
+                        let _ = client.queue(
+                            "/api/peer/hardware",
+                            serde_json::to_value(command).unwrap_or_default(),
+                        );
+                    }
+                    EngineMessage::LiveActuatorOverride { channel, value } => {
+                        let _ = client.queue(
+                            "/api/peer/hardware",
+                            serde_json::to_value(Command::PwmSet { channel, value })
+                                .unwrap_or_default(),
+                        );
+                    }
+                    // Only the authority schedules outputs. Local cue edits
+                    // are sent through the shared timeline session endpoint.
+                    EngineMessage::UpdateQueue(_)
+                    | EngineMessage::UpdateControllerMacros(_)
+                    | EngineMessage::UpdateControllerStripEffects(_)
+                    | EngineMessage::UpdateAnalogTracks(_)
+                    | EngineMessage::UpdateDirectPwmCues(_)
+                    | EngineMessage::Seek(_)
+                    | EngineMessage::ReconfigureEndpoint { .. } => {}
+                }
             }
-            if !connected.load(Ordering::Relaxed){pending.clear();deadlines.clear();}
-            if let Some((key,intent))=pending.pop_front(){
-                let created=deadlines.remove(&key).unwrap_or_else(std::time::Instant::now);
-                if created.elapsed()<=Duration::from_millis(500){
-                    if let Err(error)=client.post("/api/peer/controller",&serde_json::json!({"method":intent.method,"params":intent.params})) && let Ok(mut slot)=errors.lock(){*slot=Some(error);}
-                }else if let Ok(mut slot)=errors.lock(){*slot=Some(format!("Expired remote intent for {key} was discarded"));}
+            if !connected.load(Ordering::Relaxed) {
+                pending.clear();
+                deadlines.clear();
+            }
+            if let Some((key, intent)) = pending.pop_front() {
+                let created = deadlines
+                    .remove(&key)
+                    .unwrap_or_else(std::time::Instant::now);
+                if created.elapsed() <= Duration::from_millis(500) {
+                    if let Err(error) = client.post(
+                        "/api/peer/controller",
+                        &serde_json::json!({"method":intent.method,"params":intent.params}),
+                    ) && let Ok(mut slot) = errors.lock()
+                    {
+                        *slot = Some(error);
+                    }
+                } else if let Ok(mut slot) = errors.lock() {
+                    *slot = Some(format!("Expired remote intent for {key} was discarded"));
+                }
             }
         }
     });
@@ -2123,7 +2383,9 @@ mod tests {
         );
         let effect_id = effect.id;
         timeline.templates.push(effect);
-        timeline.instances.push(EffectInstance::new(effect_id, 4_000));
+        timeline
+            .instances
+            .push(EffectInstance::new(effect_id, 4_000));
         assert_eq!(
             compile_direct_pwm_cues(&timeline),
             vec![CompiledDirectPwmCue {
@@ -2131,10 +2393,61 @@ mod tests {
                 end_time_ms: 5_250,
                 channel: 12,
                 value_basis_points: 3_750,
+                start_value_basis_points: None,
+                envelope: crate::four_d::models::DirectControlEnvelope::Hold,
+                easing: crate::four_d::models::AutomationEasing::Linear,
+                cycle_ms: 1_000,
+                duty_cycle_basis_points: 5_000,
             }]
         );
         timeline.set_track_linked("hardware:pwm.12", false);
         assert!(compile_direct_pwm_cues(&timeline).is_empty());
+    }
+
+    #[test]
+    fn pwm_scrub_reconstructs_fade_and_respects_explicit_preview_policy() {
+        use crate::four_d::models::{AutomationEasing, DirectControlEnvelope, ScrubPreviewPolicy};
+        let mut timeline = Timeline::new();
+        let mut effect = Effect::direct_control("Fade".into(), String::new(), 1000, "pwm.2".into(), 10000, None);
+        let cue = effect.direct_control.as_mut().unwrap();
+        cue.start_value_basis_points = Some(0);
+        cue.envelope = DirectControlEnvelope::Fade;
+        cue.easing = AutomationEasing::Linear;
+        assert_eq!(cue.value_at(500, 1000), 5000);
+        cue.easing = AutomationEasing::EaseIn;
+        assert_eq!(cue.value_at(500, 1000), 2500);
+        cue.easing = AutomationEasing::Linear;
+        let id = effect.id;
+        timeline.templates.push(effect);
+        timeline.instances.push(EffectInstance::new(id, 10000));
+        assert_eq!(preview_pwm_values_at(&timeline, &[], 10500).get(&2), Some(&2048));
+        assert_eq!(preview_pwm_values_at(&timeline, &[], 9900).get(&2), Some(&0));
+        assert_eq!(preview_pwm_values_at(&timeline, &[], 11000).get(&2), Some(&0));
+        let mut state = timeline.track_state("hardware:pwm.2");
+        state.scrub_preview = ScrubPreviewPolicy::Disabled;
+        timeline.track_states.insert("hardware:pwm.2".into(), state);
+        assert!(preview_pwm_values_at(&timeline, &[], 10500).is_empty());
+        assert!(!timeline.track_state("hardware:relay.5").scrub_preview_enabled("hardware:relay.5"));
+        assert!(!timeline.track_state("hardware:seat.a").scrub_preview_enabled("hardware:seat.a"));
+    }
+
+    #[test]
+    fn pwm_blink_and_breathe_use_authored_cycle_and_duty() {
+        use crate::four_d::models::DirectControlEnvelope;
+        let mut effect = Effect::direct_control("Pulse".into(), String::new(), 2000, "pwm.2".into(), 10000, None);
+        let cue = effect.direct_control.as_mut().unwrap();
+        cue.start_value_basis_points = Some(0);
+        cue.envelope = DirectControlEnvelope::Blink;
+        cue.cycle_ms = 1000;
+        cue.duty_cycle_basis_points = 2500;
+        assert_eq!(cue.value_at(249, 2000), 10000);
+        assert_eq!(cue.value_at(250, 2000), 0);
+        assert_eq!(cue.value_at(1000, 2000), 10000);
+        cue.envelope = DirectControlEnvelope::Breathe;
+        assert_eq!(cue.value_at(0, 2000), 0);
+        assert_eq!(cue.value_at(500, 2000), 10000);
+        assert_eq!(cue.value_at(750, 2000), 5000);
+        assert_eq!(cue.value_at(1000, 2000), 0);
     }
 
     #[test]
@@ -2150,7 +2463,9 @@ mod tests {
         );
         let effect_id = effect.id;
         timeline.templates.push(effect);
-        timeline.instances.push(EffectInstance::new(effect_id, 2_000));
+        timeline
+            .instances
+            .push(EffectInstance::new(effect_id, 2_000));
         let compiled = compile_timeline(&timeline, &Default::default(), &Default::default());
         assert_eq!(compiled.len(), 1);
         assert_eq!(compiled[0].time_ms, 2_000);
@@ -2454,10 +2769,18 @@ mod tests {
 
     #[test]
     fn tracked_controller_calls_recover_wire_errors_not_domain_rejections() {
-        assert!(controller_wire_failed("encode PCController JSON-RPC request: socket aborted"));
-        assert!(controller_wire_failed("read PCController JSON-RPC response: timed out"));
-        assert!(controller_wire_failed("PCController closed the JSON-RPC connection"));
-        assert!(controller_wire_failed("PCController coordinator identity changed; reconnecting the command stream"));
+        assert!(controller_wire_failed(
+            "encode PCController JSON-RPC request: socket aborted"
+        ));
+        assert!(controller_wire_failed(
+            "read PCController JSON-RPC response: timed out"
+        ));
+        assert!(controller_wire_failed(
+            "PCController closed the JSON-RPC connection"
+        ));
+        assert!(controller_wire_failed(
+            "PCController coordinator identity changed; reconnecting the command stream"
+        ));
         assert!(!controller_wire_failed("RF binding name already exists"));
         assert!(!controller_wire_failed("virtual keyboard is disabled"));
         assert!(!controller_wire_failed("PCController is not connected"));

@@ -10,7 +10,12 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Debug)]
 pub struct PlaybackSample {
     pub name: String,
+    /// Canonical libmpv presentation timestamp. Milliseconds remain in the
+    /// wire payload for older PCController peers, but scheduling uses this
+    /// integer microsecond clock when the peer supports it.
+    pub position_us: u64,
     pub position_ms: u64,
+    pub duration_us: Option<u64>,
     pub duration_ms: Option<u64>,
     pub playing: bool,
     pub buffering: bool,
@@ -24,7 +29,9 @@ impl Default for PlaybackSample {
     fn default() -> Self {
         Self {
             name: String::new(),
+            position_us: 0,
             position_ms: 0,
+            duration_us: None,
             duration_ms: None,
             playing: false,
             buffering: false,
@@ -37,13 +44,32 @@ impl Default for PlaybackSample {
     }
 }
 impl PlaybackSample {
-    pub(crate) fn position_now(&self) -> u64 {
+    fn canonical_position_us(&self) -> u64 {
+        if self.position_us == 0 && self.position_ms != 0 {
+            self.position_ms.saturating_mul(1_000)
+        } else {
+            self.position_us
+        }
+    }
+
+    fn canonical_duration_us(&self) -> Option<u64> {
+        self.duration_us
+            .or_else(|| self.duration_ms.map(|value| value.saturating_mul(1_000)))
+    }
+
+    pub(crate) fn position_now_us(&self) -> u64 {
         let advance = if self.playing {
-            self.sampled_at.elapsed().as_secs_f64() * 1000.0 * self.rate
+            self.sampled_at.elapsed().as_secs_f64() * 1_000_000.0 * self.rate
         } else {
             0.0
         };
-        let position = self.position_ms.saturating_add(advance.max(0.0) as u64);
+        self.canonical_position_us()
+            .saturating_add(advance.max(0.0) as u64)
+            .min(self.canonical_duration_us().unwrap_or(u64::MAX))
+    }
+
+    pub(crate) fn position_now(&self) -> u64 {
+        let position = self.position_now_us() / 1_000;
         position
             .min(self.duration_ms.unwrap_or(u32::MAX as u64))
             .min(u32::MAX as u64)
@@ -52,7 +78,7 @@ impl PlaybackSample {
         self.epoch != previous.epoch
             || self.loaded != previous.loaded
             || self.playing != previous.playing
-            || self.duration_ms != previous.duration_ms
+            || self.canonical_duration_us() != previous.canonical_duration_us()
             || self.rate != previous.rate
             || self.position_now().abs_diff(previous.position_now()) > 80
     }
@@ -66,6 +92,37 @@ fn playback_publish_interval(sample: &PlaybackSample) -> Duration {
     }
 }
 
+fn clock_payload_for_peer(mut payload: serde_json::Value, microseconds: bool) -> serde_json::Value {
+    if !microseconds {
+        if let Some(object) = payload.as_object_mut() {
+            object.remove("position_us");
+            object.remove("duration_us");
+        }
+    }
+    payload
+}
+
+fn plan_payload_for_peer(mut payload: serde_json::Value, microseconds: bool) -> serde_json::Value {
+    if !microseconds {
+        if let Some(object) = payload.as_object_mut() {
+            object.remove("clock_unit");
+            object.remove("max_lateness_us");
+        }
+        for list in ["cues", "actions"] {
+            if let Some(items) = payload[list].as_array_mut() {
+                for item in items {
+                    if let Some(object) = item.as_object_mut() {
+                        for field in ["time_us", "dispatch_time_us", "media_time_ms", "duration_us", "latency_compensation_us"] {
+                            object.remove(field);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    payload
+}
+
 pub fn spawn(
     lifecycle: Weak<()>,
     sample: Arc<Mutex<PlaybackSample>>,
@@ -77,6 +134,7 @@ pub fn spawn(
         let id = crate::platform::interop::controller_instance_id();
         let mut client: Option<ControllerClient> = None;
         let mut active_endpoint = String::new();
+        let mut microsecond_clock = false;
         let mut sequence = 0_u64;
         let mut previous: Option<PlaybackSample> = None;
         let mut sent_at = Instant::now();
@@ -118,11 +176,16 @@ pub fn spawn(
                             "controller.app.instance.report",
                             identity(&id, &current.name),
                         )?;
-                        Ok(new)
+                        // Strict peers cannot receive extended fields until
+                        // their timing contract explicitly advertises support.
+                        let microseconds = new.call("controller.media.timeline.get", json!({}))
+                            .ok().is_some_and(|state| state["clock_unit"] == "microseconds");
+                        Ok((new, microseconds))
                     });
                 match attempt {
-                    Ok(new) => {
+                    Ok((new, microseconds)) => {
                         client = Some(new);
+                        microsecond_clock = microseconds;
                         active_endpoint = requested_endpoint;
                         reported_at = Instant::now();
                         previous = None;
@@ -148,7 +211,8 @@ pub fn spawn(
                 (plan.compilation_error.is_none()
                     && plan.revision != 0
                     && plan.revision != plan.acknowledged_revision
-                    && (plan.revision != preparation_retry_revision || Instant::now() >= preparation_retry_at))
+                    && (plan.revision != preparation_retry_revision
+                        || Instant::now() >= preparation_retry_at))
                     .then(|| (plan.revision, plan.payload.clone()))
             });
             if let Some((revision, mut payload)) = pending
@@ -159,10 +223,10 @@ pub fn spawn(
                     continue;
                 }
                 sequence += 1;
-                if rpc.call("controller.media.playback.update",json!({"client_id":id,"sequence":sequence,"position_ms":current.position_now(),"duration_ms":current.duration_ms,"playing":false,"loaded":current.loaded,"rate":current.rate,"epoch":current.epoch})).is_err() {client=None;previous=None;continue}
+                if rpc.call("controller.media.playback.update", clock_payload_for_peer(json!({"client_id":id,"sequence":sequence,"position_us":current.position_now_us(),"position_ms":current.position_now(),"duration_us":current.duration_us,"duration_ms":current.duration_ms,"playing":false,"loaded":current.loaded,"rate":current.rate,"epoch":current.epoch}), microsecond_clock)).is_err() {client=None;previous=None;continue}
                 payload["client_id"] = json!(id);
                 payload["revision"] = json!(revision);
-                match rpc.call_detailed("controller.media.timeline.prepare", payload) {
+                match rpc.call_detailed("controller.media.timeline.prepare", plan_payload_for_peer(payload, microsecond_clock)) {
                     Ok(feedback) => {
                         if let Ok(mut plan) = timeline.lock()
                             && plan.revision == revision
@@ -183,7 +247,10 @@ pub fn spawn(
                             preparation_retry_at = Instant::now() + Duration::from_millis(retry_ms);
                             if let Ok(mut plan) = timeline.lock() {
                                 plan.error = None;
-                                plan.deferred_reason = Some(format!("Hardware timeline is waiting: {}", error.message));
+                                plan.deferred_reason = Some(format!(
+                                    "Hardware timeline is waiting: {}",
+                                    error.message
+                                ));
                                 plan.play_requested = false;
                             }
                             continue;
@@ -191,7 +258,8 @@ pub fn spawn(
                         preparation_retry_at = Instant::now() + Duration::from_secs(5);
                         if let Ok(mut plan) = timeline.lock() {
                             plan.deferred_reason = None;
-                            plan.error = Some(format!("Hardware timeline not prepared: {}", error.message));
+                            plan.error =
+                                Some(format!("Hardware timeline not prepared: {}", error.message));
                             plan.play_requested = false;
                         }
                         continue;
@@ -207,9 +275,9 @@ pub fn spawn(
                     continue;
                 }
                 sequence += 1;
-                let result = rpc.call("controller.media.playback.update",json!({
-                    "client_id":id,"sequence":sequence,"position_ms":current.position_now(),
-                    "duration_ms":current.duration_ms,"playing":current.playing,"loaded":current.loaded,"rate":current.rate,"epoch":current.epoch,"plan_revision":revision}));
+                let result = rpc.call("controller.media.playback.update", clock_payload_for_peer(json!({
+                    "client_id":id,"sequence":sequence,"position_us":current.position_now_us(),"position_ms":current.position_now(),
+                    "duration_us":current.duration_us,"duration_ms":current.duration_ms,"playing":current.playing,"loaded":current.loaded,"rate":current.rate,"epoch":current.epoch,"plan_revision":revision}), microsecond_clock));
                 match result {
                     Ok(feedback) => {
                         if let Ok(mut plan) = timeline.lock() {
@@ -284,6 +352,21 @@ fn identity(id: &str, name: &str) -> serde_json::Value {
 mod tests {
     use super::*;
     #[test]
+    fn strict_millisecond_peer_receives_only_negotiated_timing_fields() {
+        let clock = json!({"position_us":1_234_567,"position_ms":1234,"duration_us":2_000_000,"duration_ms":2000});
+        assert_eq!(clock_payload_for_peer(clock.clone(), false), json!({"position_ms":1234,"duration_ms":2000}));
+        assert_eq!(clock_payload_for_peer(clock.clone(), true), clock);
+        let plan = json!({"clock_unit":"microseconds","max_lateness_us":50_000,"max_lateness_ms":50,
+            "cues":[{"id":"a","reference":"effect:1","time_us":10_000_000,"dispatch_time_us":9_975_000,"time_ms":9975,"media_time_ms":10000,"duration_us":1_000_000,"duration_ms":1000,"latency_compensation_us":25000}],
+            "actions":[{"id":"b","time_us":10_000_000,"dispatch_time_us":9_975_000,"time_ms":9975,"media_time_ms":10000,"latency_compensation_us":25000,"step":{"kind":"relay","target":7,"value":1}}]});
+        let legacy = plan_payload_for_peer(plan.clone(), false);
+        assert!(legacy.get("clock_unit").is_none());
+        assert_eq!(legacy["cues"][0].as_object().unwrap().len(), 4);
+        assert_eq!(legacy["actions"][0].as_object().unwrap().len(), 3);
+        assert_eq!(legacy["actions"][0]["time_ms"], 9975);
+        assert_eq!(plan_payload_for_peer(plan.clone(), true), plan);
+    }
+    #[test]
     fn playback_and_action_subscriptions_share_one_complete_client_identity() {
         let id = crate::platform::interop::controller_instance_id();
         let value = identity(&id, "Custom Player");
@@ -344,9 +427,6 @@ mod tests {
         let mut value = PlaybackSample::default();
         assert_eq!(playback_publish_interval(&value), Duration::from_secs(1));
         value.playing = true;
-        assert_eq!(
-            playback_publish_interval(&value),
-            Duration::from_millis(40)
-        );
+        assert_eq!(playback_publish_interval(&value), Duration::from_millis(40));
     }
 }

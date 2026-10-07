@@ -77,6 +77,15 @@ impl PreparedTimeline {
     }
 }
 
+fn compensated_time_us(media_time_ms: u64, compensation_us: i64) -> u64 {
+    let media_time_us = media_time_ms.saturating_mul(1_000);
+    if compensation_us >= 0 {
+        media_time_us.saturating_sub(compensation_us as u64)
+    } else {
+        media_time_us.saturating_add(compensation_us.unsigned_abs())
+    }
+}
+
 pub fn compile_plan(
     timeline: &Timeline,
     relays: &[engine::CompiledAction],
@@ -104,10 +113,26 @@ pub fn compile_plan(
         } else {
             continue;
         };
-        cues.push(json!({"id":instance.id.to_string(),"reference":reference,"time_ms":instance.start_time_ms,"duration_ms":effect.duration_ms}));
+        let track_key = super::models::controller_effect_timeline_track_key(lane);
+        let compensation_us = timeline.track_state(&track_key).latency_compensation_us;
+        let dispatch_time_us = compensated_time_us(instance.start_time_ms, compensation_us);
+        cues.push(json!({
+            "id":instance.id.to_string(),"reference":reference,
+            "time_us":instance.start_time_ms.saturating_mul(1_000),
+            "dispatch_time_us":dispatch_time_us,"time_ms":dispatch_time_us / 1_000,
+            "media_time_ms":instance.start_time_ms,"duration_us":effect.duration_ms.saturating_mul(1_000),
+            "duration_ms":effect.duration_ms,"latency_compensation_us":compensation_us
+        }));
     }
-    let mut actions = relays.iter().enumerate().map(|(i, edge)| json!({"id":format!("relay-{i}"),"time_ms":edge.time_ms,
-        "step":{"kind":"relay","target":edge.relay_id.saturating_sub(1),"value":u8::from(edge.state)}})).collect::<Vec<_>>();
+    let mut actions = relays.iter().enumerate().map(|(i, edge)| {
+        let track_key = super::models::hardware_timeline_track_key(&format!("relay.{}", edge.relay_id));
+        let compensation_us = timeline.track_state(&track_key).latency_compensation_us;
+        let dispatch_time_us = compensated_time_us(edge.time_ms, compensation_us);
+        json!({"id":format!("relay-{i}"),"time_us":edge.time_ms.saturating_mul(1_000),
+            "dispatch_time_us":dispatch_time_us,"time_ms":dispatch_time_us / 1_000,
+            "media_time_ms":edge.time_ms,"latency_compensation_us":compensation_us,
+            "step":{"kind":"relay","target":edge.relay_id.saturating_sub(1),"value":u8::from(edge.state)}})
+    }).collect::<Vec<_>>();
     let direct_pwm = engine::compile_direct_pwm_cues(timeline);
     let solo = analog.iter().any(|track| track.enabled && track.soloed);
     let pwm_channels = analog
@@ -134,34 +159,60 @@ pub fn compile_plan(
             .max()
             .unwrap_or(0);
         let end = last_curve_time.max(last_cue_time);
+        let track_key = super::models::hardware_timeline_track_key(&format!("pwm.{channel}"));
+        let compensation_us = timeline.track_state(&track_key).latency_compensation_us;
         if end / 34 > 200_000 {
-            return Err("PWM timeline exceeds prepared sample capacity; shorten or split it".into());
+            return Err(
+                "PWM timeline exceeds prepared sample capacity; shorten or split it".into(),
+            );
         }
-        let mut times = (0..=end / 34)
-            .map(|sample| sample * 34)
-            .collect::<Vec<_>>();
+        let mut times = (0..=end / 34).map(|sample| sample * 34).collect::<Vec<_>>();
         if times.last().copied() != Some(end) {
             times.push(end);
         }
         for cue in &channel_cues {
             times.push(cue.start_time_ms);
             times.push(cue.end_time_ms);
+            // A sampled curve may be bounded at 30 Hz, but boolean blink
+            // edges and cycle extrema must retain their authored timestamps.
+            if matches!(cue.envelope, super::models::DirectControlEnvelope::Blink | super::models::DirectControlEnvelope::Breathe) {
+                let cycle = u64::from(cue.cycle_ms.max(2));
+                let duration = cue.end_time_ms.saturating_sub(cue.start_time_ms);
+                if duration / cycle > 65_535 {
+                    return Err("PWM cycle exceeds prepared action capacity; increase its period".into());
+                }
+                let middle = if cue.envelope == super::models::DirectControlEnvelope::Blink {
+                    (cycle * u64::from(cue.duty_cycle_basis_points.min(10_000))).div_ceil(10_000)
+                } else { cycle / 2 };
+                for offset in (0..duration).step_by(cycle as usize) {
+                    times.push(cue.start_time_ms + offset);
+                    if offset.saturating_add(middle) < duration {
+                        times.push(cue.start_time_ms + offset + middle);
+                    }
+                }
+            }
+        }
+        if let Some(track) = track {
+            times.extend(track.keyframes.iter().map(|keyframe| keyframe.time_ms));
         }
         times.sort_unstable();
         times.dedup();
         let mut previous = None;
         for at in times {
-            let direct = channel_cues.iter().rev().find(|cue| {
-                at >= cue.start_time_ms && at < cue.end_time_ms
-            });
+            let direct = channel_cues
+                .iter()
+                .rev()
+                .find(|cue| at >= cue.start_time_ms && at < cue.end_time_ms);
             let value = direct.map_or_else(
                 || track.map_or(0, |track| (track.evaluate(at) * 4095.0).round() as u16),
-                |cue| {
-                    ((u32::from(cue.value_basis_points) * 4095 + 5_000) / 10_000) as u16
-                },
+                |cue| ((u32::from(cue.value_at(at)) * 4095 + 5_000) / 10_000) as u16,
             );
             if previous != Some(value) {
-                actions.push(json!({"id":format!("pwm-{channel}-{at}"),"time_ms":at,
+                let dispatch_time_us = compensated_time_us(at, compensation_us);
+                actions.push(json!({"id":format!("pwm-{channel}-{at}"),
+                    "time_us":at.saturating_mul(1_000),"dispatch_time_us":dispatch_time_us,
+                    "time_ms":dispatch_time_us / 1_000,"media_time_ms":at,
+                    "latency_compensation_us":compensation_us,
                     "step":{"kind":"pwm","target":channel,"value":value}}));
                 previous = Some(value);
             }
@@ -173,7 +224,9 @@ pub fn compile_plan(
     if cues.len() > 4096 || actions.len() > 65535 {
         return Err("Timeline exceeds prepared cue/action capacity".into());
     }
-    Ok(json!({"cues":cues,"actions":actions,"max_lateness_ms":50}))
+    Ok(
+        json!({"clock_unit":"microseconds","cues":cues,"actions":actions,"max_lateness_us":50_000,"max_lateness_ms":50}),
+    )
 }
 
 /// libmpv observer independent of the egui event/render thread.
@@ -236,10 +289,10 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                 && !estop.load(std::sync::atomic::Ordering::Acquire);
             let mut set_pause = None;
             if let Ok(mut clock) = sample.lock() {
-                let next = position
-                    .unwrap_or(clock.position_ms as f64 / 1000.)
-                    .max(0.0)
-                    * 1000.0;
+                let next_seconds = position
+                    .unwrap_or(clock.position_us as f64 / 1_000_000.)
+                    .max(0.0);
+                let next = next_seconds * 1000.0;
                 let discontinuity =
                     loaded && !buffering && (next - clock.position_now() as f64).abs() > 250.0;
                 let rebase = path != previous_path || restarted;
@@ -270,8 +323,10 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                     }
                 }
                 previous_path = path;
-                clock.position_ms = next.round() as u64;
-                clock.duration_ms = duration.map(|value| (value * 1000.0).round() as u64);
+                clock.position_us = (next_seconds * 1_000_000.0).round() as u64;
+                clock.position_ms = clock.position_us / 1_000;
+                clock.duration_us = duration.map(|value| (value * 1_000_000.0).round() as u64);
+                clock.duration_ms = clock.duration_us.map(|value| value / 1_000);
                 clock.loaded = loaded;
                 clock.buffering = buffering;
                 clock.rate = rate;
@@ -371,7 +426,9 @@ mod tests {
         );
         let effect_id = effect.id;
         timeline.templates.push(effect);
-        timeline.instances.push(EffectInstance::new(effect_id, 10_000));
+        timeline
+            .instances
+            .push(EffectInstance::new(effect_id, 10_000));
         let plan = compile_plan(&timeline, &[], &[]).expect("direct PWM plan");
         let actions = plan["actions"].as_array().expect("prepared actions");
         assert!(actions.iter().any(|action| {
@@ -384,5 +441,28 @@ mod tests {
                 && action["step"]["target"] == 3
                 && action["step"]["value"] == 0
         }));
+    }
+
+    #[test]
+    fn prepared_blink_edges_keep_authored_pts_and_compensated_dispatch() {
+        use super::super::models::{DirectControlEnvelope, TimelineTrackState};
+        let mut timeline = Timeline::new();
+        let mut effect = Effect::direct_control("Blink".into(), String::new(), 1000, "pwm.3".into(), 10000, None);
+        let cue = effect.direct_control.as_mut().unwrap();
+        cue.envelope = DirectControlEnvelope::Blink;
+        cue.start_value_basis_points = Some(0);
+        cue.cycle_ms = 333;
+        cue.duty_cycle_basis_points = 5000;
+        let id = effect.id;
+        timeline.templates.push(effect);
+        timeline.instances.push(EffectInstance::new(id, 10000));
+        timeline.track_states.insert("hardware:pwm.3".into(), TimelineTrackState { latency_compensation_us: 25_000, ..Default::default() });
+        let plan = compile_plan(&timeline, &[], &[]).unwrap();
+        let actions = plan["actions"].as_array().unwrap();
+        // Integer basis-point duty is ON until phase >= 166.5 ms. The
+        // authored clock uses integer milliseconds, so the first OFF is 167.
+        assert!(actions.iter().any(|a| a["time_us"] == 10_333_000 && a["dispatch_time_us"] == 10_308_000 && a["step"]["value"] == 4095));
+        assert!(actions.iter().any(|a| a["time_us"] == 10_167_000 && a["dispatch_time_us"] == 10_142_000 && a["step"]["value"] == 0));
+        assert_eq!(plan["clock_unit"], "microseconds");
     }
 }

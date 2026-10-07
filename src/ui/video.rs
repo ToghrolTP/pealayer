@@ -95,10 +95,7 @@ fn temporary_fast_forward_delay(app: &PealayerApp) -> std::time::Duration {
         .unwrap_or_default()
 }
 
-fn temporary_fast_forward_ready(
-    elapsed: std::time::Duration,
-    delay: std::time::Duration,
-) -> bool {
+fn temporary_fast_forward_ready(elapsed: std::time::Duration, delay: std::time::Duration) -> bool {
     elapsed >= delay
 }
 
@@ -754,6 +751,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         };
     #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
     let composition_active = false;
+    #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
+    let native_osd_active =
+        app.active_windows_video_renderer == crate::config::WindowsVideoRenderer::D3D11
+        && (composition_active || composition_popup_fallback);
+    #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
+    let native_osd_active = false;
 
     // Draw the offscreen texture if registered
     let texture_id_opt = app
@@ -813,10 +816,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 .unwrap_or(22.0)
                 .clamp(8.0, 128.0);
             let font_id = egui::FontId::proportional(font_size);
-            let osd_text = osd_text_with_icon(
-                options.and_then(|options| options.icon.as_deref()),
-                msg,
-            );
+            let osd_text =
+                osd_text_with_icon(options.and_then(|options| options.icon.as_deref()), msg);
             let galley = ui.painter().layout_no_wrap(osd_text, font_id, text_color);
             let padding = egui::vec2(
                 options
@@ -842,9 +843,22 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             let corner_radius = options
                 .and_then(|options| options.corner_radius)
                 .unwrap_or(8.0);
-            ui.painter().rect_filled(rect, corner_radius, bg_color);
-            ui.painter()
-                .galley(rect.min + padding, galley, egui::Color32::PLACEHOLDER);
+            if native_osd_active {
+                // Both renderers consume the exact same measured card. ASS
+                // composes it above the D3D11 surface without painting a
+                // second egui OSD or using mpv's unrelated default style.
+                let local_rect = rect.translate(-dest_rect.min.to_vec2());
+                let data = osd_ass_card(
+                    local_rect, padding, corner_radius, font_size,
+                    text_color, bg_color, options.and_then(|o| o.icon.as_deref()), msg,
+                    if app.language == crate::config::AppLanguage::Persian { "Vazirmatn" } else { "Segoe UI" },
+                );
+                sync_native_osd(app, ui.ctx(), Some(data), dest_rect.size());
+            } else {
+                ui.painter().rect_filled(rect, corner_radius, bg_color);
+                ui.painter()
+                    .galley(rect.min + padding, galley, egui::Color32::PLACEHOLDER);
+            }
 
             // Keep a precise expiry without forcing the entire application to
             // render at 60 Hz while the message is static. During the short
@@ -856,7 +870,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 std::time::Duration::from_millis(100)
             };
             ui.ctx().request_repaint_after(repaint_after);
+        } else if native_osd_active {
+            sync_native_osd(app, ui.ctx(), None, dest_rect.size());
         }
+    } else if native_osd_active {
+        sync_native_osd(app, ui.ctx(), None, dest_rect.size());
     }
 
     // 3. Schedule PaintCallback to render current frame at exact physical pixel size
@@ -981,6 +999,90 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             egui::Color32::PLACEHOLDER,
         );
     }
+}
+
+fn sync_native_osd(
+    app: &PealayerApp,
+    ctx: &egui::Context,
+    data: Option<String>,
+    size: egui::Vec2,
+) {
+    // Keep static messages cheap; only geometry, content or the fade changes
+    // cause an overlay write. Include resolution so resizing never stretches
+    // a cached card. Retry failures instead of caching an unrendered message.
+    let key = egui::Id::new("native_video_osd_card");
+    let value = (data, size.x.round() as u32, size.y.round() as u32,
+        app.osd_message.as_ref().map(|(_, timestamp)| *timestamp));
+    let unchanged = ctx.data(|d| d.get_temp::<(Option<String>, u32, u32, Option<std::time::Instant>)>(key))
+        .as_ref() == Some(&value);
+    if unchanged { return; }
+    let width = value.1.max(1).to_string();
+    let height = value.2.max(1).to_string();
+    let result = match value.0.as_deref() {
+        Some(data) => app.mpv_client.command(
+            "osd-overlay", &["7302", "ass-events", data, &width, &height, "20"],
+        ),
+        None => app.mpv_client.command("osd-overlay", &["7302", "none", ""]),
+    };
+    if result.is_ok() { ctx.data_mut(|d| d.insert_temp(key, value)); }
+}
+
+fn osd_ass_color(color: egui::Color32) -> String {
+    let [r, g, b, a] = color.to_srgba_unmultiplied();
+    format!("\\1c&H{b:02X}{g:02X}{r:02X}&\\1a&H{:02X}&", 255 - a)
+}
+
+fn osd_ass_literal(text: &str) -> String {
+    // Prevent external OSD text from injecting ASS tags. The invisible word
+    // joiner after a backslash also stops literal Windows paths becoming \N.
+    text.replace('\\', "\\\u{2060}")
+        .replace('{', "\\{")
+        .replace('}', "\\}")
+        .replace('\r', "")
+        .replace('\n', "\\N")
+}
+
+fn osd_ass_card(
+    rect: egui::Rect,
+    padding: egui::Vec2,
+    radius: f32,
+    font_size: f32,
+    foreground: egui::Color32,
+    background: egui::Color32,
+    icon: Option<&str>,
+    message: &str,
+    font_family: &str,
+) -> String {
+    use std::fmt::Write;
+    let radius = radius.clamp(0.0, rect.width().min(rect.height()) * 0.5);
+    let mut path = String::new();
+    // Rounded corners in the shared logical-pixel coordinate system.
+    for (corner, center) in [
+        egui::pos2(rect.right() - radius, rect.top() + radius),
+        egui::pos2(rect.right() - radius, rect.bottom() - radius),
+        egui::pos2(rect.left() + radius, rect.bottom() - radius),
+        egui::pos2(rect.left() + radius, rect.top() + radius),
+    ].into_iter().enumerate() {
+        for step in 0..=8 {
+            let angle = (-90.0 + corner as f32 * 90.0 + step as f32 * 11.25).to_radians();
+            let point = center + egui::vec2(angle.cos(), angle.sin()) * radius;
+            let command = if corner == 0 && step == 0 { "m" } else { "l" };
+            let _ = write!(path, "{command} {:.2} {:.2} ", point.x, point.y);
+        }
+    }
+    let position = rect.min + padding;
+    let text = if let Some(icon) = requested_osd_icon(icon, message) {
+        format!("{{\\fnPhosphor}}{icon}{{\\fn{font_family}}}  {}", osd_ass_literal(message))
+    } else {
+        osd_ass_literal(message)
+    };
+    // Explicit settings prevent inherited mpv OSD borders, shadow, bold,
+    // scaling or subtitle style from changing this card's appearance.
+    format!(
+        "{{\\an7\\pos(0,0)\\bord0\\shad0{}\\p1}}{path}\n\
+         {{\\an7\\pos({:.2},{:.2})\\q2\\fn{font_family}\\fs{font_size:.2}\\b0\\i0\\fscx100\\fscy100\\bord0\\shad0{}}}{text}",
+        osd_ass_color(background), position.x, position.y, osd_ass_color(foreground),
+    )
 }
 
 fn parse_osd_color(value: &str) -> Option<egui::Color32> {
@@ -1281,5 +1383,24 @@ mod tests {
             osd_text_with_icon(Some("volume"), "Volume: 50%"),
             format!("{}  Volume: 50%", crate::ui::icons::SPEAKER_HIGH)
         );
+    }
+
+    #[test]
+    fn native_osd_card_preserves_geometry_rgba_icons_and_literal_text() {
+        let event = osd_ass_card(
+            egui::Rect::from_min_size(egui::pos2(24.0, 24.0), egui::vec2(180.0, 44.0)),
+            egui::vec2(12.0, 8.0), 8.0, 22.0,
+            parse_osd_color("#12345680").unwrap(),
+            egui::Color32::from_black_alpha(180), Some("pause"),
+            r"Pause {\bord20} C:\New", "Segoe UI",
+        );
+        assert!(event.contains(r"\pos(36.00,32.00)"));
+        assert!(event.contains(r"\1c&H563412&\1a&H7F&"));
+        assert!(event.contains(r"\1c&H000000&\1a&H4B&"));
+        assert!(event.contains(r"\fnPhosphor"));
+        assert!(event.contains(crate::ui::icons::PAUSE));
+        assert!(event.contains("m 196.00 24.00"));
+        assert!(!event.contains(r"{\bord20}"));
+        assert!(!event.contains(r"C:\N"));
     }
 }

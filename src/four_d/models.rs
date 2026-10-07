@@ -84,6 +84,112 @@ pub struct DirectControlCue {
     pub control_key: String,
     /// Exact normalized value in basis points (0..=10_000).
     pub value_basis_points: u16,
+    /// Optional value at the beginning of the cue. Omission preserves legacy
+    /// constant-value cues.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_value_basis_points: Option<u16>,
+    #[serde(default)]
+    pub envelope: DirectControlEnvelope,
+    #[serde(default)]
+    pub easing: AutomationEasing,
+    #[serde(default = "default_direct_control_cycle_ms")]
+    pub cycle_ms: u32,
+    #[serde(default = "default_duty_cycle_basis_points")]
+    pub duty_cycle_basis_points: u16,
+}
+
+fn default_direct_control_cycle_ms() -> u32 {
+    1_000
+}
+fn default_duty_cycle_basis_points() -> u16 {
+    5_000
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DirectControlEnvelope {
+    #[default]
+    Hold,
+    Fade,
+    Blink,
+    Breathe,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum AutomationEasing {
+    Step,
+    #[default]
+    Linear,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+    SmoothStep,
+}
+
+impl AutomationEasing {
+    pub fn apply(self, progress: f64) -> f64 {
+        let t = progress.clamp(0.0, 1.0);
+        match self {
+            Self::Step => 0.0,
+            Self::Linear => t,
+            Self::EaseIn => t * t,
+            Self::EaseOut => 1.0 - (1.0 - t) * (1.0 - t),
+            Self::EaseInOut if t < 0.5 => 2.0 * t * t,
+            Self::EaseInOut => 1.0 - (-2.0 * t + 2.0).powi(2) / 2.0,
+            Self::SmoothStep => t * t * (3.0 - 2.0 * t),
+        }
+    }
+}
+
+impl DirectControlCue {
+    pub fn value_at(&self, elapsed_ms: u64, duration_ms: u64) -> u16 {
+        let low = self
+            .start_value_basis_points
+            .unwrap_or_else(|| {
+                if matches!(
+                    self.envelope,
+                    DirectControlEnvelope::Blink | DirectControlEnvelope::Breathe
+                ) {
+                    0
+                } else {
+                    self.value_basis_points
+                }
+            })
+            .min(10_000);
+        let high = self.value_basis_points.min(10_000);
+        let interpolate = |progress: f64| {
+            let t = self.easing.apply(progress);
+            (f64::from(low) + (f64::from(high) - f64::from(low)) * t)
+                .round()
+                .clamp(0.0, 10_000.0) as u16
+        };
+        match self.envelope {
+            DirectControlEnvelope::Hold => high,
+            DirectControlEnvelope::Fade => {
+                let duration = duration_ms.max(1);
+                interpolate(elapsed_ms.min(duration) as f64 / duration as f64)
+            }
+            DirectControlEnvelope::Blink => {
+                let cycle = u64::from(self.cycle_ms.max(1));
+                let duty = u64::from(self.duty_cycle_basis_points.min(10_000));
+                if (elapsed_ms % cycle) * 10_000 < cycle * duty {
+                    high
+                } else {
+                    low
+                }
+            }
+            DirectControlEnvelope::Breathe => {
+                let cycle = u64::from(self.cycle_ms.max(2));
+                let phase = (elapsed_ms % cycle) as f64 / cycle as f64;
+                interpolate(if phase < 0.5 {
+                    phase * 2.0
+                } else {
+                    (1.0 - phase) * 2.0
+                })
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -130,10 +236,22 @@ pub fn default_hardware_target() -> HardwareTarget {
 fn migrate_project_targets(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(fields) => {
-            let legacy = fields.get("target").and_then(serde_json::Value::as_str)
-                .is_some_and(|name| matches!(name, "Water" | "Wind" | "SeatVibration" | "Smoke" | "Auxiliary"));
-            if legacy && let Some(actions) = fields.get("actions").and_then(serde_json::Value::as_array) {
-                let ids = actions.iter().filter_map(|action| action.get("relay_id").and_then(serde_json::Value::as_u64)).collect::<std::collections::BTreeSet<_>>();
+            let legacy = fields
+                .get("target")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|name| {
+                    matches!(
+                        name,
+                        "Water" | "Wind" | "SeatVibration" | "Smoke" | "Auxiliary"
+                    )
+                });
+            if legacy
+                && let Some(actions) = fields.get("actions").and_then(serde_json::Value::as_array)
+            {
+                let ids = actions
+                    .iter()
+                    .filter_map(|action| action.get("relay_id").and_then(serde_json::Value::as_u64))
+                    .collect::<std::collections::BTreeSet<_>>();
                 let target = if ids.len() == 1 {
                     serde_json::json!({"Relay": ids.iter().next().copied().unwrap()})
                 } else {
@@ -141,9 +259,15 @@ fn migrate_project_targets(value: &mut serde_json::Value) {
                 };
                 fields.insert("target".to_string(), target);
             }
-            for child in fields.values_mut() { migrate_project_targets(child); }
+            for child in fields.values_mut() {
+                migrate_project_targets(child);
+            }
         }
-        serde_json::Value::Array(items) => for item in items { migrate_project_targets(item); },
+        serde_json::Value::Array(items) => {
+            for item in items {
+                migrate_project_targets(item);
+            }
+        }
         _ => {}
     }
 }
@@ -281,18 +405,22 @@ impl Effect {
         let normalized = value_basis_points.min(10_000);
         let actions = relay_id
             .filter(|id| *id != 0)
-            .map(|relay_id| vec![AtomicAction {
-                relay_id,
-                state: normalized >= 5_000,
-                offset_ms: 0,
-            }])
+            .map(|relay_id| {
+                vec![AtomicAction {
+                    relay_id,
+                    state: normalized >= 5_000,
+                    offset_ms: 0,
+                }]
+            })
             .unwrap_or_default();
         Self {
             id: Uuid::new_v4(),
             name,
             icon,
             duration_ms: duration_ms.max(100),
-            target: relay_id.map(HardwareTarget::for_relay).unwrap_or(HardwareTarget::Any),
+            target: relay_id
+                .map(HardwareTarget::for_relay)
+                .unwrap_or(HardwareTarget::Any),
             actions,
             controller_macro: None,
             controller_strip_effect: None,
@@ -300,6 +428,11 @@ impl Effect {
             direct_control: Some(DirectControlCue {
                 control_key,
                 value_basis_points: normalized,
+                start_value_basis_points: None,
+                envelope: DirectControlEnvelope::Hold,
+                easing: AutomationEasing::Linear,
+                cycle_ms: default_direct_control_cycle_ms(),
+                duty_cycle_basis_points: default_duty_cycle_basis_points(),
             }),
             duration_policy: CueDurationPolicy::Resizable,
         }
@@ -339,6 +472,21 @@ pub struct TimelineTrackState {
     pub linked: bool,
     /// Hidden tracks remain linked and operational but do not consume a row.
     pub visible: bool,
+    /// Whether timeline scrubbing may drive this physical output.
+    pub scrub_preview: ScrubPreviewPolicy,
+    /// Positive values dispatch early to compensate transport/device latency;
+    /// negative values deliberately delay. The authored media timestamp is
+    /// never changed.
+    pub latency_compensation_us: i64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScrubPreviewPolicy {
+    #[default]
+    Auto,
+    Enabled,
+    Disabled,
 }
 
 impl Default for TimelineTrackState {
@@ -346,6 +494,18 @@ impl Default for TimelineTrackState {
         Self {
             linked: true,
             visible: true,
+            scrub_preview: ScrubPreviewPolicy::Auto,
+            latency_compensation_us: 0,
+        }
+    }
+}
+
+impl TimelineTrackState {
+    pub fn scrub_preview_enabled(self, track_key: &str) -> bool {
+        match self.scrub_preview {
+            ScrubPreviewPolicy::Enabled => true,
+            ScrubPreviewPolicy::Disabled => false,
+            ScrubPreviewPolicy::Auto => track_key.starts_with("hardware:pwm."),
         }
     }
 }
@@ -432,7 +592,10 @@ mod tests {
     #[test]
     fn zero_relay_ids_are_rejected_even_from_imported_data() {
         assert!(serde_json::from_str::<HardwareTarget>(r#"{"Relay":0}"#).is_err());
-        assert!(serde_json::from_str::<AtomicAction>(r#"{"relay_id":0,"state":true,"offset_ms":0}"#).is_err());
+        assert!(
+            serde_json::from_str::<AtomicAction>(r#"{"relay_id":0,"state":true,"offset_ms":0}"#)
+                .is_err()
+        );
         assert_eq!(HardwareTarget::Relay(0).primary_relay_id(), None);
         assert!(!HardwareTarget::Relay(0).is_compatible_with_relay(0));
     }
@@ -445,7 +608,10 @@ mod tests {
         assert_eq!(value["target"], serde_json::json!({"Relay":7}));
         assert_eq!(value["actions"], actions);
         value["target"] = serde_json::json!("Auxiliary");
-        value["actions"].as_array_mut().unwrap().push(serde_json::json!({"relay_id":8,"state":false,"offset_ms":15}));
+        value["actions"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"relay_id":8,"state":false,"offset_ms":15}));
         migrate_project_targets(&mut value);
         assert_eq!(value["target"], "Any");
         assert_eq!(value["actions"].as_array().unwrap().len(), 2);

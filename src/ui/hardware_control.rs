@@ -3363,10 +3363,12 @@ mod tests {
             TimelineTrackState {
                 linked: true,
                 visible: false,
+                ..Default::default()
             },
             TimelineTrackState {
                 linked: false,
                 visible: true,
+                ..Default::default()
             },
         ] {
             assert!(manager_channel_is_dimmed(

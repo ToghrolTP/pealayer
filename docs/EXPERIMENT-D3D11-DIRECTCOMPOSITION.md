@@ -60,11 +60,29 @@ maximum 640×360 RGBA frame, and feeds the same 30 Hz publisher used by OpenGL.
 This bounded shell-preview readback does not alter the zero-copy on-screen
 presentation path.
 
+## Shared OSD rendering
+
+OSD messages retain one application state and one measured card layout. The
+OpenGL path paints that card in egui. D3D11 renders the same position, size,
+rounded background, colors, padding and fade in mpv's custom ASS overlay
+`7302`, above the video surface. It explicitly selects the registered Phosphor
+font for icons and the application UI font for text. It does not simultaneously
+paint egui's OSD or use mpv's differently styled `show-text` message.
+
+Static overlay writes are cached; resizing or a new message invalidates the
+cache, and fading uses the existing repaint cadence. Empty messages and
+`pealayer.osd.hide` clear both the application state and the native overlay.
+When no composition surface is available, the egui card remains available.
+The subtitle overlay uses the separate `7301` ID and is unaffected.
+
+The OSD geometry/color/icon tests and D3D11 release build passed. Windows
+Graphics Capture failed with `0x8007041D` during the current visual check, so
+an actual screenshot comparison remains outstanding.
+
 ## Experimental limitations
 
-- The composition visual sits above egui's opaque OpenGL surface. egui-drawn
-  overlays inside the video rectangle (notably the OSD) require a later shared
-  DirectComposition overlay visual or migration of those overlays into mpv.
+- Popup menus still require the existing captured-video composition fallback;
+  the OSD itself is now rendered directly above the video swapchain.
 - Hardware/driver coverage is limited to the current Windows 11 validation;
   adapter selection, HDR, device-loss recovery, Windows 10, and Cafe-PC still
   require explicit acceptance testing before this could replace the default.
