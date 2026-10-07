@@ -13,6 +13,7 @@ struct Preview {
     frame: Option<image::RgbaImage>,
     captured: Option<Instant>,
     requested: Option<Instant>,
+    requested_size: Option<(u32, u32)>,
     requests: u64,
     delivered: u64,
     last_error: Option<String>,
@@ -25,6 +26,7 @@ static PREVIEW: Mutex<Preview> = Mutex::new(Preview {
     frame: None,
     captured: None,
     requested: None,
+    requested_size: None,
     requests: 0,
     delivered: 0,
     last_error: None,
@@ -157,6 +159,7 @@ pub fn configure(hwnd: isize, enabled: bool) -> Result<(), String> {
     state.frame = None;
     state.captured = None;
     state.requested = None;
+    state.requested_size = None;
     Ok(())
 }
 
@@ -293,8 +296,19 @@ pub unsafe fn capture(
         for pixel in rgba.chunks_exact_mut(4) {
             pixel[3] = 255;
         }
+        let frame = image::RgbaImage::from_raw(w, h, rgba);
+        let requested_size = PREVIEW.lock().ok().and_then(|state| {
+            state
+                .requested
+                .is_some_and(|at| at.elapsed() < Duration::from_secs(1))
+                .then_some(state.requested_size)
+                .flatten()
+        });
+        if let (Some(frame), Some(size)) = (frame.as_ref(), requested_size) {
+            publish_thumbnail(hwnd, frame, size);
+        }
         if let Ok(mut state) = PREVIEW.lock() {
-            state.frame = image::RgbaImage::from_raw(w, h, rgba);
+            state.frame = frame;
             state.captured = Some(Instant::now());
         }
         let _ = windows::Win32::Graphics::Dwm::DwmInvalidateIconicBitmaps(
@@ -340,14 +354,7 @@ pub fn bitmap(
 
 #[cfg(target_os = "windows")]
 pub fn handle_request(hwnd: isize, message: u32, lparam: isize) -> bool {
-    use windows::Win32::{
-        Foundation::HWND,
-        Graphics::{
-            Dwm::DwmSetIconicThumbnail,
-            Gdi::DeleteObject,
-        },
-        UI::WindowsAndMessaging::WM_DWMSENDICONICLIVEPREVIEWBITMAP,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::WM_DWMSENDICONICLIVEPREVIEWBITMAP;
 
     // Video-only is correct for the small taskbar thumbnail, but a Peek/live
     // preview is projected over the real desktop window. Leave that full-size
@@ -367,6 +374,10 @@ pub fn handle_request(hwnd: isize, message: u32, lparam: isize) -> bool {
         }
         state.requests += 1;
         state.requested = Some(Instant::now());
+        state.requested_size = Some((
+            ((lparam as u32 >> 16) & 0xffff).max(1),
+            (lparam as u32 & 0xffff).max(1),
+        ));
         state.frame.clone()
     };
     if let Some(ctx) = REPAINT.get() {
@@ -375,15 +386,24 @@ pub fn handle_request(hwnd: isize, message: u32, lparam: isize) -> bool {
     let Some(frame) = frame else {
         return true;
     };
-    let hwnd = HWND(hwnd as *mut _);
     let (max_w, max_h) = (
         ((lparam as u32 >> 16) & 0xffff).max(1),
         (lparam as u32 & 0xffff).max(1),
     );
-    let (w, h) = fit_size(frame.width(), frame.height(), max_w, max_h);
-    let resized = image::imageops::resize(&frame, w, h, image::imageops::FilterType::Triangle);
+    publish_thumbnail(hwnd, &frame, (max_w, max_h));
+    true
+}
+
+#[cfg(target_os = "windows")]
+fn publish_thumbnail(hwnd: isize, frame: &image::RgbaImage, maximum: (u32, u32)) {
+    use windows::Win32::{
+        Foundation::HWND,
+        Graphics::{Dwm::DwmSetIconicThumbnail, Gdi::DeleteObject},
+    };
+    let (w, h) = fit_size(frame.width(), frame.height(), maximum.0, maximum.1);
+    let resized = image::imageops::resize(frame, w, h, image::imageops::FilterType::Triangle);
     let result = bitmap(&resized).and_then(|bitmap| unsafe {
-        let result = DwmSetIconicThumbnail(hwnd, bitmap, 0);
+        let result = DwmSetIconicThumbnail(HWND(hwnd as *mut _), bitmap, 0);
         let _ = DeleteObject(bitmap.into());
         result
     });
@@ -396,7 +416,6 @@ pub fn handle_request(hwnd: isize, message: u32, lparam: isize) -> bool {
             Err(error) => state.last_error = Some(error.to_string()),
         }
     }
-    true
 }
 
 pub fn diagnostics() -> serde_json::Value {
@@ -412,7 +431,8 @@ pub fn diagnostics() -> serde_json::Value {
         "toolbar_icon_size":crate::platform::windows::thumbnail_toolbar_metrics(crate::platform::windows::get_registered_hwnd()).0,
         "frame_size":state.frame.as_ref().map(|f| [f.width(),f.height()]),
         "frame_age_ms":state.captured.map(|at| at.elapsed().as_millis() as u64),
-        "dwm_requests":state.requests,"dwm_delivered":state.delivered,"last_error":state.last_error})
+        "dwm_requests":state.requests,"dwm_delivered":state.delivered,"last_error":state.last_error,
+        "shell_commands":crate::platform::windows::shell_command_diagnostics()})
 }
 
 pub fn frame_png() -> Option<Vec<u8>> {

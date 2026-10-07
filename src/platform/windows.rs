@@ -151,7 +151,9 @@ static SIMPLE_VIDEO_CHROME_HEIGHT: AtomicI32 = AtomicI32::new(0);
 static WINDOW_MAGNETIC_SNAP_ENABLED: AtomicBool = AtomicBool::new(false);
 static WINDOW_MAGNETIC_SNAP_DISTANCE: AtomicI32 = AtomicI32::new(16);
 static WINDOW_MAGNETIC_DRAG: Mutex<MagneticDragSession> = Mutex::new(MagneticDragSession::new());
-static ORIGINAL_WINDOW_PROC: AtomicIsize = AtomicIsize::new(0);
+static SHELL_SUBCLASS_HWND: AtomicIsize = AtomicIsize::new(0);
+static SHELL_COMMAND_MESSAGES: AtomicU64 = AtomicU64::new(0);
+static SHELL_COMMANDS_QUEUED: AtomicU64 = AtomicU64::new(0);
 static SHELL_COMMANDS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 static SHELL_PAUSED: AtomicBool = AtomicBool::new(true);
 static SHELL_MUTED: AtomicBool = AtomicBool::new(false);
@@ -167,6 +169,7 @@ static THUMBNAIL_TOOLBAR_ICONS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 fn queue_shell_command(command: u32) {
     if let Ok(mut commands) = SHELL_COMMANDS.lock() {
         commands.push_back(command);
+        SHELL_COMMANDS_QUEUED.fetch_add(1, Ordering::Relaxed);
     }
     crate::platform::taskbar_preview::request_repaint();
 }
@@ -2045,11 +2048,12 @@ unsafe extern "system" fn shell_window_proc(
     message: u32,
     wparam: windows::Win32::Foundation::WPARAM,
     lparam: windows::Win32::Foundation::LPARAM,
+    _subclass_id: usize,
+    _reference_data: usize,
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Foundation::LRESULT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, WM_APPCOMMAND, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK,
-        WM_RBUTTONUP, WNDPROC,
+        WM_APPCOMMAND, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_RBUTTONUP,
     };
 
     observe_native_window_message(message);
@@ -2114,6 +2118,7 @@ unsafe extern "system" fn shell_window_proc(
                     | THUMB_BUTTON_FULLSCREEN
             )
         {
+            SHELL_COMMAND_MESSAGES.fetch_add(1, Ordering::Relaxed);
             queue_shell_command(command);
             return LRESULT(0);
         }
@@ -2130,29 +2135,45 @@ unsafe extern "system" fn shell_window_proc(
         }
     }
 
-    let original = ORIGINAL_WINDOW_PROC.load(Ordering::Acquire);
-    if original == 0 {
-        unsafe {
-            windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, message, wparam, lparam)
-        }
-    } else {
-        let original: WNDPROC = unsafe { std::mem::transmute(original) };
-        unsafe { CallWindowProcW(original, hwnd, message, wparam, lparam) }
-    }
+    unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "comctl32")]
+unsafe extern "system" {
+    fn SetWindowSubclass(
+        hwnd: windows::Win32::Foundation::HWND,
+        callback: Option<
+            unsafe extern "system" fn(
+                windows::Win32::Foundation::HWND,
+                u32,
+                windows::Win32::Foundation::WPARAM,
+                windows::Win32::Foundation::LPARAM,
+                usize,
+                usize,
+            ) -> windows::Win32::Foundation::LRESULT,
+        >,
+        subclass_id: usize,
+        reference_data: usize,
+    ) -> windows::core::BOOL;
+    fn DefSubclassProc(
+        hwnd: windows::Win32::Foundation::HWND,
+        message: u32,
+        wparam: windows::Win32::Foundation::WPARAM,
+        lparam: windows::Win32::Foundation::LPARAM,
+    ) -> windows::Win32::Foundation::LRESULT;
 }
 
 #[cfg(target_os = "windows")]
 pub fn install_shell_message_hook(hwnd_raw: isize) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GWLP_WNDPROC, RegisterWindowMessageW, SetWindowLongPtrW,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::RegisterWindowMessageW;
     use windows::core::w;
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
     }
-    if ORIGINAL_WINDOW_PROC.load(Ordering::Acquire) != 0 {
+    if SHELL_SUBCLASS_HWND.load(Ordering::Acquire) == hwnd_raw {
         return Ok(());
     }
     let taskbar_created = unsafe { RegisterWindowMessageW(w!("TaskbarButtonCreated")) };
@@ -2160,17 +2181,19 @@ pub fn install_shell_message_hook(hwnd_raw: isize) -> Result<(), String> {
         return Err("RegisterWindowMessageW TaskbarButtonCreated failed".to_string());
     }
     TASKBAR_BUTTON_CREATED_MESSAGE.store(taskbar_created, Ordering::Release);
-    let previous = unsafe {
-        SetWindowLongPtrW(
+    const PEALAYER_SHELL_SUBCLASS_ID: usize = 0x5045_414c;
+    let installed = unsafe {
+        SetWindowSubclass(
             HWND(hwnd_raw as *mut _),
-            GWLP_WNDPROC,
-            shell_window_proc as *const () as isize,
+            Some(shell_window_proc),
+            PEALAYER_SHELL_SUBCLASS_ID,
+            0,
         )
     };
-    if previous == 0 {
-        return Err("SetWindowLongPtrW GWLP_WNDPROC failed".to_string());
+    if !installed.as_bool() {
+        return Err("SetWindowSubclass failed".to_string());
     }
-    ORIGINAL_WINDOW_PROC.store(previous, Ordering::Release);
+    SHELL_SUBCLASS_HWND.store(hwnd_raw, Ordering::Release);
     Ok(())
 }
 
@@ -2196,6 +2219,19 @@ pub fn take_shell_command() -> Option<u32> {
         .lock()
         .ok()
         .and_then(|mut commands| commands.pop_front())
+}
+
+pub fn shell_command_diagnostics() -> serde_json::Value {
+    serde_json::json!({
+        "hook_hwnd": SHELL_SUBCLASS_HWND.load(Ordering::Acquire),
+        "registered_hwnd": get_registered_hwnd(),
+        "thumbnail_click_messages": SHELL_COMMAND_MESSAGES.load(Ordering::Relaxed),
+        "commands_queued": SHELL_COMMANDS_QUEUED.load(Ordering::Relaxed),
+        "queue_depth": SHELL_COMMANDS.lock().map(|queue| queue.len()).unwrap_or_default(),
+        "has_media": SHELL_HAS_MEDIA.load(Ordering::Relaxed),
+        "paused": SHELL_PAUSED.load(Ordering::Relaxed),
+        "muted": SHELL_MUTED.load(Ordering::Relaxed),
+    })
 }
 
 pub fn take_shell_reinitialize_request() -> bool {
