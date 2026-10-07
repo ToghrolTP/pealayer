@@ -48,6 +48,14 @@ Timeline toolbar buttons own their pointer area: the ruler cannot override their
 hand cursor or seek while a toolbar button is being pressed. A separate geometry
 regression test covers the toolbar, ruler background and continued ruler drags.
 
+A local deployment attempt also produced a real panic report: the GUI-subsystem
+CLI process aborted while printing upload progress after its inherited pipe was
+closed. CLI stdout/stderr are now best-effort writes rather than panic-on-error
+printing. A disconnected-writer regression test covers this failure. Keep an
+updater launcher attached with `Start-Process -Wait` and redirected output when
+collecting deployment evidence. An interrupted partial upload is not a deployed
+build and requires explicit cancellation before another upload can begin.
+
 Use the project Windows host resolver and retain a clean, pushed source checkpoint.
 Package separately for the actual David-PC and Cafe-PC libmpv runtime identities.
 Preserve Cafe-PC's independent timeline/effect changes before creating a release

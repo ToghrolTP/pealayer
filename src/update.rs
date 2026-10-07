@@ -984,7 +984,7 @@ pub fn push_current_to_peer(target: &str) -> Result<UpdateStatus, String> {
             }
         };
         offset += count as u64;
-        println!("{}", status.message);
+        crate::cli_println!("{}", status.message);
     }
     let finish_result = client
         .post(format!("{target}/api/update/finish"))
@@ -1367,7 +1367,7 @@ pub fn schedule_startup_health_acknowledgement() {
             file.sync_all()
         });
         if let Err(error) = acknowledgement {
-            eprintln!("write update health acknowledgement: {error}");
+            crate::cli_eprintln!("write update health acknowledgement: {error}");
             return;
         }
         if let Some(helper) = helper {
