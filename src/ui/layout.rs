@@ -286,7 +286,12 @@ fn hardware_channel_source_rect_id(
     surface: HardwareChannelDragSurface,
     key: &str,
 ) -> egui::Id {
-    egui::Id::new(("hardware-channel-source-rect", surface, ui.ctx().viewport_id(), key))
+    egui::Id::new((
+        "hardware-channel-source-rect",
+        surface,
+        ui.ctx().viewport_id(),
+        key,
+    ))
 }
 
 pub(crate) fn clear_released_hardware_channel_drag(
@@ -343,11 +348,9 @@ pub(crate) fn hardware_channel_drag_handle(
     let source_rect = ui.data_mut(|data| data.get_temp::<egui::Rect>(source_rect_id));
     let pointer = ui.ctx().pointer_hover_pos();
     let hovered = hardware_channel_handle_hovered(pointer, source_rect, ui.max_rect(), active);
-    let alpha = ui.ctx().animate_bool_with_time(
-        source_rect_id.with("handle-visible"),
-        hovered,
-        0.12,
-    );
+    let alpha =
+        ui.ctx()
+            .animate_bool_with_time(source_rect_id.with("handle-visible"), hovered, 0.12);
     let color = ui.visuals().weak_text_color().gamma_multiply(alpha);
     let response = ui
         .add_sized(
@@ -414,8 +417,7 @@ pub(crate) fn hardware_channel_drop_target(
     surface: HardwareChannelDragSurface,
 ) -> Option<HardwareChannelDrop> {
     let drag_id = hardware_channel_drag_id(ui, surface);
-    let drag =
-        ui.data_mut(|data| data.get_temp::<HardwareChannelDrag>(drag_id))?;
+    let drag = ui.data_mut(|data| data.get_temp::<HardwareChannelDrag>(drag_id))?;
     if drag.key == control.key || drag.kind != control.kind {
         return None;
     }
@@ -450,10 +452,7 @@ pub(crate) fn timeline_keyboard_focus_id() -> egui::Id {
     egui::Id::new("timeline-keyboard-focus")
 }
 
-fn delete_selected_cues_without_timeline_focus(
-    app: &mut PealayerApp,
-    ui: &egui::Ui,
-) -> bool {
+fn delete_selected_cues_without_timeline_focus(app: &mut PealayerApp, ui: &egui::Ui) -> bool {
     if app.selected_instance_ids.is_empty()
         || app.active_drag.is_some()
         || ui.ctx().text_edit_focused()
@@ -510,32 +509,56 @@ fn timeline_wheel_action(
     if delta.x != 0.0 {
         return Some(TimelineWheelAction::HorizontalScroll(delta.x));
     }
-    if delta.y == 0.0 { return None; }
+    if delta.y == 0.0 {
+        return None;
+    }
     match behavior {
         crate::config::TimelineWheelBehavior::Zoom => Some(TimelineWheelAction::Zoom(delta.y)),
-        crate::config::TimelineWheelBehavior::HorizontalScroll => Some(TimelineWheelAction::HorizontalScroll(delta.y)),
-        crate::config::TimelineWheelBehavior::VerticalScroll => Some(TimelineWheelAction::VerticalScroll(delta.y)),
+        crate::config::TimelineWheelBehavior::HorizontalScroll => {
+            Some(TimelineWheelAction::HorizontalScroll(delta.y))
+        }
+        crate::config::TimelineWheelBehavior::VerticalScroll => {
+            Some(TimelineWheelAction::VerticalScroll(delta.y))
+        }
         crate::config::TimelineWheelBehavior::None => None,
     }
 }
 
-fn timeline_wheel_behavior(app: &PealayerApp, modifiers: egui::Modifiers) -> crate::config::TimelineWheelBehavior {
-    if modifiers.shift { app.timeline_shift_wheel_action }
-    else if modifiers.ctrl || modifiers.command { app.timeline_ctrl_wheel_action }
-    else if modifiers.alt { app.timeline_alt_wheel_action }
-    else { app.timeline_plain_wheel_action }
+fn timeline_wheel_behavior(
+    app: &PealayerApp,
+    modifiers: egui::Modifiers,
+) -> crate::config::TimelineWheelBehavior {
+    if modifiers.shift {
+        app.timeline_shift_wheel_action
+    } else if modifiers.ctrl || modifiers.command {
+        app.timeline_ctrl_wheel_action
+    } else if modifiers.alt {
+        app.timeline_alt_wheel_action
+    } else {
+        app.timeline_plain_wheel_action
+    }
 }
 
 fn timeline_wheel_modifiers(input: &egui::InputState) -> egui::Modifiers {
-    input.events.iter().rev().find_map(|event| match event {
-        egui::Event::MouseWheel { modifiers, .. } => Some(*modifiers),
-        _ => None,
-    }).unwrap_or(input.modifiers)
+    input
+        .events
+        .iter()
+        .rev()
+        .find_map(|event| match event {
+            egui::Event::MouseWheel { modifiers, .. } => Some(*modifiers),
+            _ => None,
+        })
+        .unwrap_or(input.modifiers)
 }
 
-fn timeline_wheel_over_surface(ui: &egui::Ui, surface: egui::Rect,
-    behavior: crate::config::TimelineWheelBehavior) -> Option<(TimelineWheelAction, f32)> {
-    if !ui.rect_contains_pointer(surface) { return None; }
+fn timeline_wheel_over_surface(
+    ui: &egui::Ui,
+    surface: egui::Rect,
+    behavior: crate::config::TimelineWheelBehavior,
+) -> Option<(TimelineWheelAction, f32)> {
+    if !ui.rect_contains_pointer(surface) {
+        return None;
+    }
     // Surface-class touchscreens expose pan and pinch together. Preserve both
     // axes and keep the content under the center of the fingers.
     if let Some(touch) = ui.input(|input| input.multi_touch())
@@ -543,44 +566,69 @@ fn timeline_wheel_over_surface(ui: &egui::Ui, surface: egui::Rect,
         && ((touch.zoom_delta - 1.0).abs() > f32::EPSILON
             || touch.translation_delta != egui::Vec2::ZERO)
     {
-        ui.ctx().input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
-        return Some((TimelineWheelAction::MultiGesture {
-            zoom_factor: touch.zoom_delta.max(0.01),
-            translation: touch.translation_delta,
-        }, touch.center_pos.x));
+        ui.ctx()
+            .input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
+        return Some((
+            TimelineWheelAction::MultiGesture {
+                zoom_factor: touch.zoom_delta.max(0.01),
+                translation: touch.translation_delta,
+            },
+            touch.center_pos.x,
+        ));
     }
     // Precision-trackpad pinch is native Event::Zoom on Windows and macOS.
     if let Some(zoom_factor) = ui.input(|input| timeline_pinch_factor(&input.events)) {
         ui.ctx().input_mut(|input| {
             input.smooth_scroll_delta = egui::Vec2::ZERO;
-            input.events.retain(|event| !matches!(event, egui::Event::Zoom(_)));
+            input
+                .events
+                .retain(|event| !matches!(event, egui::Event::Zoom(_)));
         });
-        return Some((TimelineWheelAction::MultiGesture {
-            zoom_factor,
-            translation: egui::Vec2::ZERO,
-        }, ui.ctx().pointer_latest_pos().map_or(surface.center().x, |pos| pos.x)));
+        return Some((
+            TimelineWheelAction::MultiGesture {
+                zoom_factor,
+                translation: egui::Vec2::ZERO,
+            },
+            ui.ctx()
+                .pointer_latest_pos()
+                .map_or(surface.center().x, |pos| pos.x),
+        ));
     }
-    let line_speed = ui.ctx().options(|options| options.input_options.line_scroll_speed);
+    let line_speed = ui
+        .ctx()
+        .options(|options| options.input_options.line_scroll_speed);
     let delta = ui.input(|input| timeline_wheel_delta(&input.events, line_speed, surface.height()));
     // None also consumes the gesture, rather than falling through to ScrollArea.
-    ui.ctx().input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
-    timeline_wheel_action(delta, behavior).map(|action| (action,
-        ui.ctx().pointer_latest_pos().map_or(surface.left(), |pos| pos.x)))
+    ui.ctx()
+        .input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
+    timeline_wheel_action(delta, behavior).map(|action| {
+        (
+            action,
+            ui.ctx()
+                .pointer_latest_pos()
+                .map_or(surface.left(), |pos| pos.x),
+        )
+    })
 }
 
 fn timeline_pinch_factor(events: &[egui::Event]) -> Option<f32> {
-    let factor = events.iter().filter_map(|event| match event {
-        egui::Event::Zoom(factor) if factor.is_finite() && *factor > 0.0 => Some(*factor),
-        _ => None,
-    }).product::<f32>();
+    let factor = events
+        .iter()
+        .filter_map(|event| match event {
+            egui::Event::Zoom(factor) if factor.is_finite() && *factor > 0.0 => Some(*factor),
+            _ => None,
+        })
+        .product::<f32>();
     ((factor - 1.0).abs() > f32::EPSILON).then_some(factor)
 }
 
 // Read the original axes for every modifier: egui otherwise converts Ctrl to zoom
 // and Shift to horizontal scrolling before configurable routing can inspect it.
 fn timeline_wheel_delta(events: &[egui::Event], line_speed: f32, page_height: f32) -> egui::Vec2 {
-    events.iter().filter_map(|event| match event {
-        egui::Event::MouseWheel { unit, delta, .. } => {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            egui::Event::MouseWheel { unit, delta, .. } => {
                 let scale = match unit {
                     egui::MouseWheelUnit::Point => 1.0,
                     egui::MouseWheelUnit::Line => line_speed,
@@ -588,8 +636,9 @@ fn timeline_wheel_delta(events: &[egui::Event], line_speed: f32, page_height: f3
                 };
                 Some(*delta * scale)
             }
-        _ => None,
-    }).fold(egui::Vec2::ZERO, |sum, delta| sum + delta)
+            _ => None,
+        })
+        .fold(egui::Vec2::ZERO, |sum, delta| sum + delta)
 }
 
 fn timeline_zoom_from_wheel(current_zoom: f32, wheel_delta: f32) -> f32 {
@@ -681,9 +730,8 @@ fn sample_timeline_navigation_transition(
     // Smoothstep starts and stops gently while remaining deterministic and
     // short enough that navigation never feels disconnected from its action.
     let eased = progress * progress * (3.0 - 2.0 * progress);
-    let interpolate = |start: f32, target: f32| {
-        (f64::from(start) + f64::from(target - start) * eased) as f32
-    };
+    let interpolate =
+        |start: f32, target: f32| (f64::from(start) + f64::from(target - start) * eased) as f32;
     (
         egui::vec2(
             interpolate(transition.start_offset.x, transition.target_offset.x),
@@ -884,7 +932,8 @@ fn effect_library_card_header(
             .on_hover_text(tooltips[1]);
         let (title_width, actions_width) =
             effect_card_header_widths(ui.available_width(), ui.spacing().item_spacing.x);
-        let action_button_width = ((actions_width - ui.spacing().item_spacing.x * 3.0) / 4.0).max(1.0);
+        let action_button_width =
+            ((actions_width - ui.spacing().item_spacing.x * 3.0) / 4.0).max(1.0);
         let title = ui
             .allocate_ui_with_layout(
                 egui::vec2(title_width, 24.0),
@@ -1413,13 +1462,15 @@ fn send_pwm_raw_with(
     channel: u8,
     raw: u16,
 ) {
-    let _ = sender.send(crate::four_d::engine::EngineMessage::CoalescedControllerIntent {
-        created:std::time::Instant::now(),
-        control_key: format!("pwm.{channel}"),
-        method: "controller.pwm.set".to_string(),
-        params: serde_json::json!({"channel": channel, "value": raw}),
-        refresh_catalog: false,
-    });
+    let _ = sender.send(
+        crate::four_d::engine::EngineMessage::CoalescedControllerIntent {
+            created: std::time::Instant::now(),
+            control_key: format!("pwm.{channel}"),
+            method: "controller.pwm.set".to_string(),
+            params: serde_json::json!({"channel": channel, "value": raw}),
+            refresh_catalog: false,
+        },
+    );
 }
 
 const PWM_LIVE_INTERVAL: std::time::Duration = std::time::Duration::from_micros(33_334);
@@ -1797,10 +1848,7 @@ fn manage_timeline_track(app: &mut PealayerApp, row: &TimelineTrackRow) {
     }
 }
 
-pub(crate) fn manage_timeline_track_by_key(
-    app: &mut PealayerApp,
-    key: &str,
-) -> Result<(), String> {
+pub(crate) fn manage_timeline_track_by_key(app: &mut PealayerApp, key: &str) -> Result<(), String> {
     let row = all_timeline_track_rows(app)
         .into_iter()
         .find(|row| row.key == key)
@@ -1842,9 +1890,7 @@ pub(crate) fn update_timeline_track(
     }
     if patch.selected == Some(true) {
         app.selected_timeline_track = Some(key.to_string());
-    } else if patch.selected == Some(false)
-        && app.selected_timeline_track.as_deref() == Some(key)
-    {
+    } else if patch.selected == Some(false) && app.selected_timeline_track.as_deref() == Some(key) {
         app.selected_timeline_track = None;
     }
 
@@ -2018,7 +2064,8 @@ fn nearest_timeline_keyframe(
     candidates: &[(TimelineKeyframeTarget, egui::Pos2)],
 ) -> Option<TimelineKeyframeTarget> {
     let pointer = pointer?;
-    candidates.iter()
+    candidates
+        .iter()
         .map(|(target, center)| (*target, pointer.distance_sq(*center)))
         .filter(|(_, distance)| *distance <= 16.0 * 16.0)
         .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -2034,8 +2081,13 @@ fn keyframe_context_menu(
 ) -> bool {
     // The canvas/ruler also cover this area. Use the nearest marker's explicit
     // hit-test, not whichever overlapping Response claimed the right click.
-    let open = targeted && ui.rect_contains_pointer(response.rect)
-        && ui.input(|input| input.pointer.button_released(egui::PointerButton::Secondary));
+    let open = targeted
+        && ui.rect_contains_pointer(response.rect)
+        && ui.input(|input| {
+            input
+                .pointer
+                .button_released(egui::PointerButton::Secondary)
+        });
     egui::Popup::menu(response)
         .id(target.menu_id())
         .at_pointer_fixed()
@@ -2056,11 +2108,15 @@ fn clear_unfocused_timeline_keyframes(
     if popup_was_open || egui::Popup::is_any_open(ui.ctx()) || app.active_keyframe_drag.is_some() {
         return;
     }
-    let (click_away, escape) = ui.input(|input| (
-        input.pointer.button_pressed(egui::PointerButton::Primary)
-            && !keyframe_hit && !input.modifiers.ctrl && !input.modifiers.command,
-        input.key_pressed(egui::Key::Escape),
-    ));
+    let (click_away, escape) = ui.input(|input| {
+        (
+            input.pointer.button_pressed(egui::PointerButton::Primary)
+                && !keyframe_hit
+                && !input.modifiers.ctrl
+                && !input.modifiers.command,
+            input.key_pressed(egui::Key::Escape),
+        )
+    });
     let focus = ui.ctx().memory(|memory| memory.focused());
     let escape = escape && (focus.is_none() || focus == Some(timeline_keyboard_focus_id()));
     if click_away || escape {
@@ -2069,7 +2125,8 @@ fn clear_unfocused_timeline_keyframes(
         ui.ctx().request_repaint();
         if escape {
             app.selected_instance_ids.clear();
-            ui.ctx().memory_mut(|memory| memory.surrender_focus(timeline_keyboard_focus_id()));
+            ui.ctx()
+                .memory_mut(|memory| memory.surrender_focus(timeline_keyboard_focus_id()));
         }
     }
 }
@@ -2388,17 +2445,20 @@ pub(crate) fn web_timeline_tracks(
                 TimelineTrackKind::Subtitle(_) => ("subtitle".to_string(), None),
                 TimelineTrackKind::ControllerEffect(lane) => (
                     "effect".to_string(),
-                    Some(match *lane {
-                        crate::four_d::models::ControllerEffectLane::Motion => "motion",
-                        crate::four_d::models::ControllerEffectLane::Relay => "relay",
-                        crate::four_d::models::ControllerEffectLane::Pwm => "pwm",
-                        crate::four_d::models::ControllerEffectLane::Lighting => "lighting",
-                        crate::four_d::models::ControllerEffectLane::Display => "display",
-                        crate::four_d::models::ControllerEffectLane::Rf => "rf",
-                        crate::four_d::models::ControllerEffectLane::Audio => "audio",
-                        crate::four_d::models::ControllerEffectLane::Sequence => "sequence",
-                        crate::four_d::models::ControllerEffectLane::Composite => "composite",
-                    }.to_string()),
+                    Some(
+                        match *lane {
+                            crate::four_d::models::ControllerEffectLane::Motion => "motion",
+                            crate::four_d::models::ControllerEffectLane::Relay => "relay",
+                            crate::four_d::models::ControllerEffectLane::Pwm => "pwm",
+                            crate::four_d::models::ControllerEffectLane::Lighting => "lighting",
+                            crate::four_d::models::ControllerEffectLane::Display => "display",
+                            crate::four_d::models::ControllerEffectLane::Rf => "rf",
+                            crate::four_d::models::ControllerEffectLane::Audio => "audio",
+                            crate::four_d::models::ControllerEffectLane::Sequence => "sequence",
+                            crate::four_d::models::ControllerEffectLane::Composite => "composite",
+                        }
+                        .to_string(),
+                    ),
                 ),
                 TimelineTrackKind::Relay(_) | TimelineTrackKind::Hardware(_) => {
                     ("hardware".to_string(), None)
@@ -3541,11 +3601,7 @@ fn invoke_advertised_action(app: &PealayerApp, control_key: &str, action_id: &st
     );
 }
 
-pub(crate) fn invoke_held_motion_action(
-    app: &PealayerApp,
-    control_key: &str,
-    action_id: &str,
-) {
+pub(crate) fn invoke_held_motion_action(app: &PealayerApp, control_key: &str, action_id: &str) {
     let mut parts = action_id.split('.');
     if parts.next() == Some("raw-motion")
         && let (Some(side), Some(verb), None) = (parts.next(), parts.next(), parts.next())
@@ -3582,17 +3638,12 @@ pub(crate) fn update_held_motion_action(
         primary_down,
     ) {
         HoldMotionTransition::Start => {
-            if let Some((_, previous_stop, previous_control_key)) =
-                app.held_motion_action.take()
-            {
+            if let Some((_, previous_stop, previous_control_key)) = app.held_motion_action.take() {
                 invoke_held_motion_action(app, &previous_control_key, &previous_stop);
             }
             crate::ui::hardware_control::invoke_action(app, control, action);
-            app.held_motion_action = Some((
-                action_id.to_string(),
-                stop.id.clone(),
-                control.key.clone(),
-            ));
+            app.held_motion_action =
+                Some((action_id.to_string(), stop.id.clone(), control.key.clone()));
         }
         HoldMotionTransition::Stop => {
             if let Some((_, stop, control_key)) = app.held_motion_action.take() {
@@ -4522,9 +4573,18 @@ fn draw_display_text_tool(
 }
 
 fn draw_rf_code_tool(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    if ui.button(format!("{} {}", crate::ui::icons::RADIO, app.tr("Manage RF…"))).clicked() {
+    if ui
+        .button(format!(
+            "{} {}",
+            crate::ui::icons::RADIO,
+            app.tr("Manage RF…")
+        ))
+        .clicked()
+    {
         app.rf.open = true;
-        if let Err(error) = app.request_rf("catalog", serde_json::json!({"read_board":true})) { app.rf.error = error; }
+        if let Err(error) = app.request_rf("catalog", serde_json::json!({"read_board":true})) {
+            app.rf.error = error;
+        }
     }
     let code_id = ui.make_persistent_id("hardware_rf_code");
     let bits_id = ui.make_persistent_id("hardware_rf_bits");
@@ -4614,7 +4674,10 @@ fn hardware_header_widget<R>(
 /// than as independent Middle windows that can paint over floating dialogs.
 fn hardware_card_layer(ui: &egui::Ui, key: &str) -> egui::LayerId {
     let parent = ui.layer_id();
-    let child = egui::LayerId::new(parent.order, egui::Id::new(("hardware-channel-card", parent.id, key)));
+    let child = egui::LayerId::new(
+        parent.order,
+        egui::Id::new(("hardware-channel-card", parent.id, key)),
+    );
     ui.ctx().set_sublayer(parent, child);
     child
 }
@@ -4648,257 +4711,311 @@ fn draw_compact_control_card(
     let card_content_width = hardware_frame_content_width(card_outer_width, 9);
     ui.set_width(card_outer_width);
     let layer_id = hardware_card_layer(ui, &control.key);
-    let dragging_source = hardware_channel_is_dragging(ui, &control.key, HardwareChannelDragSurface::Monitor);
-    let card = ui.scope_builder(egui::UiBuilder::new().layer_id(layer_id), |ui| {
-        if dragging_source {
-            ui.set_opacity(0.58);
-        }
-        egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::symmetric(9, 6))
-        .stroke(egui::Stroke::new(
-            HARDWARE_CARD_STROKE_WIDTH,
-            ui.visuals().widgets.noninteractive.bg_stroke.color,
-        ))
-        .corner_radius(7.0)
-        .show(ui, |ui| {
-            configure_hardware_card_controls(ui);
-            ui.set_width(card_content_width);
-            ui.horizontal(|ui| {
-                draw_control_icon_picker(app, ui, capabilities, control, 17.0);
-                let indicator = draw_control_indicator(
-                    app,
-                    ui,
-                    indicator_state,
-                    relay_id.is_some() && !control.locked,
-                    active_control_indicator_color(capabilities, control),
-                    indicator_intensity,
-                );
-                if hardware_control_activated(app, ui, &indicator)
-                    && !control.locked
-                    && let Some(id) = relay_id
-                {
-                    let turn_on = indicator_state != ControlIndicatorState::Active;
-                    crate::ui::hardware_control::set_relay(app, id, turn_on);
-                }
-                if app.prefix_relay_identifiers && let Some(id) = relay_id {
-                    ui.label(
-                        egui::RichText::new(relay_identifier_label(id))
-                            .monospace()
-                            .weak(),
-                    );
-                }
-                if let Some(id) = pwm_id {
-                    ui.label(egui::RichText::new(format!("P{}", id + 1)).monospace().weak());
-                }
-                if control.locked {
-                    ui.label(egui::RichText::new(crate::ui::icons::LOCK).weak())
-                        .on_hover_text(app.tr("Channel is locked in PCController"));
-                }
-				hardware_channel_drag_handle(app, ui, control, HardwareChannelDragSurface::Monitor);
-
-                let editing = ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
-                let editing_group = ui
-                    .data_mut(|data| data.get_temp::<bool>(group_edit_id).unwrap_or(false));
-                if editing {
-                    let mut draft = ui.data_mut(|data| {
-                        data.get_temp::<String>(draft_id)
-                            .unwrap_or_else(|| control.name.clone())
-                    });
-                    let edit_align = crate::ui::i18n::input_alignment(app.rtl, &draft);
-                    let edit_width = (ui.available_width() * 0.42).clamp(64.0, 190.0);
-                    let edit = ui.add_sized(
-                        [edit_width, 24.0],
-                        egui::TextEdit::singleline(&mut draft)
-                            .id(text_edit_id)
-                            .horizontal_align(edit_align)
-                            .hint_text(&control.default_name),
-                    );
-                    if ui.data_mut(|data| data.remove_temp::<bool>(focus_pending_id))
-                        == Some(true)
-                    {
-                        edit.request_focus();
-                    }
-                    if edit.changed() {
-                        ui.data_mut(|data| data.insert_temp(draft_id, draft.clone()));
-                    }
-                    if ui.button(crate::ui::icons::FLOPPY_DISK).clicked()
-                        || (edit.lost_focus()
-                            && ui.input(|input| input.key_pressed(egui::Key::Enter)))
-                    {
-                        update_control_name(app, capabilities, control, draft);
-                        ui.data_mut(|data| data.insert_temp(edit_id, false));
-                    }
-                    if ui.button(crate::ui::icons::X).clicked() {
-                        ui.data_mut(|data| data.insert_temp(edit_id, false));
-                    }
-                } else if editing_group {
-                    let mut draft = ui.data_mut(|data| {
-                        data.get_temp::<String>(group_draft_id)
-                            .unwrap_or_else(|| control.group.clone())
-                    });
-                    let edit_width = (ui.available_width() * 0.42).clamp(64.0, 190.0);
-                    let changed = crate::ui::group_picker::group_picker(
-                        ui,
-                        group_draft_id,
-                        &mut draft,
-                        capabilities.controls.iter().map(|item| item.group.as_str()),
-                        edit_width,
-                        app.language,
-                    );
-                    if changed {
-                        ui.data_mut(|data| data.insert_temp(group_draft_id, draft.clone()));
-                    }
-                    if ui.button(crate::ui::icons::FLOPPY_DISK).clicked() {
-                        update_control_group(app, capabilities, control, draft);
-                        ui.data_mut(|data| data.insert_temp(group_edit_id, false));
-                    }
-                    if ui.button(crate::ui::icons::X).clicked() {
-                        ui.data_mut(|data| data.insert_temp(group_edit_id, false));
-                    }
-                } else {
-                    let title = crate::ui::i18n::visual_text(app.language, &control.name);
-                    let is_motion = is_motion_control(control);
-                    let stop_visible = contextual_stop_action(capabilities, control).is_some();
-                    let reserved = if is_pwm_control(control) {
-                        150.0
-                    } else if !control.actions.is_empty() {
-                        (card_control_actions(control).len().min(3) as f32 * 34.0)
-                            + if is_motion { 34.0 } else { 0.0 }
-                            + if stop_visible { 34.0 } else { 0.0 }
-                            + 8.0
-                    } else if relay_id.is_some() {
-                        76.0
-                    } else {
-                        8.0
-                    };
-                    let response = hardware_header_widget(ui, &control.key, "caption", |ui| {
-                        left_aligned_click_label(ui, &title, (ui.available_width() - reserved).max(48.0), 24.0, 13.0)
-                    });
-                    if response.clicked() {
-                        ui.data_mut(|data| {
-                            data.insert_temp(draft_id, control.name.clone());
-                            data.insert_temp(edit_id, true);
-                            data.insert_temp(focus_pending_id, true);
-                        });
-                    }
-                    response.on_hover_text(format!("{} — {}", title, app.tr("Rename")));
-                    if is_motion {
-                        if let Some(stop) = contextual_stop_action(capabilities, control) {
-                            let response = hardware_header_widget(ui, &control.key, "stop", |ui| ui
-                                .add_enabled(
-                                    !app.estop_active && !control.locked,
-                                    egui::Button::new(crate::ui::icons::action(&stop.verb))
-                                        .min_size(egui::vec2(28.0, 26.0)),
-                                )
-                                .on_hover_text(crate::ui::i18n::visual_text(
-                                    app.language,
-                                    &stop.name,
-                                )));
-                            if hardware_control_activated(app, ui, &response) {
-                                crate::ui::hardware_control::invoke_action(app, control, stop);
-                            }
-                        }
-                        if hardware_header_widget(ui, &control.key, "rename", |ui| ui
-                            .button(crate::ui::icons::PENCIL_SIMPLE)
-                            .on_hover_text(app.tr("Rename")))
-                            .clicked()
-                        {
-                            ui.data_mut(|data| {
-                                data.insert_temp(draft_id, control.name.clone());
-                                data.insert_temp(edit_id, true);
-                                data.insert_temp(focus_pending_id, true);
-                            });
-                        }
-                    }
-                }
-
-                if is_pwm_control(control) {
-                    if let Some(channel) = capabilities
-                        .pwm_channels
-                        .iter()
-                        .find(|channel| channel.key == control.key)
-                    {
-                        draw_pwm_card_editor(
+    let dragging_source =
+        hardware_channel_is_dragging(ui, &control.key, HardwareChannelDragSurface::Monitor);
+    let card = ui
+        .scope_builder(egui::UiBuilder::new().layer_id(layer_id), |ui| {
+            if dragging_source {
+                ui.set_opacity(0.58);
+            }
+            egui::Frame::group(ui.style())
+                .inner_margin(egui::Margin::symmetric(9, 6))
+                .stroke(egui::Stroke::new(
+                    HARDWARE_CARD_STROKE_WIDTH,
+                    ui.visuals().widgets.noninteractive.bg_stroke.color,
+                ))
+                .corner_radius(7.0)
+                .show(ui, |ui| {
+                    configure_hardware_card_controls(ui);
+                    ui.set_width(card_content_width);
+                    ui.horizontal(|ui| {
+                        draw_control_icon_picker(app, ui, capabilities, control, 17.0);
+                        let indicator = draw_control_indicator(
                             app,
                             ui,
-                            capabilities,
-                            control,
-                            channel,
-                            ui.available_width(),
+                            indicator_state,
+                            relay_id.is_some() && !control.locked,
+                            active_control_indicator_color(capabilities, control),
+                            indicator_intensity,
                         );
-                    }
-                } else if !control.actions.is_empty() {
-                    let is_motion = is_motion_control(control);
-                    let stop = control
-                        .actions
-                        .iter()
-                        .find(|action| action.verb.eq_ignore_ascii_case("stop"));
-                    let ordered = card_control_actions(control);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        for action in ordered.into_iter().rev() {
-                            let response = ui
-                                .add_enabled(
-                                    !app.estop_active && !control.locked,
-                                    egui::Button::new(crate::ui::icons::action(&action.verb))
-                                        .min_size(egui::vec2(28.0, 26.0)),
-                                )
-                                .on_hover_text(crate::ui::i18n::visual_text(
-                                    app.language,
-                                    &action.name,
-                                ));
-                            if is_motion
-                                && !action.verb.eq_ignore_ascii_case("stop")
-                                && app.motion_control_mode == crate::config::MotionControlMode::Hold
-                                && stop.is_some()
+                        if hardware_control_activated(app, ui, &indicator)
+                            && !control.locked
+                            && let Some(id) = relay_id
+                        {
+                            let turn_on = indicator_state != ControlIndicatorState::Active;
+                            crate::ui::hardware_control::set_relay(app, id, turn_on);
+                        }
+                        if app.prefix_relay_identifiers
+                            && let Some(id) = relay_id
+                        {
+                            ui.label(
+                                egui::RichText::new(relay_identifier_label(id))
+                                    .monospace()
+                                    .weak(),
+                            );
+                        }
+                        if let Some(id) = pwm_id {
+                            ui.label(
+                                egui::RichText::new(format!("P{}", id + 1))
+                                    .monospace()
+                                    .weak(),
+                            );
+                        }
+                        if control.locked {
+                            ui.label(egui::RichText::new(crate::ui::icons::LOCK).weak())
+                                .on_hover_text(app.tr("Channel is locked in PCController"));
+                        }
+                        hardware_channel_drag_handle(
+                            app,
+                            ui,
+                            control,
+                            HardwareChannelDragSurface::Monitor,
+                        );
+
+                        let editing =
+                            ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
+                        let editing_group = ui
+                            .data_mut(|data| data.get_temp::<bool>(group_edit_id).unwrap_or(false));
+                        if editing {
+                            let mut draft = ui.data_mut(|data| {
+                                data.get_temp::<String>(draft_id)
+                                    .unwrap_or_else(|| control.name.clone())
+                            });
+                            let edit_align = crate::ui::i18n::input_alignment(app.rtl, &draft);
+                            let edit_width = (ui.available_width() * 0.42).clamp(64.0, 190.0);
+                            let edit = ui.add_sized(
+                                [edit_width, 24.0],
+                                egui::TextEdit::singleline(&mut draft)
+                                    .id(text_edit_id)
+                                    .horizontal_align(edit_align)
+                                    .hint_text(&control.default_name),
+                            );
+                            if ui.data_mut(|data| data.remove_temp::<bool>(focus_pending_id))
+                                == Some(true)
                             {
-                                update_held_motion_action(
+                                edit.request_focus();
+                            }
+                            if edit.changed() {
+                                ui.data_mut(|data| data.insert_temp(draft_id, draft.clone()));
+                            }
+                            if ui.button(crate::ui::icons::FLOPPY_DISK).clicked()
+                                || (edit.lost_focus()
+                                    && ui.input(|input| input.key_pressed(egui::Key::Enter)))
+                            {
+                                update_control_name(app, capabilities, control, draft);
+                                ui.data_mut(|data| data.insert_temp(edit_id, false));
+                            }
+                            if ui.button(crate::ui::icons::X).clicked() {
+                                ui.data_mut(|data| data.insert_temp(edit_id, false));
+                            }
+                        } else if editing_group {
+                            let mut draft = ui.data_mut(|data| {
+                                data.get_temp::<String>(group_draft_id)
+                                    .unwrap_or_else(|| control.group.clone())
+                            });
+                            let edit_width = (ui.available_width() * 0.42).clamp(64.0, 190.0);
+                            let changed = crate::ui::group_picker::group_picker(
+                                ui,
+                                group_draft_id,
+                                &mut draft,
+                                capabilities.controls.iter().map(|item| item.group.as_str()),
+                                edit_width,
+                                app.language,
+                            );
+                            if changed {
+                                ui.data_mut(|data| data.insert_temp(group_draft_id, draft.clone()));
+                            }
+                            if ui.button(crate::ui::icons::FLOPPY_DISK).clicked() {
+                                update_control_group(app, capabilities, control, draft);
+                                ui.data_mut(|data| data.insert_temp(group_edit_id, false));
+                            }
+                            if ui.button(crate::ui::icons::X).clicked() {
+                                ui.data_mut(|data| data.insert_temp(group_edit_id, false));
+                            }
+                        } else {
+                            let title = crate::ui::i18n::visual_text(app.language, &control.name);
+                            let is_motion = is_motion_control(control);
+                            let stop_visible =
+                                contextual_stop_action(capabilities, control).is_some();
+                            let reserved = if is_pwm_control(control) {
+                                150.0
+                            } else if !control.actions.is_empty() {
+                                (card_control_actions(control).len().min(3) as f32 * 34.0)
+                                    + if is_motion { 34.0 } else { 0.0 }
+                                    + if stop_visible { 34.0 } else { 0.0 }
+                                    + 8.0
+                            } else if relay_id.is_some() {
+                                76.0
+                            } else {
+                                8.0
+                            };
+                            let response =
+                                hardware_header_widget(ui, &control.key, "caption", |ui| {
+                                    left_aligned_click_label(
+                                        ui,
+                                        &title,
+                                        (ui.available_width() - reserved).max(48.0),
+                                        24.0,
+                                        13.0,
+                                    )
+                                });
+                            if response.clicked() {
+                                ui.data_mut(|data| {
+                                    data.insert_temp(draft_id, control.name.clone());
+                                    data.insert_temp(edit_id, true);
+                                    data.insert_temp(focus_pending_id, true);
+                                });
+                            }
+                            response.on_hover_text(format!("{} — {}", title, app.tr("Rename")));
+                            if is_motion {
+                                if let Some(stop) = contextual_stop_action(capabilities, control) {
+                                    let response =
+                                        hardware_header_widget(ui, &control.key, "stop", |ui| {
+                                            ui.add_enabled(
+                                                !app.estop_active && !control.locked,
+                                                egui::Button::new(crate::ui::icons::action(
+                                                    &stop.verb,
+                                                ))
+                                                .min_size(egui::vec2(28.0, 26.0)),
+                                            )
+                                            .on_hover_text(crate::ui::i18n::visual_text(
+                                                app.language,
+                                                &stop.name,
+                                            ))
+                                        });
+                                    if hardware_control_activated(app, ui, &response) {
+                                        crate::ui::hardware_control::invoke_action(
+                                            app, control, stop,
+                                        );
+                                    }
+                                }
+                                if hardware_header_widget(ui, &control.key, "rename", |ui| {
+                                    ui.button(crate::ui::icons::PENCIL_SIMPLE)
+                                        .on_hover_text(app.tr("Rename"))
+                                })
+                                .clicked()
+                                {
+                                    ui.data_mut(|data| {
+                                        data.insert_temp(draft_id, control.name.clone());
+                                        data.insert_temp(edit_id, true);
+                                        data.insert_temp(focus_pending_id, true);
+                                    });
+                                }
+                            }
+                        }
+
+                        if is_pwm_control(control) {
+                            if let Some(channel) = capabilities
+                                .pwm_channels
+                                .iter()
+                                .find(|channel| channel.key == control.key)
+                            {
+                                draw_pwm_card_editor(
                                     app,
                                     ui,
-                                    &response,
+                                    capabilities,
                                     control,
-                                    action,
-                                    stop.expect("checked above"),
+                                    channel,
+                                    ui.available_width(),
                                 );
-                            } else if ((is_motion
-                                || matches!(
-                                    action.verb.to_ascii_lowercase().as_str(),
-                                    "on" | "off"
-                                )) && hardware_control_activated(app, ui, &response))
-                                || (!is_motion
-                                    && !matches!(
-                                        action.verb.to_ascii_lowercase().as_str(),
-                                        "on" | "off"
-                                    )
-                                    && response.clicked())
-                            {
-                                crate::ui::hardware_control::invoke_action(app, control, action);
                             }
+                        } else if !control.actions.is_empty() {
+                            let is_motion = is_motion_control(control);
+                            let stop = control
+                                .actions
+                                .iter()
+                                .find(|action| action.verb.eq_ignore_ascii_case("stop"));
+                            let ordered = card_control_actions(control);
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    for action in ordered.into_iter().rev() {
+                                        let response = ui
+                                            .add_enabled(
+                                                !app.estop_active && !control.locked,
+                                                egui::Button::new(crate::ui::icons::action(
+                                                    &action.verb,
+                                                ))
+                                                .min_size(egui::vec2(28.0, 26.0)),
+                                            )
+                                            .on_hover_text(crate::ui::i18n::visual_text(
+                                                app.language,
+                                                &action.name,
+                                            ));
+                                        if is_motion
+                                            && !action.verb.eq_ignore_ascii_case("stop")
+                                            && app.motion_control_mode
+                                                == crate::config::MotionControlMode::Hold
+                                            && stop.is_some()
+                                        {
+                                            update_held_motion_action(
+                                                app,
+                                                ui,
+                                                &response,
+                                                control,
+                                                action,
+                                                stop.expect("checked above"),
+                                            );
+                                        } else if ((is_motion
+                                            || matches!(
+                                                action.verb.to_ascii_lowercase().as_str(),
+                                                "on" | "off"
+                                            ))
+                                            && hardware_control_activated(app, ui, &response))
+                                            || (!is_motion
+                                                && !matches!(
+                                                    action.verb.to_ascii_lowercase().as_str(),
+                                                    "on" | "off"
+                                                )
+                                                && response.clicked())
+                                        {
+                                            crate::ui::hardware_control::invoke_action(
+                                                app, control, action,
+                                            );
+                                        }
+                                    }
+                                },
+                            );
+                        } else if let Some(id) = relay_id {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    for (state, icon, label) in [
+                                        (false, crate::ui::icons::STOP_CIRCLE, app.tr("OFF")),
+                                        (true, crate::ui::icons::LIGHTNING, app.tr("ON")),
+                                    ] {
+                                        let response = ui
+                                            .add_enabled(
+                                                !app.estop_active && !control.locked,
+                                                egui::Button::new(icon)
+                                                    .min_size(egui::vec2(28.0, 26.0)),
+                                            )
+                                            .on_hover_text(label);
+                                        if hardware_control_activated(app, ui, &response) {
+                                            crate::ui::hardware_control::set_relay(app, id, state);
+                                        }
+                                    }
+                                },
+                            );
                         }
                     });
-                } else if let Some(id) = relay_id {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        for (state, icon, label) in [
-                            (false, crate::ui::icons::STOP_CIRCLE, app.tr("OFF")),
-                            (true, crate::ui::icons::LIGHTNING, app.tr("ON")),
-                        ] {
-                            let response = ui
-                                .add_enabled(
-                                    !app.estop_active && !control.locked,
-                                    egui::Button::new(icon).min_size(egui::vec2(28.0, 26.0)),
-                                )
-                                .on_hover_text(label);
-                            if hardware_control_activated(app, ui, &response) {
-                                crate::ui::hardware_control::set_relay(app, id, state);
-                            }
-                        }
-                    });
-                }
-            });
+                })
         })
-    }).inner;
+        .inner;
 
-    finish_hardware_channel_card(ui, control, card.response.rect, layer_id, HardwareChannelDragSurface::Monitor);
-    let drop = hardware_channel_drop_target(ui, card.response.rect, control, HardwareChannelDragSurface::Monitor);
+    finish_hardware_channel_card(
+        ui,
+        control,
+        card.response.rect,
+        layer_id,
+        HardwareChannelDragSurface::Monitor,
+    );
+    let drop = hardware_channel_drop_target(
+        ui,
+        card.response.rect,
+        control,
+        HardwareChannelDragSurface::Monitor,
+    );
     control_context_popup(
         app,
         ui,
@@ -4947,7 +5064,8 @@ fn draw_control_card(
     let card_content_width = hardware_frame_content_width(card_outer_width, 12);
     ui.set_width(card_outer_width);
     let layer_id = hardware_card_layer(ui, &control.key);
-    let dragging_source = hardware_channel_is_dragging(ui, &control.key, HardwareChannelDragSurface::Monitor);
+    let dragging_source =
+        hardware_channel_is_dragging(ui, &control.key, HardwareChannelDragSurface::Monitor);
     let card = ui
         .scope_builder(egui::UiBuilder::new().layer_id(layer_id), |ui| {
             if dragging_source {
@@ -5002,7 +5120,12 @@ fn draw_control_card(
                             ui.label(egui::RichText::new(crate::ui::icons::LOCK).weak())
                                 .on_hover_text(app.tr("Channel is locked in PCController"));
                         }
-                        hardware_channel_drag_handle(app, ui, control, HardwareChannelDragSurface::Monitor);
+                        hardware_channel_drag_handle(
+                            app,
+                            ui,
+                            control,
+                            HardwareChannelDragSurface::Monitor,
+                        );
 
                         if editing {
                             let mut draft = ui.data_mut(|data| {
@@ -5301,9 +5424,7 @@ fn draw_control_card(
                                     })
                                     .inner;
                                 if hardware_control_activated(app, &uis[index], &response) {
-                                    crate::ui::hardware_control::set_relay(
-                                        app, relay_id, state,
-                                    );
+                                    crate::ui::hardware_control::set_relay(app, relay_id, state);
                                 }
                             }
                         });
@@ -5312,8 +5433,19 @@ fn draw_control_card(
         })
         .inner;
 
-    finish_hardware_channel_card(ui, control, card.response.rect, layer_id, HardwareChannelDragSurface::Monitor);
-    let drop = hardware_channel_drop_target(ui, card.response.rect, control, HardwareChannelDragSurface::Monitor);
+    finish_hardware_channel_card(
+        ui,
+        control,
+        card.response.rect,
+        layer_id,
+        HardwareChannelDragSurface::Monitor,
+    );
+    let drop = hardware_channel_drop_target(
+        ui,
+        card.response.rect,
+        control,
+        HardwareChannelDragSurface::Monitor,
+    );
     control_context_popup(
         app,
         ui,
@@ -5375,7 +5507,12 @@ fn draw_compact_relay_group(
                                 egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(34, 197, 94)),
                             );
                         }
-                        let handle = hardware_channel_drag_handle(app, ui, control, HardwareChannelDragSurface::Monitor);
+                        let handle = hardware_channel_drag_handle(
+                            app,
+                            ui,
+                            control,
+                            HardwareChannelDragSurface::Monitor,
+                        );
                         let response = ui
                             .add_enabled(!app.estop_active && !control.locked, button)
                             .on_hover_text(format!(
@@ -5696,14 +5833,31 @@ mod timeline_row_tests {
     fn timeline_wheel_modifiers_route_zoom_and_horizontal_scroll() {
         use crate::config::TimelineWheelBehavior as Wheel;
         let delta = egui::vec2(0.0, 120.0);
-        assert_eq!(timeline_wheel_action(delta, Wheel::Zoom), Some(TimelineWheelAction::Zoom(120.0)));
-        assert_eq!(timeline_wheel_action(delta, Wheel::VerticalScroll), Some(TimelineWheelAction::VerticalScroll(120.0)));
-        assert_eq!(timeline_wheel_action(delta, Wheel::HorizontalScroll), Some(TimelineWheelAction::HorizontalScroll(120.0)));
+        assert_eq!(
+            timeline_wheel_action(delta, Wheel::Zoom),
+            Some(TimelineWheelAction::Zoom(120.0))
+        );
+        assert_eq!(
+            timeline_wheel_action(delta, Wheel::VerticalScroll),
+            Some(TimelineWheelAction::VerticalScroll(120.0))
+        );
+        assert_eq!(
+            timeline_wheel_action(delta, Wheel::HorizontalScroll),
+            Some(TimelineWheelAction::HorizontalScroll(120.0))
+        );
         assert_eq!(timeline_wheel_action(delta, Wheel::None), None);
         assert_eq!(timeline_wheel_action(egui::Vec2::ZERO, Wheel::Zoom), None);
-        for behavior in [Wheel::Zoom, Wheel::VerticalScroll, Wheel::HorizontalScroll, Wheel::None] {
+        for behavior in [
+            Wheel::Zoom,
+            Wheel::VerticalScroll,
+            Wheel::HorizontalScroll,
+            Wheel::None,
+        ] {
             for delta in [egui::vec2(-45.0, 0.0), egui::vec2(-45.0, 120.0)] {
-                assert_eq!(timeline_wheel_action(delta, behavior), Some(TimelineWheelAction::HorizontalScroll(-45.0)));
+                assert_eq!(
+                    timeline_wheel_action(delta, behavior),
+                    Some(TimelineWheelAction::HorizontalScroll(-45.0))
+                );
             }
         }
     }
@@ -5712,33 +5866,74 @@ mod timeline_row_tests {
     fn timeline_wheel_reaches_empty_surface_and_consumes_ctrl_zoom_input() {
         use crate::config::TimelineWheelBehavior as Wheel;
         for (modifiers, delta, behavior, expected) in [
-            (egui::Modifiers::CTRL, egui::vec2(0.0, -80.0), Wheel::VerticalScroll, Some(TimelineWheelAction::VerticalScroll(-80.0))),
-            (egui::Modifiers::SHIFT, egui::vec2(-50.0, 0.0), Wheel::Zoom, Some(TimelineWheelAction::HorizontalScroll(-50.0))),
-            (egui::Modifiers::ALT, egui::vec2(0.0, -40.0), Wheel::HorizontalScroll, Some(TimelineWheelAction::HorizontalScroll(-40.0))),
-            (egui::Modifiers::NONE, egui::vec2(0.0, -40.0), Wheel::None, None),
+            (
+                egui::Modifiers::CTRL,
+                egui::vec2(0.0, -80.0),
+                Wheel::VerticalScroll,
+                Some(TimelineWheelAction::VerticalScroll(-80.0)),
+            ),
+            (
+                egui::Modifiers::SHIFT,
+                egui::vec2(-50.0, 0.0),
+                Wheel::Zoom,
+                Some(TimelineWheelAction::HorizontalScroll(-50.0)),
+            ),
+            (
+                egui::Modifiers::ALT,
+                egui::vec2(0.0, -40.0),
+                Wheel::HorizontalScroll,
+                Some(TimelineWheelAction::HorizontalScroll(-40.0)),
+            ),
+            (
+                egui::Modifiers::NONE,
+                egui::vec2(0.0, -40.0),
+                Wheel::None,
+                None,
+            ),
         ] {
             let context = egui::Context::default();
             // Warm up hit testing, then send an actual egui raw wheel event over
             // empty space well below a small child widget (the previous exclusion).
             for frame in 0..2 {
-                let output = context.run_ui(egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 300.0))),
-                    events: if frame == 0 { vec![] } else { vec![
-                        egui::Event::PointerMoved(egui::pos2(240.0, 230.0)),
-                        egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta,
-                            modifiers, phase: egui::TouchPhase::Move },
-                    ] },
-                    ..Default::default()
-                }, |ui| {
-                    let surface = ui.clip_rect();
-                    let (_, child) = ui.allocate_space(egui::vec2(40.0, 20.0));
-                    if frame == 1 {
-                        assert!(!child.contains(egui::pos2(240.0, 230.0)));
-                        assert_eq!(ui.input(timeline_wheel_modifiers), modifiers);
-                        assert_eq!(timeline_wheel_over_surface(ui, surface, behavior).map(|(action, _)| action), expected);
-                        assert_eq!(ui.input(|input| input.smooth_scroll_delta), egui::Vec2::ZERO);
-                    }
-                });
+                let output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(500.0, 300.0),
+                        )),
+                        events: if frame == 0 {
+                            vec![]
+                        } else {
+                            vec![
+                                egui::Event::PointerMoved(egui::pos2(240.0, 230.0)),
+                                egui::Event::MouseWheel {
+                                    unit: egui::MouseWheelUnit::Point,
+                                    delta,
+                                    modifiers,
+                                    phase: egui::TouchPhase::Move,
+                                },
+                            ]
+                        },
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let surface = ui.clip_rect();
+                        let (_, child) = ui.allocate_space(egui::vec2(40.0, 20.0));
+                        if frame == 1 {
+                            assert!(!child.contains(egui::pos2(240.0, 230.0)));
+                            assert_eq!(ui.input(timeline_wheel_modifiers), modifiers);
+                            assert_eq!(
+                                timeline_wheel_over_surface(ui, surface, behavior)
+                                    .map(|(action, _)| action),
+                                expected
+                            );
+                            assert_eq!(
+                                ui.input(|input| input.smooth_scroll_delta),
+                                egui::Vec2::ZERO
+                            );
+                        }
+                    },
+                );
                 discard_ui_output(output);
             }
         }
@@ -5747,37 +5942,89 @@ mod timeline_row_tests {
     #[test]
     fn timeline_wheel_uses_original_axes_and_native_units_for_all_modifiers() {
         let wheel = |unit, delta, modifiers| egui::Event::MouseWheel {
-            unit, delta, modifiers, phase: egui::TouchPhase::Move,
+            unit,
+            delta,
+            modifiers,
+            phase: egui::TouchPhase::Move,
         };
         let events = [
-            wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, -3.0), egui::Modifiers::CTRL),
-            wheel(egui::MouseWheelUnit::Point, egui::vec2(0.0, -12.0), egui::Modifiers::COMMAND),
-            wheel(egui::MouseWheelUnit::Point, egui::vec2(0.0, -100.0), egui::Modifiers::NONE),
+            wheel(
+                egui::MouseWheelUnit::Line,
+                egui::vec2(0.0, -3.0),
+                egui::Modifiers::CTRL,
+            ),
+            wheel(
+                egui::MouseWheelUnit::Point,
+                egui::vec2(0.0, -12.0),
+                egui::Modifiers::COMMAND,
+            ),
+            wheel(
+                egui::MouseWheelUnit::Point,
+                egui::vec2(0.0, -100.0),
+                egui::Modifiers::NONE,
+            ),
         ];
-        assert_eq!(timeline_wheel_delta(&events, 20.0, 200.0), egui::vec2(0.0, -172.0));
-        assert_eq!(timeline_wheel_delta(&[wheel(egui::MouseWheelUnit::Page, egui::vec2(0.0, -1.0), egui::Modifiers::CTRL)], 20.0, 200.0), egui::vec2(0.0, -200.0));
-        assert_eq!(timeline_wheel_delta(&[wheel(egui::MouseWheelUnit::Line, egui::vec2(2.0, 0.0), egui::Modifiers::ALT)], 20.0, 200.0), egui::vec2(40.0, 0.0));
+        assert_eq!(
+            timeline_wheel_delta(&events, 20.0, 200.0),
+            egui::vec2(0.0, -172.0)
+        );
+        assert_eq!(
+            timeline_wheel_delta(
+                &[wheel(
+                    egui::MouseWheelUnit::Page,
+                    egui::vec2(0.0, -1.0),
+                    egui::Modifiers::CTRL
+                )],
+                20.0,
+                200.0
+            ),
+            egui::vec2(0.0, -200.0)
+        );
+        assert_eq!(
+            timeline_wheel_delta(
+                &[wheel(
+                    egui::MouseWheelUnit::Line,
+                    egui::vec2(2.0, 0.0),
+                    egui::Modifiers::ALT
+                )],
+                20.0,
+                200.0
+            ),
+            egui::vec2(40.0, 0.0)
+        );
     }
 
     #[test]
     fn timeline_combines_native_precision_trackpad_pinch_factors() {
         assert_eq!(timeline_pinch_factor(&[]), None);
-        assert_eq!(timeline_pinch_factor(&[
-            egui::Event::Zoom(1.1), egui::Event::Zoom(1.2)]), Some(1.32));
+        assert_eq!(
+            timeline_pinch_factor(&[egui::Event::Zoom(1.1), egui::Event::Zoom(1.2)]),
+            Some(1.32)
+        );
         assert_eq!(timeline_pinch_factor(&[egui::Event::Zoom(f32::NAN)]), None);
         assert_eq!(timeline_pinch_factor(&[egui::Event::Zoom(0.0)]), None);
     }
 
     #[test]
     fn timeline_ruler_is_frozen_while_tracks_and_horizontal_origin_scroll() {
-        for offset in [egui::Vec2::ZERO, egui::vec2(140.0, 90.0), egui::vec2(400.0, 600.0)] {
-            let content = egui::Rect::from_min_size(egui::pos2(300.0, 80.0) - offset, egui::vec2(1800.0, 2000.0));
+        for offset in [
+            egui::Vec2::ZERO,
+            egui::vec2(140.0, 90.0),
+            egui::vec2(400.0, 600.0),
+        ] {
+            let content = egui::Rect::from_min_size(
+                egui::pos2(300.0, 80.0) - offset,
+                egui::vec2(1800.0, 2000.0),
+            );
             let viewport = egui::Rect::from_min_size(offset.to_pos2(), egui::vec2(500.0, 260.0));
             let ruler = timeline_frozen_ruler_rect(content, viewport);
             assert_eq!(ruler.top(), 80.0);
             assert_eq!(ruler.bottom(), 80.0 + TIMELINE_RULER_HEIGHT);
             assert_eq!(ruler.left(), 300.0 - offset.x);
-            assert_eq!(timeline_track_row_top(content.top(), 0, 40.0), 80.0 + TIMELINE_RULER_HEIGHT - offset.y);
+            assert_eq!(
+                timeline_track_row_top(content.top(), 0, 40.0),
+                80.0 + TIMELINE_RULER_HEIGHT - offset.y
+            );
             assert!(ruler.contains(timeline_keyframe_marker_center(ruler, 350.0)));
         }
     }
@@ -5787,27 +6034,40 @@ mod timeline_row_tests {
         let context = egui::Context::default();
         let mut observed = Vec::new();
         for offset in [0.0, 120.0, 420.0] {
-            let output = context.run_ui(egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 240.0))),
-                ..Default::default()
-            }, |ui| {
-                let scroll = egui::ScrollArea::both()
-                    .id_salt("test-frozen-timeline")
-                    .content_margin(egui::Margin::ZERO)
-                    .vertical_scroll_offset(offset)
-                    .show_viewport(ui, |ui, viewport| {
-                        let (_, content) = ui.allocate_space(egui::vec2(1400.0, 1600.0));
-                        let ruler = timeline_frozen_ruler_rect(content, viewport);
-                        let clip = ui.clip_rect();
-                        let body_clip = egui::Rect::from_min_max(egui::pos2(clip.left(), ruler.bottom()), clip.max).intersect(clip);
-                        let body_painter = ui.painter().with_clip_rect(body_clip);
-                        let ruler_painter = ui.painter().with_clip_rect(ruler.intersect(clip));
-                        assert!(ruler_painter.clip_rect().height() > 0.0);
-                        assert!(body_painter.clip_rect().top() >= ruler.bottom());
-                        observed.push((ruler.top(), timeline_track_row_top(content.top(), 0, 40.0)));
-                    });
-                assert_eq!(scroll.state.offset.y, offset);
-            });
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(700.0, 240.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let scroll = egui::ScrollArea::both()
+                        .id_salt("test-frozen-timeline")
+                        .content_margin(egui::Margin::ZERO)
+                        .vertical_scroll_offset(offset)
+                        .show_viewport(ui, |ui, viewport| {
+                            let (_, content) = ui.allocate_space(egui::vec2(1400.0, 1600.0));
+                            let ruler = timeline_frozen_ruler_rect(content, viewport);
+                            let clip = ui.clip_rect();
+                            let body_clip = egui::Rect::from_min_max(
+                                egui::pos2(clip.left(), ruler.bottom()),
+                                clip.max,
+                            )
+                            .intersect(clip);
+                            let body_painter = ui.painter().with_clip_rect(body_clip);
+                            let ruler_painter = ui.painter().with_clip_rect(ruler.intersect(clip));
+                            assert!(ruler_painter.clip_rect().height() > 0.0);
+                            assert!(body_painter.clip_rect().top() >= ruler.bottom());
+                            observed.push((
+                                ruler.top(),
+                                timeline_track_row_top(content.top(), 0, 40.0),
+                            ));
+                        });
+                    assert_eq!(scroll.state.offset.y, offset);
+                },
+            );
             discard_ui_output(output);
         }
         assert_eq!(observed[0].0, observed[1].0);
@@ -6048,29 +6308,38 @@ mod timeline_row_tests {
         let content_height = std::cell::Cell::new(0.0);
         let first_card = std::cell::Cell::new(egui::Rect::NOTHING);
         let mut render = |events| {
-            let output = context.run_ui(egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(420.0, 300.0))),
-                events,
-                ..Default::default()
-            }, |ui| {
-                let scroll = hardware_monitor_scroll(ui, |ui| {
-                    for relay in 1..=14 {
-                        let control = crate::four_d::controller::HardwareControl {
-                            key: format!("relay.{relay}"), kind: "relay".to_string(),
-                            name: format!("Channel {relay}"), ..Default::default()
-                        };
-                        let top = ui.next_widget_position();
-                        draw_control_card(&mut app, ui, &capabilities, &control);
-                        if relay == 1 {
-                            first_card.set(egui::Rect::from_min_size(top, egui::vec2(300.0, 40.0)));
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(420.0, 300.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let scroll = hardware_monitor_scroll(ui, |ui| {
+                        for relay in 1..=14 {
+                            let control = crate::four_d::controller::HardwareControl {
+                                key: format!("relay.{relay}"),
+                                kind: "relay".to_string(),
+                                name: format!("Channel {relay}"),
+                                ..Default::default()
+                            };
+                            let top = ui.next_widget_position();
+                            draw_control_card(&mut app, ui, &capabilities, &control);
+                            if relay == 1 {
+                                first_card
+                                    .set(egui::Rect::from_min_size(top, egui::vec2(300.0, 40.0)));
+                            }
+                            ui.add_space(8.0);
                         }
-                        ui.add_space(8.0);
-                    }
-                });
-                offset.set(scroll.state.offset.y);
-                viewport_height.set(scroll.inner_rect.height());
-                content_height.set(scroll.content_size.y);
-            });
+                    });
+                    offset.set(scroll.state.offset.y);
+                    viewport_height.set(scroll.inner_rect.height());
+                    content_height.set(scroll.content_size.y);
+                },
+            );
             discard_ui_output(output);
         };
         render(Vec::new());
@@ -6078,12 +6347,18 @@ mod timeline_row_tests {
         render(vec![egui::Event::MouseWheel {
             unit: egui::MouseWheelUnit::Point,
             phase: egui::TouchPhase::Move,
-            delta: egui::vec2(0.0, -100.0), modifiers: egui::Modifiers::NONE,
+            delta: egui::vec2(0.0, -100.0),
+            modifiers: egui::Modifiers::NONE,
         }]);
-        for _ in 0..8 { render(Vec::new()); }
+        for _ in 0..8 {
+            render(Vec::new());
+        }
         assert!(content_height.get() > viewport_height.get());
         assert!(viewport_height.get() <= 300.0);
-        assert!(offset.get() > 0.0, "wheel over a card did not scroll the Hardware Monitor");
+        assert!(
+            offset.get() > 0.0,
+            "wheel over a card did not scroll the Hardware Monitor"
+        );
     }
 
     #[test]
@@ -6091,34 +6366,71 @@ mod timeline_row_tests {
         for dark in [false, true] {
             for compact in [false, true] {
                 let context = egui::Context::default();
-                context.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+                context.set_visuals(if dark {
+                    egui::Visuals::dark()
+                } else {
+                    egui::Visuals::light()
+                });
                 let mut app = PealayerApp::default();
                 app.show_sub_settings = true;
                 app.compact_hardware_controls = compact;
                 let capabilities = crate::four_d::controller::HardwareCapabilities::default();
-                let control = crate::four_d::controller::HardwareControl { key: "relay.5".into(), kind: "relay".into(), name: "Hardware sentinel".into(), ..Default::default() };
+                let control = crate::four_d::controller::HardwareControl {
+                    key: "relay.5".into(),
+                    kind: "relay".into(),
+                    name: "Hardware sentinel".into(),
+                    ..Default::default()
+                };
                 let clip = egui::Rect::from_min_max(egui::pos2(8.0, 8.0), egui::pos2(388.0, 160.0));
                 let mut final_output = None;
                 for _ in 0..3 {
-                    let mut output = context.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 800.0))), ..Default::default() }, |ui| {
-                        ui.scope(|ui| {
-                            ui.set_width(380.0);
-                            ui.set_clip_rect(clip);
-                            draw_control_card(&mut app, ui, &capabilities, &control);
-                        });
-                        crate::ui::subtitles::draw_settings_dialog(&mut app, ui);
-                    });
+                    let mut output = context.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(1000.0, 800.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            ui.scope(|ui| {
+                                ui.set_width(380.0);
+                                ui.set_clip_rect(clip);
+                                draw_control_card(&mut app, ui, &capabilities, &control);
+                            });
+                            crate::ui::subtitles::draw_settings_dialog(&mut app, ui);
+                        },
+                    );
                     output.textures_delta.clear();
                     final_output = Some(output);
                 }
                 let output = final_output.unwrap();
                 let card_index = output.shapes.iter().position(|s| matches!(&s.shape, egui::epaint::Shape::Text(t) if t.galley.job.text == "Hardware sentinel")).expect("card not painted");
                 let dialog_index = output.shapes.iter().position(|s| matches!(&s.shape, egui::epaint::Shape::Text(t) if t.galley.job.text.contains("Visibility"))).expect("subtitle dialog not painted");
-                assert!(card_index < dialog_index, "hardware card paints over Subtitle settings; dark={dark}, compact={compact}");
-                assert!(clip.contains_rect(output.shapes[card_index].clip_rect), "card painting escaped the Hardware Monitor clip");
-                let dialog_rect = context.memory(|memory| memory.area_rect(egui::Id::new("subtitle_settings_dialog_professional_v4"))).expect("subtitle window bounds missing");
-                assert!(dialog_rect.expand(8.0).contains_rect(output.shapes[dialog_index].clip_rect), "subtitle contents escaped their window clip");
-                assert_eq!(context.layer_id_at(dialog_rect.center()).unwrap().order, egui::Order::Foreground, "workspace must not own dialog pointer interactions");
+                assert!(
+                    card_index < dialog_index,
+                    "hardware card paints over Subtitle settings; dark={dark}, compact={compact}"
+                );
+                assert!(
+                    clip.contains_rect(output.shapes[card_index].clip_rect),
+                    "card painting escaped the Hardware Monitor clip"
+                );
+                let dialog_rect = context
+                    .memory(|memory| {
+                        memory.area_rect(egui::Id::new("subtitle_settings_dialog_professional_v4"))
+                    })
+                    .expect("subtitle window bounds missing");
+                assert!(
+                    dialog_rect
+                        .expand(8.0)
+                        .contains_rect(output.shapes[dialog_index].clip_rect),
+                    "subtitle contents escaped their window clip"
+                );
+                assert_eq!(
+                    context.layer_id_at(dialog_rect.center()).unwrap().order,
+                    egui::Order::Foreground,
+                    "workspace must not own dialog pointer interactions"
+                );
             }
         }
     }
@@ -6126,72 +6438,169 @@ mod timeline_row_tests {
     #[test]
     fn hardware_drag_manager_coordinates_and_release_are_not_owned_by_monitor() {
         let context = egui::Context::default();
-        let monitor_rect = egui::Rect::from_min_size(egui::pos2(12.0, 20.0), egui::vec2(280.0, 80.0));
-        let manager_rect = egui::Rect::from_min_size(egui::pos2(350.0, 150.0), egui::vec2(540.0, 36.0));
+        let monitor_rect =
+            egui::Rect::from_min_size(egui::pos2(12.0, 20.0), egui::vec2(280.0, 80.0));
+        let manager_rect =
+            egui::Rect::from_min_size(egui::pos2(350.0, 150.0), egui::vec2(540.0, 36.0));
         let control = crate::four_d::controller::HardwareControl {
-            key: "relay.5".to_string(), kind: "relay".to_string(), ..Default::default()
+            key: "relay.5".to_string(),
+            kind: "relay".to_string(),
+            ..Default::default()
         };
         let target = crate::four_d::controller::HardwareControl {
-            key: "relay.6".to_string(), kind: "relay".to_string(), ..Default::default()
+            key: "relay.6".to_string(),
+            kind: "relay".to_string(),
+            ..Default::default()
         };
         let target_rect = manager_rect.translate(egui::vec2(0.0, 60.0));
         let grab_offset = egui::vec2(46.0, 18.0);
         let output = context.run_ui(egui::RawInput::default(), |ui| {
-            let empty_layer = egui::LayerId::new(egui::Order::Middle, egui::Id::new("test-drag-layer"));
-            finish_hardware_channel_card(ui, &control, monitor_rect, empty_layer, HardwareChannelDragSurface::Monitor);
-            finish_hardware_channel_card(ui, &control, manager_rect, empty_layer, HardwareChannelDragSurface::Manager);
-            let monitor_id = hardware_channel_source_rect_id(ui, HardwareChannelDragSurface::Monitor, &control.key);
-            let manager_id = hardware_channel_source_rect_id(ui, HardwareChannelDragSurface::Manager, &control.key);
+            let empty_layer =
+                egui::LayerId::new(egui::Order::Middle, egui::Id::new("test-drag-layer"));
+            finish_hardware_channel_card(
+                ui,
+                &control,
+                monitor_rect,
+                empty_layer,
+                HardwareChannelDragSurface::Monitor,
+            );
+            finish_hardware_channel_card(
+                ui,
+                &control,
+                manager_rect,
+                empty_layer,
+                HardwareChannelDragSurface::Manager,
+            );
+            let monitor_id = hardware_channel_source_rect_id(
+                ui,
+                HardwareChannelDragSurface::Monitor,
+                &control.key,
+            );
+            let manager_id = hardware_channel_source_rect_id(
+                ui,
+                HardwareChannelDragSurface::Manager,
+                &control.key,
+            );
             assert_ne!(monitor_id, manager_id);
-            assert_eq!(ui.data_mut(|data| data.get_temp::<egui::Rect>(monitor_id)), Some(monitor_rect));
-            assert_eq!(ui.data_mut(|data| data.get_temp::<egui::Rect>(manager_id)), Some(manager_rect));
+            assert_eq!(
+                ui.data_mut(|data| data.get_temp::<egui::Rect>(monitor_id)),
+                Some(monitor_rect)
+            );
+            assert_eq!(
+                ui.data_mut(|data| data.get_temp::<egui::Rect>(manager_id)),
+                Some(manager_rect)
+            );
             let drag_id = hardware_channel_drag_id(ui, HardwareChannelDragSurface::Manager);
-            ui.data_mut(|data| data.insert_temp(drag_id, HardwareChannelDrag {
-                key: control.key.clone(), kind: control.kind.clone(), grab_offset,
-            }));
+            ui.data_mut(|data| {
+                data.insert_temp(
+                    drag_id,
+                    HardwareChannelDrag {
+                        key: control.key.clone(),
+                        kind: control.kind.clone(),
+                        grab_offset,
+                    },
+                )
+            });
         });
         discard_ui_output(output);
         // A real primary release is rendered by the panel before the modal.
         let point = target_rect.center();
-        let output = context.run_ui(egui::RawInput {
-            events: vec![egui::Event::PointerMoved(point), egui::Event::PointerButton {
-                pos: point, button: egui::PointerButton::Primary, pressed: true,
-                modifiers: egui::Modifiers::NONE,
-            }], ..Default::default()
-        }, |_| {});
+        let output = context.run_ui(
+            egui::RawInput {
+                events: vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            },
+            |_| {},
+        );
         discard_ui_output(output);
-        let output = context.run_ui(egui::RawInput {
-            events: vec![egui::Event::PointerButton {
-                pos: point, button: egui::PointerButton::Primary, pressed: false,
-                modifiers: egui::Modifiers::NONE,
-            }], ..Default::default()
-        }, |ui| {
-            assert!(!hardware_channel_is_dragging(ui, &control.key, HardwareChannelDragSurface::Monitor));
-            assert!(hardware_channel_drop_target(ui, target_rect, &target, HardwareChannelDragSurface::Monitor).is_none());
-            clear_released_hardware_channel_drag(ui, HardwareChannelDragSurface::Monitor);
-            assert!(hardware_channel_is_dragging(ui, &control.key, HardwareChannelDragSurface::Manager));
-            let drag_id = hardware_channel_drag_id(ui, HardwareChannelDragSurface::Manager);
-            let drag = ui.data_mut(|data| data.get_temp::<HardwareChannelDrag>(drag_id)).unwrap();
-            assert_eq!(drag_translation(manager_rect.min + grab_offset, manager_rect.min, drag.grab_offset), egui::Vec2::ZERO);
-            let drop = hardware_channel_drop_target(ui, target_rect, &target, HardwareChannelDragSurface::Manager).unwrap();
-            assert_eq!(drop.source_key, control.key);
-            assert_eq!(drop.target_key, target.key);
-            assert!(!hardware_channel_is_dragging(ui, &control.key, HardwareChannelDragSurface::Manager));
-        });
+        let output = context.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                assert!(!hardware_channel_is_dragging(
+                    ui,
+                    &control.key,
+                    HardwareChannelDragSurface::Monitor
+                ));
+                assert!(
+                    hardware_channel_drop_target(
+                        ui,
+                        target_rect,
+                        &target,
+                        HardwareChannelDragSurface::Monitor
+                    )
+                    .is_none()
+                );
+                clear_released_hardware_channel_drag(ui, HardwareChannelDragSurface::Monitor);
+                assert!(hardware_channel_is_dragging(
+                    ui,
+                    &control.key,
+                    HardwareChannelDragSurface::Manager
+                ));
+                let drag_id = hardware_channel_drag_id(ui, HardwareChannelDragSurface::Manager);
+                let drag = ui
+                    .data_mut(|data| data.get_temp::<HardwareChannelDrag>(drag_id))
+                    .unwrap();
+                assert_eq!(
+                    drag_translation(
+                        manager_rect.min + grab_offset,
+                        manager_rect.min,
+                        drag.grab_offset
+                    ),
+                    egui::Vec2::ZERO
+                );
+                let drop = hardware_channel_drop_target(
+                    ui,
+                    target_rect,
+                    &target,
+                    HardwareChannelDragSurface::Manager,
+                )
+                .unwrap();
+                assert_eq!(drop.source_key, control.key);
+                assert_eq!(drop.target_key, target.key);
+                assert!(!hardware_channel_is_dragging(
+                    ui,
+                    &control.key,
+                    HardwareChannelDragSurface::Manager
+                ));
+            },
+        );
         discard_ui_output(output);
     }
 
     #[test]
     fn hardware_drag_pointer_start_and_drop_work_in_each_surface() {
         use std::cell::{Cell, RefCell};
-        for origin in [HardwareChannelDragSurface::Monitor, HardwareChannelDragSurface::Manager] {
+        for origin in [
+            HardwareChannelDragSurface::Monitor,
+            HardwareChannelDragSurface::Manager,
+        ] {
             let context = egui::Context::default();
             let app = PealayerApp::default();
             let control = crate::four_d::controller::HardwareControl {
-                key: "relay.5".to_string(), kind: "relay".to_string(), ..Default::default()
+                key: "relay.5".to_string(),
+                kind: "relay".to_string(),
+                ..Default::default()
             };
             let target = crate::four_d::controller::HardwareControl {
-                key: "relay.6".to_string(), kind: "relay".to_string(), ..Default::default()
+                key: "relay.6".to_string(),
+                kind: "relay".to_string(),
+                ..Default::default()
             };
             let source_handle = Cell::new(egui::Rect::NOTHING);
             let source_rect = Cell::new(egui::Rect::NOTHING);
@@ -6247,16 +6656,32 @@ mod timeline_row_tests {
             render(Vec::new());
             let press = source_handle.get().center();
             let start = press + egui::vec2(18.0, 2.0);
-            render(vec![egui::Event::PointerMoved(press), egui::Event::PointerButton {
-                pos: press, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE,
-            }]);
+            render(vec![
+                egui::Event::PointerMoved(press),
+                egui::Event::PointerButton {
+                    pos: press,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
             render(vec![egui::Event::PointerMoved(start)]);
-            let captured = started_drag.borrow().clone().expect("hardware drag did not start from its handle");
-            assert_eq!(captured.grab_offset, start - source_rect.get().min, "grab offset came from the other surface");
+            let captured = started_drag
+                .borrow()
+                .clone()
+                .expect("hardware drag did not start from its handle");
+            assert_eq!(
+                captured.grab_offset,
+                start - source_rect.get().min,
+                "grab offset came from the other surface"
+            );
             let destination = drop_rect.get().center();
             render(vec![egui::Event::PointerMoved(destination)]);
             render(vec![egui::Event::PointerButton {
-                pos: destination, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE,
+                pos: destination,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
             }]);
             assert!(dropped.get(), "hardware drag did not drop in {origin:?}");
         }
@@ -6712,56 +7137,118 @@ mod timeline_row_tests {
     fn keyframe_near_hit_chooses_one_closest_marker() {
         let first = TimelineKeyframeTarget::Marker(uuid::Uuid::new_v4());
         let second = TimelineKeyframeTarget::Analog(uuid::Uuid::new_v4(), 0);
-        let candidates = [(first, egui::pos2(60.0, 25.0)), (second, egui::pos2(72.0, 25.0))];
-        assert_eq!(nearest_timeline_keyframe(Some(egui::pos2(62.0, 30.0)), &candidates), Some(first));
-        assert_eq!(nearest_timeline_keyframe(Some(egui::pos2(76.0, 30.0)), &candidates), Some(second));
-        assert_eq!(nearest_timeline_keyframe(Some(egui::pos2(100.0, 30.0)), &candidates), None);
+        let candidates = [
+            (first, egui::pos2(60.0, 25.0)),
+            (second, egui::pos2(72.0, 25.0)),
+        ];
+        assert_eq!(
+            nearest_timeline_keyframe(Some(egui::pos2(62.0, 30.0)), &candidates),
+            Some(first)
+        );
+        assert_eq!(
+            nearest_timeline_keyframe(Some(egui::pos2(76.0, 30.0)), &candidates),
+            Some(second)
+        );
+        assert_eq!(
+            nearest_timeline_keyframe(Some(egui::pos2(100.0, 30.0)), &candidates),
+            None
+        );
         assert_eq!(nearest_timeline_keyframe(None, &candidates), None);
         assert_ne!(first.menu_id(), second.menu_id());
     }
 
     #[test]
     fn keyframe_context_menu_wins_over_canvas_and_ruler_near_the_diamond() {
-        for target in [TimelineKeyframeTarget::Marker(uuid::Uuid::new_v4()),
-            TimelineKeyframeTarget::Analog(uuid::Uuid::new_v4(), 0)]
-        {
+        for target in [
+            TimelineKeyframeTarget::Marker(uuid::Uuid::new_v4()),
+            TimelineKeyframeTarget::Analog(uuid::Uuid::new_v4(), 0),
+        ] {
             let context = egui::Context::default();
             context.all_styles_mut(|style| style.animation_time = 0.0);
             let center = egui::pos2(100.0, 40.0);
             let render = |events| {
-                let output = context.run_ui(egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 300.0))),
-                    events, ..Default::default()
-                }, |ui| {
-                    let canvas_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 200.0));
-                    let canvas = ui.interact(canvas_rect, timeline_keyboard_focus_id(), egui::Sense::click_and_drag());
-                    let ruler = ui.interact(canvas_rect, egui::Id::new("test-ruler"), egui::Sense::click());
-                    let hit = nearest_timeline_keyframe(ui.ctx().pointer_latest_pos(), &[(target, center)]);
-                    let owned = hit.is_some() || egui::Popup::is_id_open(ui.ctx(), target.menu_id());
-                    if !owned { ruler.context_menu(|ui| { ui.label("Wrong ruler menu"); }); }
-                    let marker = ui.interact(egui::Rect::from_center_size(center, egui::vec2(32.0, 32.0)),
-                        egui::Id::new(("test-keyframe", target)), egui::Sense::click());
-                    keyframe_context_menu(ui, &marker, target, hit == Some(target), |ui| {
-                        ui.label("Dedicated keyframe menu");
-                        ui.button("Delete keyframe").on_hover_text("Only this keyframe");
-                    });
-                    if !owned { canvas.context_menu(|ui| { ui.label("Wrong canvas menu"); }); }
-                });
+                let output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(500.0, 300.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let canvas_rect = egui::Rect::from_min_size(
+                            egui::pos2(0.0, 0.0),
+                            egui::vec2(400.0, 200.0),
+                        );
+                        let canvas = ui.interact(
+                            canvas_rect,
+                            timeline_keyboard_focus_id(),
+                            egui::Sense::click_and_drag(),
+                        );
+                        let ruler = ui.interact(
+                            canvas_rect,
+                            egui::Id::new("test-ruler"),
+                            egui::Sense::click(),
+                        );
+                        let hit = nearest_timeline_keyframe(
+                            ui.ctx().pointer_latest_pos(),
+                            &[(target, center)],
+                        );
+                        let owned =
+                            hit.is_some() || egui::Popup::is_id_open(ui.ctx(), target.menu_id());
+                        if !owned {
+                            ruler.context_menu(|ui| {
+                                ui.label("Wrong ruler menu");
+                            });
+                        }
+                        let marker = ui.interact(
+                            egui::Rect::from_center_size(center, egui::vec2(32.0, 32.0)),
+                            egui::Id::new(("test-keyframe", target)),
+                            egui::Sense::click(),
+                        );
+                        keyframe_context_menu(ui, &marker, target, hit == Some(target), |ui| {
+                            ui.label("Dedicated keyframe menu");
+                            ui.button("Delete keyframe")
+                                .on_hover_text("Only this keyframe");
+                        });
+                        if !owned {
+                            canvas.context_menu(|ui| {
+                                ui.label("Wrong canvas menu");
+                            });
+                        }
+                    },
+                );
                 discard_ui_output(output);
             };
             render(Vec::new());
             render(Vec::new());
             // Outside the painted 5px diamond, inside the forgiving near hit.
             let point = center + egui::vec2(12.0, 5.0);
-            render(vec![egui::Event::PointerMoved(point), egui::Event::PointerButton {
-                pos: point, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::NONE,
-            }]);
+            render(vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Secondary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
             render(vec![egui::Event::PointerButton {
-                pos: point, button: egui::PointerButton::Secondary, pressed: false, modifiers: egui::Modifiers::NONE,
+                pos: point,
+                button: egui::PointerButton::Secondary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
             }]);
-            assert!(egui::Popup::is_id_open(&context, target.menu_id()), "near right click opened the wrong menu");
+            assert!(
+                egui::Popup::is_id_open(&context, target.menu_id()),
+                "near right click opened the wrong menu"
+            );
             render(vec![egui::Event::PointerMoved(egui::pos2(210.0, 85.0))]);
-            assert!(egui::Popup::is_id_open(&context, target.menu_id()), "menu lost its keyframe when pointer left marker");
+            assert!(
+                egui::Popup::is_id_open(&context, target.menu_id()),
+                "menu lost its keyframe when pointer left marker"
+            );
         }
     }
 
@@ -6773,23 +7260,41 @@ mod timeline_row_tests {
         let track = uuid::Uuid::new_v4();
         app.selected_keyframes.insert((track, 0));
         let render = |events, hit, popup, app: &mut PealayerApp| {
-            let output = context.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
-                // Register the real focus widget before requesting focus, preserving
-                // the Windows accessibility crash fix for empty timelines.
-                ui.interact(ui.max_rect(), timeline_keyboard_focus_id(), egui::Sense::click());
-                ui.ctx().memory_mut(|memory| memory.request_focus(timeline_keyboard_focus_id()));
-                clear_unfocused_timeline_keyframes(app, ui, hit, popup);
-            });
+            let output = context.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    // Register the real focus widget before requesting focus, preserving
+                    // the Windows accessibility crash fix for empty timelines.
+                    ui.interact(
+                        ui.max_rect(),
+                        timeline_keyboard_focus_id(),
+                        egui::Sense::click(),
+                    );
+                    ui.ctx()
+                        .memory_mut(|memory| memory.request_focus(timeline_keyboard_focus_id()));
+                    clear_unfocused_timeline_keyframes(app, ui, hit, popup);
+                },
+            );
             discard_ui_output(output);
         };
         let press = |pressed| egui::Event::PointerButton {
-            pos: egui::pos2(150.0, 80.0), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE,
+            pos: egui::pos2(150.0, 80.0),
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
         };
         render(vec![press(true)], true, false, &mut app);
         assert_eq!(app.selected_timeline_keyframe, Some(id));
         render(vec![press(false)], true, false, &mut app);
         render(vec![press(true)], false, true, &mut app);
-        assert_eq!(app.selected_timeline_keyframe, Some(id), "popup interaction cleared its target");
+        assert_eq!(
+            app.selected_timeline_keyframe,
+            Some(id),
+            "popup interaction cleared its target"
+        );
         render(vec![press(false)], false, true, &mut app);
         render(vec![press(true)], false, false, &mut app);
         assert!(app.selected_timeline_keyframe.is_none());
@@ -6797,12 +7302,26 @@ mod timeline_row_tests {
         render(vec![press(false)], false, false, &mut app);
         app.selected_timeline_keyframe = Some(id);
         app.selected_keyframes.insert((track, 0));
-        render(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None,
-            pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }], false, false, &mut app);
+        render(
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            false,
+            false,
+            &mut app,
+        );
         assert!(app.selected_timeline_keyframe.is_none());
         assert!(app.selected_keyframes.is_empty());
         assert!(!context.memory(|memory| memory.has_focus(timeline_keyboard_focus_id())));
-        assert_eq!(app.timeline.keyframes.len(), 1, "blur must not delete keyframes");
+        assert_eq!(
+            app.timeline.keyframes.len(),
+            1,
+            "blur must not delete keyframes"
+        );
     }
 
     #[test]
@@ -6834,9 +7353,10 @@ mod timeline_row_tests {
                 ..Default::default()
             },
             |ui| {
-                assert!(!ui
-                    .ctx()
-                    .memory(|memory| memory.has_focus(timeline_keyboard_focus_id())));
+                assert!(
+                    !ui.ctx()
+                        .memory(|memory| memory.has_focus(timeline_keyboard_focus_id()))
+                );
                 assert!(delete_selected_cues_without_timeline_focus(&mut app, ui));
             },
         );
@@ -8142,7 +8662,10 @@ mod timeline_row_tests {
                                         "Seat rise",
                                         crate::ui::icons::PLAY,
                                         true,
-                                        ["Drag", "Icon", "Rename", "Run", "Place", "More", "Rename"],
+                                        [
+                                            "Drag", "Icon", "Rename", "Run", "Place", "More",
+                                            "Rename",
+                                        ],
                                     );
                                     let button = match action {
                                         0 => header.run,
@@ -8198,9 +8721,18 @@ mod timeline_row_tests {
         let first = egui::Id::new("sequence-effect-card");
         let second = egui::Id::new("strip-effect-card");
         request_effect_card_rename(&context, second);
-        assert!(!context.data_mut(|data| data.remove_temp::<bool>(first.with("rename-request")).unwrap_or(false)));
-        assert!(context.data_mut(|data| data.remove_temp::<bool>(second.with("rename-request")).unwrap_or(false)));
-        assert!(!context.data_mut(|data| data.remove_temp::<bool>(second.with("rename-request")).unwrap_or(false)));
+        assert!(!context.data_mut(|data| {
+            data.remove_temp::<bool>(first.with("rename-request"))
+                .unwrap_or(false)
+        }));
+        assert!(context.data_mut(|data| {
+            data.remove_temp::<bool>(second.with("rename-request"))
+                .unwrap_or(false)
+        }));
+        assert!(!context.data_mut(|data| {
+            data.remove_temp::<bool>(second.with("rename-request"))
+                .unwrap_or(false)
+        }));
     }
 
     #[test]
@@ -8472,10 +9004,7 @@ mod timeline_row_tests {
             effect_preset_reference(&first),
             effect_preset_reference(&second)
         );
-        assert_eq!(
-            effect_preset_reference(&first).as_deref(),
-            Some("effect:7")
-        );
+        assert_eq!(effect_preset_reference(&first).as_deref(), Some("effect:7"));
 
         let strip = crate::app::EffectPreset {
             category: "Lighting".to_string(),
@@ -8980,6 +9509,33 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                     .clicked()
                 {
                     self.app.toggle_fullscreen(ui.ctx());
+                    ui.close();
+                }
+                ui.separator();
+                let detached_supported = cfg!(all(
+                    target_os = "windows",
+                    feature = "d3d11-composition-experiment"
+                )) && self.app.active_windows_video_renderer
+                    == crate::config::WindowsVideoRenderer::D3D11;
+                let detach_label = if self.app.windows_detached_video_panel {
+                    self.app.tr("Attach video panel")
+                } else {
+                    self.app.tr("Detach video panel")
+                };
+                let response = ui.add_enabled(
+                    detached_supported,
+                    egui::Button::new(format!(
+                        "{} {detach_label}",
+                        crate::ui::icons::ARROW_SQUARE_OUT
+                    )),
+                );
+                if !detached_supported {
+                    response.on_disabled_hover_text(self.app.tr(
+                        "The detachable zero-copy video surface requires the D3D11 / DirectComposition renderer and an application restart.",
+                    ));
+                } else if response.clicked() {
+                    self.app.windows_detached_video_panel = !self.app.windows_detached_video_panel;
+                    self.app.save_config();
                     ui.close();
                 }
             }

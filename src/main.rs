@@ -81,16 +81,18 @@ fn main() -> eframe::Result {
 
     let action = crate::cli::parse_cli_args(startup_args);
     let action = match action {
-        Ok(crate::cli::CliAction::RunClient {endpoint,port,options}) => {
-            match crate::peer::connect(&endpoint,port) {
-                Ok(()) => Ok(crate::cli::CliAction::RunGui(options)),
-                Err(error) => Err(format!("Cannot connect to remote Pealayer: {error}")),
-            }
-        }
+        Ok(crate::cli::CliAction::RunClient {
+            endpoint,
+            port,
+            options,
+        }) => match crate::peer::connect(&endpoint, port) {
+            Ok(()) => Ok(crate::cli::CliAction::RunGui(options)),
+            Err(error) => Err(format!("Cannot connect to remote Pealayer: {error}")),
+        },
         action => action,
     };
     let cli_options = match action {
-        Ok(crate::cli::CliAction::RunClient {..}) => unreachable!(),
+        Ok(crate::cli::CliAction::RunClient { .. }) => unreachable!(),
         Ok(crate::cli::CliAction::PrintHelp(msg)) => {
             println!("{}", msg);
             return Ok(());
@@ -257,7 +259,9 @@ fn main() -> eframe::Result {
         launch_config.compositor_paced_window_move,
     );
     let initial_window_title = app_name.clone();
-    let icon_data = (!crate::peer::active()).then(||crate::config::resolved_app_icon(&launch_config)).flatten()
+    let icon_data = (!crate::peer::active())
+        .then(|| crate::config::resolved_app_icon(&launch_config))
+        .flatten()
         .and_then(|path| std::fs::read(path).ok())
         .and_then(|bytes| eframe::icon_data::from_png_bytes(&bytes).ok())
         .or_else(|| {
@@ -267,11 +271,12 @@ fn main() -> eframe::Result {
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([800.0, 600.0])
         .with_clamp_size_to_monitor_size(true);
-    if !crate::peer::active() && let Some(geometry) = launch_config
-        .workspace_session
-        .window_geometry
-        .or(launch_config.window_geometry)
-        .filter(|geometry| geometry.is_valid())
+    if !crate::peer::active()
+        && let Some(geometry) = launch_config
+            .workspace_session
+            .window_geometry
+            .or(launch_config.window_geometry)
+            .filter(|geometry| geometry.is_valid())
     {
         viewport = viewport
             .with_inner_size([geometry.width, geometry.height])
@@ -292,9 +297,9 @@ fn main() -> eframe::Result {
         viewport,
         renderer: eframe::Renderer::Glow,
         persist_window: !crate::peer::active(),
-        persistence_path: (!crate::peer::active()).then(||
-            crate::config::AppConfig::get_config_path().with_file_name("workspace-state.ron"),
-        ),
+        persistence_path: (!crate::peer::active()).then(|| {
+            crate::config::AppConfig::get_config_path().with_file_name("workspace-state.ron")
+        }),
         glow_options: eframe::egui_glow::GlowConfiguration {
             vsync: launch_config.opengl_vsync,
             ..Default::default()
@@ -339,8 +344,8 @@ fn main() -> eframe::Result {
                 .expect("Glow backend must provide get_proc_address");
 
             #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
-            let use_d3d11 = loaded_config.windows_video_renderer
-                == crate::config::WindowsVideoRenderer::D3D11;
+            let use_d3d11 =
+                loaded_config.windows_video_renderer == crate::config::WindowsVideoRenderer::D3D11;
             #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
             let use_d3d11 = false;
 
@@ -368,6 +373,11 @@ fn main() -> eframe::Result {
                     init.set_property("gpu-context", "d3d11")?;
                     init.set_property("d3d11-output-mode", "composition")?;
                     init.set_property("d3d11-composition-size", "1280x720")?;
+                    // Explicitly request DXGI flip-model presentation. Modern
+                    // mpv uses FLIP_DISCARD when the active Windows/driver
+                    // combination supports it and falls back safely otherwise.
+                    init.set_property("d3d11-flip", true)?;
+                    init.set_property("swapchain-depth", 3_i64)?;
                     init.set_property("hwdec", "d3d11va")?;
                     init.set_property("d3d11va-zero-copy", true)?;
                 } else {
@@ -425,16 +435,16 @@ fn main() -> eframe::Result {
             crate::remote_location::install_context(&egui_ctx);
             if let Some(render_context) = render_context.as_mut() {
                 render_context.set_update_callback(move || {
-                // Outside a native move, the decoder remains the most efficient
-                // repaint clock. During WM_ENTERSIZEMOVE, the dedicated DWM
-                // pump presents the newest decoded frame at compositor cadence;
-                // allowing this media-rate callback to inject extra paints
-                // would recreate the uneven 24/25/30 Hz pointer lag.
-                if crate::platform::windows::native_window_video_rendering_allowed()
-                    && !crate::platform::windows::native_window_compositor_pacing_active()
-                {
-                    egui_ctx.request_repaint();
-                }
+                    // Outside a native move, the decoder remains the most efficient
+                    // repaint clock. During WM_ENTERSIZEMOVE, the dedicated DWM
+                    // pump presents the newest decoded frame at compositor cadence;
+                    // allowing this media-rate callback to inject extra paints
+                    // would recreate the uneven 24/25/30 Hz pointer lag.
+                    if crate::platform::windows::native_window_video_rendering_allowed()
+                        && !crate::platform::windows::native_window_compositor_pacing_active()
+                    {
+                        egui_ctx.request_repaint();
+                    }
                 });
             }
 
@@ -532,13 +542,17 @@ fn main() -> eframe::Result {
             });
 
             let initial_volume = cli_options.volume.unwrap_or(loaded_config.volume);
-            let startup_media_target = if crate::peer::active() { cli_options.target.clone() } else { crate::media::startup_media_target(
-                cli_options.target.as_deref(),
-                loaded_config.restore_last_media_on_startup,
-                loaded_config.last_media_target.as_deref(),
-                &loaded_config.recent_media,
-                &loaded_config.playback_positions,
-            ) };
+            let startup_media_target = if crate::peer::active() {
+                cli_options.target.clone()
+            } else {
+                crate::media::startup_media_target(
+                    cli_options.target.as_deref(),
+                    loaded_config.restore_last_media_on_startup,
+                    loaded_config.last_media_target.as_deref(),
+                    &loaded_config.recent_media,
+                    &loaded_config.playback_positions,
+                )
+            };
             // An explicit CLI media target starts normally. Only an automatic
             // last-session restore inherits the persisted pause state.
             let restore_startup_pause = cli_options
@@ -566,10 +580,12 @@ fn main() -> eframe::Result {
             let _ = mpv_static.set_property("sub-delay", loaded_config.subtitle_delay_seconds);
             let _ = mpv_static.set_property("sub-pos", loaded_config.subtitle_position_percent);
             let _ = mpv_static.set_property("audio-delay", loaded_config.audio_delay_seconds);
-            if !crate::peer::active() { crate::platform::windows::sync_windows_jump_list_with_options(
-                &loaded_config.recent_media,
-                loaded_config.windows_jump_list_quick_actions,
-            ); }
+            if !crate::peer::active() {
+                crate::platform::windows::sync_windows_jump_list_with_options(
+                    &loaded_config.recent_media,
+                    loaded_config.windows_jump_list_quick_actions,
+                );
+            }
 
             let (interop_tx, interop_rx) = std::sync::mpsc::channel();
             crate::platform::interop::spawn_interop_listener(
@@ -594,15 +610,19 @@ fn main() -> eframe::Result {
                 .to_string(),
                 crate::ui::platform_accent_rgb(&loaded_config),
             );
-            let mut listener_config=loaded_config.clone();
-            if let Some(client)=crate::peer::client() {listener_config.web_enabled=true;listener_config.web_port=client.local_port;listener_config.web_listen_addresses=vec!["127.0.0.1".into()];}
+            let mut listener_config = loaded_config.clone();
+            if let Some(client) = crate::peer::client() {
+                listener_config.web_enabled = true;
+                listener_config.web_port = client.local_port;
+                listener_config.web_listen_addresses = vec!["127.0.0.1".into()];
+            }
             #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
             {
-                // This standalone renderer experiment intentionally does not
-                // claim network-server identity. A different executable path
-                // would otherwise trigger a Windows Firewall consent dialog
-                // even though the test only exercises local video composition.
-                listener_config.web_enabled = false;
+                // Keep diagnostics reachable without claiming a LAN server
+                // identity or causing a Windows Firewall consent prompt.
+                listener_config.web_enabled = true;
+                listener_config.web_listen_addresses = vec!["127.0.0.1".into()];
+                listener_config.web_port = 8088;
             }
             let web_state_tx = crate::server::spawn_control_server_for_config(
                 &listener_config,
@@ -616,12 +636,18 @@ fn main() -> eframe::Result {
             let engine_handle = crate::four_d::engine::spawn_engine();
             let engine_repaint = cc.egui_ctx.clone();
             engine_handle.set_state_notifier(move || engine_repaint.request_repaint());
-            crate::peer::register_server(&engine_handle,mpv_static,cc.egui_ctx.clone());
-            if !crate::peer::active() {engine_handle.attach_playback_clock(mpv_static);}
-            let controller_cmd_rx = if crate::peer::active(){std::sync::mpsc::channel().1}else{crate::platform::interop::spawn_pccontroller_action_bridge(
-                cc.egui_ctx.clone(),
-                engine_handle.controller_push_target(),
-            )};
+            crate::peer::register_server(&engine_handle, mpv_static, cc.egui_ctx.clone());
+            if !crate::peer::active() {
+                engine_handle.attach_playback_clock(mpv_static);
+            }
+            let controller_cmd_rx = if crate::peer::active() {
+                std::sync::mpsc::channel().1
+            } else {
+                crate::platform::interop::spawn_pccontroller_action_bridge(
+                    cc.egui_ctx.clone(),
+                    engine_handle.controller_push_target(),
+                )
+            };
 
             let dock_state = loaded_config
                 .workspace_session
@@ -904,6 +930,7 @@ fn main() -> eframe::Result {
                 windows_video_taskbar_thumbnail: loaded_config.windows_video_taskbar_thumbnail,
                 windows_thumbnail_toolbar: loaded_config.windows_thumbnail_toolbar,
                 windows_jump_list_quick_actions: loaded_config.windows_jump_list_quick_actions,
+                windows_detached_video_panel: loaded_config.windows_detached_video_panel,
                 windows_video_renderer: loaded_config.windows_video_renderer,
                 active_windows_video_renderer: loaded_config.windows_video_renderer,
                 opengl_vsync: loaded_config.opengl_vsync,
@@ -941,6 +968,8 @@ fn main() -> eframe::Result {
                 shell_initialized: false,
                 last_taskbar_state: None,
                 last_thumbnail_button_state: None,
+                taskbar_video_rect: None,
+                d3d11_overlay_texture: None,
                 last_update_notice_state: None,
             };
 

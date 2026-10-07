@@ -1,13 +1,21 @@
 use serde::Serialize;
 
 fn timeline_wheel_control(key: &'static str, label: &'static str) -> PreferenceControl {
-    let mut control = PreferenceControl::select(key, "input", "Timeline navigation", label, &[
-        ("zoom", "Zoom"),
-        ("vertical_scroll", "Scroll vertically"),
-        ("horizontal_scroll", "Scroll horizontally"),
-        ("none", "No action"),
-    ]);
-    control.description = Some("Vertical wheel action. Horizontal wheel always pans horizontally. Combined modifiers use Shift, then Ctrl / Command, then Alt.");
+    let mut control = PreferenceControl::select(
+        key,
+        "input",
+        "Timeline navigation",
+        label,
+        &[
+            ("zoom", "Zoom"),
+            ("vertical_scroll", "Scroll vertically"),
+            ("horizontal_scroll", "Scroll horizontally"),
+            ("none", "No action"),
+        ],
+    );
+    control.description = Some(
+        "Vertical wheel action. Horizontal wheel always pans horizontally. Combined modifiers use Shift, then Ctrl / Command, then Alt.",
+    );
     control
 }
 
@@ -315,14 +323,19 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         ),
         {
             let mut control = PreferenceControl::select(
-                "always_on_top", "appearance", "Window", "Always on top",
+                "always_on_top",
+                "appearance",
+                "Window",
+                "Always on top",
                 &[
                     ("never", "Never"),
                     ("always", "Always"),
                     ("while_playing_video", "While playing video"),
                 ],
             );
-            control.description = Some("Keep the player window above other windows. While playing video returns to normal on pause or end; audio-only playback does not pin the window.");
+            control.description = Some(
+                "Keep the player window above other windows. While playing video returns to normal on pause or end; audio-only playback does not pin the window.",
+            );
             control
         },
         {
@@ -459,9 +472,16 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 "playback",
                 "Subtitles",
                 "Text alignment",
-                &[("left", "Left"), ("center", "Center"), ("right", "Right"), ("subtitle_style", "Subtitle style")],
+                &[
+                    ("left", "Left"),
+                    ("center", "Center"),
+                    ("right", "Right"),
+                    ("subtitle_style", "Subtitle style"),
+                ],
             );
-            control.description = Some("Horizontal placement is independent of text direction; subtitle style preserves native styling without text processing");
+            control.description = Some(
+                "Horizontal placement is independent of text direction; subtitle style preserves native styling without text processing",
+            );
             control
         },
         {
@@ -532,8 +552,18 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Custom proxy URL",
             "http://proxy.example:8080",
         ),
-        PreferenceControl::boolean("remote_folder_auto_next", "playback", "Remote folders", "Automatically play the next file in the folder"),
-        PreferenceControl::boolean("remote_folder_thumbnails", "playback", "Remote folders", "Generate thumbnails for listed media files"),
+        PreferenceControl::boolean(
+            "remote_folder_auto_next",
+            "playback",
+            "Remote folders",
+            "Automatically play the next file in the folder",
+        ),
+        PreferenceControl::boolean(
+            "remote_folder_thumbnails",
+            "playback",
+            "Remote folders",
+            "Generate thumbnails for listed media files",
+        ),
         PreferenceControl::boolean(
             "auto_connect_hardware",
             "hardware",
@@ -635,17 +665,51 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         ),
         {
             let mut control = PreferenceControl::boolean(
-                "media_keys_enabled", "input", "Keyboard shortcuts",
+                "media_keys_enabled",
+                "input",
+                "Keyboard shortcuts",
                 "Respond to keyboard media controls",
             );
-            control.description = Some("Play, pause, stop, next/previous and seek through the OS media session, even in the background. Independent of in-app shortcuts and hardware hotkeys.");
+            control.description = Some(
+                "Play, pause, stop, next/previous and seek through the OS media session, even in the background. Independent of in-app shortcuts and hardware hotkeys.",
+            );
             control
         },
-        PreferenceControl::text("application_shortcuts.fullscreen", "input", "Application shortcuts", "Toggle fullscreen", "F11 (empty disables)"),
-        PreferenceControl::text("application_shortcuts.media_information", "input", "Application shortcuts", "Media information", "Shift+F10"),
-        PreferenceControl::text("application_shortcuts.media_folder", "input", "Application shortcuts", "Open media containing folder", "Ctrl+Shift+F10"),
-        PreferenceControl::text("application_shortcuts.preferences", "input", "Application shortcuts", "Open Preferences", "Ctrl+, / Cmd+,"),
-        PreferenceControl::text("application_shortcuts.edit_config", "input", "Application shortcuts", "Edit configuration file", "Ctrl+Shift+, / Cmd+Shift+,"),
+        PreferenceControl::text(
+            "application_shortcuts.fullscreen",
+            "input",
+            "Application shortcuts",
+            "Toggle fullscreen",
+            "F11 (empty disables)",
+        ),
+        PreferenceControl::text(
+            "application_shortcuts.media_information",
+            "input",
+            "Application shortcuts",
+            "Media information",
+            "Shift+F10",
+        ),
+        PreferenceControl::text(
+            "application_shortcuts.media_folder",
+            "input",
+            "Application shortcuts",
+            "Open media containing folder",
+            "Ctrl+Shift+F10",
+        ),
+        PreferenceControl::text(
+            "application_shortcuts.preferences",
+            "input",
+            "Application shortcuts",
+            "Open Preferences",
+            "Ctrl+, / Cmd+,",
+        ),
+        PreferenceControl::text(
+            "application_shortcuts.edit_config",
+            "input",
+            "Application shortcuts",
+            "Edit configuration file",
+            "Ctrl+Shift+, / Cmd+Shift+,",
+        ),
         PreferenceControl::select(
             "non_user_control_visibility",
             "hardware",
@@ -917,12 +981,27 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Show quick actions in the taskbar and Start menu",
         ),
         {
+            let mut control = PreferenceControl::boolean(
+                "windows_detached_video_panel",
+                "advanced",
+                "Windows graphics and composition",
+                "Open the video panel in a separate window",
+            );
+            control.description = Some(
+                "Moves the D3D11 DirectComposition video surface into a native resizable window without adding player chrome.",
+            );
+            control
+        },
+        {
             let mut control = PreferenceControl::select(
                 "windows_video_renderer",
                 "advanced",
                 "Windows graphics and composition",
                 "Video renderer",
-                &[("open_gl", "OpenGL"), ("d3d11", "D3D11 / DirectComposition")],
+                &[
+                    ("open_gl", "OpenGL"),
+                    ("d3d11", "D3D11 / DirectComposition"),
+                ],
             );
             control.description = Some(
                 "Selects libmpv's Windows video presentation path. Restart Pealayer after changing this setting.",
@@ -1029,7 +1108,8 @@ pub fn preferences_contract(config: &crate::config::AppConfig) -> PreferencesCon
     let mut controls = preference_controls(config);
     for control in &mut controls {
         if matches!(control.kind, PreferenceControlKind::Number) {
-            control.integer = value_at_path(&values, control.key).is_some_and(|v| v.is_i64() || v.is_u64());
+            control.integer =
+                value_at_path(&values, control.key).is_some_and(|v| v.is_i64() || v.is_u64());
         }
     }
     PreferencesContract {
@@ -1078,15 +1158,30 @@ mod tests {
     fn application_shortcuts_are_shared_editable_controls() {
         let config = crate::config::AppConfig::default();
         let contract = preferences_contract(&config);
-        for key in ["fullscreen", "media_information", "media_folder", "preferences", "edit_config"] {
+        for key in [
+            "fullscreen",
+            "media_information",
+            "media_folder",
+            "preferences",
+            "edit_config",
+        ] {
             let path = format!("application_shortcuts.{key}");
-            let control = contract.controls.iter().find(|control| control.key == path).unwrap();
+            let control = contract
+                .controls
+                .iter()
+                .find(|control| control.key == path)
+                .unwrap();
             assert!(matches!(control.kind, PreferenceControlKind::Text));
             assert_eq!(control.section, "input");
             assert!(value_at_path(&contract.values, &path).unwrap().is_string());
         }
         let mut values = contract.values;
-        set_value_at_path(&mut values, "application_shortcuts.fullscreen", serde_json::json!("Alt+Enter")).unwrap();
+        set_value_at_path(
+            &mut values,
+            "application_shortcuts.fullscreen",
+            serde_json::json!("Alt+Enter"),
+        )
+        .unwrap();
         let restored: crate::config::AppConfig = serde_json::from_value(values).unwrap();
         restored.validate().unwrap();
         assert_eq!(restored.application_shortcuts.fullscreen, "Alt+Enter");
@@ -1116,15 +1211,28 @@ mod tests {
         assert!(matches!(direction.kind, PreferenceControlKind::Select));
         assert_eq!(direction.section, "playback");
 
-        let alignment = controls.iter().find(|control| control.key == "subtitle_alignment")
+        let alignment = controls
+            .iter()
+            .find(|control| control.key == "subtitle_alignment")
             .expect("subtitle alignment control");
         assert!(matches!(alignment.kind, PreferenceControlKind::Select));
-        assert_eq!(alignment.options.iter().map(|option| option.value.as_str().unwrap()).collect::<Vec<_>>(),
-            vec!["left", "center", "right", "subtitle_style"]);
+        assert_eq!(
+            alignment
+                .options
+                .iter()
+                .map(|option| option.value.as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["left", "center", "right", "subtitle_style"]
+        );
         let contract = preferences_contract(&config);
         assert_eq!(contract.values["subtitle_alignment"], "center");
         assert_eq!(contract.defaults["subtitle_alignment"], "center");
-        assert!(crate::config::AppConfig::validate_patch_shape(&serde_json::json!({"subtitle_alignment":"right"})).is_ok());
+        assert!(
+            crate::config::AppConfig::validate_patch_shape(
+                &serde_json::json!({"subtitle_alignment":"right"})
+            )
+            .is_ok()
+        );
 
         let replacements = controls
             .iter()
@@ -1299,7 +1407,10 @@ mod tests {
         let config: crate::config::AppConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(config.always_on_top, AlwaysOnTopMode::Never);
         let controls = preference_controls(&config);
-        let control = controls.iter().find(|control| control.key == "always_on_top").unwrap();
+        let control = controls
+            .iter()
+            .find(|control| control.key == "always_on_top")
+            .unwrap();
         assert_eq!(control.section, "appearance");
         assert_eq!(control.group, "Window");
         assert!(matches!(control.kind, PreferenceControlKind::Select));
@@ -1311,19 +1422,28 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_value(mode).unwrap(), value);
             assert!(control.options.iter().any(|option| option.value == value));
-            let patched = config.apply_patch(&serde_json::json!({"always_on_top": value})).unwrap();
+            let patched = config
+                .apply_patch(&serde_json::json!({"always_on_top": value}))
+                .unwrap();
             assert_eq!(patched.always_on_top, mode);
             for loaded in [false, true] {
                 for paused in [false, true] {
                     for ended in [false, true] {
                         let expected = mode == AlwaysOnTopMode::Always
-                            || (mode == AlwaysOnTopMode::WhilePlayingVideo && loaded && !paused && !ended);
+                            || (mode == AlwaysOnTopMode::WhilePlayingVideo
+                                && loaded
+                                && !paused
+                                && !ended);
                         assert_eq!(mode.is_active(loaded, paused, ended), expected);
                     }
                 }
             }
         }
-        assert!(config.apply_patch(&serde_json::json!({"always_on_top": "sometimes"})).is_err());
+        assert!(
+            config
+                .apply_patch(&serde_json::json!({"always_on_top": "sometimes"}))
+                .is_err()
+        );
     }
 
     #[test]
@@ -1401,7 +1521,8 @@ mod tests {
     #[test]
     fn timeline_navigation_gestures_are_shared_persistent_preferences() {
         let config = crate::config::AppConfig::default();
-        let previous: crate::config::AppConfig = serde_json::from_str(r#"{"timeline_ctrl_wheel_zoom":true}"#).unwrap();
+        let previous: crate::config::AppConfig =
+            serde_json::from_str(r#"{"timeline_ctrl_wheel_zoom":true}"#).unwrap();
         use crate::config::TimelineWheelBehavior as Wheel;
         assert_eq!(previous.timeline_ctrl_wheel_action, Wheel::VerticalScroll);
         let changed = crate::config::AppConfig {
@@ -1424,15 +1545,27 @@ mod tests {
             ..Default::default()
         };
         let wire = serde_json::to_value(&status).unwrap();
-        assert_eq!(wire["timeline_wheel_preferences"], serde_json::json!({
-            "plain": "vertical_scroll", "ctrl": "zoom", "shift": "none", "alt": "horizontal_scroll"
-        }));
-        assert_eq!(serde_json::from_value::<crate::platform::interop::PlayerStatusResponse>(wire)
-            .unwrap().timeline_wheel_preferences, status.timeline_wheel_preferences);
+        assert_eq!(
+            wire["timeline_wheel_preferences"],
+            serde_json::json!({
+                "plain": "vertical_scroll", "ctrl": "zoom", "shift": "none", "alt": "horizontal_scroll"
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<crate::platform::interop::PlayerStatusResponse>(wire)
+                .unwrap()
+                .timeline_wheel_preferences,
+            status.timeline_wheel_preferences
+        );
         assert!(crate::config::AppConfig::validate_patch_shape(&serde_json::json!({
             "timeline_ctrl_wheel_action": "zoom", "timeline_alt_wheel_action": "horizontal_scroll"
         })).is_ok());
-        assert!(serde_json::from_str::<crate::config::AppConfig>(r#"{"timeline_alt_wheel_action":"invalid"}"#).is_err());
+        assert!(
+            serde_json::from_str::<crate::config::AppConfig>(
+                r#"{"timeline_alt_wheel_action":"invalid"}"#
+            )
+            .is_err()
+        );
         assert!(config.timeline_header_wheel_vertical_scroll);
         assert_eq!(config.timeline_plain_wheel_action, Wheel::Zoom);
         assert_eq!(config.timeline_ctrl_wheel_action, Wheel::VerticalScroll);
@@ -1459,7 +1592,12 @@ mod tests {
             assert_eq!(control.group, "Timeline navigation");
         }
 
-        for key in ["timeline_plain_wheel_action", "timeline_ctrl_wheel_action", "timeline_shift_wheel_action", "timeline_alt_wheel_action"] {
+        for key in [
+            "timeline_plain_wheel_action",
+            "timeline_ctrl_wheel_action",
+            "timeline_shift_wheel_action",
+            "timeline_alt_wheel_action",
+        ] {
             let control = controls.iter().find(|control| control.key == key).unwrap();
             assert!(matches!(control.kind, PreferenceControlKind::Select));
             assert_eq!(control.options.len(), 4);
@@ -1506,20 +1644,29 @@ mod tests {
     fn media_key_policy_defaults_to_enabled_and_is_persistent_and_api_configurable() {
         let old: crate::config::AppConfig = serde_json::from_str("{}").unwrap();
         assert!(old.media_keys_enabled);
-        let disabled = old.apply_patch(&serde_json::json!({"media_keys_enabled": false})).unwrap();
+        let disabled = old
+            .apply_patch(&serde_json::json!({"media_keys_enabled": false}))
+            .unwrap();
         assert!(!disabled.media_keys_enabled);
         // OS media controls do not depend on local shortcuts or hardware hotkeys.
         assert!(disabled.keyboard_shortcuts_enabled);
         assert!(disabled.global_hardware_hotkeys_enabled);
-        let restored: crate::config::AppConfig = serde_json::from_str(
-            &serde_json::to_string(&disabled).unwrap(),
-        ).unwrap();
+        let restored: crate::config::AppConfig =
+            serde_json::from_str(&serde_json::to_string(&disabled).unwrap()).unwrap();
         assert!(!restored.media_keys_enabled);
         let contract = preferences_contract(&restored);
         assert_eq!(contract.defaults["media_keys_enabled"], true);
         assert_eq!(contract.values["media_keys_enabled"], false);
-        assert!(old.apply_patch(&serde_json::json!({"media_keys_enabled": "off"})).is_err());
-        assert!(disabled.apply_patch(&serde_json::json!({"media_keys_enabled": true})).unwrap().media_keys_enabled);
+        assert!(
+            old.apply_patch(&serde_json::json!({"media_keys_enabled": "off"}))
+                .is_err()
+        );
+        assert!(
+            disabled
+                .apply_patch(&serde_json::json!({"media_keys_enabled": true}))
+                .unwrap()
+                .media_keys_enabled
+        );
     }
 
     #[test]

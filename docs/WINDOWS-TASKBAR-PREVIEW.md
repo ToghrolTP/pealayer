@@ -1,6 +1,57 @@
 # Windows video-only taskbar preview
 
-## What changed
+## Layered presentation strategy (experimental D3D11 branch)
+
+Pealayer now chooses the native representation from the actual video host:
+
+1. **Detached native video HWND:** the zero-copy DirectComposition swapchain
+   moves to a resizable top-level video window. That HWND supplies its own DWM
+   surface and taskbar representation; the main window is not falsely cropped.
+2. **Visible embedded video rectangle in the redirected main surface:**
+   `ITaskbarList3::SetThumbnailClip`
+   receives the intersection of the current physical-pixel video rectangle and
+   the main window client area. Iconic-bitmap forcing is disabled.
+3. **Video loaded but embedded rectangle unavailable:** the clip is cleared,
+   `DWMWA_HAS_ICONIC_BITMAP` and `DWMWA_FORCE_ICONIC_REPRESENTATION` are enabled,
+   and the last MPV-only `HBITMAP` is supplied for both
+   `DwmSetIconicThumbnail` and `DwmSetIconicLivePreviewBitmap`.
+4. **No video or preference disabled:** both custom paths and any stale clip
+   are disabled.
+
+The D3D11 startup contract explicitly enables mpv's flip model, requests three
+swapchain buffers and keeps D3D11VA zero-copy decoding enabled. Pealayer reads
+the exported swapchain's real `DXGI_SWAP_CHAIN_DESC`; diagnostics distinguish
+`flip-discard`, `flip-sequential`, and legacy bitblt fallbacks instead of
+claiming a swap effect from configuration alone. mpv remains the swapchain
+owner, so driver fallback is respected rather than replacing its live chain.
+
+Taskbar capture also follows the active flip chain rather than assuming DXGI
+buffer 0 is visible. Pealayer queries `IDXGISwapChain3` for the current render
+index and copies the immediately preceding buffer (the last presented frame).
+This prevents Pause from making Explorer jump back to an older buffer in a
+triple-buffered chain. A brief post-Pause refresh settles the cached frame, and
+the native DWM message callback can continue publishing that cache while the
+main window is minimized.
+
+On Windows 11, mpv's embedded DirectComposition visual is not part of the main
+HWND's redirected egui bitmap. `SetThumbnailClip` on that HWND consequently
+crops the UI behind the video rather than the separately composed video. The
+strategy therefore treats embedded D3D11 as case 3, while OpenGL uses case 2
+and detached D3D11 uses case 1.
+
+Because that topmost DirectComposition visual also sits above egui's redirected
+surface, an egui popup would otherwise be hidden below the video. While a popup
+is open, Pealayer takes one bounded snapshot from the same swapchain, temporarily
+hides the native visual, and paints the snapshot inside egui. Closing the popup
+immediately restores the zero-copy visual. Pealayer OSD messages are additionally
+sent to mpv's native OSD so they remain above both embedded and detached D3D11
+video without forcing the normal playback path through a CPU copy.
+
+The Program Monitor tab context menu exposes **Detach video panel** when the
+D3D11 / DirectComposition renderer is active. The same shared Preferences
+contract exposes the persisted option for native and Web settings surfaces.
+
+## Earlier bitmap-fallback groundwork
 
 The previous implementation provided hand-drawn, fixed 16x16 monochrome icons
 and asked Explorer to crop the main egui window using `SetThumbnailClip`. It
@@ -9,15 +60,18 @@ therefore exposed a weakness in the crop-only implementation. It is **not**
 evidence by itself of a confirmed Windows 10 versus Windows 11 OS bug; the
 Windows 10 host was unreachable during this pass.
 
-The replacement uses the native DWM iconic-thumbnail contract:
+That pass established the native DWM iconic-thumbnail fallback now used by
+step 3 of the strategy above:
 
-- Enable `DWMWA_HAS_ICONIC_BITMAP` and `DWMWA_FORCE_ICONIC_REPRESENTATION` when
-  the configured video-only preview is active; disable both to restore the
-  ordinary application-window preview. Clear the obsolete shell crop.
+- Enable `DWMWA_HAS_ICONIC_BITMAP` and `DWMWA_FORCE_ICONIC_REPRESENTATION` only
+  when the video is loaded but neither a visible embedded rectangle nor a
+  detached native host can represent it. Disable both for the other paths.
 - Read only MPV's offscreen framebuffer, before egui/OSD composition, with an
   aspect-preserving, maximum 640x360 GPU downsample. Preserve framebuffer,
   renderbuffer, pixel-pack buffer and pixel-pack settings afterward.
-- Seed one frame. Further readback is requested by DWM and capped at 5 Hz;
+- Refresh the seed cache for two seconds after a media change so an initial
+  undecoded/black render cannot become the persistent thumbnail. Further
+  readback is requested by DWM and capped at 30 Hz;
   it stops after preview demand expires. No continual idle full-screen capture,
   ffmpeg process, network request or disk write is involved.
 - Respond to `WM_DWMSENDICONICTHUMBNAIL` and
@@ -69,6 +123,22 @@ Changing the preview preference applies live, without restarting.
 | Paused playback/workspace | Preserved at 1256.089 seconds, NLE |
 | Actual taskbar screenshot and click verification | Pending: native capture service failed twice with `0x8007041D`; no taskbar screenshot is claimed |
 | Windows 10 / Cafe-PC comparison and deployment | Pending: updater endpoint timed out |
+
+## D3D11 / DirectComposition experiment — 2026-10-07
+
+- Experimental binary: `experimental/d3d11-composition/Pealayer-D3D11-Composition.exe`
+- SHA-256: `2234ee8922bb41e50770db7c2911d5e30ecea55b4783ae5ace844ad74776454d`
+- Runtime strategy: `IconicBitmap`; cached frame 640x360; DWM iconic attributes
+  accepted; video-only PNG visually inspected before and after Pause and while
+  the main window was minimized.
+- Shell toolbar diagnostics: add and state-update calls succeeded. A real
+  Explorer hover/click remains the user-visible acceptance test; synthetic DWM
+  request messages are deliberately not counted as proof.
+- Actual mpv composition swap effect on David-PC: `flip-sequential`. Pealayer
+  requests and recognizes `flip-discard`, but upstream mpv explicitly chooses
+  `DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL` when `d3d11-output-mode=composition`.
+- Checks: feature and ordinary release checks passed; four focused thumbnail
+  tests passed.
 
 The following diagnostic atlas comes from the **installed** app's production
 icon rasterizer, at its actual native size. It is not a screenshot of Explorer.

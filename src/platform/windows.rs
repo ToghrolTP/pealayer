@@ -162,7 +162,15 @@ static SHELL_HAS_MEDIA: AtomicBool = AtomicBool::new(false);
 static SHELL_MEDIA_KEYS_ENABLED: AtomicBool = AtomicBool::new(true);
 static SHELL_REINITIALIZE: AtomicBool = AtomicBool::new(false);
 static TASKBAR_BUTTON_CREATED_MESSAGE: AtomicU32 = AtomicU32::new(0);
-static TASKBAR_THUMBNAIL_CLIP: Mutex<Option<(isize, Option<[i32; 4]>)>> = Mutex::new(None);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskbarVideoPreviewTarget {
+    Disabled,
+    WindowClip([i32; 4]),
+    IconicBitmap,
+    ExternalWindow(isize),
+}
+
+static TASKBAR_THUMBNAIL_CLIP: Mutex<Option<(isize, TaskbarVideoPreviewTarget)>> = Mutex::new(None);
 static THUMBNAIL_METRICS_DIRTY: AtomicBool = AtomicBool::new(true);
 static THUMBNAIL_TOOLBAR_ADDED_HWND: AtomicIsize = AtomicIsize::new(0);
 static THUMBNAIL_TOOLBAR_ADD_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
@@ -1505,7 +1513,9 @@ pub fn sync_windows_jump_list_with_options(
     recent_media: &[std::path::PathBuf],
     include_quick_actions: bool,
 ) {
-    if crate::peer::active() { return; }
+    if crate::peer::active() {
+        return;
+    }
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::UI::Shell::{SHARD_PATHW, SHAddToRecentDocs};
@@ -1606,23 +1616,39 @@ fn create_thumbnail_button_icon(
     glyph: ThumbnailGlyph,
     size: u32,
 ) -> windows::core::Result<windows::Win32::UI::WindowsAndMessaging::HICON> {
-    use windows::Win32::{Graphics::Gdi::{CreateBitmap, DeleteObject},
-        UI::WindowsAndMessaging::{CreateIconIndirect, ICONINFO}};
+    use windows::Win32::{
+        Graphics::Gdi::{CreateBitmap, DeleteObject},
+        UI::WindowsAndMessaging::{CreateIconIndirect, ICONINFO},
+    };
     let image = thumbnail_icon_pixels(glyph, size);
     let color = crate::platform::taskbar_preview::bitmap(&image)?;
     let mask_bytes = vec![0u8; ((size as usize + 15) / 16 * 2) * size as usize];
     unsafe {
-        let mask = CreateBitmap(size as i32, size as i32, 1, 1, Some(mask_bytes.as_ptr().cast()));
-        if mask.0.is_null() { let _ = DeleteObject(color.into()); return Err(windows::core::Error::from_thread()); }
-        let result = CreateIconIndirect(&ICONINFO { fIcon: true.into(), hbmColor:color, hbmMask:mask, ..Default::default() });
-        let _ = DeleteObject(color.into()); let _ = DeleteObject(mask.into()); result
+        let mask = CreateBitmap(
+            size as i32,
+            size as i32,
+            1,
+            1,
+            Some(mask_bytes.as_ptr().cast()),
+        );
+        if mask.0.is_null() {
+            let _ = DeleteObject(color.into());
+            return Err(windows::core::Error::from_thread());
+        }
+        let result = CreateIconIndirect(&ICONINFO {
+            fIcon: true.into(),
+            hbmColor: color,
+            hbmMask: mask,
+            ..Default::default()
+        });
+        let _ = DeleteObject(color.into());
+        let _ = DeleteObject(mask.into());
+        result
     }
 }
 
 #[cfg(target_os = "windows")]
-fn retain_thumbnail_toolbar_icons(
-    icons: Vec<windows::Win32::UI::WindowsAndMessaging::HICON>,
-) {
+fn retain_thumbnail_toolbar_icons(icons: Vec<windows::Win32::UI::WindowsAndMessaging::HICON>) {
     use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, HICON};
 
     let replacement = icons
@@ -1641,9 +1667,7 @@ fn retain_thumbnail_toolbar_icons(
 }
 
 #[cfg(target_os = "windows")]
-fn destroy_thumbnail_toolbar_icons(
-    icons: Vec<windows::Win32::UI::WindowsAndMessaging::HICON>,
-) {
+fn destroy_thumbnail_toolbar_icons(icons: Vec<windows::Win32::UI::WindowsAndMessaging::HICON>) {
     use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
     for icon in icons {
         unsafe {
@@ -1654,31 +1678,47 @@ fn destroy_thumbnail_toolbar_icons(
 
 #[cfg(target_os = "windows")]
 fn thumbnail_icon_pixels(glyph: ThumbnailGlyph, size: u32) -> image::RgbaImage {
-    use ab_glyph::{Font, FontRef, PxScale, point};
     use crate::ui::icons;
+    use ab_glyph::{Font, FontRef, PxScale, point};
     let symbol = match glyph {
-        ThumbnailGlyph::Back => icons::REWIND, ThumbnailGlyph::Forward => icons::FAST_FORWARD,
-        ThumbnailGlyph::Play => icons::PLAY, ThumbnailGlyph::Pause => icons::PAUSE,
-        ThumbnailGlyph::Mute => icons::SPEAKER_SLASH, ThumbnailGlyph::Unmute => icons::SPEAKER_HIGH,
-        ThumbnailGlyph::Fullscreen => icons::ARROWS_OUT, ThumbnailGlyph::Restore => icons::ARROWS_IN,
+        ThumbnailGlyph::Back => icons::REWIND,
+        ThumbnailGlyph::Forward => icons::FAST_FORWARD,
+        ThumbnailGlyph::Play => icons::PLAY,
+        ThumbnailGlyph::Pause => icons::PAUSE,
+        ThumbnailGlyph::Mute => icons::SPEAKER_SLASH,
+        ThumbnailGlyph::Unmute => icons::SPEAKER_HIGH,
+        ThumbnailGlyph::Fullscreen => icons::ARROWS_OUT,
+        ThumbnailGlyph::Restore => icons::ARROWS_IN,
     };
-    let mut image = image::RgbaImage::new(size,size);
-    let font = FontRef::try_from_slice(egui_phosphor::Variant::Regular.font_bytes()).expect("bundled Phosphor font");
+    let mut image = image::RgbaImage::new(size, size);
+    let font = FontRef::try_from_slice(egui_phosphor::Variant::Regular.font_bytes())
+        .expect("bundled Phosphor font");
     let glyph = font.glyph_id(symbol.chars().next().expect("Phosphor glyph"));
     let scale = PxScale::from(size as f32 * 0.9);
     if let Some(outline) = font.outline_glyph(glyph.with_scale(scale)) {
         let bounds = outline.px_bounds();
-        let position = point((size as f32-bounds.width())*0.5-bounds.min.x,
-            (size as f32-bounds.height())*0.5-bounds.min.y);
-        if let Some(outline) = font.outline_glyph(glyph.with_scale_and_position(scale,position)) {
+        let position = point(
+            (size as f32 - bounds.width()) * 0.5 - bounds.min.x,
+            (size as f32 - bounds.height()) * 0.5 - bounds.min.y,
+        );
+        if let Some(outline) = font.outline_glyph(glyph.with_scale_and_position(scale, position)) {
             let bounds = outline.px_bounds();
             let light = native_taskbar_light_theme();
-            let color = if light { [32,32,32] } else { [245,245,245] };
-            outline.draw(|x,y,coverage| {
-                let x=bounds.min.x.floor() as i32+x as i32;
-                let y=bounds.min.y.floor() as i32+y as i32;
-                if x>=0 && y>=0 && x<size as i32 && y<size as i32 {
-                    image.put_pixel(x as u32,y as u32,image::Rgba([color[0],color[1],color[2],(coverage*255.0).round() as u8]));
+            let color = if light { [32, 32, 32] } else { [245, 245, 245] };
+            outline.draw(|x, y, coverage| {
+                let x = bounds.min.x.floor() as i32 + x as i32;
+                let y = bounds.min.y.floor() as i32 + y as i32;
+                if x >= 0 && y >= 0 && x < size as i32 && y < size as i32 {
+                    image.put_pixel(
+                        x as u32,
+                        y as u32,
+                        image::Rgba([
+                            color[0],
+                            color[1],
+                            color[2],
+                            (coverage * 255.0).round() as u8,
+                        ]),
+                    );
                 }
             });
         }
@@ -1690,26 +1730,40 @@ fn thumbnail_icon_pixels(glyph: ThumbnailGlyph, size: u32) -> image::RgbaImage {
 fn native_taskbar_light_theme() -> bool {
     winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
         .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize")
-        .ok().and_then(|key| key.get_value::<u32,_>("SystemUsesLightTheme").ok()).is_some_and(|v| v!=0)
+        .ok()
+        .and_then(|key| key.get_value::<u32, _>("SystemUsesLightTheme").ok())
+        .is_some_and(|v| v != 0)
 }
 
-pub fn thumbnail_toolbar_metrics(hwnd: isize) -> (u32,bool) {
+pub fn thumbnail_toolbar_metrics(hwnd: isize) -> (u32, bool) {
     #[cfg(target_os = "windows")]
     {
-        static METRICS: Mutex<Option<(isize, std::time::Instant, (u32,bool))>> = Mutex::new(None);
+        static METRICS: Mutex<Option<(isize, std::time::Instant, (u32, bool))>> = Mutex::new(None);
         let mut cached = METRICS.lock().unwrap_or_else(|error| error.into_inner());
         let dirty = THUMBNAIL_METRICS_DIRTY.swap(false, Ordering::AcqRel);
         if !dirty && let Some((owner, at, metrics)) = *cached {
-            if owner == hwnd && at.elapsed() < std::time::Duration::from_secs(1) { return metrics; }
+            if owner == hwnd && at.elapsed() < std::time::Duration::from_secs(1) {
+                return metrics;
+            }
         }
         #[link(name = "user32")]
-        unsafe extern "system" { fn GetDpiForWindow(hwnd: isize) -> u32; fn GetSystemMetricsForDpi(index:i32,dpi:u32)->i32; }
+        unsafe extern "system" {
+            fn GetDpiForWindow(hwnd: isize) -> u32;
+            fn GetSystemMetricsForDpi(index: i32, dpi: u32) -> i32;
+        }
         let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
-        let metrics = (unsafe { GetSystemMetricsForDpi(49,dpi) }.clamp(16,64) as u32,native_taskbar_light_theme());
-        *cached = Some((hwnd,std::time::Instant::now(),metrics)); metrics
+        let metrics = (
+            unsafe { GetSystemMetricsForDpi(49, dpi) }.clamp(16, 64) as u32,
+            native_taskbar_light_theme(),
+        );
+        *cached = Some((hwnd, std::time::Instant::now(), metrics));
+        metrics
     }
     #[cfg(not(target_os = "windows"))]
-    { let _=hwnd; (16,false) }
+    {
+        let _ = hwnd;
+        (16, false)
+    }
 }
 
 /// Diagnostic atlas uses the exact same rasterizer as the native HICONs.
@@ -1717,18 +1771,35 @@ pub fn thumbnail_toolbar_png() -> Option<Vec<u8>> {
     #[cfg(target_os = "windows")]
     {
         let size = thumbnail_toolbar_metrics(get_registered_hwnd()).0;
-        let mut atlas = image::RgbaImage::new(size*8,size);
-        for (index,glyph) in [ThumbnailGlyph::Back,ThumbnailGlyph::Play,ThumbnailGlyph::Pause,
-            ThumbnailGlyph::Forward,ThumbnailGlyph::Mute,ThumbnailGlyph::Unmute,
-            ThumbnailGlyph::Fullscreen,ThumbnailGlyph::Restore].into_iter().enumerate() {
-            image::imageops::overlay(&mut atlas,&thumbnail_icon_pixels(glyph,size),index as i64*size as i64,0);
+        let mut atlas = image::RgbaImage::new(size * 8, size);
+        for (index, glyph) in [
+            ThumbnailGlyph::Back,
+            ThumbnailGlyph::Play,
+            ThumbnailGlyph::Pause,
+            ThumbnailGlyph::Forward,
+            ThumbnailGlyph::Mute,
+            ThumbnailGlyph::Unmute,
+            ThumbnailGlyph::Fullscreen,
+            ThumbnailGlyph::Restore,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            image::imageops::overlay(
+                &mut atlas,
+                &thumbnail_icon_pixels(glyph, size),
+                index as i64 * size as i64,
+                0,
+            );
         }
-        let mut out=std::io::Cursor::new(Vec::new());
-        atlas.write_to(&mut out,image::ImageFormat::Png).ok()?;
+        let mut out = std::io::Cursor::new(Vec::new());
+        atlas.write_to(&mut out, image::ImageFormat::Png).ok()?;
         Some(out.into_inner())
     }
     #[cfg(not(target_os = "windows"))]
-    { None }
+    {
+        None
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -1927,8 +1998,14 @@ pub fn update_taskbar_thumbnail_buttons(
             .map_err(|e| format!("ITaskbarList3::HrInit failed: {e}"))?;
         THUMBNAIL_TOOLBAR_ENABLED.store(enabled, Ordering::Relaxed);
         THUMBNAIL_TOOLBAR_HAS_MEDIA.store(has_media, Ordering::Relaxed);
-        let (buttons, icons) =
-            taskbar_thumbnail_buttons(hwnd_raw, is_paused, is_muted, is_fullscreen, has_media, enabled)?;
+        let (buttons, icons) = taskbar_thumbnail_buttons(
+            hwnd_raw,
+            is_paused,
+            is_muted,
+            is_fullscreen,
+            has_media,
+            enabled,
+        )?;
         THUMBNAIL_TOOLBAR_UPDATE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
         let update_result = taskbar.ThumbBarUpdateButtons(hwnd, &buttons);
         let result = match update_result {
@@ -2008,38 +2085,78 @@ pub fn compute_thumbnail_clip_ratio(
 
 #[cfg(target_os = "windows")]
 pub fn configure_video_taskbar_thumbnail(hwnd_raw: isize) -> Result<(), String> {
-    update_video_taskbar_thumbnail(hwnd_raw, None)
+    update_video_taskbar_thumbnail(hwnd_raw, None, false, None)
 }
 
-/// Enables Pealayer's MPV-only iconic thumbnail while media is visible.
+/// Select the least invasive video-only Windows taskbar representation.
 ///
-/// A compositor clip still samples the complete egui swapchain on Windows 11
-/// and regresses to an application-UI thumbnail. The explicit iconic bitmap is
-/// sourced from MPV's offscreen framebuffer instead, while the actual window
-/// and DWM Peek remain ordinary full-application surfaces.
+/// A visible in-client video rectangle is cropped directly from DWM's live
+/// window surface. A detached native video window owns its own redirected
+/// surface. Only a hidden/clipped panel needs the cached MPV HBITMAP path.
 #[cfg(target_os = "windows")]
 pub fn update_video_taskbar_thumbnail(
     hwnd_raw: isize,
     video_rect: Option<[i32; 4]>,
+    video_available: bool,
+    external_hwnd: Option<isize>,
 ) -> Result<(), String> {
-    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Foundation::{HWND, RECT};
     use windows::Win32::System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     };
     use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList};
+    use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, IsWindow};
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
     }
-    let normalized = video_rect.filter(|rect| rect[2] > rect[0] && rect[3] > rect[1]);
-    crate::platform::taskbar_preview::configure(hwnd_raw, normalized.is_some())?;
+    let hwnd = HWND(hwnd_raw as *mut _);
+    let mut client = RECT::default();
+    let client_available = unsafe { GetClientRect(hwnd, &mut client) }.is_ok();
+    let normalized = video_rect.and_then(|rect| {
+        let clipped = [
+            rect[0].max(client.left),
+            rect[1].max(client.top),
+            rect[2].min(client.right),
+            rect[3].min(client.bottom),
+        ];
+        (client_available && clipped[2] > clipped[0] && clipped[3] > clipped[1]).then_some(clipped)
+    });
+    let external = external_hwnd.filter(|external| {
+        *external != 0 && unsafe { IsWindow(Some(HWND(*external as *mut _))).as_bool() }
+    });
+    let target = if !video_available {
+        TaskbarVideoPreviewTarget::Disabled
+    } else if let Some(external) = external {
+        TaskbarVideoPreviewTarget::ExternalWindow(external)
+    } else if let Some(rect) = normalized {
+        TaskbarVideoPreviewTarget::WindowClip(rect)
+    } else {
+        TaskbarVideoPreviewTarget::IconicBitmap
+    };
+
+    let iconic = target == TaskbarVideoPreviewTarget::IconicBitmap;
+    crate::platform::taskbar_preview::configure(hwnd_raw, iconic)?;
+    crate::platform::taskbar_preview::set_mode(match target {
+        TaskbarVideoPreviewTarget::Disabled => {
+            crate::platform::taskbar_preview::PreviewMode::Disabled
+        }
+        TaskbarVideoPreviewTarget::WindowClip(_) => {
+            crate::platform::taskbar_preview::PreviewMode::WindowClip
+        }
+        TaskbarVideoPreviewTarget::IconicBitmap => {
+            crate::platform::taskbar_preview::PreviewMode::IconicBitmap
+        }
+        TaskbarVideoPreviewTarget::ExternalWindow(_) => {
+            crate::platform::taskbar_preview::PreviewMode::ExternalWindow
+        }
+    });
     if TASKBAR_THUMBNAIL_CLIP
         .lock()
-        .is_ok_and(|cached| *cached == Some((hwnd_raw, normalized)))
+        .is_ok_and(|cached| *cached == Some((hwnd_raw, target)))
     {
         return Ok(());
     }
-    let hwnd = HWND(hwnd_raw as *mut _);
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         let taskbar: ITaskbarList3 = CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER)
@@ -2047,14 +2164,24 @@ pub fn update_video_taskbar_thumbnail(
         taskbar
             .HrInit()
             .map_err(|error| format!("initialize taskbar thumbnail service: {error}"))?;
-        // Clear any clip left by an older build. The iconic bitmap already
-        // contains video only and must not be cropped a second time.
-        taskbar
-            .SetThumbnailClip(hwnd, std::ptr::null())
-            .map_err(|error| format!("clear legacy taskbar thumbnail clip: {error}"))?;
+        if let TaskbarVideoPreviewTarget::WindowClip(rect) = target {
+            let clip = RECT {
+                left: rect[0],
+                top: rect[1],
+                right: rect[2],
+                bottom: rect[3],
+            };
+            taskbar
+                .SetThumbnailClip(hwnd, &clip)
+                .map_err(|error| format!("set video taskbar thumbnail clip: {error}"))?;
+        } else {
+            taskbar
+                .SetThumbnailClip(hwnd, std::ptr::null())
+                .map_err(|error| format!("clear taskbar thumbnail clip: {error}"))?;
+        }
     }
     if let Ok(mut cached) = TASKBAR_THUMBNAIL_CLIP.lock() {
-        *cached = Some((hwnd_raw, normalized));
+        *cached = Some((hwnd_raw, target));
     }
     Ok(())
 }
@@ -2068,6 +2195,8 @@ pub fn configure_video_taskbar_thumbnail(_hwnd_raw: isize) -> Result<(), String>
 pub fn update_video_taskbar_thumbnail(
     _hwnd_raw: isize,
     _video_rect: Option<[i32; 4]>,
+    _video_available: bool,
+    _external_hwnd: Option<isize>,
 ) -> Result<(), String> {
     Ok(())
 }
@@ -2140,7 +2269,8 @@ unsafe extern "system" fn shell_window_proc(
 
     observe_native_window_message(message);
 
-    if matches!(message, 0x02e0 | 0x031a | 0x001a) { // DPI/theme/system settings
+    if matches!(message, 0x02e0 | 0x031a | 0x001a) {
+        // DPI/theme/system settings
         THUMBNAIL_METRICS_DIRTY.store(true, Ordering::Release);
     }
 
@@ -2366,8 +2496,7 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Shell::{
-        NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_MODIFY, NOTIFYICONDATAW,
-        Shell_NotifyIconW,
+        NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_MODIFY, NOTIFYICONDATAW, Shell_NotifyIconW,
     };
     use windows::Win32::UI::WindowsAndMessaging::{GCLP_HICON, GetClassLongPtrW, HICON, LoadIconW};
     use windows::core::PCWSTR;
@@ -2958,12 +3087,30 @@ mod tests {
 
     #[test]
     fn appcommand_media_keys_respect_configuration_and_media_state() {
-        assert_eq!(shell_command_for_appcommand(14, true, true), Some(THUMB_BUTTON_PLAYPAUSE));
-        assert_eq!(shell_command_for_appcommand(46, true, true), Some(MEDIA_KEY_CMD_PLAY));
-        assert_eq!(shell_command_for_appcommand(47, true, true), Some(MEDIA_KEY_CMD_PAUSE));
-        assert_eq!(shell_command_for_appcommand(13, true, true), Some(MEDIA_KEY_CMD_STOP));
-        assert_eq!(shell_command_for_appcommand(11, true, true), Some(MEDIA_KEY_CMD_NEXT));
-        assert_eq!(shell_command_for_appcommand(12, true, true), Some(MEDIA_KEY_CMD_PREVIOUS));
+        assert_eq!(
+            shell_command_for_appcommand(14, true, true),
+            Some(THUMB_BUTTON_PLAYPAUSE)
+        );
+        assert_eq!(
+            shell_command_for_appcommand(46, true, true),
+            Some(MEDIA_KEY_CMD_PLAY)
+        );
+        assert_eq!(
+            shell_command_for_appcommand(47, true, true),
+            Some(MEDIA_KEY_CMD_PAUSE)
+        );
+        assert_eq!(
+            shell_command_for_appcommand(13, true, true),
+            Some(MEDIA_KEY_CMD_STOP)
+        );
+        assert_eq!(
+            shell_command_for_appcommand(11, true, true),
+            Some(MEDIA_KEY_CMD_NEXT)
+        );
+        assert_eq!(
+            shell_command_for_appcommand(12, true, true),
+            Some(MEDIA_KEY_CMD_PREVIOUS)
+        );
         assert_eq!(shell_command_for_appcommand(14, false, true), None);
         assert_eq!(shell_command_for_appcommand(14, true, false), None);
         assert_eq!(shell_command_for_appcommand(999, true, true), None);

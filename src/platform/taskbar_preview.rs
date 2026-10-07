@@ -1,7 +1,9 @@
-//! DWM consumes an MPV-only bitmap, not a screenshot/crop of egui.
-//! Readback is demand-driven: one seed frame, then up to 30 Hz only while
-//! Windows is actively requesting previews. No decoding, disk I/O or GL runs
-//! in the window procedure, and the real Pealayer window remains untouched.
+//! Cached MPV-only bitmap fallback for the Windows taskbar preview strategy.
+//! A visible embedded panel uses `SetThumbnailClip`, and a detached native
+//! video HWND uses its own DWM surface. Readback is retained for the remaining
+//! hidden-panel case: one seed frame, then up to 30 Hz only while Windows is
+//! actively requesting previews. No decoding, disk I/O or GL runs in the
+//! window procedure.
 
 use std::sync::{Mutex, OnceLock, mpsc::SyncSender};
 use std::time::{Duration, Instant};
@@ -9,9 +11,11 @@ use std::time::{Duration, Instant};
 #[derive(Default)]
 struct Preview {
     enabled: bool,
+    mode: PreviewMode,
     media: String,
     frame: Option<image::RgbaImage>,
     captured: Option<Instant>,
+    seed_until: Option<Instant>,
     requested: Option<Instant>,
     requests: u64,
     delivered: u64,
@@ -19,11 +23,22 @@ struct Preview {
     configuration_error: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PreviewMode {
+    #[default]
+    Disabled,
+    WindowClip,
+    IconicBitmap,
+    ExternalWindow,
+}
+
 static PREVIEW: Mutex<Preview> = Mutex::new(Preview {
     enabled: false,
+    mode: PreviewMode::Disabled,
     media: String::new(),
     frame: None,
     captured: None,
+    seed_until: None,
     requested: None,
     requests: 0,
     delivered: 0,
@@ -63,8 +78,12 @@ fn wake_native_window() {}
 // Win32 message values are stable ABI constants. Keeping this decision pure
 // lets every CI host verify that video-only rendering is limited to the small
 // taskbar thumbnail and never leaks into the full-size Peek preview.
-fn is_static_thumbnail_request(message: u32) -> bool {
-    message == 0x0323 // WM_DWMSENDICONICTHUMBNAIL
+fn is_iconic_bitmap_request(message: u32) -> bool {
+    matches!(
+        message,
+        0x0323 // WM_DWMSENDICONICTHUMBNAIL
+            | 0x0326 // WM_DWMSENDICONICLIVEPREVIEWBITMAP
+    )
 }
 
 pub fn register_repaint(ctx: &eframe::egui::Context) {
@@ -93,12 +112,31 @@ pub fn register_repaint(ctx: &eframe::egui::Context) {
 
 /// Wake the GUI after a shell callback queues an action without activating it.
 pub fn request_repaint() {
-    if REPAINT_WAKE.get().is_some_and(|sender| sender.try_send(()).is_ok()) {
+    if REPAINT_WAKE
+        .get()
+        .is_some_and(|sender| sender.try_send(()).is_ok())
+    {
         return;
     }
     if let Some(ctx) = REPAINT.get() {
         ctx.request_repaint();
     }
+}
+
+/// Keep the video-only cache fresh for a short native transition such as
+/// pausing playback or replacing the DirectComposition visual with an egui
+/// popup overlay. The current frame remains publishable until its successor is
+/// ready, so Explorer never falls back to the whole application window.
+pub(crate) fn request_fresh_frames(duration: Duration) {
+    if let Ok(mut state) = PREVIEW.lock() {
+        let until = Instant::now() + duration;
+        state.seed_until = Some(state.seed_until.map_or(until, |current| current.max(until)));
+    }
+    request_repaint();
+}
+
+pub(crate) fn frame_rgba() -> Option<image::RgbaImage> {
+    PREVIEW.lock().ok()?.frame.clone()
 }
 
 pub fn fit_size(width: u32, height: u32, max_width: u32, max_height: u32) -> (u32, u32) {
@@ -153,11 +191,22 @@ pub fn configure(hwnd: isize, enabled: bool) -> Result<(), String> {
     let _ = hwnd;
     let mut state = PREVIEW.lock().map_err(|_| "thumbnail state unavailable")?;
     state.enabled = enabled;
+    state.mode = if enabled {
+        PreviewMode::IconicBitmap
+    } else if state.mode == PreviewMode::IconicBitmap {
+        PreviewMode::Disabled
+    } else {
+        state.mode
+    };
     state.configuration_error = None;
-    state.frame = None;
-    state.captured = None;
     state.requested = None;
     Ok(())
+}
+
+pub fn set_mode(mode: PreviewMode) {
+    if let Ok(mut state) = PREVIEW.lock() {
+        state.mode = mode;
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,17 +221,27 @@ enum CapturePlan {
 /// and 30 Hz throttling regardless of the selected Windows video renderer.
 pub(crate) fn begin_capture(media: &str, width: u32, height: u32) -> Option<(u32, u32)> {
     let plan = if let Ok(mut state) = PREVIEW.lock() {
-        if !state.enabled || width == 0 || height == 0 {
+        if width == 0 || height == 0 {
             return None;
         }
         if state.media != media {
             state.media = media.to_owned();
             state.frame = None;
             state.captured = None;
+            // The first render after opening media can precede the decoded
+            // video frame and therefore be black. Briefly refresh the cache
+            // after a media change so Explorer receives decoded pixels even
+            // before its first hover request.
+            state.seed_until = Some(Instant::now() + Duration::from_secs(2));
         }
+        let seeding = state.seed_until.is_some_and(|until| until > Instant::now());
+        let requested = state
+            .requested
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(1));
         capture_plan(
-            state.enabled,
+            state.enabled || state.frame.is_none() || seeding || requested,
             state.frame.is_some(),
+            seeding,
             state.requested.map(|at| at.elapsed()),
             state.captured.map(|at| at.elapsed()),
         )
@@ -205,9 +264,21 @@ pub(crate) fn begin_capture(media: &str, width: u32, height: u32) -> Option<(u32
 
 /// Publish a top-down RGBA video frame to the common DWM thumbnail state.
 pub(crate) fn submit_capture(hwnd: isize, frame: image::RgbaImage) {
+    let mut seed_delay = None;
     if let Ok(mut state) = PREVIEW.lock() {
         state.frame = Some(frame);
         state.captured = Some(Instant::now());
+        if let Some(until) = state.seed_until {
+            let remaining = until.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                state.seed_until = None;
+            } else {
+                seed_delay = Some(remaining.min(Duration::from_millis(120)));
+            }
+        }
+    }
+    if let (Some(ctx), Some(delay)) = (REPAINT.get(), seed_delay) {
+        ctx.request_repaint_after(delay);
     }
     #[cfg(target_os = "windows")]
     unsafe {
@@ -222,6 +293,7 @@ pub(crate) fn submit_capture(hwnd: isize, frame: image::RgbaImage) {
 fn capture_plan(
     enabled: bool,
     has_frame: bool,
+    seeding: bool,
     requested_age: Option<Duration>,
     captured_age: Option<Duration>,
 ) -> CapturePlan {
@@ -232,6 +304,13 @@ fn capture_plan(
     }
     if !has_frame {
         return CapturePlan::Capture;
+    }
+    if seeding {
+        const SEED_INTERVAL: Duration = Duration::from_millis(120);
+        return match captured_age {
+            Some(age) if age < SEED_INTERVAL => CapturePlan::RetryAfter(SEED_INTERVAL - age),
+            _ => CapturePlan::Capture,
+        };
     }
     if !requested_age.is_some_and(|age| age < ACTIVE_WINDOW) {
         return CapturePlan::Idle;
@@ -245,6 +324,7 @@ fn capture_plan(
 pub fn reset_shell() {
     if let Ok(mut state) = PREVIEW.lock() {
         state.enabled = false;
+        state.mode = PreviewMode::Disabled;
     }
 }
 
@@ -400,13 +480,7 @@ pub fn bitmap(
 pub fn handle_request(hwnd: isize, message: u32, lparam: isize) -> bool {
     use windows::Win32::UI::WindowsAndMessaging::WM_DWMSENDICONICLIVEPREVIEWBITMAP;
 
-    // Video-only is correct for the small taskbar thumbnail, but a Peek/live
-    // preview is projected over the real desktop window. Leave that full-size
-    // preview to DWM so Pealayer keeps its complete UI while being hovered.
-    if message == WM_DWMSENDICONICLIVEPREVIEWBITMAP {
-        return false;
-    }
-    if !is_static_thumbnail_request(message) {
+    if !is_iconic_bitmap_request(message) {
         return false;
     }
     let frame = {
@@ -426,12 +500,55 @@ pub fn handle_request(hwnd: isize, message: u32, lparam: isize) -> bool {
     let Some(frame) = frame else {
         return true;
     };
-    let (max_w, max_h) = (
-        ((lparam as u32 >> 16) & 0xffff).max(1),
-        (lparam as u32 & 0xffff).max(1),
-    );
-    publish_thumbnail(hwnd, &frame, (max_w, max_h));
+    if message == WM_DWMSENDICONICLIVEPREVIEWBITMAP {
+        publish_live_preview(hwnd, &frame);
+    } else {
+        let (max_w, max_h) = (
+            ((lparam as u32 >> 16) & 0xffff).max(1),
+            (lparam as u32 & 0xffff).max(1),
+        );
+        publish_thumbnail(hwnd, &frame, (max_w, max_h));
+    }
     true
+}
+
+#[cfg(target_os = "windows")]
+fn publish_live_preview(hwnd: isize, frame: &image::RgbaImage) {
+    use windows::Win32::{
+        Foundation::{HWND, POINT, RECT},
+        Graphics::{Dwm::DwmSetIconicLivePreviewBitmap, Gdi::DeleteObject},
+        UI::WindowsAndMessaging::GetClientRect,
+    };
+    let mut client = RECT::default();
+    let result = unsafe { GetClientRect(HWND(hwnd as *mut _), &mut client) };
+    if result.is_err() {
+        return;
+    }
+    let maximum = (
+        (client.right - client.left).max(1) as u32,
+        (client.bottom - client.top).max(1) as u32,
+    );
+    let (width, height) = fit_size(frame.width(), frame.height(), maximum.0, maximum.1);
+    let resized =
+        image::imageops::resize(frame, width, height, image::imageops::FilterType::Triangle);
+    let origin = POINT {
+        x: ((maximum.0 - width) / 2) as i32,
+        y: ((maximum.1 - height) / 2) as i32,
+    };
+    let result = bitmap(&resized).and_then(|bitmap| unsafe {
+        let result = DwmSetIconicLivePreviewBitmap(HWND(hwnd as *mut _), bitmap, Some(&origin), 0);
+        let _ = DeleteObject(bitmap.into());
+        result
+    });
+    if let Ok(mut state) = PREVIEW.lock() {
+        match result {
+            Ok(()) => {
+                state.delivered += 1;
+                state.last_error = None;
+            }
+            Err(error) => state.last_error = Some(error.to_string()),
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -464,7 +581,13 @@ pub fn diagnostics() -> serde_json::Value {
     };
     // These two attributes are documented for Set, not Get. Report the
     // successfully accepted configuration, not fabricated read-back values.
-    serde_json::json!({"video_only":state.enabled,
+    #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
+    let renderer = crate::platform::d3d11_composition::diagnostics();
+    #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
+    let renderer = serde_json::Value::Null;
+    serde_json::json!({"video_only":state.mode != PreviewMode::Disabled,
+        "strategy":format!("{:?}", state.mode),
+        "d3d11_composition":renderer,
         "dwm_configuration":{"supported":cfg!(target_os="windows"),
             "force_iconic":state.enabled,"has_iconic_bitmap":state.enabled,
             "source":"successful DwmSetWindowAttribute calls","error":state.configuration_error},
@@ -485,9 +608,10 @@ pub fn frame_png() -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn video_only_bitmap_is_never_used_for_full_size_peek() {
-        assert!(super::is_static_thumbnail_request(0x0323));
-        assert!(!super::is_static_thumbnail_request(0x0326));
+    fn iconic_fallback_handles_thumbnail_and_live_preview_requests() {
+        assert!(super::is_iconic_bitmap_request(0x0323));
+        assert!(super::is_iconic_bitmap_request(0x0326));
+        assert!(!super::is_iconic_bitmap_request(0x000f));
     }
 
     #[test]
@@ -504,6 +628,7 @@ mod tests {
             super::capture_plan(
                 true,
                 true,
+                false,
                 Some(Duration::from_millis(5)),
                 Some(Duration::from_millis(20)),
             ),
@@ -513,6 +638,7 @@ mod tests {
             super::capture_plan(
                 true,
                 true,
+                false,
                 Some(Duration::from_millis(40)),
                 Some(Duration::from_millis(33)),
             ),
@@ -522,10 +648,24 @@ mod tests {
             super::capture_plan(
                 true,
                 true,
+                false,
                 Some(Duration::from_secs(2)),
                 Some(Duration::from_secs(1)),
             ),
             super::CapturePlan::Idle
+        );
+    }
+
+    #[test]
+    fn media_seed_refreshes_before_the_first_shell_hover() {
+        use std::time::Duration;
+        assert_eq!(
+            super::capture_plan(true, true, true, None, Some(Duration::from_millis(40)),),
+            super::CapturePlan::RetryAfter(Duration::from_millis(80))
+        );
+        assert_eq!(
+            super::capture_plan(true, true, true, None, Some(Duration::from_millis(120)),),
+            super::CapturePlan::Capture
         );
     }
 }

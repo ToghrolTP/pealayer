@@ -639,28 +639,61 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 .map(|path| path.to_string_lossy().into_owned())
         })
         .flatten();
-    if hwnd != 0
-        && let Err(error) =
-            crate::platform::windows::update_video_taskbar_thumbnail(hwnd, taskbar_video_rect)
-    {
-        log::debug!("Could not update taskbar video thumbnail crop: {error}");
-    }
+    app.taskbar_video_rect = taskbar_video_rect;
 
     // 2. Calculate DPI-aware physical pixel dimensions
     let ppi = pixels_per_point;
     let (target_phys_w, target_phys_h) = calculate_physical_bounds(dest_rect, ppi);
 
     #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
+    let composition_popup_fallback = app.active_windows_video_renderer
+        == crate::config::WindowsVideoRenderer::D3D11
+        && !app.windows_detached_video_panel
+        && egui::Popup::is_any_open(ui.ctx());
+    #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
     let composition_active = app.active_windows_video_renderer
         == crate::config::WindowsVideoRenderer::D3D11
-        && crate::platform::d3d11_composition::update(
-            &app.mpv_client,
-            hwnd,
-            dest_rect,
-            pixels_per_point,
-            app.current_video_path.is_some(),
-            taskbar_media.as_deref(),
-        );
+        && if app.windows_detached_video_panel {
+            crate::platform::d3d11_composition::active()
+        } else if composition_popup_fallback {
+            if let Some(media) = taskbar_media.as_deref() {
+                crate::platform::taskbar_preview::request_fresh_frames(
+                    std::time::Duration::from_millis(300),
+                );
+                crate::platform::d3d11_composition::capture_for_overlay(hwnd, media);
+            }
+            if let Some(frame) = crate::platform::taskbar_preview::frame_rgba() {
+                let size = [frame.width() as usize, frame.height() as usize];
+                let image = egui::ColorImage::from_rgba_unmultiplied(size, frame.as_raw());
+                if let Some(texture) = app.d3d11_overlay_texture.as_mut() {
+                    texture.set(image, egui::TextureOptions::LINEAR);
+                } else {
+                    app.d3d11_overlay_texture = Some(ui.ctx().load_texture(
+                        "d3d11-popup-video-fallback",
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    ));
+                }
+            }
+            let _ = crate::platform::d3d11_composition::update(
+                &app.mpv_client,
+                hwnd,
+                dest_rect,
+                pixels_per_point,
+                false,
+                taskbar_media.as_deref(),
+            );
+            false
+        } else {
+            crate::platform::d3d11_composition::update(
+                &app.mpv_client,
+                hwnd,
+                dest_rect,
+                pixels_per_point,
+                app.current_video_path.is_some(),
+                taskbar_media.as_deref(),
+            )
+        };
     #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
     let composition_active = false;
 
@@ -671,13 +704,25 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .ok()
         .and_then(|rtt| rtt.video_texture_id);
 
-    if !composition_active && let Some(texture_id) = texture_id_opt {
-        ui.painter().image(
-            texture_id,
-            dest_rect,
-            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            egui::Color32::WHITE,
-        );
+    if !composition_active {
+        #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
+        let popup_texture = composition_popup_fallback
+            .then(|| {
+                app.d3d11_overlay_texture
+                    .as_ref()
+                    .map(egui::TextureHandle::id)
+            })
+            .flatten();
+        #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
+        let popup_texture = None;
+        if let Some(texture_id) = popup_texture.or(texture_id_opt) {
+            ui.painter().image(
+                texture_id,
+                dest_rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        }
     }
 
     // 2.5 Draw OSD overlay if active

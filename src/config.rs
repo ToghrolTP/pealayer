@@ -53,11 +53,16 @@ pub struct NumericInputSteps {
 
 impl NumericInputSteps {
     pub fn for_step(step: f64) -> Self {
-        Self { normal: step, fine: step / 10.0, coarse: step * 10.0 }
+        Self {
+            normal: step,
+            fine: step / 10.0,
+            coarse: step * 10.0,
+        }
     }
 
     pub fn is_valid(self) -> bool {
-        [self.normal, self.fine, self.coarse].into_iter()
+        [self.normal, self.fine, self.coarse]
+            .into_iter()
             .all(|step| step.is_finite() && (1e-9..=1e12).contains(&step))
     }
 }
@@ -69,14 +74,36 @@ mod numeric_input_tests {
     #[test]
     fn numeric_input_steps_roundtrip_and_validate_through_config_contract() {
         let mut config = AppConfig::default();
-        config.numeric_input_steps.insert("subtitle_delay_seconds".into(), NumericInputSteps { normal: 0.25, fine: 0.005, coarse: 2.0 });
+        config.numeric_input_steps.insert(
+            "subtitle_delay_seconds".into(),
+            NumericInputSteps {
+                normal: 0.25,
+                fine: 0.005,
+                coarse: 2.0,
+            },
+        );
         assert!(config.validate().is_ok());
-        let reloaded: AppConfig = serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
+        let reloaded: AppConfig =
+            serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
         assert_eq!(reloaded.numeric_input_steps, config.numeric_input_steps);
-        assert!(AppConfig::validate_patch_shape(&serde_json::json!({"numeric_input_steps": config.numeric_input_steps})).is_ok());
-        assert!(serde_json::from_str::<AppConfig>("{}").unwrap().numeric_input_steps.is_empty());
+        assert!(
+            AppConfig::validate_patch_shape(
+                &serde_json::json!({"numeric_input_steps": config.numeric_input_steps})
+            )
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_str::<AppConfig>("{}")
+                .unwrap()
+                .numeric_input_steps
+                .is_empty()
+        );
         for invalid in [0.0, -1.0, f64::INFINITY, f64::NAN, 1e13] {
-            config.numeric_input_steps.get_mut("subtitle_delay_seconds").unwrap().fine = invalid;
+            config
+                .numeric_input_steps
+                .get_mut("subtitle_delay_seconds")
+                .unwrap()
+                .fine = invalid;
             assert!(config.validate().is_err());
         }
     }
@@ -596,6 +623,10 @@ pub struct AppConfig {
     /// Publish persistent Windows Jump List tasks for the taskbar and Start
     /// menu.
     pub windows_jump_list_quick_actions: bool,
+    /// Present the video in its own native top-level window. The experimental
+    /// D3D11/DirectComposition renderer can move its zero-copy swapchain to
+    /// this host without duplicating decoding or copying frames through egui.
+    pub windows_detached_video_panel: bool,
     /// Select the Windows libmpv video path. Applying a different renderer
     /// takes effect on the next application start because mpv's VO is created
     /// during process initialization.
@@ -749,6 +780,7 @@ impl Default for AppConfig {
             windows_video_taskbar_thumbnail: true,
             windows_thumbnail_toolbar: true,
             windows_jump_list_quick_actions: true,
+            windows_detached_video_panel: false,
             windows_video_renderer: WindowsVideoRenderer::OpenGl,
             // Reactive egui rendering does not require a continuously synced
             // swap loop. Some Windows OpenGL drivers flicker with V-Sync, so
@@ -1130,7 +1162,9 @@ pub fn runtime_port(env_name: &str, default: u16) -> u16 {
 
 /// The single TCP port used by Pealayer's HTTP, WebSocket, and local IPC APIs.
 pub fn control_port() -> u16 {
-    if let Some(client)=crate::peer::client(){return client.local_port}
+    if let Some(client) = crate::peer::client() {
+        return client.local_port;
+    }
     let config = AppConfig::load();
     runtime_port("PEALAYER_PORT", config.web_port)
 }
@@ -1251,7 +1285,12 @@ impl AppConfig {
     }
 
     pub fn get_config_path() -> PathBuf {
-        if let Some(client)=crate::peer::client(){return client.snapshot().map(|value|PathBuf::from(value.session.config_path)).unwrap_or_default();}
+        if let Some(client) = crate::peer::client() {
+            return client
+                .snapshot()
+                .map(|value| PathBuf::from(value.session.config_path))
+                .unwrap_or_default();
+        }
         if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {
             return PathBuf::from(path);
         }
@@ -1263,7 +1302,9 @@ impl AppConfig {
     }
 
     pub fn load_with_mode(mode: StorageMode, exe_dir: &std::path::Path) -> Self {
-        if let Some(client)=crate::peer::client(){return client.config();}
+        if let Some(client) = crate::peer::client() {
+            return client.config();
+        }
         match mode {
             StorageMode::Portable => {
                 let path = resolve_portable_config_path(exe_dir);
@@ -1294,11 +1335,14 @@ impl AppConfig {
                 }
 
                 // Transparent Migration from legacy recent.json if present
-                let legacy_path =
-                    PathBuf::from(std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".to_string()))
-                        .join(".config")
-                        .join("pealayer")
-                        .join("recent.json");
+                let legacy_path = PathBuf::from(
+                    std::env::var("HOME")
+                        .or_else(|_| std::env::var("USERPROFILE"))
+                        .unwrap_or_else(|_| ".".to_string()),
+                )
+                .join(".config")
+                .join("pealayer")
+                .join("recent.json");
 
                 let mut config = Self::default();
                 if legacy_path.exists() {
@@ -1320,7 +1364,9 @@ impl AppConfig {
         exe_dir: &std::path::Path,
     ) -> Result<(), String> {
         self.validate()?;
-        if let Some(client)=crate::peer::client(){return client.save_config(self);}
+        if let Some(client) = crate::peer::client() {
+            return client.save_config(self);
+        }
         match mode {
             StorageMode::Portable => {
                 let path = resolve_portable_config_path(exe_dir);
@@ -1349,7 +1395,9 @@ impl AppConfig {
     }
 
     pub fn load() -> Self {
-        if let Some(client) = crate::peer::client() { return client.config(); }
+        if let Some(client) = crate::peer::client() {
+            return client.config();
+        }
         if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {
             let path = PathBuf::from(path);
             if let Ok(cfg) = Self::load_from_path(&path) {
@@ -1364,7 +1412,9 @@ impl AppConfig {
 
     pub fn save(&self) -> Result<(), String> {
         self.validate()?;
-        if let Some(client) = crate::peer::client() { return client.save_config(self); }
+        if let Some(client) = crate::peer::client() {
+            return client.save_config(self);
+        }
         if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {
             let path = PathBuf::from(path);
             self.save_to_path(&path)?;
@@ -1382,10 +1432,20 @@ impl AppConfig {
     }
 
     pub fn load_from_path(path: &std::path::Path) -> Result<Self, String> {
-        if let Some(client)=crate::peer::client(){
-            let mut url=client.url("/api/fs/file")?;url.query_pairs_mut().append_pair("path",&path.to_string_lossy());
-            let mut config=client.http.get(url).send().and_then(|response|response.error_for_status()).and_then(|response|response.json::<Self>()).map_err(|error|error.to_string())?;
-            config.normalize_workspace_profiles();config.validate()?;return Ok(config);
+        if let Some(client) = crate::peer::client() {
+            let mut url = client.url("/api/fs/file")?;
+            url.query_pairs_mut()
+                .append_pair("path", &path.to_string_lossy());
+            let mut config = client
+                .http
+                .get(url)
+                .send()
+                .and_then(|response| response.error_for_status())
+                .and_then(|response| response.json::<Self>())
+                .map_err(|error| error.to_string())?;
+            config.normalize_workspace_profiles();
+            config.validate()?;
+            return Ok(config);
         }
         let data = std::fs::read_to_string(path)
             .map_err(|error| format!("read configuration {}: {error}", path.display()))?;
@@ -1397,7 +1457,12 @@ impl AppConfig {
     }
 
     pub fn save_to_path(&self, path: &std::path::Path) -> Result<(), String> {
-        if crate::peer::active(){return Err("Use the server configuration Export action; local client files are read-only".into());}
+        if crate::peer::active() {
+            return Err(
+                "Use the server configuration Export action; local client files are read-only"
+                    .into(),
+            );
+        }
         self.validate()?;
         let parent = path
             .parent()
@@ -1451,8 +1516,11 @@ impl AppConfig {
 
     pub fn fingerprint(path: &std::path::Path) -> Result<u64, String> {
         use std::hash::{Hash, Hasher};
-        let bytes = if let Some(client)=crate::peer::client(){serde_json::to_vec(&client.config()).map_err(|error|error.to_string())?}else{std::fs::read(path)
-            .map_err(|error| format!("read configuration {}: {error}", path.display()))?
+        let bytes = if let Some(client) = crate::peer::client() {
+            serde_json::to_vec(&client.config()).map_err(|error| error.to_string())?
+        } else {
+            std::fs::read(path)
+                .map_err(|error| format!("read configuration {}: {error}", path.display()))?
         };
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         bytes.hash(&mut hasher);
@@ -1508,9 +1576,16 @@ impl AppConfig {
         {
             return Err("temporary_fast_forward_speed must be between 1 and 16".to_string());
         }
-        if self.numeric_input_steps.len() > 256 || self.numeric_input_steps.iter().any(|(key, steps)|
-            key.is_empty() || key.len() > 128 || !steps.is_valid()) {
-            return Err("numeric_input_steps must contain valid, positive finite adjustment sizes".to_string());
+        if self.numeric_input_steps.len() > 256
+            || self
+                .numeric_input_steps
+                .iter()
+                .any(|(key, steps)| key.is_empty() || key.len() > 128 || !steps.is_valid())
+        {
+            return Err(
+                "numeric_input_steps must contain valid, positive finite adjustment sizes"
+                    .to_string(),
+            );
         }
         if !self.subtitle_font_size.is_finite()
             || !(10.0..=100.0).contains(&self.subtitle_font_size)
@@ -1816,8 +1891,20 @@ mod tests {
         assert!(edited.effect_working_draft.is_some());
         let clear = serde_json::json!({"effect_working_draft": null});
         assert!(AppConfig::validate_patch_shape(&clear).is_ok());
-        assert!(edited.apply_patch(&clear).unwrap().effect_working_draft.is_none());
-        assert!(config.apply_patch(&clear).unwrap().effect_working_draft.is_none());
+        assert!(
+            edited
+                .apply_patch(&clear)
+                .unwrap()
+                .effect_working_draft
+                .is_none()
+        );
+        assert!(
+            config
+                .apply_patch(&clear)
+                .unwrap()
+                .effect_working_draft
+                .is_none()
+        );
     }
 
     #[test]

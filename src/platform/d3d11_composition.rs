@@ -7,25 +7,30 @@
 
 use std::cell::RefCell;
 use std::ffi::c_void;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use windows::core::{Interface, IUnknown};
 use windows::Win32::Foundation::HWND;
-use windows::Win32::Graphics::DirectComposition::{
-    DCompositionCreateDevice2, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
-};
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_TEXTURE2D_DESC,
     D3D11_USAGE_STAGING, ID3D11Device, ID3D11Texture2D,
 };
+use windows::Win32::Graphics::DirectComposition::{
+    DCompositionCreateDevice2, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
+};
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
-    DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
-    DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_R10G10B10A2_UNORM,
 };
-use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
+use windows::Win32::Graphics::Dxgi::{
+    DXGI_SWAP_EFFECT_DISCARD, DXGI_SWAP_EFFECT_FLIP_DISCARD, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+    DXGI_SWAP_EFFECT_SEQUENTIAL,
+};
+use windows::Win32::Graphics::Dxgi::{IDXGISwapChain, IDXGISwapChain3};
+use windows::core::{IUnknown, Interface};
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
+static SWAP_EFFECT: Mutex<Option<&'static str>> = Mutex::new(None);
 
 thread_local! {
     static STATE: RefCell<Option<CompositionState>> = const { RefCell::new(None) };
@@ -44,14 +49,15 @@ struct CompositionState {
     thumbnail_staging: Option<ID3D11Texture2D>,
     thumbnail_staging_desc: Option<(u32, u32, DXGI_FORMAT)>,
     logged_thumbnail_capture: bool,
+    last_back_buffer_index: Option<u32>,
+    flip_chain_advanced: bool,
 }
 
 fn create_state(hwnd: isize) -> windows::core::Result<CompositionState> {
     // A null rendering device asks DirectComposition to create its own device.
     // The swapchain itself remains owned and presented by mpv.
-    let device: IDCompositionDevice = unsafe {
-        DCompositionCreateDevice2::<_, IDCompositionDevice>(None::<&IUnknown>)?
-    };
+    let device: IDCompositionDevice =
+        unsafe { DCompositionCreateDevice2::<_, IDCompositionDevice>(None::<&IUnknown>)? };
     // Topmost makes the video visual sit above egui's opaque OpenGL surface.
     // The visual has no input surface, so pointer gestures still reach egui.
     let target = unsafe { device.CreateTargetForHwnd(HWND(hwnd as *mut _), true)? };
@@ -73,6 +79,8 @@ fn create_state(hwnd: isize) -> windows::core::Result<CompositionState> {
         thumbnail_staging: None,
         thumbnail_staging_desc: None,
         logged_thumbnail_capture: false,
+        last_back_buffer_index: None,
+        flip_chain_advanced: false,
     })
 }
 
@@ -87,9 +95,8 @@ fn unpack_swapchain_frame(
     }
     let mut rgba = vec![0_u8; desc.Width as usize * desc.Height as usize * 4];
     for y in 0..desc.Height as usize {
-        let source = unsafe {
-            std::slice::from_raw_parts(base.add(y * row_pitch), desc.Width as usize * 4)
-        };
+        let source =
+            unsafe { std::slice::from_raw_parts(base.add(y * row_pitch), desc.Width as usize * 4) };
         let target = &mut rgba[y * desc.Width as usize * 4..(y + 1) * desc.Width as usize * 4];
         match desc.Format {
             DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB => {
@@ -129,7 +136,42 @@ fn capture_taskbar_thumbnail(
     let Some(swapchain) = state.swapchain.as_ref().cloned() else {
         return Ok(());
     };
-    let source: ID3D11Texture2D = unsafe { swapchain.GetBuffer(0)? };
+    let swapchain_desc = unsafe { swapchain.GetDesc()? };
+    // On a flip-model chain buffer 0 is not synonymous with the frame DWM is
+    // currently presenting. After Present, DXGI advances the current render
+    // buffer; the immediately preceding buffer is the displayed frame. Reading
+    // a fixed buffer explains the visible jump several frames backwards when
+    // playback is paused on a three-buffer chain.
+    let presented_index = if matches!(
+        swapchain_desc.SwapEffect,
+        DXGI_SWAP_EFFECT_FLIP_DISCARD | DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL
+    ) && swapchain_desc.BufferCount > 1
+    {
+        swapchain
+            .cast::<IDXGISwapChain3>()
+            .map(|chain| {
+                let current = unsafe { chain.GetCurrentBackBufferIndex() };
+                if state
+                    .last_back_buffer_index
+                    .is_some_and(|previous| previous != current)
+                {
+                    state.flip_chain_advanced = true;
+                }
+                state.last_back_buffer_index = Some(current);
+                if state.flip_chain_advanced {
+                    (current + swapchain_desc.BufferCount - 1) % swapchain_desc.BufferCount
+                } else {
+                    // A paused media restore can render into the initial back
+                    // buffer without advancing the chain. In that state the
+                    // preceding slot has never been presented and is black.
+                    current
+                }
+            })
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let source: ID3D11Texture2D = unsafe { swapchain.GetBuffer(presented_index)? };
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe { source.GetDesc(&mut desc) };
     let Some((target_width, target_height)) =
@@ -201,6 +243,19 @@ fn capture_taskbar_thumbnail(
     Ok(())
 }
 
+/// Capture the latest presented composition buffer before the visual is
+/// temporarily hidden for an egui popup. This does not alter the swapchain or
+/// create another decoder/player.
+pub fn capture_for_overlay(hwnd: isize, media: &str) {
+    STATE.with(|slot| {
+        if let Some(state) = slot.borrow_mut().as_mut()
+            && let Err(error) = capture_taskbar_thumbnail(state, hwnd, media)
+        {
+            log::debug!("D3D11 popup fallback capture failed: {error}");
+        }
+    });
+}
+
 /// Synchronize mpv's composition swapchain with the physical egui video rect.
 /// Returns true only when the swapchain is attached and visible.
 pub fn update(
@@ -262,8 +317,32 @@ pub fn update(
             state.swapchain_ptr = raw;
             state.thumbnail_staging = None;
             state.thumbnail_staging_desc = None;
+            state.last_back_buffer_index = None;
+            state.flip_chain_advanced = false;
             swapchain_changed = true;
-            log::info!("mpv exposed a D3D11 zero-copy composition swapchain");
+            if let Ok(desc) = unsafe { state.swapchain.as_ref().expect("new swapchain").GetDesc() } {
+                let effect = match desc.SwapEffect {
+                    DXGI_SWAP_EFFECT_FLIP_DISCARD => "flip-discard",
+                    DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL => "flip-sequential",
+                    DXGI_SWAP_EFFECT_DISCARD => "discard-bitblt",
+                    DXGI_SWAP_EFFECT_SEQUENTIAL => "sequential-bitblt",
+                    _ => "unknown",
+                };
+                if let Ok(mut observed) = SWAP_EFFECT.lock() {
+                    *observed = Some(effect);
+                }
+                if effect == "flip-discard" {
+                    log::info!(
+                        "mpv exposed a D3D11 zero-copy composition swapchain using DXGI_SWAP_EFFECT_FLIP_DISCARD"
+                    );
+                } else {
+                    log::warn!(
+                        "mpv composition swapchain uses {effect}; flip-discard was requested but the active mpv/driver selected a fallback"
+                    );
+                }
+            } else {
+                log::info!("mpv exposed a D3D11 zero-copy composition swapchain");
+            }
         }
 
         let visible = media_loaded && state.swapchain.is_some();
@@ -312,4 +391,13 @@ pub fn update(
 
 pub fn active() -> bool {
     ACTIVE.load(Ordering::Acquire)
+}
+
+pub fn diagnostics() -> serde_json::Value {
+    serde_json::json!({
+        "active": active(),
+        "swap_effect": SWAP_EFFECT.lock().ok().and_then(|effect| *effect),
+        "flip_discard": SWAP_EFFECT.lock().ok().and_then(|effect| *effect) == Some("flip-discard"),
+        "zero_copy": true,
+    })
 }
