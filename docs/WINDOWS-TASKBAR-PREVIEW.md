@@ -41,11 +41,24 @@ and detached D3D11 uses case 1.
 
 Because that topmost DirectComposition visual also sits above egui's redirected
 surface, an egui popup would otherwise be hidden below the video. While a popup
-is open, Pealayer takes one bounded snapshot from the same swapchain, temporarily
-hides the native visual, and paints the snapshot inside egui. Closing the popup
-immediately restores the zero-copy visual. Pealayer OSD messages are additionally
-sent to mpv's native OSD so they remain above both embedded and detached D3D11
-video without forcing the normal playback path through a CPU copy.
+is open, Pealayer reads the same swapchain into a viewport-sized temporary
+texture at up to 30 Hz, temporarily hides the native visual, and paints that
+texture inside egui. This keeps the video moving smoothly behind the popup;
+closing it immediately restores the zero-copy visual. Pealayer OSD messages are
+additionally sent to mpv's native OSD so they remain above both embedded and
+detached D3D11 video without forcing the normal playback path through a CPU copy.
+
+Explorer thumbnail actions are dispatched by a dedicated shell-media worker.
+Play/pause, seek, mute, stop, playlist navigation, fullscreen and media-key
+commands therefore reach libmpv even when Windows has minimized the eframe
+window and no egui update pass is running. The worker also republishes the
+button state immediately instead of waiting for the window to regain focus.
+
+The iconic live-preview callback is deliberately limited to minimized windows.
+For a visible owner, Windows keeps the real application surface for Aero Peek;
+the small taskbar thumbnail can still use the video-only bitmap. Timed preview
+history pins Pause to the latest captured frame at or before the media clock,
+instead of exposing the next decoded flip-chain buffer.
 
 The Program Monitor tab context menu exposes **Detach video panel** when the
 D3D11 / DirectComposition renderer is active. The same shared Preferences

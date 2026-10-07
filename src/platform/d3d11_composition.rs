@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use std::ffi::c_void;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct3D11::{
@@ -51,6 +52,8 @@ struct CompositionState {
     logged_thumbnail_capture: bool,
     last_back_buffer_index: Option<u32>,
     flip_chain_advanced: bool,
+    media: String,
+    last_overlay_capture: Option<Instant>,
 }
 
 fn create_state(hwnd: isize) -> windows::core::Result<CompositionState> {
@@ -81,6 +84,8 @@ fn create_state(hwnd: isize) -> windows::core::Result<CompositionState> {
         logged_thumbnail_capture: false,
         last_back_buffer_index: None,
         flip_chain_advanced: false,
+        media: String::new(),
+        last_overlay_capture: None,
     })
 }
 
@@ -128,10 +133,17 @@ fn unpack_swapchain_frame(
     image::RgbaImage::from_raw(desc.Width, desc.Height, rgba)
 }
 
-fn capture_taskbar_thumbnail(
+#[derive(Clone, Copy)]
+enum CapturePurpose {
+    Taskbar,
+    PopupOverlay { maximum: (u32, u32) },
+}
+
+fn capture_composition_frame(
     state: &mut CompositionState,
     hwnd: isize,
     media: &str,
+    purpose: CapturePurpose,
 ) -> windows::core::Result<()> {
     let Some(swapchain) = state.swapchain.as_ref().cloned() else {
         return Ok(());
@@ -174,10 +186,30 @@ fn capture_taskbar_thumbnail(
     let source: ID3D11Texture2D = unsafe { swapchain.GetBuffer(presented_index)? };
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe { source.GetDesc(&mut desc) };
-    let Some((target_width, target_height)) =
-        crate::platform::taskbar_preview::begin_capture(media, desc.Width, desc.Height)
-    else {
-        return Ok(());
+    let (target_width, target_height) = match purpose {
+        CapturePurpose::Taskbar => {
+            let Some(size) =
+                crate::platform::taskbar_preview::begin_capture(media, desc.Width, desc.Height)
+            else {
+                return Ok(());
+            };
+            size
+        }
+        CapturePurpose::PopupOverlay { maximum } => {
+            if state
+                .last_overlay_capture
+                .is_some_and(|at| at.elapsed() < Duration::from_millis(33))
+            {
+                return Ok(());
+            }
+            state.last_overlay_capture = Some(Instant::now());
+            crate::platform::taskbar_preview::fit_size(
+                desc.Width,
+                desc.Height,
+                maximum.0.clamp(1, 1280),
+                maximum.1.clamp(1, 720),
+            )
+        }
     };
     if desc.SampleDesc.Count != 1 {
         log::debug!("D3D11 taskbar capture skipped a multisampled swapchain");
@@ -228,10 +260,14 @@ fn capture_taskbar_thumbnail(
             &frame,
             target_width,
             target_height,
-            image::imageops::FilterType::Triangle,
+            match purpose {
+                CapturePurpose::Taskbar => image::imageops::FilterType::Triangle,
+                CapturePurpose::PopupOverlay { .. } => image::imageops::FilterType::CatmullRom,
+            },
         )
     };
-    crate::platform::taskbar_preview::submit_capture(hwnd, frame);
+    let media_time = crate::platform::windows::shell_player_time();
+    crate::platform::taskbar_preview::submit_capture_at(hwnd, frame, media_time);
     if !state.logged_thumbnail_capture {
         log::info!(
             "D3D11 video-only taskbar thumbnail capture is active ({}x{})",
@@ -246,12 +282,38 @@ fn capture_taskbar_thumbnail(
 /// Capture the latest presented composition buffer before the visual is
 /// temporarily hidden for an egui popup. This does not alter the swapchain or
 /// create another decoder/player.
-pub fn capture_for_overlay(hwnd: isize, media: &str) {
+pub fn capture_for_overlay(hwnd: isize, media: &str, maximum: (u32, u32)) {
     STATE.with(|slot| {
         if let Some(state) = slot.borrow_mut().as_mut()
-            && let Err(error) = capture_taskbar_thumbnail(state, hwnd, media)
+            && let Err(error) = capture_composition_frame(
+                state,
+                hwnd,
+                media,
+                CapturePurpose::PopupOverlay { maximum },
+            )
         {
             log::debug!("D3D11 popup fallback capture failed: {error}");
+        }
+    });
+}
+
+/// Refresh a minimized taskbar thumbnail directly from mpv's live swapchain.
+/// DWM delivers the request on the owner-window thread, so the thread-local
+/// DirectComposition state remains accessible even when eframe suppresses
+/// normal paints for a minimized window.
+pub fn capture_for_taskbar_request(hwnd: isize) {
+    STATE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let Some(state) = slot.as_mut() else {
+            return;
+        };
+        let media = state.media.clone();
+        if media.is_empty() {
+            return;
+        }
+        if let Err(error) = capture_composition_frame(state, hwnd, &media, CapturePurpose::Taskbar)
+        {
+            log::debug!("D3D11 on-demand taskbar capture failed: {error}");
         }
     });
 }
@@ -292,6 +354,7 @@ pub fn update(
             }
         }
         let state = slot.as_mut().expect("composition state initialized");
+        state.media = taskbar_media.unwrap_or_default().to_owned();
 
         if state.size != (width, height) {
             if let Err(error) = mpv.set_property(
@@ -381,7 +444,8 @@ pub fn update(
         ACTIVE.store(visible, Ordering::Release);
         if visible
             && let Some(media) = taskbar_media
-            && let Err(error) = capture_taskbar_thumbnail(state, hwnd, media)
+            && let Err(error) =
+                capture_composition_frame(state, hwnd, media, CapturePurpose::Taskbar)
         {
             log::debug!("D3D11 taskbar thumbnail capture failed: {error}");
         }

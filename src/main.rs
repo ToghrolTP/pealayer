@@ -430,6 +430,7 @@ fn main() -> eframe::Result {
             .unwrap();
 
             let mpv_static: &'static Mpv = Box::leak(Box::new(mpv));
+            crate::platform::windows::register_shell_player(crate::mpv::player::Player(mpv_static));
 
             let mut render_context = (!use_d3d11).then(|| {
                 mpv_static

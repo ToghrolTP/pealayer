@@ -657,10 +657,16 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             crate::platform::d3d11_composition::active()
         } else if composition_popup_fallback {
             if let Some(media) = taskbar_media.as_deref() {
-                crate::platform::taskbar_preview::request_fresh_frames(
-                    std::time::Duration::from_millis(300),
+                crate::platform::d3d11_composition::capture_for_overlay(
+                    hwnd,
+                    media,
+                    (target_phys_w.max(1) as u32, target_phys_h.max(1) as u32),
                 );
-                crate::platform::d3d11_composition::capture_for_overlay(hwnd, media);
+                // The zero-copy visual has to be hidden while an egui popup is
+                // above it, but keep the temporary high-quality texture moving
+                // at compositor cadence rather than an 8 Hz taskbar cadence.
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(16));
             }
             if let Some(frame) = crate::platform::taskbar_preview::frame_rgba() {
                 let size = [frame.width() as usize, frame.height() as usize];

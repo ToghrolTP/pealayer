@@ -4623,6 +4623,10 @@ impl PealayerApp {
                     (3, PropertyData::Flag(v)) => {
                         let prev_paused = self.is_paused;
                         self.is_paused = v;
+                        crate::platform::taskbar_preview::set_playback_state(
+                            v,
+                            self.mpv.get_property::<f64>("time-pos").ok(),
+                        );
                         self.engine_handle
                             .is_playing
                             .store(!v, std::sync::atomic::Ordering::Relaxed);
@@ -4911,6 +4915,7 @@ impl PealayerApp {
             self.seek_pos = None;
             let _ = self.mpv.set_property("pause", false);
             self.is_paused = false;
+            crate::platform::taskbar_preview::set_playback_state(false, None);
             self.engine_handle
                 .is_playing
                 .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -4928,6 +4933,10 @@ impl PealayerApp {
             return;
         }
         let _ = self.mpv.set_property("pause", true);
+        crate::platform::taskbar_preview::set_playback_state(
+            true,
+            self.mpv.get_property::<f64>("time-pos").ok(),
+        );
         #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
         crate::platform::taskbar_preview::request_fresh_frames(std::time::Duration::from_millis(
             600,

@@ -5,6 +5,7 @@
 //! actively requesting previews. No decoding, disk I/O or GL runs in the
 //! window procedure.
 
+use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock, mpsc::SyncSender};
 use std::time::{Duration, Instant};
 
@@ -14,6 +15,8 @@ struct Preview {
     mode: PreviewMode,
     media: String,
     frame: Option<image::RgbaImage>,
+    history: VecDeque<TimedFrame>,
+    freeze_at: Option<f64>,
     captured: Option<Instant>,
     seed_until: Option<Instant>,
     requested: Option<Instant>,
@@ -21,6 +24,12 @@ struct Preview {
     delivered: u64,
     last_error: Option<String>,
     configuration_error: Option<String>,
+}
+
+#[derive(Clone)]
+struct TimedFrame {
+    media_time: f64,
+    frame: image::RgbaImage,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -37,6 +46,8 @@ static PREVIEW: Mutex<Preview> = Mutex::new(Preview {
     mode: PreviewMode::Disabled,
     media: String::new(),
     frame: None,
+    history: VecDeque::new(),
+    freeze_at: None,
     captured: None,
     seed_until: None,
     requested: None,
@@ -123,6 +134,13 @@ pub fn request_repaint() {
     }
 }
 
+pub fn request_fullscreen(fullscreen: bool) {
+    if let Some(ctx) = REPAINT.get() {
+        ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Fullscreen(fullscreen));
+    }
+    request_repaint();
+}
+
 /// Keep the video-only cache fresh for a short native transition such as
 /// pausing playback or replacing the DirectComposition visual with an egui
 /// popup overlay. The current frame remains publishable until its successor is
@@ -137,6 +155,44 @@ pub(crate) fn request_fresh_frames(duration: Duration) {
 
 pub(crate) fn frame_rgba() -> Option<image::RgbaImage> {
     PREVIEW.lock().ok()?.frame.clone()
+}
+
+/// Pin the cached preview to the decoded frame at (or immediately before) the
+/// paused playhead. This avoids publishing the decoder's next queued frame on
+/// a flip-model swapchain. Resuming clears the pin immediately.
+pub fn set_playback_state(paused: bool, media_time: Option<f64>) {
+    let Ok(mut state) = PREVIEW.lock() else {
+        return;
+    };
+    state.freeze_at = paused
+        .then_some(media_time)
+        .flatten()
+        .filter(|time| time.is_finite());
+    if let Some(target) = state.freeze_at
+        && let Some(frame) = frozen_frame(&state.history, target)
+    {
+        state.frame = Some(frame);
+    }
+    if paused {
+        let until = Instant::now() + Duration::from_millis(500);
+        state.seed_until = Some(state.seed_until.map_or(until, |current| current.max(until)));
+    }
+}
+
+fn frozen_frame(history: &VecDeque<TimedFrame>, target: f64) -> Option<image::RgbaImage> {
+    const EPSILON: f64 = 0.000_5;
+    history
+        .iter()
+        .filter(|entry| entry.media_time <= target + EPSILON)
+        .max_by(|a, b| a.media_time.total_cmp(&b.media_time))
+        .or_else(|| {
+            history.iter().min_by(|a, b| {
+                (a.media_time - target)
+                    .abs()
+                    .total_cmp(&(b.media_time - target).abs())
+            })
+        })
+        .map(|entry| entry.frame.clone())
 }
 
 pub fn fit_size(width: u32, height: u32, max_width: u32, max_height: u32) -> (u32, u32) {
@@ -227,6 +283,8 @@ pub(crate) fn begin_capture(media: &str, width: u32, height: u32) -> Option<(u32
         if state.media != media {
             state.media = media.to_owned();
             state.frame = None;
+            state.history.clear();
+            state.freeze_at = None;
             state.captured = None;
             // The first render after opening media can precede the decoded
             // video frame and therefore be black. Briefly refresh the cache
@@ -264,9 +322,25 @@ pub(crate) fn begin_capture(media: &str, width: u32, height: u32) -> Option<(u32
 
 /// Publish a top-down RGBA video frame to the common DWM thumbnail state.
 pub(crate) fn submit_capture(hwnd: isize, frame: image::RgbaImage) {
+    submit_capture_at(hwnd, frame, None);
+}
+
+pub(crate) fn submit_capture_at(hwnd: isize, frame: image::RgbaImage, media_time: Option<f64>) {
     let mut seed_delay = None;
     if let Ok(mut state) = PREVIEW.lock() {
-        state.frame = Some(frame);
+        if let Some(media_time) = media_time.filter(|time| time.is_finite()) {
+            state.history.push_back(TimedFrame {
+                media_time,
+                frame: frame.clone(),
+            });
+            while state.history.len() > 12 {
+                state.history.pop_front();
+            }
+        }
+        state.frame = state
+            .freeze_at
+            .and_then(|target| frozen_frame(&state.history, target))
+            .or(Some(frame));
         state.captured = Some(Instant::now());
         if let Some(until) = state.seed_until {
             let remaining = until.saturating_duration_since(Instant::now());
@@ -478,12 +552,15 @@ pub fn bitmap(
 
 #[cfg(target_os = "windows")]
 pub fn handle_request(hwnd: isize, message: u32, lparam: isize) -> bool {
-    use windows::Win32::UI::WindowsAndMessaging::WM_DWMSENDICONICLIVEPREVIEWBITMAP;
+    use windows::Win32::{
+        Foundation::HWND,
+        UI::WindowsAndMessaging::{IsIconic, WM_DWMSENDICONICLIVEPREVIEWBITMAP},
+    };
 
     if !is_iconic_bitmap_request(message) {
         return false;
     }
-    let frame = {
+    let enabled = {
         let Ok(mut state) = PREVIEW.lock() else {
             return false;
         };
@@ -492,8 +569,23 @@ pub fn handle_request(hwnd: isize, message: u32, lparam: isize) -> bool {
         }
         state.requests += 1;
         state.requested = Some(Instant::now());
-        state.frame.clone()
+        true
     };
+    if !enabled {
+        return false;
+    }
+    // A custom live-preview bitmap is the full-size Aero Peek surface, not
+    // the small taskbar thumbnail. Publishing the video-only cache while the
+    // owner is visible makes Windows cover the real Pealayer interface with a
+    // low-resolution bitmap. Only a minimized owner needs this fallback.
+    if message == WM_DWMSENDICONICLIVEPREVIEWBITMAP
+        && !unsafe { IsIconic(HWND(hwnd as *mut _)).as_bool() }
+    {
+        return false;
+    }
+    #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
+    crate::platform::d3d11_composition::capture_for_taskbar_request(hwnd);
+    let frame = PREVIEW.lock().ok().and_then(|state| state.frame.clone());
     if let Some(ctx) = REPAINT.get() {
         ctx.request_repaint();
     }
@@ -594,6 +686,7 @@ pub fn diagnostics() -> serde_json::Value {
         "toolbar_icon_size":crate::platform::windows::thumbnail_toolbar_metrics(crate::platform::windows::get_registered_hwnd()).0,
         "frame_size":state.frame.as_ref().map(|f| [f.width(),f.height()]),
         "frame_age_ms":state.captured.map(|at| at.elapsed().as_millis() as u64),
+        "timed_frame_history":state.history.len(),"paused_frame_time":state.freeze_at,
         "dwm_requests":state.requests,"dwm_delivered":state.delivered,"last_error":state.last_error,
         "shell_commands":crate::platform::windows::shell_command_diagnostics()})
 }
@@ -667,5 +760,26 @@ mod tests {
             super::capture_plan(true, true, true, None, Some(Duration::from_millis(120)),),
             super::CapturePlan::Capture
         );
+    }
+
+    #[test]
+    fn paused_preview_prefers_the_last_frame_not_after_the_playhead() {
+        let frame = |value| image::RgbaImage::from_pixel(1, 1, image::Rgba([value, 0, 0, 255]));
+        let history = std::collections::VecDeque::from([
+            super::TimedFrame {
+                media_time: 10.000,
+                frame: frame(1),
+            },
+            super::TimedFrame {
+                media_time: 10.041,
+                frame: frame(2),
+            },
+            super::TimedFrame {
+                media_time: 10.083,
+                frame: frame(3),
+            },
+        ]);
+        let selected = super::frozen_frame(&history, 10.060).expect("frame before pause");
+        assert_eq!(selected.get_pixel(0, 0).0[0], 2);
     }
 }

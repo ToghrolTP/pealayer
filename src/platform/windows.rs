@@ -154,7 +154,11 @@ static WINDOW_MAGNETIC_DRAG: Mutex<MagneticDragSession> = Mutex::new(MagneticDra
 static SHELL_SUBCLASS_HWND: AtomicIsize = AtomicIsize::new(0);
 static SHELL_COMMAND_MESSAGES: AtomicU64 = AtomicU64::new(0);
 static SHELL_COMMANDS_QUEUED: AtomicU64 = AtomicU64::new(0);
+static SHELL_COMMANDS_DISPATCHED_DIRECTLY: AtomicU64 = AtomicU64::new(0);
 static SHELL_COMMANDS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
+static SHELL_PLAYER_TX: OnceLock<std::sync::mpsc::SyncSender<u32>> = OnceLock::new();
+static SHELL_PLAYER: OnceLock<crate::mpv::player::Player> = OnceLock::new();
+static SHELL_PLAYER_LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 static SHELL_PAUSED: AtomicBool = AtomicBool::new(true);
 static SHELL_MUTED: AtomicBool = AtomicBool::new(false);
 static SHELL_FULLSCREEN: AtomicBool = AtomicBool::new(false);
@@ -185,11 +189,147 @@ static THUMBNAIL_TOOLBAR_LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 static THUMBNAIL_TOOLBAR_ICONS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 
 fn queue_shell_command(command: u32) {
+    if is_direct_shell_media_command(command)
+        && SHELL_PLAYER_TX
+            .get()
+            .is_some_and(|sender| sender.try_send(command).is_ok())
+    {
+        SHELL_COMMANDS_DISPATCHED_DIRECTLY.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
     if let Ok(mut commands) = SHELL_COMMANDS.lock() {
         commands.push_back(command);
         SHELL_COMMANDS_QUEUED.fetch_add(1, Ordering::Relaxed);
     }
     crate::platform::taskbar_preview::request_repaint();
+}
+
+fn is_direct_shell_media_command(command: u32) -> bool {
+    matches!(
+        command,
+        THUMB_BUTTON_PREV
+            | THUMB_BUTTON_PLAYPAUSE
+            | THUMB_BUTTON_NEXT
+            | THUMB_BUTTON_MUTE
+            | THUMB_BUTTON_FULLSCREEN
+            | TRAY_CMD_PLAYPAUSE
+            | TRAY_CMD_MUTE
+            | MEDIA_KEY_CMD_PLAY
+            | MEDIA_KEY_CMD_PAUSE
+            | MEDIA_KEY_CMD_STOP
+            | MEDIA_KEY_CMD_NEXT
+            | MEDIA_KEY_CMD_PREVIOUS
+    )
+}
+
+/// Install a shell-media dispatcher that remains operational while eframe is
+/// minimized and therefore does not run an egui update pass. Explorer's
+/// thumbnail toolbar and WM_APPCOMMAND messages must never depend on the
+/// application becoming foreground before libmpv receives them.
+pub fn register_shell_player(player: crate::mpv::player::Player) {
+    if SHELL_PLAYER_TX.get().is_some() {
+        return;
+    }
+    let (sender, receiver) = std::sync::mpsc::sync_channel(32);
+    if SHELL_PLAYER_TX.set(sender).is_err() {
+        return;
+    }
+    let _ = SHELL_PLAYER.set(player);
+    let _ = std::thread::Builder::new()
+        .name("pealayer-shell-media".to_owned())
+        .spawn(move || {
+            while let Ok(command) = receiver.recv() {
+                let result = dispatch_shell_media_command(player, command);
+                if let Ok(mut last_error) = SHELL_PLAYER_LAST_ERROR.lock() {
+                    *last_error = result.as_ref().err().cloned();
+                }
+                let paused = player.get_property::<bool>("pause").unwrap_or(true);
+                let muted = player.get_property::<bool>("mute").unwrap_or(false);
+                SHELL_PAUSED.store(paused, Ordering::Relaxed);
+                SHELL_MUTED.store(muted, Ordering::Relaxed);
+                let position = player.get_property::<f64>("time-pos").ok();
+                crate::platform::taskbar_preview::set_playback_state(paused, position);
+                let hwnd = get_registered_hwnd();
+                if hwnd != 0 {
+                    let _ = update_taskbar_thumbnail_buttons(
+                        hwnd,
+                        paused,
+                        muted,
+                        SHELL_FULLSCREEN.load(Ordering::Relaxed),
+                        SHELL_HAS_MEDIA.load(Ordering::Relaxed),
+                        THUMBNAIL_TOOLBAR_ENABLED.load(Ordering::Relaxed),
+                    );
+                }
+                crate::platform::taskbar_preview::request_repaint();
+            }
+        });
+}
+
+pub fn shell_player_time() -> Option<f64> {
+    SHELL_PLAYER
+        .get()
+        .and_then(|player| player.get_property::<f64>("time-pos").ok())
+        .filter(|time| time.is_finite())
+}
+
+fn dispatch_shell_media_command(
+    player: crate::mpv::player::Player,
+    command: u32,
+) -> Result<(), String> {
+    let mpv_error = |action: &str, error: libmpv2::Error| format!("{action}: {error}");
+    match command {
+        THUMB_BUTTON_PREV => player
+            .command("seek", &["-10", "relative+exact"])
+            .map_err(|error| mpv_error("seek backward", error)),
+        THUMB_BUTTON_NEXT => player
+            .command("seek", &["10", "relative+exact"])
+            .map_err(|error| mpv_error("seek forward", error)),
+        THUMB_BUTTON_PLAYPAUSE | TRAY_CMD_PLAYPAUSE => {
+            let paused = player.get_property::<bool>("pause").unwrap_or(true);
+            player
+                .set_property("pause", !paused)
+                .map_err(|error| mpv_error("toggle playback", error))
+        }
+        THUMB_BUTTON_MUTE | TRAY_CMD_MUTE => {
+            let muted = player.get_property::<bool>("mute").unwrap_or(false);
+            player
+                .set_property("mute", !muted)
+                .map_err(|error| mpv_error("toggle mute", error))
+        }
+        THUMB_BUTTON_FULLSCREEN => {
+            let fullscreen = !SHELL_FULLSCREEN.load(Ordering::Relaxed);
+            let hwnd = get_registered_hwnd();
+            if hwnd != 0 {
+                #[cfg(target_os = "windows")]
+                unsafe {
+                    use windows::Win32::{
+                        Foundation::HWND,
+                        UI::WindowsAndMessaging::{SW_RESTORE, ShowWindow},
+                    };
+                    let _ = ShowWindow(HWND(hwnd as *mut _), SW_RESTORE);
+                }
+            }
+            SHELL_FULLSCREEN.store(fullscreen, Ordering::Relaxed);
+            crate::platform::taskbar_preview::request_fullscreen(fullscreen);
+            Ok(())
+        }
+        MEDIA_KEY_CMD_PLAY => player
+            .set_property("pause", false)
+            .map_err(|error| mpv_error("play", error)),
+        MEDIA_KEY_CMD_PAUSE => player
+            .set_property("pause", true)
+            .map_err(|error| mpv_error("pause", error)),
+        MEDIA_KEY_CMD_STOP => player
+            .command("stop", &[])
+            .map_err(|error| mpv_error("stop", error)),
+        MEDIA_KEY_CMD_NEXT => player
+            .command("playlist-next", &["force"])
+            .map_err(|error| mpv_error("next item", error)),
+        MEDIA_KEY_CMD_PREVIOUS => player
+            .command("playlist-prev", &["force"])
+            .map_err(|error| mpv_error("previous item", error)),
+        _ => Err(format!("unsupported direct shell command {command}")),
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -2456,7 +2596,10 @@ pub fn shell_command_diagnostics() -> serde_json::Value {
         "registered_hwnd": get_registered_hwnd(),
         "thumbnail_click_messages": SHELL_COMMAND_MESSAGES.load(Ordering::Relaxed),
         "commands_queued": SHELL_COMMANDS_QUEUED.load(Ordering::Relaxed),
+        "commands_dispatched_while_inactive": SHELL_COMMANDS_DISPATCHED_DIRECTLY.load(Ordering::Relaxed),
         "queue_depth": SHELL_COMMANDS.lock().map(|queue| queue.len()).unwrap_or_default(),
+        "direct_dispatch_ready": SHELL_PLAYER_TX.get().is_some(),
+        "direct_dispatch_error": SHELL_PLAYER_LAST_ERROR.lock().ok().and_then(|error| error.clone()),
         "has_media": SHELL_HAS_MEDIA.load(Ordering::Relaxed),
         "paused": SHELL_PAUSED.load(Ordering::Relaxed),
         "muted": SHELL_MUTED.load(Ordering::Relaxed),
@@ -2959,6 +3102,25 @@ mod tests {
         let state = TaskbarState::default();
         assert_eq!(state.progress_percent, 0);
         assert!(!state.is_paused);
+    }
+
+    #[test]
+    fn minimized_shell_media_actions_do_not_require_an_egui_frame() {
+        for command in [
+            THUMB_BUTTON_PREV,
+            THUMB_BUTTON_PLAYPAUSE,
+            THUMB_BUTTON_NEXT,
+            THUMB_BUTTON_MUTE,
+            TRAY_CMD_PLAYPAUSE,
+            TRAY_CMD_MUTE,
+            MEDIA_KEY_CMD_PLAY,
+            MEDIA_KEY_CMD_PAUSE,
+            MEDIA_KEY_CMD_STOP,
+        ] {
+            assert!(is_direct_shell_media_command(command));
+        }
+        assert!(is_direct_shell_media_command(THUMB_BUTTON_FULLSCREEN));
+        assert!(!is_direct_shell_media_command(TRAY_CMD_SHOW));
     }
 
     #[test]
