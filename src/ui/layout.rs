@@ -1833,6 +1833,43 @@ struct TimelineTrackRow {
     kind: TimelineTrackKind,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TimelineCuePlacement {
+    track_index: usize,
+    relay_id: Option<u8>,
+    analog_index: Option<usize>,
+    selected_track_key: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TimelineMarqueeMode {
+    /// CAD-style window selection: the cue must be completely enclosed.
+    Window,
+    /// CAD-style crossing selection: touching any part of the cue is enough.
+    Crossing,
+}
+
+fn timeline_marquee_mode(origin: egui::Pos2, current: egui::Pos2) -> TimelineMarqueeMode {
+    if current.x >= origin.x {
+        TimelineMarqueeMode::Window
+    } else {
+        TimelineMarqueeMode::Crossing
+    }
+}
+
+fn timeline_marquee_selects_rect(
+    marquee: egui::Rect,
+    candidate: egui::Rect,
+    mode: TimelineMarqueeMode,
+) -> bool {
+    match mode {
+        TimelineMarqueeMode::Window => {
+            marquee.contains(candidate.min) && marquee.contains(candidate.max)
+        }
+        TimelineMarqueeMode::Crossing => marquee.intersects(candidate),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TimelineTrackPatch {
     pub linked: Option<bool>,
@@ -2602,6 +2639,63 @@ fn relay_for_timeline_row(rows: &[TimelineTrackRow], row: i32) -> Option<u8> {
 fn timeline_row_for_relay(rows: &[TimelineTrackRow], relay_id: u8) -> Option<usize> {
     rows.iter()
         .position(|track| track.kind == TimelineTrackKind::Relay(relay_id))
+}
+
+fn timeline_cue_placement(
+    app: &PealayerApp,
+    effect: &crate::four_d::models::Effect,
+    rows: &[TimelineTrackRow],
+    visible_analog_track_ids: &std::collections::BTreeSet<uuid::Uuid>,
+) -> Option<TimelineCuePlacement> {
+    if effect.controller_macro.is_some() || effect.controller_strip_effect.is_some() {
+        let lane = effect
+            .controller_lane
+            .unwrap_or(crate::four_d::models::ControllerEffectLane::Sequence);
+        return rows.iter()
+            .position(|row| row.kind == TimelineTrackKind::ControllerEffect(lane))
+            .map(|track_index| TimelineCuePlacement {
+                track_index,
+                relay_id: None,
+                analog_index: None,
+                selected_track_key: None,
+            });
+    }
+
+    if let Some(direct) = effect.direct_control.as_ref()
+        && let Some(channel) = direct.control_key.strip_prefix("pwm.")
+            .and_then(|value| value.parse::<u8>().ok())
+    {
+        if let Some(analog_index) = app.timeline.analog_tracks.iter()
+            .filter(|track| visible_analog_track_ids.contains(&track.id))
+            .position(|track| track.channel == channel)
+        {
+            return Some(TimelineCuePlacement {
+                track_index: usize::MAX,
+                relay_id: None,
+                analog_index: Some(analog_index),
+                selected_track_key: Some(
+                    crate::four_d::models::hardware_timeline_track_key(&direct.control_key),
+                ),
+            });
+        }
+
+        return rows.iter()
+            .position(|row| row.kind == TimelineTrackKind::Hardware(direct.control_key.clone()))
+            .map(|track_index| TimelineCuePlacement {
+                track_index,
+                relay_id: None,
+                analog_index: None,
+                selected_track_key: None,
+            });
+    }
+
+    let relay_id = effect.actions.first().map(|action| action.relay_id)?;
+    timeline_row_for_relay(rows, relay_id).map(|track_index| TimelineCuePlacement {
+        track_index,
+        relay_id: Some(relay_id),
+        analog_index: None,
+        selected_track_key: None,
+    })
 }
 
 fn relay_id_from_control_key(key: &str) -> Option<u8> {
@@ -6002,6 +6096,87 @@ mod timeline_row_tests {
         );
 
         assert_eq!(offset, egui::vec2(155.0, 50.0));
+    }
+
+    #[test]
+    fn timeline_marquee_direction_matches_cad_window_and_crossing_conventions() {
+        let origin = egui::pos2(100.0, 50.0);
+
+        assert_eq!(
+            timeline_marquee_mode(origin, egui::pos2(180.0, 80.0)),
+            TimelineMarqueeMode::Window
+        );
+        assert_eq!(
+            timeline_marquee_mode(origin, egui::pos2(20.0, 80.0)),
+            TimelineMarqueeMode::Crossing
+        );
+    }
+
+    #[test]
+    fn timeline_window_requires_full_enclosure_while_crossing_accepts_an_overlap() {
+        let marquee = egui::Rect::from_min_max(egui::pos2(10.0, 10.0), egui::pos2(50.0, 50.0));
+        let enclosed = egui::Rect::from_min_max(
+            egui::pos2(20.0, 20.0),
+            egui::pos2(40.0, 40.0),
+        );
+        let crossing = egui::Rect::from_min_max(
+            egui::pos2(40.0, 20.0),
+            egui::pos2(70.0, 40.0),
+        );
+
+        assert!(timeline_marquee_selects_rect(
+            marquee,
+            enclosed,
+            TimelineMarqueeMode::Window
+        ));
+        assert!(!timeline_marquee_selects_rect(
+            marquee,
+            crossing,
+            TimelineMarqueeMode::Window
+        ));
+        assert!(timeline_marquee_selects_rect(
+            marquee,
+            crossing,
+            TimelineMarqueeMode::Crossing
+        ));
+    }
+
+    #[test]
+    fn controller_macro_cues_resolve_to_the_same_lane_used_for_rendering() {
+        let app = PealayerApp::default();
+        let lane = crate::four_d::models::ControllerEffectLane::Sequence;
+        let rows = vec![TimelineTrackRow {
+            key: crate::four_d::models::controller_effect_timeline_track_key(lane),
+            name: "General sequences".to_string(),
+            detail: Some("Effects".to_string()),
+            active: true,
+            enabled: true,
+            linked: true,
+            visible: true,
+            icon: crate::ui::icons::WAVEFORM.to_string(),
+            control_key: None,
+            relay_ids: Vec::new(),
+            dimmed: false,
+            kind: TimelineTrackKind::ControllerEffect(lane),
+        }];
+        let effect = crate::four_d::models::Effect::controller_macro(
+            "Motion".to_string(),
+            crate::ui::icons::SEAT.to_string(),
+            1_000,
+            7,
+            "mcu".to_string(),
+        );
+
+        let placement = timeline_cue_placement(
+            &app,
+            &effect,
+            &rows,
+            &std::collections::BTreeSet::new(),
+        )
+        .expect("controller cue should resolve to its visible timeline lane");
+        assert_eq!(placement.track_index, 0);
+        assert_eq!(placement.analog_index, None);
+        assert_eq!(placement.relay_id, None);
     }
 
     #[test]
@@ -13749,49 +13924,23 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         for instance in &self.app.timeline.instances {
                                             if let Some(effect) = self.app.timeline.templates.iter().find(|t| t.id == instance.effect_id) {
-                                                let is_controller_owned = effect.controller_macro.is_some()
-                                                    || effect.controller_strip_effect.is_some();
                                                 let duration_resizable = effect.duration_resizable();
-                                                let (track_index, relay_id, analog_y, selected_track_key) = if is_controller_owned {
-                                                    let lane = effect
-                                                        .controller_lane
-                                                        .unwrap_or(crate::four_d::models::ControllerEffectLane::Sequence);
-                                                    let Some(index) = timeline_rows
-                                                        .iter()
-                                                        .position(|row| row.kind == TimelineTrackKind::ControllerEffect(lane))
-                                                    else {
-                                                        continue;
-                                                    };
-                                                    (index, None, None, None)
-                                                } else if let Some(direct) = effect.direct_control.as_ref()
-                                                    && let Some(channel) = direct.control_key.strip_prefix("pwm.").and_then(|value| value.parse::<u8>().ok())
-                                                {
-                                                    if let Some(analog_index) = self.app.timeline.analog_tracks.iter()
-                                                        .filter(|track| visible_analog_track_ids.contains(&track.id))
-                                                        .position(|track| track.channel == channel)
-                                                    {
-                                                        (
-                                                            usize::MAX,
-                                                            None,
-                                                            Some(tracks_top + track_area_height + analog_index as f32 * timeline_analog_height),
-                                                            Some(crate::four_d::models::hardware_timeline_track_key(&direct.control_key)),
-                                                        )
-                                                    } else if let Some(index) = timeline_rows.iter().position(|row| {
-                                                        row.kind == TimelineTrackKind::Hardware(direct.control_key.clone())
-                                                    }) {
-                                                        (index, None, None, None)
-                                                    } else {
-                                                        continue;
-                                                    }
-                                                } else {
-                                                    let Some(relay_id) = effect.actions.first().map(|a| a.relay_id) else {
-                                                        continue;
-                                                    };
-                                                    let Some(index) = timeline_row_for_relay(&timeline_rows, relay_id) else {
-                                                        continue;
-                                                    };
-                                                    (index, Some(relay_id), None, None)
+                                                let Some(placement) = timeline_cue_placement(
+                                                    self.app,
+                                                    effect,
+                                                    &timeline_rows,
+                                                    &visible_analog_track_ids,
+                                                ) else {
+                                                    continue;
                                                 };
+                                                let track_index = placement.track_index;
+                                                let relay_id = placement.relay_id;
+                                                let selected_track_key = placement.selected_track_key;
+                                                let analog_y = placement.analog_index.map(|analog_index| {
+                                                    tracks_top
+                                                        + track_area_height
+                                                        + analog_index as f32 * timeline_analog_height
+                                                });
                                                 let is_mismatched = relay_id
                                                     .is_some_and(|relay_id| !effect.target.is_compatible_with_relay(relay_id));
                                                 let track_y = analog_y.unwrap_or_else(|| timeline_track_row_top(
@@ -15199,13 +15348,36 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
 
                                         // Lasso selection drawing
-                                        if let Some(lasso_rect) = self.app.lasso_rect {
+                                        if let (Some(origin), Some(lasso_rect)) =
+                                            (self.app.lasso_origin, self.app.lasso_rect)
+                                        {
+                                            let current = ui.ctx().pointer_latest_pos().unwrap_or(lasso_rect.max);
+                                            let mode = timeline_marquee_mode(origin, current);
+                                            let (fill, stroke, label) = match mode {
+                                                TimelineMarqueeMode::Window => (
+                                                    egui::Color32::from_rgba_unmultiplied(52, 152, 219, 34),
+                                                    egui::Color32::from_rgb(52, 152, 219),
+                                                    self.app.tr("Window · fully enclosed"),
+                                                ),
+                                                TimelineMarqueeMode::Crossing => (
+                                                    egui::Color32::from_rgba_unmultiplied(46, 204, 113, 34),
+                                                    egui::Color32::from_rgb(46, 204, 113),
+                                                    self.app.tr("Crossing · touched"),
+                                                ),
+                                            };
                                             painter.rect(
                                                 lasso_rect,
                                                 2.0,
-                                                egui::Color32::from_rgba_unmultiplied(52, 152, 219, 30),
-                                                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(52, 152, 219)),
+                                                fill,
+                                                egui::Stroke::new(1.5_f32, stroke),
                                                 egui::StrokeKind::Inside,
+                                            );
+                                            painter.text(
+                                                lasso_rect.left_top() + egui::vec2(4.0, -4.0),
+                                                egui::Align2::LEFT_BOTTOM,
+                                                label,
+                                                egui::FontId::proportional(11.0),
+                                                stroke,
                                             );
                                         }
 
@@ -15894,6 +16066,19 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                     if mouse_pos.y >= ruler_bottom {
                                         self.app.lasso_origin = Some(mouse_pos);
+                                        let multi_select = ui.ctx().input(|input| {
+                                            input.modifiers.ctrl || input.modifiers.command
+                                        });
+                                        self.app.lasso_initial_instance_ids = if multi_select {
+                                            self.app.selected_instance_ids.clone()
+                                        } else {
+                                            std::collections::HashSet::new()
+                                        };
+                                        self.app.lasso_initial_keyframes = if multi_select {
+                                            self.app.selected_keyframes.clone()
+                                        } else {
+                                            std::collections::HashSet::new()
+                                        };
                                     }
                                 }
                             }
@@ -15904,35 +16089,56 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                     let origin = self.app.lasso_origin.unwrap();
                                     let lasso_rect = egui::Rect::from_two_pos(origin, mouse_pos);
+                                    let marquee_mode = timeline_marquee_mode(origin, mouse_pos);
                                     self.app.lasso_rect = Some(lasso_rect);
 
-                                    let multi_select = ui.ctx().input(|i| {
-                                        i.modifiers.ctrl || i.modifiers.command
-                                    });
-                                    let mut new_instance_selection = if multi_select { self.app.selected_instance_ids.clone() } else { std::collections::HashSet::new() };
-                                    let mut new_keyframe_selection = if multi_select { self.app.selected_keyframes.clone() } else { std::collections::HashSet::new() };
+                                    let mut new_instance_selection =
+                                        self.app.lasso_initial_instance_ids.clone();
+                                    let mut new_keyframe_selection =
+                                        self.app.lasso_initial_keyframes.clone();
 
                                     // Instances
                                     for instance in &self.app.timeline.instances {
                                         if let Some(effect) = self.app.timeline.templates.iter().find(|t| t.id == instance.effect_id) {
-                                            let Some(relay_id) = effect.actions.first().map(|a| a.relay_id) else {
+                                            let Some(placement) = timeline_cue_placement(
+                                                self.app,
+                                                effect,
+                                                &timeline_rows,
+                                                &visible_analog_track_ids,
+                                            ) else {
                                                 continue;
                                             };
-                                            let Some(track_index) = timeline_row_for_relay(&timeline_rows, relay_id) else {
-                                                continue;
+                                            let (track_y, cue_row_height) = if let Some(analog_index) = placement.analog_index {
+                                                (
+                                                    tracks_top
+                                                        + track_area_height
+                                                        + analog_index as f32 * timeline_analog_height,
+                                                    timeline_analog_height,
+                                                )
+                                            } else {
+                                                (
+                                                    timeline_track_row_top(
+                                                        rect.min.y,
+                                                        placement.track_index,
+                                                        timeline_track_height,
+                                                    ),
+                                                    timeline_track_height,
+                                                )
                                             };
-                                            let track_y = tracks_top
-                                                + track_index as f32 * timeline_track_height;
                                             let start_x = rect.min.x + (instance.start_time_ms as f32 * px_per_ms);
-                                            let end_x = start_x + (effect.duration_ms as f32 * px_per_ms);
+                                            let end_x = start_x + (effect.duration_ms.max(1) as f32 * px_per_ms);
                                             let clip_rect = egui::Rect::from_min_max(
                                                 egui::pos2(start_x, track_y + 4.0),
                                                 egui::pos2(
-                                                    end_x,
-                                                    track_y + timeline_track_height - 4.0,
+                                                    end_x.max(start_x + 8.0),
+                                                    track_y + cue_row_height - 4.0,
                                                 ),
                                             );
-                                            if lasso_rect.intersects(clip_rect) {
+                                            if timeline_marquee_selects_rect(
+                                                lasso_rect,
+                                                clip_rect,
+                                                marquee_mode,
+                                            ) {
                                                 new_instance_selection.insert(instance.id);
                                             }
                                         }
@@ -15975,9 +16181,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 lasso_ended = true;
                             }
 
+                            let lasso_was_active = self.app.lasso_origin.is_some();
                             if lasso_ended {
                                 self.app.lasso_origin = None;
                                 self.app.lasso_rect = None;
+                                self.app.lasso_initial_instance_ids.clear();
+                                self.app.lasso_initial_keyframes.clear();
                             }
 
                             if response.clicked_by(egui::PointerButton::Primary)
@@ -15985,6 +16194,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 && !clicked_any_keyframe
                                 && self.app.active_drag.is_none()
                                 && self.app.active_keyframe_drag.is_none()
+                                && !lasso_was_active
                             {
                                 if let Some(mouse_pos) = response.interact_pointer_pos() {
                                     if mouse_pos.y >= tracks_top && mouse_pos.y < tracks_top + track_area_height {
