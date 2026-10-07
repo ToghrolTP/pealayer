@@ -82,7 +82,9 @@ misses. A missed frame is deliberately discarded instead of queued: the next
 frame is rendered from monotonic elapsed time, so the animation remains current
 and no stale colors accumulate behind the serial link. Disconnects, protocol
 errors, cancellations, and all other non-timeout failures still terminate the
-stream and remain visible to clients.
+stream and remain visible to clients. Commit `e9991da8` also advances past all
+overdue frame boundaries after a slow ACK; it does not consume a buffered timer
+tick and immediately burst another full frame onto the link.
 
 ## Live evidence
 
@@ -111,3 +113,12 @@ remained stable, and request-wide serialization plus timeout recovery prevented
 it from becoming an application failure. A future transport optimization should
 reduce request overhead or further prioritize strip commits, but it must retain
 PCController as the sole driver and must not queue late animation frames.
+
+After deploying the overdue-boundary fix, a follow-up 40-second run stayed live
+at every 10-second observation. Framing errors increased from 459 to 473, while
+CRC errors remained 0 and reset count remained 475. This is an improvement in
+burst behavior but not elimination of the physical-link framing limitation.
+Immediately after restarting PCController, the first asynchronous Pealayer RPC
+was accepted before the refreshed event channel could start the stream; a second
+request after reconnection started normally. Clients should treat the live strip
+status, not command queue acceptance alone, as the operation confirmation.
