@@ -13227,8 +13227,30 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         // Keep navigation controls anchored to the visible end of
                                         // the frozen ruler rather than letting them scroll with
                                         // timeline content.
-                                        let toolbar_rect = ruler_rect.intersect(viewport_clip).shrink2(
-                                            egui::vec2(3.0, 1.0),
+                                        let toolbar_order =
+                                            crate::config::normalize_timeline_toolbar_order(
+                                                &self.app.timeline_toolbar_order,
+                                            );
+                                        let visible_toolbar_buttons = toolbar_order
+                                            .iter()
+                                            .filter(|action| {
+                                                !self.app.timeline_toolbar_hidden.contains(action)
+                                            })
+                                            .count();
+                                        let visible_ruler = ruler_rect.intersect(viewport_clip);
+                                        let toolbar_width = ((visible_toolbar_buttons + 1) as f32
+                                            * 26.0
+                                            + 8.0)
+                                            .min(visible_ruler.width());
+                                        let toolbar_rect = egui::Rect::from_min_max(
+                                            egui::pos2(
+                                                visible_ruler.right() - toolbar_width,
+                                                visible_ruler.top() + 1.0,
+                                            ),
+                                            egui::pos2(
+                                                visible_ruler.right() - 3.0,
+                                                visible_ruler.bottom() - 1.0,
+                                            ),
                                         );
                                         let mut toolbar_ui = ui.new_child(
                                             egui::UiBuilder::new()
@@ -13350,10 +13372,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 .0
                                                 .on_hover_text(self.app.tr("More timeline controls and preferences"));
 
-                                                let ordered = crate::config::normalize_timeline_toolbar_order(
-                                                    &self.app.timeline_toolbar_order,
-                                                );
-                                                for action in ordered.into_iter().filter(|action| {
+                                                for action in toolbar_order.into_iter().filter(|action| {
                                                     !self.app.timeline_toolbar_hidden.contains(action)
                                                 }) {
                                                     let enabled = match action {
