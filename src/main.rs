@@ -47,6 +47,47 @@ fn subtitle_font_directory() -> Option<std::path::PathBuf> {
     })
 }
 
+#[cfg(target_os = "windows")]
+fn mpv_font_directory() -> Option<std::path::PathBuf> {
+    let source = subtitle_font_directory()?;
+    let cache_root = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            crate::config::AppConfig::get_config_path()
+                .parent()
+                .map(std::path::Path::to_path_buf)
+        })?;
+    let target = cache_root.join("Pealayer/cache/fonts");
+    let stage = || -> std::io::Result<()> {
+        std::fs::create_dir_all(&target)?;
+        let vazirmatn = std::fs::read(source.join("Vazirmatn-Regular.ttf"))?;
+        write_if_changed(&target.join("Vazirmatn-Regular.ttf"), &vazirmatn)?;
+        write_if_changed(
+            &target.join("Phosphor-Regular.ttf"),
+            egui_phosphor::bytes::regular::FONT,
+        )?;
+        Ok(())
+    };
+    if let Err(error) = stage() {
+        log::warn!("could not stage native OSD fonts: {error}");
+        return Some(source);
+    }
+    Some(target)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn mpv_font_directory() -> Option<std::path::PathBuf> {
+    subtitle_font_directory()
+}
+
+#[cfg(target_os = "windows")]
+fn write_if_changed(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    if std::fs::read(path).is_ok_and(|current| current == contents) {
+        return Ok(());
+    }
+    std::fs::write(path, contents)
+}
+
 fn main() -> eframe::Result {
     crate::diagnostics::install_panic_reporter();
     let startup_args: Vec<String> = std::env::args().collect();
@@ -356,20 +397,28 @@ fn main() -> eframe::Result {
             #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
             let use_d3d11 = false;
 
-            let subtitle_font_directory = subtitle_font_directory();
-            if let Some(font_path) = subtitle_font_directory
-                .as_ref()
-                .map(|directory| directory.join("Vazirmatn-Regular.ttf"))
-            {
+            let subtitle_font_directory = mpv_font_directory();
+            for (family, file_name) in [
+                (
+                    crate::subtitle::SUBTITLE_FONT_FAMILY,
+                    "Vazirmatn-Regular.ttf",
+                ),
+                ("Phosphor", "Phosphor-Regular.ttf"),
+            ] {
+                let Some(font_path) = subtitle_font_directory
+                    .as_ref()
+                    .map(|directory| directory.join(file_name))
+                    .filter(|path| path.is_file())
+                else {
+                    continue;
+                };
                 match crate::platform::windows::register_private_font(&font_path) {
                     Ok(faces) if faces > 0 => log::info!(
-                        "registered {faces} bundled {} font face(s) for subtitle overlays",
-                        crate::subtitle::SUBTITLE_FONT_FAMILY
+                        "registered {faces} bundled {family} font face(s) for native overlays"
                     ),
                     Ok(_) => {}
                     Err(error) => log::warn!(
-                        "could not register bundled {} subtitle font: {error}",
-                        crate::subtitle::SUBTITLE_FONT_FAMILY
+                        "could not register bundled {family} overlay font: {error}"
                     ),
                 }
             }

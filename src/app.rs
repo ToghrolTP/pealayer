@@ -4937,10 +4937,6 @@ impl PealayerApp {
             true,
             self.mpv.get_property::<f64>("time-pos").ok(),
         );
-        #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
-        crate::platform::taskbar_preview::request_fresh_frames(std::time::Duration::from_millis(
-            600,
-        ));
         self.is_paused = true;
         self.engine_handle
             .is_playing
@@ -7418,7 +7414,7 @@ impl PealayerApp {
             self.osd_message = None;
             self.clear_native_video_osd();
         } else {
-            self.show_native_video_osd(&msg, self.osd_timeout_seconds);
+            self.show_native_video_osd(&msg, self.osd_timeout_seconds, None);
             self.osd_message = Some((msg, std::time::Instant::now()));
         }
     }
@@ -7434,6 +7430,7 @@ impl PealayerApp {
             self.show_native_video_osd(
                 &msg,
                 options.timeout_seconds.unwrap_or(self.osd_timeout_seconds),
+                options.icon.as_deref(),
             );
             self.osd_message = Some((msg, std::time::Instant::now()));
             self.osd_display_options = Some(options);
@@ -7446,15 +7443,25 @@ impl PealayerApp {
         self.clear_native_video_osd();
     }
 
-    fn show_native_video_osd(&self, message: &str, timeout_seconds: f32) {
+    fn show_native_video_osd(
+        &self,
+        message: &str,
+        timeout_seconds: f32,
+        requested_icon: Option<&str>,
+    ) {
         #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
         if self.active_windows_video_renderer == crate::config::WindowsVideoRenderer::D3D11 {
             let duration = (timeout_seconds.max(0.25) * 1000.0).round().to_string();
+            let native_text = crate::ui::video::osd_text_with_icon(requested_icon, message);
             // mpv's OSD is composed into the video swapchain, so it remains
             // visible above the zero-copy DirectComposition surface and in a
-            // detached video window. The egui overlay remains authoritative
+            // detached video window. Use the same Phosphor icon selection as
+            // egui; the bundled Phosphor face is registered with mpv's font
+            // directory during startup. The egui overlay remains authoritative
             // for the OpenGL path and Web/API state.
-            let _ = self.mpv_client.command("show-text", &[message, &duration]);
+            let _ = self
+                .mpv_client
+                .command("show-text", &[&native_text, &duration]);
         }
     }
 

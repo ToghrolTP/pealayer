@@ -17,6 +17,7 @@ struct Preview {
     frame: Option<image::RgbaImage>,
     history: VecDeque<TimedFrame>,
     freeze_at: Option<f64>,
+    frozen_frame: Option<image::RgbaImage>,
     captured: Option<Instant>,
     seed_until: Option<Instant>,
     requested: Option<Instant>,
@@ -48,6 +49,7 @@ static PREVIEW: Mutex<Preview> = Mutex::new(Preview {
     frame: None,
     history: VecDeque::new(),
     freeze_at: None,
+    frozen_frame: None,
     captured: None,
     seed_until: None,
     requested: None,
@@ -141,42 +143,40 @@ pub fn request_fullscreen(fullscreen: bool) {
     request_repaint();
 }
 
-/// Keep the video-only cache fresh for a short native transition such as
-/// pausing playback or replacing the DirectComposition visual with an egui
-/// popup overlay. The current frame remains publishable until its successor is
-/// ready, so Explorer never falls back to the whole application window.
-pub(crate) fn request_fresh_frames(duration: Duration) {
-    if let Ok(mut state) = PREVIEW.lock() {
-        let until = Instant::now() + duration;
-        state.seed_until = Some(state.seed_until.map_or(until, |current| current.max(until)));
-    }
-    request_repaint();
-}
-
 pub(crate) fn frame_rgba() -> Option<image::RgbaImage> {
     PREVIEW.lock().ok()?.frame.clone()
 }
 
-/// Pin the cached preview to the decoded frame at (or immediately before) the
-/// paused playhead. This avoids publishing the decoder's next queued frame on
-/// a flip-model swapchain. Resuming clears the pin immediately.
+/// Freeze the frame Explorer is already displaying when playback pauses.
+///
+/// Selecting another history entry here made the thumbnail visibly jump at
+/// the exact moment the Play/Pause button changed state. The cached frame is
+/// already the most recent frame published to DWM, so retain those exact
+/// pixels until playback resumes. History is only a fallback when Pause lands
+/// before the first thumbnail frame has been published.
 pub fn set_playback_state(paused: bool, media_time: Option<f64>) {
     let Ok(mut state) = PREVIEW.lock() else {
         return;
     };
-    state.freeze_at = paused
-        .then_some(media_time)
-        .flatten()
-        .filter(|time| time.is_finite());
-    if let Some(target) = state.freeze_at
-        && let Some(frame) = frozen_frame(&state.history, target)
-    {
-        state.frame = Some(frame);
-    }
     if paused {
-        let until = Instant::now() + Duration::from_millis(500);
-        state.seed_until = Some(state.seed_until.map_or(until, |current| current.max(until)));
+        let target = media_time.filter(|time| time.is_finite());
+        if state.freeze_at.is_none() {
+            state.frozen_frame = state
+                .frame
+                .clone()
+                .or_else(|| target.and_then(|target| frozen_frame(&state.history, target)));
+        }
+        state.freeze_at = target;
+        // Do not run the media-load seed loop after Pause. Repeatedly
+        // invalidating DWM with the same frozen frame caused a second visual
+        // jump and needless readback work.
+        state.seed_until = None;
+    } else {
+        state.freeze_at = None;
+        state.frozen_frame = None;
     }
+    drop(state);
+    request_repaint();
 }
 
 fn frozen_frame(history: &VecDeque<TimedFrame>, target: f64) -> Option<image::RgbaImage> {
@@ -285,6 +285,7 @@ pub(crate) fn begin_capture(media: &str, width: u32, height: u32) -> Option<(u32
             state.frame = None;
             state.history.clear();
             state.freeze_at = None;
+            state.frozen_frame = None;
             state.captured = None;
             // The first render after opening media can precede the decoded
             // video frame and therefore be black. Briefly refresh the cache
@@ -327,6 +328,7 @@ pub(crate) fn submit_capture(hwnd: isize, frame: image::RgbaImage) {
 
 pub(crate) fn submit_capture_at(hwnd: isize, frame: image::RgbaImage, media_time: Option<f64>) {
     let mut seed_delay = None;
+    let mut published_frame_changed = false;
     if let Ok(mut state) = PREVIEW.lock() {
         if let Some(media_time) = media_time.filter(|time| time.is_finite()) {
             state.history.push_back(TimedFrame {
@@ -337,11 +339,22 @@ pub(crate) fn submit_capture_at(hwnd: isize, frame: image::RgbaImage, media_time
                 state.history.pop_front();
             }
         }
-        state.frame = state
-            .freeze_at
-            .and_then(|target| frozen_frame(&state.history, target))
-            .or(Some(frame));
-        state.captured = Some(Instant::now());
+        if state.freeze_at.is_some() {
+            if state.frozen_frame.is_none() {
+                state.frozen_frame = state
+                    .freeze_at
+                    .and_then(|target| frozen_frame(&state.history, target))
+                    .or_else(|| Some(frame.clone()));
+                published_frame_changed = true;
+            }
+            state.frame = state.frozen_frame.clone();
+        } else {
+            state.frame = Some(frame);
+            published_frame_changed = true;
+        }
+        if published_frame_changed {
+            state.captured = Some(Instant::now());
+        }
         if let Some(until) = state.seed_until {
             let remaining = until.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -355,10 +368,12 @@ pub(crate) fn submit_capture_at(hwnd: isize, frame: image::RgbaImage, media_time
         ctx.request_repaint_after(delay);
     }
     #[cfg(target_os = "windows")]
-    unsafe {
-        let _ = windows::Win32::Graphics::Dwm::DwmInvalidateIconicBitmaps(
-            windows::Win32::Foundation::HWND(hwnd as *mut _),
-        );
+    if published_frame_changed {
+        unsafe {
+            let _ = windows::Win32::Graphics::Dwm::DwmInvalidateIconicBitmaps(
+                windows::Win32::Foundation::HWND(hwnd as *mut _),
+            );
+        }
     }
     #[cfg(not(target_os = "windows"))]
     let _ = hwnd;
@@ -687,6 +702,7 @@ pub fn diagnostics() -> serde_json::Value {
         "frame_size":state.frame.as_ref().map(|f| [f.width(),f.height()]),
         "frame_age_ms":state.captured.map(|at| at.elapsed().as_millis() as u64),
         "timed_frame_history":state.history.len(),"paused_frame_time":state.freeze_at,
+        "paused_frame_frozen":state.frozen_frame.is_some(),
         "dwm_requests":state.requests,"dwm_delivered":state.delivered,"last_error":state.last_error,
         "shell_commands":crate::platform::windows::shell_command_diagnostics()})
 }
@@ -781,5 +797,35 @@ mod tests {
         ]);
         let selected = super::frozen_frame(&history, 10.060).expect("frame before pause");
         assert_eq!(selected.get_pixel(0, 0).0[0], 2);
+    }
+
+    #[test]
+    fn pausing_keeps_the_pixels_already_published_to_explorer() {
+        let frame = |value| image::RgbaImage::from_pixel(1, 1, image::Rgba([value, 0, 0, 255]));
+        {
+            let mut state = super::PREVIEW.lock().expect("preview state");
+            state.frame = Some(frame(9));
+            state.history = std::collections::VecDeque::from([super::TimedFrame {
+                media_time: 10.0,
+                frame: frame(1),
+            }]);
+            state.freeze_at = None;
+            state.frozen_frame = None;
+        }
+
+        super::set_playback_state(true, Some(10.0));
+        let state = super::PREVIEW.lock().expect("preview state");
+        assert_eq!(state.frame.as_ref().unwrap().get_pixel(0, 0).0[0], 9);
+        assert_eq!(
+            state
+                .frozen_frame
+                .as_ref()
+                .unwrap()
+                .get_pixel(0, 0)
+                .0[0],
+            9
+        );
+        drop(state);
+        super::set_playback_state(false, None);
     }
 }

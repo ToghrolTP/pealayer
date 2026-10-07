@@ -761,10 +761,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 .unwrap_or(22.0)
                 .clamp(8.0, 128.0);
             let font_id = egui::FontId::proportional(font_size);
-            let icon = requested_osd_icon(options.and_then(|options| options.icon.as_deref()), msg);
-            let osd_text = icon
-                .map(|icon| format!("{icon}  {msg}"))
-                .unwrap_or_else(|| msg.clone());
+            let osd_text = osd_text_with_icon(
+                options.and_then(|options| options.icon.as_deref()),
+                msg,
+            );
             let galley = ui.painter().layout_no_wrap(osd_text, font_id, text_color);
             let padding = egui::vec2(
                 options
@@ -1029,6 +1029,12 @@ fn osd_rect(
     rect
 }
 
+pub(crate) fn osd_text_with_icon(name: Option<&str>, message: &str) -> String {
+    requested_osd_icon(name, message)
+        .map(|icon| format!("{icon}  {message}"))
+        .unwrap_or_else(|| message.to_owned())
+}
+
 fn requested_osd_icon(name: Option<&str>, message: &str) -> Option<&'static str> {
     let Some(name) = name.map(str::trim).filter(|name| !name.is_empty()) else {
         return Some(osd_icon(message));
@@ -1196,5 +1202,18 @@ mod tests {
             true,
             std::time::Duration::ZERO,
         ));
+    }
+
+    #[test]
+    fn native_and_egui_osd_share_the_same_icon_text() {
+        assert_eq!(
+            osd_text_with_icon(None, "Pause"),
+            format!("{}  Pause", crate::ui::icons::PAUSE)
+        );
+        assert_eq!(osd_text_with_icon(Some("none"), "Pause"), "Pause");
+        assert_eq!(
+            osd_text_with_icon(Some("volume"), "Volume: 50%"),
+            format!("{}  Volume: 50%", crate::ui::icons::SPEAKER_HIGH)
+        );
     }
 }

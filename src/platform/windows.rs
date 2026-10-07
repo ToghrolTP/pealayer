@@ -156,6 +156,9 @@ static SHELL_COMMAND_MESSAGES: AtomicU64 = AtomicU64::new(0);
 static SHELL_COMMANDS_QUEUED: AtomicU64 = AtomicU64::new(0);
 static SHELL_COMMANDS_DISPATCHED_DIRECTLY: AtomicU64 = AtomicU64::new(0);
 static SHELL_COMMANDS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
+static WINDOW_ICON_APPLY_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+static WINDOW_ICON_APPLY_SUCCESSES: AtomicU64 = AtomicU64::new(0);
+static WINDOW_ICON_LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 static SHELL_PLAYER_TX: OnceLock<std::sync::mpsc::SyncSender<u32>> = OnceLock::new();
 static SHELL_PLAYER: OnceLock<crate::mpv::player::Player> = OnceLock::new();
 static SHELL_PLAYER_LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
@@ -2427,15 +2430,18 @@ unsafe extern "system" fn shell_window_proc(
         // are not guaranteed to paint soon enough to restore missing actions.
         // DWM's iconic-bitmap attributes belong to this HWND and survive an
         // Explorer taskbar recreation, so preserve the video-only preview.
-        let restored = init_taskbar_thumbnail_toolbar(
-            hwnd.0 as isize,
-            SHELL_PAUSED.load(Ordering::Relaxed),
-            SHELL_MUTED.load(Ordering::Relaxed),
-            SHELL_FULLSCREEN.load(Ordering::Relaxed),
-            SHELL_HAS_MEDIA.load(Ordering::Relaxed),
-            THUMBNAIL_TOOLBAR_ENABLED.load(Ordering::Relaxed),
-        )
-        .is_ok();
+        let restored = ensure_application_window_icon(hwnd.0 as isize)
+            .and_then(|_| {
+                init_taskbar_thumbnail_toolbar(
+                    hwnd.0 as isize,
+                    SHELL_PAUSED.load(Ordering::Relaxed),
+                    SHELL_MUTED.load(Ordering::Relaxed),
+                    SHELL_FULLSCREEN.load(Ordering::Relaxed),
+                    SHELL_HAS_MEDIA.load(Ordering::Relaxed),
+                    THUMBNAIL_TOOLBAR_ENABLED.load(Ordering::Relaxed),
+                )
+            })
+            .is_ok();
         SHELL_REINITIALIZE.store(!restored, Ordering::Release);
         crate::platform::taskbar_preview::request_repaint();
     }
@@ -2541,7 +2547,7 @@ pub fn install_shell_message_hook(hwnd_raw: isize) -> Result<(), String> {
         return Err("invalid window handle (HWND is 0)".to_string());
     }
     if SHELL_SUBCLASS_HWND.load(Ordering::Acquire) == hwnd_raw {
-        return Ok(());
+        return ensure_application_window_icon(hwnd_raw);
     }
     let taskbar_created = unsafe { RegisterWindowMessageW(w!("TaskbarButtonCreated")) };
     if taskbar_created == 0 {
@@ -2561,7 +2567,7 @@ pub fn install_shell_message_hook(hwnd_raw: isize) -> Result<(), String> {
         return Err("SetWindowSubclass failed".to_string());
     }
     SHELL_SUBCLASS_HWND.store(hwnd_raw, Ordering::Release);
-    Ok(())
+    ensure_application_window_icon(hwnd_raw)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -2603,6 +2609,7 @@ pub fn shell_command_diagnostics() -> serde_json::Value {
         "has_media": SHELL_HAS_MEDIA.load(Ordering::Relaxed),
         "paused": SHELL_PAUSED.load(Ordering::Relaxed),
         "muted": SHELL_MUTED.load(Ordering::Relaxed),
+        "window_icon": window_icon_diagnostics(get_registered_hwnd()),
         "thumbnail_toolbar": {
             "added_hwnd": THUMBNAIL_TOOLBAR_ADDED_HWND.load(Ordering::Acquire),
             "enabled": THUMBNAIL_TOOLBAR_ENABLED.load(Ordering::Relaxed),
@@ -2615,6 +2622,95 @@ pub fn shell_command_diagnostics() -> serde_json::Value {
             "last_error": THUMBNAIL_TOOLBAR_LAST_ERROR.lock().ok().and_then(|error| error.clone()),
         },
     })
+}
+
+#[cfg(target_os = "windows")]
+pub fn ensure_application_window_icon(hwnd_raw: isize) -> Result<(), String> {
+    use windows::Win32::{
+        Foundation::{HWND, LPARAM, WPARAM},
+        System::LibraryLoader::GetModuleHandleW,
+        UI::WindowsAndMessaging::{LoadIconW, SendMessageW, WM_SETICON},
+    };
+    use windows::core::PCWSTR;
+
+    WINDOW_ICON_APPLY_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+    let result = (|| unsafe {
+        if hwnd_raw == 0 {
+            return Err("invalid window handle (HWND is 0)".to_string());
+        }
+        let module =
+            GetModuleHandleW(None).map_err(|error| format!("GetModuleHandleW failed: {error}"))?;
+        let instance: windows::Win32::Foundation::HINSTANCE = module.into();
+        let icon = LoadIconW(Some(instance), PCWSTR(1usize as *const u16))
+            .map_err(|error| format!("load packaged application icon: {error}"))?;
+        if icon.0.is_null() {
+            return Err("packaged application icon is unavailable".to_string());
+        }
+        let hwnd = HWND(hwnd_raw as *mut _);
+        // WM_SETICON values are stable ABI constants: 0 = ICON_SMALL,
+        // 1 = ICON_BIG, 2 = ICON_SMALL2. Set every size explicitly because
+        // Explorer can recreate the taskbar button independently of winit.
+        for size in [0usize, 1, 2] {
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(size)),
+                Some(LPARAM(icon.0 as isize)),
+            );
+        }
+        Ok(())
+    })();
+    if let Ok(mut last_error) = WINDOW_ICON_LAST_ERROR.lock() {
+        *last_error = result.as_ref().err().cloned();
+    }
+    if result.is_ok() {
+        WINDOW_ICON_APPLY_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+    }
+    result
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn ensure_application_window_icon(_hwnd_raw: isize) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn window_icon_diagnostics(hwnd_raw: isize) -> serde_json::Value {
+    use windows::Win32::{
+        Foundation::{HWND, LPARAM, WPARAM},
+        UI::WindowsAndMessaging::{
+            GCLP_HICON, GCLP_HICONSM, GetClassLongPtrW, SendMessageW, WM_GETICON,
+        },
+    };
+    let (small, big, small2, class_small, class_big) = if hwnd_raw == 0 {
+        (0, 0, 0, 0, 0)
+    } else {
+        let hwnd = HWND(hwnd_raw as *mut _);
+        unsafe {
+            (
+                SendMessageW(hwnd, WM_GETICON, Some(WPARAM(0)), Some(LPARAM(0))).0,
+                SendMessageW(hwnd, WM_GETICON, Some(WPARAM(1)), Some(LPARAM(0))).0,
+                SendMessageW(hwnd, WM_GETICON, Some(WPARAM(2)), Some(LPARAM(0))).0,
+                GetClassLongPtrW(hwnd, GCLP_HICONSM),
+                GetClassLongPtrW(hwnd, GCLP_HICON),
+            )
+        }
+    };
+    serde_json::json!({
+        "apply_attempts": WINDOW_ICON_APPLY_ATTEMPTS.load(Ordering::Relaxed),
+        "apply_successes": WINDOW_ICON_APPLY_SUCCESSES.load(Ordering::Relaxed),
+        "small": small != 0,
+        "big": big != 0,
+        "small2": small2 != 0,
+        "class_small": class_small != 0,
+        "class_big": class_big != 0,
+        "last_error": WINDOW_ICON_LAST_ERROR.lock().ok().and_then(|error| error.clone()),
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn window_icon_diagnostics(_hwnd_raw: isize) -> serde_json::Value {
+    serde_json::json!({"supported": false})
 }
 
 pub fn take_shell_reinitialize_request() -> bool {
