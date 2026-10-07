@@ -157,6 +157,7 @@ static SHELL_COMMANDS_QUEUED: AtomicU64 = AtomicU64::new(0);
 static SHELL_COMMANDS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 static SHELL_PAUSED: AtomicBool = AtomicBool::new(true);
 static SHELL_MUTED: AtomicBool = AtomicBool::new(false);
+static SHELL_FULLSCREEN: AtomicBool = AtomicBool::new(false);
 static SHELL_HAS_MEDIA: AtomicBool = AtomicBool::new(false);
 static SHELL_MEDIA_KEYS_ENABLED: AtomicBool = AtomicBool::new(true);
 static SHELL_REINITIALIZE: AtomicBool = AtomicBool::new(false);
@@ -2151,8 +2152,21 @@ unsafe extern "system" fn shell_window_proc(
     if taskbar_created != 0 && message == taskbar_created {
         TASKBAR_BUTTON_CREATED_EVENTS.fetch_add(1, Ordering::Relaxed);
         THUMBNAIL_TOOLBAR_ADDED_HWND.store(0, Ordering::Release);
-        crate::platform::taskbar_preview::reset_shell();
-        SHELL_REINITIALIZE.store(true, Ordering::Release);
+        // Microsoft requires ThumbBarAddButtons after TaskbarButtonCreated.
+        // Rebuild immediately: paused, inactive and minimized eframe windows
+        // are not guaranteed to paint soon enough to restore missing actions.
+        // DWM's iconic-bitmap attributes belong to this HWND and survive an
+        // Explorer taskbar recreation, so preserve the video-only preview.
+        let restored = init_taskbar_thumbnail_toolbar(
+            hwnd.0 as isize,
+            SHELL_PAUSED.load(Ordering::Relaxed),
+            SHELL_MUTED.load(Ordering::Relaxed),
+            SHELL_FULLSCREEN.load(Ordering::Relaxed),
+            SHELL_HAS_MEDIA.load(Ordering::Relaxed),
+            THUMBNAIL_TOOLBAR_ENABLED.load(Ordering::Relaxed),
+        )
+        .is_ok();
+        SHELL_REINITIALIZE.store(!restored, Ordering::Release);
         crate::platform::taskbar_preview::request_repaint();
     }
 
@@ -2288,11 +2302,13 @@ pub fn install_shell_message_hook(_hwnd_raw: isize) -> Result<(), String> {
 pub fn update_shell_command_state(
     is_paused: bool,
     is_muted: bool,
+    is_fullscreen: bool,
     has_media: bool,
     media_keys_enabled: bool,
 ) {
     SHELL_PAUSED.store(is_paused, Ordering::Relaxed);
     SHELL_MUTED.store(is_muted, Ordering::Relaxed);
+    SHELL_FULLSCREEN.store(is_fullscreen, Ordering::Relaxed);
     SHELL_HAS_MEDIA.store(has_media, Ordering::Relaxed);
     SHELL_MEDIA_KEYS_ENABLED.store(media_keys_enabled, Ordering::Relaxed);
 }

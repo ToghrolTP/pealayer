@@ -2372,6 +2372,7 @@ impl PealayerApp {
         crate::platform::windows::update_shell_command_state(
             self.is_paused,
             self.is_muted,
+            self.was_fullscreen,
             self.current_video_path.is_some(),
             self.media_keys_enabled,
         );
