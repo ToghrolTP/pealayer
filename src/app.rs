@@ -1463,6 +1463,14 @@ impl eframe::App for PealayerApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
         self.update_shell_state();
+        crate::branding::sync_native_window_icon(
+            &ctx,
+            crate::branding::PlaybackIconState::from_player(
+                self.current_video_path.is_some(),
+                self.is_paused,
+                self.is_eof,
+            ),
+        );
         if let Some(ref mut mc) = self.media_controls {
             mc.update_playback(
                 self.current_video_path.is_some(),

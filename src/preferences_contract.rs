@@ -291,6 +291,27 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Color palette",
             &[("native", "Neutral (default)"), ("studio", "Studio")],
         ),
+        {
+            let mut control = PreferenceControl::text(
+                "app_icon_playing", "appearance", "Application icons", "Playing icon", "PNG, JPEG, WebP, or ICO path",
+            );
+            control.description = Some("Shown by the native window, taskbar, Web UI, favicon, and media session while media is playing.");
+            control
+        },
+        {
+            let mut control = PreferenceControl::text(
+                "app_icon_paused", "appearance", "Application icons", "Paused icon", "PNG, JPEG, WebP, or ICO path",
+            );
+            control.description = Some("Shown while loaded media is paused. Leave empty to use the base application icon.");
+            control
+        },
+        {
+            let mut control = PreferenceControl::text(
+                "app_icon_stopped", "appearance", "Application icons", "Stopped icon", "PNG, JPEG, WebP, or ICO path",
+            );
+            control.description = Some("Shown when no media is loaded or playback has ended. This is also the best shortcut and executable icon.");
+            control
+        },
         PreferenceControl::select(
             "language",
             "appearance",

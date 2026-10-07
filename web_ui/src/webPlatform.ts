@@ -140,14 +140,30 @@ export function useWebPlatform(
   }, []);
 
   useEffect(() => {
+    const stateName = !state.current_video ? 'stopped' : state.playing ? 'playing' : 'paused';
+    const href = appIconPath || `/api/runtime/app-icon?state=${stateName}`;
+    let favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (!favicon) {
+      favicon = document.createElement('link');
+      favicon.rel = 'icon';
+      document.head.appendChild(favicon);
+    }
+    favicon.type = 'image/png';
+    favicon.href = href;
+    const touchIcon = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]');
+    if (touchIcon) touchIcon.href = `/api/runtime/app-icon-192.png?state=${stateName}`;
+  }, [appIconPath, state.current_video, state.playing]);
+
+  useEffect(() => {
     if (!('mediaSession' in navigator)) return;
+    const stateName = !state.current_video ? 'stopped' : state.playing ? 'playing' : 'paused';
     navigator.mediaSession.metadata = new MediaMetadata({
       title: mediaTitle(state, appName),
       artist: appName,
       album: state.live ? 'Live stream' : 'Pealayer media',
       artwork: [
-        { src: appIconPath || '/api/runtime/app-icon-192.png', sizes: '192x192', type: 'image/png' },
-        { src: '/api/runtime/app-icon-512.png', sizes: '512x512', type: 'image/png' },
+        { src: `/api/runtime/app-icon-192.png?state=${stateName}`, sizes: '192x192', type: 'image/png' },
+        { src: `/api/runtime/app-icon-512.png?state=${stateName}`, sizes: '512x512', type: 'image/png' },
       ],
     });
     navigator.mediaSession.playbackState = state.playing ? 'playing' : 'paused';

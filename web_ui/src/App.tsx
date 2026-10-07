@@ -258,11 +258,13 @@ const App: React.FC = () => {
     });
   }, [apiEndpoint, completeRequest]);
 
+  const playbackIconState = !state.current_video ? 'stopped' : state.playing ? 'playing' : 'paused';
+  const stateAppIconPath = `${runtime?.appIconPath || '/api/runtime/app-icon'}?state=${playbackIconState}`;
   const platform = useWebPlatform(
     state,
     rawSendCmd,
     runtime?.appName || 'Pealayer',
-    runtime?.appIconPath || '/api/runtime/app-icon-192.png',
+    stateAppIconPath,
   );
 
   const signalInteraction = platform.signalInteraction;
@@ -557,7 +559,7 @@ const App: React.FC = () => {
           connected={connected}
           connectionMode={connectionMode}
           appName={runtime?.appName}
-          appIconPath={runtime?.appIconPath}
+          appIconPath={stateAppIconPath}
           locale={runtime?.locale || 'en'}
           connectionTarget={connectionTarget}
           onConnectionTargetChange={changeConnectionTarget}

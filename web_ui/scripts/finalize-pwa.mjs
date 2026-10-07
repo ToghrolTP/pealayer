@@ -46,7 +46,7 @@ for (const path of files) {
     const source = await readFile(path, 'utf8');
     const stamped = source.replace(/(["'`])(\.\.?\/[^"'`\\]+|\/assets\/[^"'`\\]+)\1/g,
       (match, quote, reference) => `${quote}${versionedReference(reference, path)}${quote}`);
-    await writeFile(path, stamped, 'utf8');
+    await writeFile(path, stamped.replace(/\r\n?/g, '\n'), 'utf8');
   }
 }
 const precache = [
@@ -56,9 +56,6 @@ const precache = [
     return assets.has(path) ? `${url}?v=${version}` : url;
   }),
   '/manifest.webmanifest',
-  '/api/runtime/app-icon',
-  '/api/runtime/app-icon-192.png',
-  '/api/runtime/app-icon-512.png',
 ].filter((value, index, values) => values.indexOf(value) === index);
 
 await writeFile(
