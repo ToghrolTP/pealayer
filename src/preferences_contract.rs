@@ -621,6 +621,12 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Timeline navigation",
             "Animate timeline navigation",
         ),
+        PreferenceControl::boolean(
+            "timeline_follow_playhead",
+            "input",
+            "Timeline navigation",
+            "Keep the playhead in view during playback",
+        ),
         PreferenceControl::number(
             "timeline_navigation_transition_ms",
             "input",

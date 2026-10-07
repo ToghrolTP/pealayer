@@ -43,6 +43,117 @@ pub struct TimelineWheelPreferences {
     pub alt: TimelineWheelBehavior,
 }
 
+/// Stable, persisted actions available in the native timeline toolbar.
+///
+/// The overflow button is deliberately not represented here: it is always
+/// available so a user can never hide the only route back to customization.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineToolbarAction {
+    ZoomIn,
+    ZoomOut,
+    PanLeft,
+    PanRight,
+    BringPlayheadIntoView,
+    FollowPlayhead,
+    AddKeyframe,
+    PreviousCue,
+    NextCue,
+    NudgeCueLeft,
+    NudgeCueRight,
+    SelectAll,
+    ClearSelection,
+    DeleteSelection,
+}
+
+impl TimelineToolbarAction {
+    pub const ALL: [Self; 14] = [
+        Self::ZoomIn,
+        Self::ZoomOut,
+        Self::PanLeft,
+        Self::PanRight,
+        Self::BringPlayheadIntoView,
+        Self::FollowPlayhead,
+        Self::AddKeyframe,
+        Self::PreviousCue,
+        Self::NextCue,
+        Self::NudgeCueLeft,
+        Self::NudgeCueRight,
+        Self::SelectAll,
+        Self::ClearSelection,
+        Self::DeleteSelection,
+    ];
+
+    pub const DEFAULT_VISIBLE: [Self; 6] = [
+        Self::ZoomIn,
+        Self::ZoomOut,
+        Self::PanLeft,
+        Self::PanRight,
+        Self::BringPlayheadIntoView,
+        Self::FollowPlayhead,
+    ];
+}
+
+pub fn default_timeline_toolbar_order() -> Vec<TimelineToolbarAction> {
+    TimelineToolbarAction::ALL.to_vec()
+}
+
+pub fn default_timeline_toolbar_hidden() -> Vec<TimelineToolbarAction> {
+    TimelineToolbarAction::ALL
+        .into_iter()
+        .filter(|action| !TimelineToolbarAction::DEFAULT_VISIBLE.contains(action))
+        .collect()
+}
+
+/// Remove duplicates and append actions introduced by newer builds. This
+/// keeps the alpha configuration self-correcting without version branches.
+pub fn normalize_timeline_toolbar_order(
+    configured: &[TimelineToolbarAction],
+) -> Vec<TimelineToolbarAction> {
+    let mut normalized = Vec::with_capacity(TimelineToolbarAction::ALL.len());
+    for action in configured
+        .iter()
+        .copied()
+        .chain(TimelineToolbarAction::ALL)
+    {
+        if !normalized.contains(&action) {
+            normalized.push(action);
+        }
+    }
+    normalized
+}
+
+#[cfg(test)]
+mod timeline_toolbar_tests {
+    use super::*;
+
+    #[test]
+    fn timeline_toolbar_order_self_heals_duplicates_and_missing_actions() {
+        let normalized = normalize_timeline_toolbar_order(&[
+            TimelineToolbarAction::PanRight,
+            TimelineToolbarAction::ZoomIn,
+            TimelineToolbarAction::PanRight,
+        ]);
+        assert_eq!(normalized[0], TimelineToolbarAction::PanRight);
+        assert_eq!(normalized[1], TimelineToolbarAction::ZoomIn);
+        assert_eq!(normalized.len(), TimelineToolbarAction::ALL.len());
+        for action in TimelineToolbarAction::ALL {
+            assert_eq!(
+                normalized.iter().filter(|candidate| **candidate == action).count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn advanced_cue_controls_start_hidden_but_navigation_starts_visible() {
+        let hidden = default_timeline_toolbar_hidden();
+        assert!(!hidden.contains(&TimelineToolbarAction::FollowPlayhead));
+        assert!(hidden.contains(&TimelineToolbarAction::AddKeyframe));
+        assert!(hidden.contains(&TimelineToolbarAction::DeleteSelection));
+    }
+}
+
 /// Per-field adjustment sizes shared by native controls and configuration clients.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct NumericInputSteps {
@@ -539,6 +650,11 @@ pub struct AppConfig {
     pub timeline_middle_axis_lock_modifiers: bool,
     pub timeline_animated_navigation: bool,
     pub timeline_navigation_transition_ms: u32,
+    /// Follow an advancing playhead and ease the viewport forward before it
+    /// reaches the trailing edge.
+    pub timeline_follow_playhead: bool,
+    pub timeline_toolbar_order: Vec<TimelineToolbarAction>,
+    pub timeline_toolbar_hidden: Vec<TimelineToolbarAction>,
     pub non_user_control_visibility: NonUserControlVisibility,
     pub prefix_relay_identifiers: bool,
     pub live_pwm_updates: bool,
@@ -707,6 +823,9 @@ impl Default for AppConfig {
             timeline_middle_axis_lock_modifiers: true,
             timeline_animated_navigation: true,
             timeline_navigation_transition_ms: 220,
+            timeline_follow_playhead: false,
+            timeline_toolbar_order: default_timeline_toolbar_order(),
+            timeline_toolbar_hidden: default_timeline_toolbar_hidden(),
             non_user_control_visibility: NonUserControlVisibility::Dimmed,
             prefix_relay_identifiers: true,
             live_pwm_updates: true,

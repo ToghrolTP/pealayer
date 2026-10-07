@@ -619,6 +619,9 @@ pub struct PealayerApp {
     pub(crate) timeline_middle_axis_lock_modifiers: bool,
     pub(crate) timeline_animated_navigation: bool,
     pub(crate) timeline_navigation_transition_ms: u32,
+    pub(crate) timeline_follow_playhead: bool,
+    pub(crate) timeline_toolbar_order: Vec<crate::config::TimelineToolbarAction>,
+    pub(crate) timeline_toolbar_hidden: Vec<crate::config::TimelineToolbarAction>,
     pub(crate) non_user_control_visibility: crate::config::NonUserControlVisibility,
     pub(crate) prefix_relay_identifiers: bool,
     pub(crate) live_pwm_updates: bool,
@@ -5941,6 +5944,10 @@ impl PealayerApp {
         cfg.timeline_middle_axis_lock_modifiers = self.timeline_middle_axis_lock_modifiers;
         cfg.timeline_animated_navigation = self.timeline_animated_navigation;
         cfg.timeline_navigation_transition_ms = self.timeline_navigation_transition_ms;
+        cfg.timeline_follow_playhead = self.timeline_follow_playhead;
+        cfg.timeline_toolbar_order =
+            crate::config::normalize_timeline_toolbar_order(&self.timeline_toolbar_order);
+        cfg.timeline_toolbar_hidden = self.timeline_toolbar_hidden.clone();
         cfg.non_user_control_visibility = self.non_user_control_visibility;
         cfg.prefix_relay_identifiers = self.prefix_relay_identifiers;
         cfg.live_pwm_updates = self.live_pwm_updates;
@@ -6145,6 +6152,10 @@ impl PealayerApp {
         self.timeline_middle_axis_lock_modifiers = config.timeline_middle_axis_lock_modifiers;
         self.timeline_animated_navigation = config.timeline_animated_navigation;
         self.timeline_navigation_transition_ms = config.timeline_navigation_transition_ms;
+        self.timeline_follow_playhead = config.timeline_follow_playhead;
+        self.timeline_toolbar_order =
+            crate::config::normalize_timeline_toolbar_order(&config.timeline_toolbar_order);
+        self.timeline_toolbar_hidden = config.timeline_toolbar_hidden.clone();
         self.non_user_control_visibility = config.non_user_control_visibility;
         self.prefix_relay_identifiers = config.prefix_relay_identifiers;
         self.live_pwm_updates = config.live_pwm_updates;
@@ -7926,6 +7937,9 @@ impl Default for PealayerApp {
             timeline_middle_axis_lock_modifiers: true,
             timeline_animated_navigation: true,
             timeline_navigation_transition_ms: 220,
+            timeline_follow_playhead: false,
+            timeline_toolbar_order: crate::config::default_timeline_toolbar_order(),
+            timeline_toolbar_hidden: crate::config::default_timeline_toolbar_hidden(),
             non_user_control_visibility: crate::config::NonUserControlVisibility::Dimmed,
             prefix_relay_identifiers: true,
             live_pwm_updates: true,

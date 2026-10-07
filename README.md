@@ -92,6 +92,7 @@ hardware-free verification.
 * **Template Isolation (Copy-on-Write)**: Modifying a placed cue automatically clones the template, protecting shared library presets from unintended edits.
 * **Deep Multi-Level Undo/Redo**: Full history tracking across all moves, trims, deletions, and track relocations (`Ctrl+Z` / `Ctrl+Y`).
 * **Lasso Marquee Selection**: Click-and-drag rubber-band selection across multiple cues and keyframes simultaneously.
+* **Playhead-Aware Navigation**: The ruler toolbar provides animated zoom, pan, playhead reveal, and an optional follow lock that eases the viewport forward before the playhead reaches its trailing edge. Its buttons can be shown, hidden, and reordered from the always-available overflow menu; advanced cue selection, nudge, keyframe, and delete controls are available but hidden by default.
 * **Capability-Driven Track Routing**: Accepts and relocates cues only against the exact output IDs and names advertised by the connected PCController. No actuator roles or fallback relay mappings are invented locally.
 
 ### 📈 Continuous Analog Curve Automation
@@ -429,6 +430,13 @@ To bridge virtual PTYs directly to a TCP socket:
 | `Ctrl` + `Z` | Undo last timeline edit / move / trim |
 | `Ctrl` + `Y` / `Ctrl` + `Shift` + `Z` | Redo last reverted edit |
 | `Delete` / `Backspace` | Delete selected timeline instances or keyframes |
+| `+` / `=` and `-` | Zoom the focused timeline in or out |
+| `Shift` + `Arrow Left` / `Right` | Pan the focused timeline left or right |
+| `C` | Bring the playhead into the focused timeline viewport |
+| `Ctrl` + `Shift` + `L` | Toggle smooth playhead-follow lock for the focused timeline |
+| `K` | Add an exact timeline keyframe at the playhead |
+| `Shift` + `Tab` / `Tab` | Select the previous / next cue |
+| `Alt` + `Arrow Left` / `Right` | Nudge selected cues by one configured frame step |
 | Available `F1` to `F8` positions | Hold during playback to record the correspondingly ordered PCController-advertised output; unavailable positions do nothing |
 | `W` / `S` or `Up` / `Down` | Ramp analog throttle up / down during curve recording |
 
