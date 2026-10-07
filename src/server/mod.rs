@@ -23,6 +23,14 @@ fn web_dist_root() -> std::path::PathBuf {
     {
         return override_root;
     }
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(binary_directory) = executable.parent() {
+            let packaged = binary_directory.join("web_ui/dist");
+            if packaged.join("index.html").is_file() {
+                return packaged;
+            }
+        }
+    }
     if !cfg!(debug_assertions) {
         return std::path::PathBuf::new();
     }
@@ -32,10 +40,6 @@ fn web_dist_root() -> std::path::PathBuf {
     }
     if let Ok(executable) = std::env::current_exe() {
         if let Some(binary_directory) = executable.parent() {
-            let packaged = binary_directory.join("web_ui/dist");
-            if packaged.join("index.html").is_file() {
-                return packaged;
-            }
             let canonical_source = binary_directory.join("../source/Pealayer/web_ui/dist");
             if canonical_source.join("index.html").is_file() {
                 return canonical_source;

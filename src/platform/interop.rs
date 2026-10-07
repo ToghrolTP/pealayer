@@ -2792,6 +2792,7 @@ fn run_pccontroller_action_bridge(
             serde_json::json!({
                 "topics":["state","events","status","opcodes"],
                 "interval_ms":100,
+                "state_interval_ms":100,
                 "after_id":0
             }),
         ))
