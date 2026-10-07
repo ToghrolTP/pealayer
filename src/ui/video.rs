@@ -65,6 +65,7 @@ pub(crate) struct VideoSurfaceGesture {
     pub(crate) target_time: f64,
     pub(crate) started_at: std::time::Instant,
     pub(crate) dragged: bool,
+    pub(crate) temporary_fast_forward_active: bool,
 }
 
 fn seek_target_from_drag(start_time: f64, drag_delta_x: f32, duration: f64) -> f64 {
@@ -81,11 +82,24 @@ fn temporary_fast_forward_rate(start_rate: f64, configured_rate: f64, drag_delta
 fn should_consume_gesture_click(
     action: crate::config::PlayerDragAction,
     dragged: bool,
-    held_for: std::time::Duration,
+    temporary_fast_forward_active: bool,
 ) -> bool {
     dragged
         || (action == crate::config::PlayerDragAction::TemporaryFastForward
-            && held_for >= std::time::Duration::from_millis(180))
+            && temporary_fast_forward_active)
+}
+
+fn temporary_fast_forward_delay(app: &PealayerApp) -> std::time::Duration {
+    app.hold_fast_forward_wait_for_double_click
+        .then(|| std::time::Duration::from_millis(u64::from(app.double_click_interval_ms)))
+        .unwrap_or_default()
+}
+
+fn temporary_fast_forward_ready(
+    elapsed: std::time::Duration,
+    delay: std::time::Duration,
+) -> bool {
+    elapsed >= delay
 }
 
 fn gesture_action_for_button(
@@ -120,23 +134,40 @@ fn begin_video_surface_gesture(
         target_time: app.playback_time,
         started_at: std::time::Instant::now(),
         dragged: false,
+        temporary_fast_forward_active: false,
     };
     app.video_surface_gesture = Some(gesture);
 
-    if action == crate::config::PlayerDragAction::TemporaryFastForward {
-        if gesture.was_paused {
-            let _ = app.mpv.set_property("pause", false);
-            app.is_paused = false;
-            app.engine_handle
-                .is_playing
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-        let speed =
-            temporary_fast_forward_rate(gesture.start_rate, app.temporary_fast_forward_speed, 0.0);
-        let _ = app.mpv.set_property("speed", speed);
-        app.playback_rate = speed;
-        app.set_osd(format!("{}: {speed:.1}×", app.tr("Playback speed")));
+    if action == crate::config::PlayerDragAction::TemporaryFastForward
+        && temporary_fast_forward_delay(app).is_zero()
+    {
+        activate_temporary_fast_forward(app);
     }
+}
+
+fn activate_temporary_fast_forward(app: &mut PealayerApp) {
+    let Some(mut gesture) = app.video_surface_gesture else {
+        return;
+    };
+    if gesture.action != crate::config::PlayerDragAction::TemporaryFastForward
+        || gesture.temporary_fast_forward_active
+    {
+        return;
+    }
+    gesture.temporary_fast_forward_active = true;
+    app.video_surface_gesture = Some(gesture);
+    if gesture.was_paused {
+        let _ = app.mpv.set_property("pause", false);
+        app.is_paused = false;
+        app.engine_handle
+            .is_playing
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    let speed =
+        temporary_fast_forward_rate(gesture.start_rate, app.temporary_fast_forward_speed, 0.0);
+    let _ = app.mpv.set_property("speed", speed);
+    app.playback_rate = speed;
+    app.set_osd(format!("{}: {speed:.1}×", app.tr("Playback speed")));
 }
 
 fn finish_video_surface_gesture(app: &mut PealayerApp) -> bool {
@@ -146,27 +177,29 @@ fn finish_video_surface_gesture(app: &mut PealayerApp) -> bool {
     match gesture.action {
         crate::config::PlayerDragAction::Seek => app.finish_scrub(gesture.target_time),
         crate::config::PlayerDragAction::TemporaryFastForward => {
-            let _ = app.mpv.set_property("speed", gesture.start_rate);
-            app.playback_rate = gesture.start_rate;
-            if gesture.was_paused {
-                let _ = app.mpv.set_property("pause", true);
-                app.is_paused = true;
-                app.engine_handle
-                    .is_playing
-                    .store(false, std::sync::atomic::Ordering::Relaxed);
+            if gesture.temporary_fast_forward_active {
+                let _ = app.mpv.set_property("speed", gesture.start_rate);
+                app.playback_rate = gesture.start_rate;
+                if gesture.was_paused {
+                    let _ = app.mpv.set_property("pause", true);
+                    app.is_paused = true;
+                    app.engine_handle
+                        .is_playing
+                        .store(false, std::sync::atomic::Ordering::Relaxed);
+                }
+                app.set_osd(format!(
+                    "{}: {:.1}×",
+                    app.tr("Playback speed"),
+                    gesture.start_rate
+                ));
             }
-            app.set_osd(format!(
-                "{}: {:.1}×",
-                app.tr("Playback speed"),
-                gesture.start_rate
-            ));
         }
         crate::config::PlayerDragAction::MoveWindow | crate::config::PlayerDragAction::None => {}
     }
     should_consume_gesture_click(
         gesture.action,
         gesture.dragged,
-        gesture.started_at.elapsed(),
+        gesture.temporary_fast_forward_active,
     )
 }
 
@@ -269,9 +302,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     ];
 
     if response.hovered() && app.current_video_path.is_some() {
-        // Temporary fast-forward is a hold gesture, so it starts on mouse-down
-        // without requiring movement. Every supported pointer button follows
-        // the same rule and one button owns the gesture until release.
+        // Register temporary fast-forward on mouse-down without requiring
+        // movement, but keep it pending until the double-click interval has
+        // elapsed when that preference is enabled. One button owns the gesture
+        // until release.
         for button in GESTURE_BUTTONS {
             let pressed = ui.input(|input| input.pointer.button_pressed(button));
             let action = gesture_action_for_button(app, button);
@@ -279,6 +313,19 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 begin_video_surface_gesture(app, button, action);
                 break;
             }
+        }
+    }
+
+    if let Some(gesture) = app.video_surface_gesture
+        && gesture.action == crate::config::PlayerDragAction::TemporaryFastForward
+        && !gesture.temporary_fast_forward_active
+    {
+        let delay = temporary_fast_forward_delay(app);
+        let elapsed = gesture.started_at.elapsed();
+        if temporary_fast_forward_ready(elapsed, delay) {
+            activate_temporary_fast_forward(app);
+        } else {
+            ui.ctx().request_repaint_after(delay - elapsed);
         }
     }
 
@@ -321,14 +368,16 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 }
             }
             crate::config::PlayerDragAction::TemporaryFastForward => {
-                let speed = temporary_fast_forward_rate(
-                    gesture.start_rate,
-                    app.temporary_fast_forward_speed,
-                    response.drag_delta().x,
-                );
-                let _ = app.mpv.set_property("speed", speed);
-                app.playback_rate = speed;
-                app.set_osd(format!("{}: {speed:.1}×", app.tr("Playback speed")));
+                if gesture.temporary_fast_forward_active {
+                    let speed = temporary_fast_forward_rate(
+                        gesture.start_rate,
+                        app.temporary_fast_forward_speed,
+                        response.drag_delta().x,
+                    );
+                    let _ = app.mpv.set_property("speed", speed);
+                    app.playback_rate = speed;
+                    app.set_osd(format!("{}: {speed:.1}×", app.tr("Playback speed")));
+                }
             }
             crate::config::PlayerDragAction::None => {}
         }
@@ -1188,21 +1237,35 @@ mod tests {
         assert!(!should_consume_gesture_click(
             crate::config::PlayerDragAction::TemporaryFastForward,
             false,
-            std::time::Duration::from_millis(50),
+            false,
         ));
         assert!(should_consume_gesture_click(
             crate::config::PlayerDragAction::TemporaryFastForward,
             false,
-            std::time::Duration::from_millis(250),
+            true,
         ));
         assert!(should_consume_gesture_click(
             crate::config::PlayerDragAction::TemporaryFastForward,
             true,
-            std::time::Duration::ZERO,
+            false,
         ));
         assert!(should_consume_gesture_click(
             crate::config::PlayerDragAction::Seek,
             true,
+            false,
+        ));
+    }
+
+    #[test]
+    fn fast_forward_waits_for_the_complete_double_click_interval() {
+        let delay = std::time::Duration::from_millis(300);
+        assert!(!temporary_fast_forward_ready(
+            std::time::Duration::from_millis(299),
+            delay,
+        ));
+        assert!(temporary_fast_forward_ready(delay, delay));
+        assert!(temporary_fast_forward_ready(
+            std::time::Duration::ZERO,
             std::time::Duration::ZERO,
         ));
     }

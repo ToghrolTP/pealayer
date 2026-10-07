@@ -446,6 +446,16 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Player controls" => "کنترل‌های پخش‌کننده",
         "Playback speed" => "سرعت پخش",
         "Hold-to-fast-forward speed" => "سرعت جلورفتن با نگه‌داشتن",
+        "Double-click interval (milliseconds)" => "فاصلهٔ دوبار کلیک (میلی‌ثانیه)",
+        "Delay hold-to-fast-forward for double-clicks" => {
+            "تأخیر در تندپخش نگه‌داشتنی برای دوبار کلیک"
+        }
+        "Used by video-surface double-click actions and delayed hold gestures" => {
+            "برای عملکرد دوبار کلیک روی ویدیو و حرکت‌های نگه‌داشتنی با تأخیر استفاده می‌شود"
+        }
+        "Wait for the configured double-click interval before temporary fast-forward begins" => {
+            "پیش از آغاز تندپخش موقت، به‌اندازهٔ فاصلهٔ تنظیم‌شدهٔ دوبار کلیک صبر می‌کند"
+        }
         "Normal speed used for playback and restored after a temporary fast-forward" => {
             "سرعت عادی پخش که پس از جلورفتن موقت بازیابی می‌شود"
         }

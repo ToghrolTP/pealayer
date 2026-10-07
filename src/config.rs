@@ -563,6 +563,11 @@ pub struct AppConfig {
     pub auto_connect_hardware: bool,
     pub pause_on_hardware_disconnect: bool,
     pub click_player_to_toggle: bool,
+    /// Maximum interval used to recognize a double-click. The hold-to-fast-
+    /// forward gesture can share this threshold so it never flashes on during
+    /// a double-click.
+    pub double_click_interval_ms: u32,
+    pub hold_fast_forward_wait_for_double_click: bool,
     pub playback_speed: f64,
     pub temporary_fast_forward_speed: f64,
     pub subtitle_font_size: f64,
@@ -741,6 +746,8 @@ impl Default for AppConfig {
             auto_connect_hardware: true,
             pause_on_hardware_disconnect: true,
             click_player_to_toggle: true,
+            double_click_interval_ms: 300,
+            hold_fast_forward_wait_for_double_click: true,
             playback_speed: 1.0,
             temporary_fast_forward_speed: 2.0,
             subtitle_font_size: 55.0,
@@ -1607,6 +1614,9 @@ impl AppConfig {
         {
             return Err("temporary_fast_forward_speed must be between 1 and 16".to_string());
         }
+        if !(100..=1_000).contains(&self.double_click_interval_ms) {
+            return Err("double_click_interval_ms must be between 100 and 1000".to_string());
+        }
         if self.numeric_input_steps.len() > 256
             || self
                 .numeric_input_steps
@@ -2012,6 +2022,8 @@ mod tests {
         assert!(cfg.open_url_proxy_url.is_none());
         assert_eq!(cfg.playback_speed, 1.0);
         assert_eq!(cfg.temporary_fast_forward_speed, 2.0);
+        assert_eq!(cfg.double_click_interval_ms, 300);
+        assert!(cfg.hold_fast_forward_wait_for_double_click);
         assert!(!cfg.seekbar_hover_thumbnails);
         assert!(!cfg.nle_seekbar_hover_thumbnails);
         assert!(cfg.consistent_video_aspect_ratio);

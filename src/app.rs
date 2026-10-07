@@ -430,6 +430,8 @@ pub struct PealayerApp {
     pub(crate) playback_rate: f64,
     pub(crate) configured_playback_speed: f64,
     pub(crate) temporary_fast_forward_speed: f64,
+    pub(crate) double_click_interval_ms: u32,
+    pub(crate) hold_fast_forward_wait_for_double_click: bool,
     pub(crate) video_surface_gesture: Option<crate::ui::video::VideoSurfaceGesture>,
 
     pub seek_pos: Option<f64>,
@@ -6209,6 +6211,9 @@ impl PealayerApp {
         cfg.auto_connect_hardware = self.auto_connect_hardware;
         cfg.pause_on_hardware_disconnect = self.pause_on_hardware_disconnect;
         cfg.click_player_to_toggle = self.click_player_to_toggle;
+        cfg.double_click_interval_ms = self.double_click_interval_ms;
+        cfg.hold_fast_forward_wait_for_double_click =
+            self.hold_fast_forward_wait_for_double_click;
         cfg.playback_speed = self.configured_playback_speed;
         cfg.temporary_fast_forward_speed = self.temporary_fast_forward_speed;
         cfg.subtitle_font_size = self.sub_font_size;
@@ -6401,6 +6406,13 @@ impl PealayerApp {
         self.auto_connect_hardware = config.auto_connect_hardware;
         self.pause_on_hardware_disconnect = config.pause_on_hardware_disconnect;
         self.click_player_to_toggle = config.click_player_to_toggle;
+        self.double_click_interval_ms = config.double_click_interval_ms;
+        self.hold_fast_forward_wait_for_double_click =
+            config.hold_fast_forward_wait_for_double_click;
+        ctx.options_mut(|options| {
+            options.input_options.max_double_click_delay =
+                f64::from(self.double_click_interval_ms) / 1_000.0;
+        });
         self.configured_playback_speed = config.playback_speed;
         self.temporary_fast_forward_speed = config.temporary_fast_forward_speed;
         if self.video_surface_gesture.is_none() {
@@ -8465,6 +8477,8 @@ impl Default for PealayerApp {
             playback_rate: 1.0,
             configured_playback_speed: 1.0,
             temporary_fast_forward_speed: 2.0,
+            double_click_interval_ms: 300,
+            hold_fast_forward_wait_for_double_click: true,
             video_surface_gesture: None,
             seek_pos: None,
             seek_controller: crate::mpv::seek::SeekController::new(

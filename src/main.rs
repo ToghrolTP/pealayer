@@ -378,6 +378,10 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let loaded_config = launch_config.clone();
+            cc.egui_ctx.options_mut(|options| {
+                options.input_options.max_double_click_delay =
+                    f64::from(loaded_config.double_click_interval_ms) / 1_000.0;
+            });
             crate::platform::windows::start_window_move_frame_pump(cc.egui_ctx.clone());
             crate::ui::i18n::configure_ui_fonts(
                 &cc.egui_ctx,
@@ -781,6 +785,9 @@ fn main() -> eframe::Result {
                 playback_rate: loaded_config.playback_speed,
                 configured_playback_speed: loaded_config.playback_speed,
                 temporary_fast_forward_speed: loaded_config.temporary_fast_forward_speed,
+                double_click_interval_ms: loaded_config.double_click_interval_ms,
+                hold_fast_forward_wait_for_double_click: loaded_config
+                    .hold_fast_forward_wait_for_double_click,
                 video_surface_gesture: None,
                 show_sub_settings: loaded_config.workspace_session.dialogs.subtitles,
                 sub_visibility: true,

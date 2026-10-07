@@ -374,6 +374,33 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         ),
         {
             let mut control = PreferenceControl::number(
+                "double_click_interval_ms",
+                "playback",
+                "Player controls",
+                "Double-click interval (milliseconds)",
+                100.0,
+                1_000.0,
+                10.0,
+            );
+            control.description = Some(
+                "Used by video-surface double-click actions and delayed hold gestures",
+            );
+            control
+        },
+        {
+            let mut control = PreferenceControl::boolean(
+                "hold_fast_forward_wait_for_double_click",
+                "playback",
+                "Player controls",
+                "Delay hold-to-fast-forward for double-clicks",
+            );
+            control.description = Some(
+                "Wait for the configured double-click interval before temporary fast-forward begins",
+            );
+            control
+        },
+        {
+            let mut control = PreferenceControl::number(
                 "playback_speed",
                 "playback",
                 "Player controls",
@@ -1687,6 +1714,25 @@ mod tests {
             assert_eq!(control.minimum, Some(min));
             assert_eq!(control.maximum, Some(max));
         }
+    }
+
+    #[test]
+    fn hold_fast_forward_delay_uses_the_shared_double_click_interval() {
+        let config = crate::config::AppConfig::default();
+        let controls = preference_controls(&config);
+        let interval = controls
+            .iter()
+            .find(|control| control.key == "double_click_interval_ms")
+            .expect("missing double-click interval preference");
+        assert!(matches!(interval.kind, PreferenceControlKind::Number));
+        assert_eq!(interval.minimum, Some(100.0));
+        assert_eq!(interval.maximum, Some(1_000.0));
+        let delay = controls
+            .iter()
+            .find(|control| control.key == "hold_fast_forward_wait_for_double_click")
+            .expect("missing hold-delay preference");
+        assert!(matches!(delay.kind, PreferenceControlKind::Boolean));
+        assert!(config.hold_fast_forward_wait_for_double_click);
     }
 
     #[test]
