@@ -18,6 +18,11 @@ coordinator timing contract.
    relay edges, and sampled PWM curves to `controller.media.timeline.prepare`.
 2. PCController acknowledges the revision, SHA-256 plan hash, board generation,
    and compiled command count. Invalid/oversized plans are rejected, not truncated.
+   A temporary output-ownership conflict is returned as a structured,
+   retryable `resource_busy` response. Pealayer shows this as **Hardware waiting**
+   and retries at the coordinator's bounded interval; it is not reported as a
+   timing fault. This keeps standalone strip previews and other intentional
+   output sessions from creating a false alarm or a tight RPC retry loop.
 3. An independent libmpv observer samples actual playback every 20 ms; the
    telemetry thread sends clock updates about every 40 ms while hardware is armed.
    Repainting, Web UI connection, and GPU callbacks do not own this clock.
@@ -38,7 +43,7 @@ not automatic recovery.
 
 The egui status bar and Web Effects Library expose preparation/timing faults.
 `/api/player/status.hardware_sync` exposes plan and clock acknowledgements,
-their age, and the PCController ledger. PCController also publishes
+their age, any deferred resource reason, and the PCController ledger. PCController also publishes
 `media.timeline` state events and includes the ledger in its playback snapshot.
 
 ## Timing limits — not a hard-real-time claim

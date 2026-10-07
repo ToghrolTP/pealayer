@@ -82,6 +82,8 @@ pub fn spawn(
         let mut sent_at = Instant::now();
         let mut reported_at = Instant::now();
         let mut retry_at = Instant::now();
+        let mut preparation_retry_at = Instant::now();
+        let mut preparation_retry_revision = 0_u64;
         let mut last_error = String::new();
         loop {
             let alive = lifecycle.strong_count() > 0;
@@ -100,7 +102,9 @@ pub fn spawn(
                 if let Ok(mut plan) = timeline.lock() {
                     plan.acknowledged_revision = 0;
                     plan.last_ack = None;
+                    plan.deferred_reason = None;
                 }
+                preparation_retry_revision = 0;
                 if !alive {
                     return;
                 }
@@ -143,7 +147,8 @@ pub fn spawn(
             let pending = timeline.lock().ok().and_then(|plan| {
                 (plan.compilation_error.is_none()
                     && plan.revision != 0
-                    && plan.revision != plan.acknowledged_revision)
+                    && plan.revision != plan.acknowledged_revision
+                    && (plan.revision != preparation_retry_revision || Instant::now() >= preparation_retry_at))
                     .then(|| (plan.revision, plan.payload.clone()))
             });
             if let Some((revision, mut payload)) = pending
@@ -157,7 +162,7 @@ pub fn spawn(
                 if rpc.call("controller.media.playback.update",json!({"client_id":id,"sequence":sequence,"position_ms":current.position_now(),"duration_ms":current.duration_ms,"playing":false,"loaded":current.loaded,"rate":current.rate,"epoch":current.epoch})).is_err() {client=None;previous=None;continue}
                 payload["client_id"] = json!(id);
                 payload["revision"] = json!(revision);
-                match rpc.call("controller.media.timeline.prepare", payload) {
+                match rpc.call_detailed("controller.media.timeline.prepare", payload) {
                     Ok(feedback) => {
                         if let Ok(mut plan) = timeline.lock()
                             && plan.revision == revision
@@ -165,16 +170,30 @@ pub fn spawn(
                             plan.acknowledged_revision = revision;
                             plan.feedback = feedback;
                             plan.error = None;
+                            plan.deferred_reason = None;
                             plan.last_ack = None;
                         }
+                        preparation_retry_revision = 0;
                         previous = None;
                     }
                     Err(error) => {
+                        preparation_retry_revision = revision;
+                        if error.is_resource_busy("addressable_strip") {
+                            let retry_ms = error.retry_after_ms.unwrap_or(2_000).clamp(500, 10_000);
+                            preparation_retry_at = Instant::now() + Duration::from_millis(retry_ms);
+                            if let Ok(mut plan) = timeline.lock() {
+                                plan.error = None;
+                                plan.deferred_reason = Some(format!("Hardware timeline is waiting: {}", error.message));
+                                plan.play_requested = false;
+                            }
+                            continue;
+                        }
+                        preparation_retry_at = Instant::now() + Duration::from_secs(5);
                         if let Ok(mut plan) = timeline.lock() {
-                            plan.error = Some(format!("Hardware timeline not prepared: {error}"));
+                            plan.deferred_reason = None;
+                            plan.error = Some(format!("Hardware timeline not prepared: {}", error.message));
                             plan.play_requested = false;
                         }
-                        std::thread::sleep(Duration::from_millis(250));
                         continue;
                     }
                 }

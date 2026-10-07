@@ -1216,7 +1216,7 @@ impl eframe::App for PealayerApp {
                         "revision":plan.revision,"prepared_revision":plan.acknowledged_revision,
                         "clock_ack_revision":plan.clock_ack_revision,"clock_ack_epoch":plan.clock_ack_epoch,
                         "ack_age_ms":plan.last_ack.map(|ack|ack.elapsed().as_millis() as u64),
-                        "error":plan.error,"timeline":plan.feedback
+                        "error":plan.error,"deferred_reason":plan.deferred_reason,"timeline":plan.feedback
                     })).unwrap_or(serde_json::Value::Null),
                 hardware_error: self
                     .engine_handle

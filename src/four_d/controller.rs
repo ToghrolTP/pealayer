@@ -1054,6 +1054,28 @@ pub struct ControllerClient {
     backend: ControllerBackend,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ControllerRpcError {
+    pub message: String,
+    pub kind: Option<String>,
+    pub resource: Option<String>,
+    pub retryable: bool,
+    pub retry_after_ms: Option<u64>,
+}
+
+impl ControllerRpcError {
+    fn from_message(message: String) -> Self {
+        Self { message, kind: None, resource: None, retryable: false, retry_after_ms: None }
+    }
+    pub(crate) fn is_resource_busy(&self, resource: &str) -> bool {
+        (self.kind.as_deref() == Some("resource_busy") && self.resource.as_deref() == Some(resource) && self.retryable)
+            || (resource == "addressable_strip" && self.message == "stop standalone strip streaming before preparing media playback")
+    }
+}
+impl From<String> for ControllerRpcError {
+    fn from(message: String) -> Self { Self::from_message(message) }
+}
+
 fn controller_json_rpc_error_message(error: &Value) -> String {
     error
         .get("message")
@@ -1069,6 +1091,17 @@ fn controller_json_rpc_error_message(error: &Value) -> String {
         .filter(|message| !message.is_empty())
         .unwrap_or("PCController rejected the request")
         .to_string()
+}
+
+fn controller_json_rpc_error(error: &Value) -> ControllerRpcError {
+    let data = error.get("data");
+    ControllerRpcError {
+        message: controller_json_rpc_error_message(error),
+        kind: data.and_then(|value| value.get("kind")).and_then(Value::as_str).map(str::to_string),
+        resource: data.and_then(|value| value.get("resource")).and_then(Value::as_str).map(str::to_string),
+        retryable: data.and_then(|value| value.get("retryable")).and_then(Value::as_bool).unwrap_or(false),
+        retry_after_ms: data.and_then(|value| value.get("retry_after_ms")).and_then(Value::as_u64),
+    }
 }
 
 fn same_coordinator_epoch(current: &Value, selected: &Value) -> bool {
@@ -1200,8 +1233,11 @@ impl ControllerClient {
     }
 
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.call_detailed(method, params).map_err(|error| error.message)
+    }
+    pub(crate) fn call_detailed(&mut self, method: &str, params: Value) -> Result<Value, ControllerRpcError> {
         let (writer, reader, next_id) = match &mut self.backend {
-            ControllerBackend::Embedded(host) => return host.call(method, params),
+            ControllerBackend::Embedded(host) => return host.call(method, params).map_err(ControllerRpcError::from_message),
             ControllerBackend::Tcp {
                 writer,
                 reader,
@@ -1237,7 +1273,7 @@ impl ControllerClient {
                 .read_line(&mut line)
                 .map_err(|error| format!("read PCController JSON-RPC response: {error}"))?;
             if read == 0 {
-                return Err("PCController closed the JSON-RPC connection".to_string());
+                return Err("PCController closed the JSON-RPC connection".to_string().into());
             }
             let response: Value = serde_json::from_str(line.trim())
                 .map_err(|error| format!("decode PCController JSON-RPC response: {error}"))?;
@@ -1246,7 +1282,7 @@ impl ControllerClient {
             }
             if let Some(error) = response.get("error").filter(|value| !value.is_null()) {
                 let _ = reader.get_ref().set_read_timeout(previous_timeout);
-                return Err(controller_json_rpc_error_message(error));
+                return Err(controller_json_rpc_error(error));
             }
             let _ = reader.get_ref().set_read_timeout(previous_timeout);
             return Ok(response.get("result").cloned().unwrap_or(Value::Null));
@@ -2507,6 +2543,22 @@ mod tests {
             controller_json_rpc_error_message(&error),
             "effect reference \"sequence:0\" must use effect:ID or ID"
         );
+    }
+
+    #[test]
+    fn json_rpc_resource_busy_preserves_machine_readable_retry_contract() {
+        let error = controller_json_rpc_error(&json!({"code":-32009,"message":"strip is busy","data":{
+            "kind":"resource_busy","resource":"addressable_strip","owner":"standalone_strip_stream",
+            "retryable":true,"retry_after_ms":2000}}));
+        assert_eq!(error.message, "strip is busy");
+        assert!(error.is_resource_busy("addressable_strip"));
+        assert_eq!(error.retry_after_ms, Some(2000));
+        assert!(!error.is_resource_busy("relay"));
+    }
+    #[test]
+    fn legacy_strip_conflict_remains_retryable_during_rolling_upgrade() {
+        let error = ControllerRpcError::from_message("stop standalone strip streaming before preparing media playback".into());
+        assert!(error.is_resource_busy("addressable_strip"));
     }
 
     #[test]
