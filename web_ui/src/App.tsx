@@ -12,18 +12,22 @@ import { PlayerInfoTab } from './components/PlayerInfoTab';
 
 const { Sider, Content } = Layout;
 
+export interface RuntimeConfig {
+  appName: string;
+  version: string;
+  wsPort: number;
+  locale: 'en' | 'fa';
+  direction: 'ltr' | 'rtl';
+  theme: 'system' | 'light' | 'dark';
+}
+
 const App: React.FC = () => {
   const [collapsed, setCollapsed] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<string>('remote');
   const [connected, setConnected] = useState<boolean>(false);
   const [connectionMode, setConnectionMode] = useState<'ws' | 'http'>('http');
-  const [state, setState] = useState<PlayerState>({
-    playing: false,
-    volume: 100,
-    playback_time: 0,
-    duration: 0,
-    current_video: null,
-  });
+  const [state, setState] = useState<PlayerState>({ status: 'initializing' });
+  const [runtime, setRuntime] = useState<RuntimeConfig | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -41,9 +45,26 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
+    let disposed = false;
+    fetch('/api/runtime/config')
+      .then((response) => {
+        if (!response.ok) throw new Error(`runtime config ${response.status}`);
+        return response.json();
+      })
+      .then((value: RuntimeConfig) => {
+        if (!disposed) setRuntime(value);
+      })
+      .catch(() => {
+        if (!disposed) setRuntime(null);
+      });
+    return () => { disposed = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!runtime) return;
     const connectWS = () => {
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${proto}//${window.location.hostname}:8081`;
+      const wsUrl = `${proto}//${window.location.hostname}:${runtime.wsPort}`;
 
       try {
         const ws = new WebSocket(wsUrl);
@@ -93,7 +114,7 @@ const App: React.FC = () => {
       clearInterval(httpInterval);
       if (wsRef.current) wsRef.current.close();
     };
-  }, []);
+  }, [runtime]);
 
   const menuItems = [
     {
@@ -114,7 +135,7 @@ const App: React.FC = () => {
   ];
 
   return (
-    <ConfigProvider
+    <ConfigProvider direction={runtime?.direction}
       theme={{
         algorithm: theme.darkAlgorithm,
         token: {
@@ -133,6 +154,7 @@ const App: React.FC = () => {
           onToggleCollapse={() => setCollapsed(!collapsed)}
           connected={connected}
           connectionMode={connectionMode}
+          appName={runtime?.appName}
         />
 
         <Layout style={{ background: '#0a2239' }}>
@@ -183,7 +205,7 @@ const App: React.FC = () => {
               />
             )}
             {activeTab === 'info' && (
-              <PlayerInfoTab state={state} connectionMode={connectionMode} />
+              <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} />
             )}
           </Content>
         </Layout>

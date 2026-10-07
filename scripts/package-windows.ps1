@@ -2,7 +2,8 @@
 param(
     [switch]$NoUpx,
     [switch]$SkipTests,
-    [switch]$Run
+    [switch]$Run,
+    [string]$Branding
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,6 +14,14 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 }
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+if ($Branding) {
+    $resolvedBranding = (Resolve-Path -LiteralPath $Branding -ErrorAction Stop).Path
+    $brandDocument = Get-Content -Raw -LiteralPath $resolvedBranding | ConvertFrom-Json
+    if ($brandDocument.format -ne 'application-brand/v1') {
+        throw 'Branding document must declare format application-brand/v1.'
+    }
+    $env:APPLICATION_BRAND = $resolvedBranding
+}
 $machineRustupHome = [Environment]::GetEnvironmentVariable('RUSTUP_HOME', 'Machine')
 if ($machineRustupHome) { $env:RUSTUP_HOME = $machineRustupHome }
 $systemRustBin = Join-Path $env:ProgramFiles 'Rust\bin'
@@ -71,13 +80,31 @@ if (-not $SkipTests) {
 & (Join-Path $PSScriptRoot 'run-windows.ps1') -BuildOnly
 
 New-Item -ItemType Directory -Force -Path $stagingDirectory,$outputDirectory | Out-Null
-$stagedExecutable = Join-Path $stagingDirectory 'pealayer.exe'
+$effectiveExecutableName = if ($env:APP_EXECUTABLE_NAME) {
+    $env:APP_EXECUTABLE_NAME.Trim()
+} elseif ($Branding -and $brandDocument.executableName) {
+    [string]$brandDocument.executableName
+} else {
+    'pealayer'
+}
+if ($effectiveExecutableName -notmatch '^[A-Za-z0-9_.-]+$' -or $effectiveExecutableName.Contains('..')) {
+    throw 'Brand executableName must be a safe extension-free file name.'
+}
+$effectiveExecutableFile = "$effectiveExecutableName.exe"
+$stagedExecutable = Join-Path $stagingDirectory $effectiveExecutableFile
 $stagedRuntime = Join-Path $stagingDirectory 'libmpv-2.dll'
 Copy-Item -LiteralPath (Join-Path $releaseDirectory 'pealayer.exe') -Destination $stagedExecutable -Force
 Copy-Item -LiteralPath $libmpvRuntime -Destination $stagedRuntime -Force
 
 $resource = (Get-Item -LiteralPath $stagedExecutable).VersionInfo
-if ($resource.ProductName -ne 'Pealayer' -or $resource.OriginalFilename -ne 'pealayer.exe') {
+$expectedProductName = if ($env:APP_NAME) {
+    $env:APP_NAME.Trim()
+} elseif ($Branding -and $brandDocument.applicationName) {
+    [string]$brandDocument.applicationName
+} else {
+    'Pealayer'
+}
+if ($resource.ProductName -ne $expectedProductName -or $resource.OriginalFilename -ne $effectiveExecutableFile) {
     throw 'Packaged executable is missing the expected Win32 identity resources.'
 }
 
@@ -107,7 +134,7 @@ if (Test-Path -LiteralPath (Join-Path $webDistribution 'index.html')) {
     $webUiPackaged = $true
 }
 
-$artifacts = @('pealayer.exe','libmpv-2.dll') | ForEach-Object {
+$artifacts = @($effectiveExecutableFile,'libmpv-2.dll') | ForEach-Object {
     $path = Join-Path $outputDirectory $_
     [ordered]@{
         path = $_
@@ -122,6 +149,14 @@ $manifest = [ordered]@{
     git_dirty = [bool](& git -C $repositoryRoot status --porcelain)
     built_at_utc = [DateTime]::UtcNow.ToString('o')
     target = (& rustc -vV | Select-String '^host:' | ForEach-Object { $_.Line.Substring(5).Trim() })
+    identity = [ordered]@{
+        format = 'application-brand/v1'
+        application_name = $resource.ProductName
+        company_name = $resource.CompanyName
+        file_description = $resource.FileDescription
+        legal_copyright = $resource.LegalCopyright
+        executable_name = $effectiveExecutableName
+    }
     validation = [ordered]@{
         tests = if ($SkipTests) { 'skipped' } else { 'passed' }
         windows_resources = 'verified'
@@ -136,5 +171,5 @@ $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $outpu
 
 Write-Host "Pealayer package published to $outputDirectory"
 if ($Run) {
-    Start-Process -FilePath (Join-Path $outputDirectory 'pealayer.exe') -WorkingDirectory $outputDirectory
+    Start-Process -FilePath (Join-Path $outputDirectory $effectiveExecutableFile) -WorkingDirectory $outputDirectory
 }

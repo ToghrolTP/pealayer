@@ -42,21 +42,20 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .vscroll(true)
         .default_width(420.0)
         .show(ui.ctx(), |ui| {
-            // Setup some dummy data if empty for MVP purposes
-            if app.timeline.templates.is_empty() {
-                app.timeline.templates.push(crate::four_d::models::Effect::new(
-                    "Blink Relay 1".to_string(),
-                    "⚡".to_string(),
-                    2000,
-                    crate::four_d::patterns::generate_blink(1, 200, 2000),
-                ));
-            }
-
             // --- Section 1: Active Relay Status LEDs ---
             ui.heading("Active Relay Status");
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                for relay_id in 1..=8 {
+            let relay_capabilities = app
+                .advertised_hardware()
+                .filter(|capabilities| capabilities.board_connected)
+                .map(|capabilities| capabilities.relays)
+                .unwrap_or_default();
+            if relay_capabilities.is_empty() {
+                ui.label(app.tr("Connect PCController to see advertised relay controls."));
+            } else {
+                ui.horizontal_wrapped(|ui| {
+                for relay in &relay_capabilities {
+                    let relay_id = relay.id;
                     let active = is_relay_active(app, relay_id);
                     let color = if active {
                         egui::Color32::from_rgb(46, 204, 113) // Vibrant emerald green
@@ -76,11 +75,12 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             ui.painter().circle_filled(rect.center(), 7.0, color);
                         }
                         
-                        ui.label(egui::RichText::new(format!("R{}", relay_id)).size(10.0));
+                        ui.label(egui::RichText::new(&relay.name).size(10.0));
                     });
                     ui.add_space(8.0);
                 }
-            });
+                });
+            }
             ui.add_space(10.0);
             ui.separator();
             ui.add_space(10.0);
@@ -130,7 +130,8 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 let mut name = ui.data_mut(|d| d.get_temp::<String>(name_id).unwrap_or_default());
                 let mut icon = ui.data_mut(|d| d.get_temp::<String>(icon_id).unwrap_or_else(|| "⚡".to_string()));
                 let mut duration_ms = ui.data_mut(|d| d.get_temp::<u64>(duration_id).unwrap_or(1000));
-                let mut target_relay = ui.data_mut(|d| d.get_temp::<u8>(relay_id_id).unwrap_or(1));
+                let default_relay = relay_capabilities.first().map(|relay| relay.id).unwrap_or(0);
+                let mut target_relay = ui.data_mut(|d| d.get_temp::<u8>(relay_id_id).unwrap_or(default_relay));
                 
                 egui::Grid::new("create_template_grid").show(ui, |ui| {
                     ui.label("Name:");
@@ -146,12 +147,30 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     ui.end_row();
                     
                     ui.label("Relay:");
-                    ui.add(egui::Slider::new(&mut target_relay, 1..=8).prefix("Relay "));
+                    egui::ComboBox::from_id_salt("custom_template_relay")
+                        .selected_text(
+                            relay_capabilities
+                                .iter()
+                                .find(|relay| relay.id == target_relay)
+                                .map(|relay| relay.name.as_str())
+                                .unwrap_or("No advertised relay"),
+                        )
+                        .show_ui(ui, |ui| {
+                            for relay in &relay_capabilities {
+                                ui.selectable_value(&mut target_relay, relay.id, &relay.name);
+                            }
+                        });
                     ui.end_row();
                 });
                 
                 ui.horizontal(|ui| {
-                    if ui.button("Create").clicked() && !name.trim().is_empty() {
+                    if ui
+                        .add_enabled(
+                            target_relay != 0 && !name.trim().is_empty(),
+                            egui::Button::new("Create"),
+                        )
+                        .clicked()
+                    {
                         let actions = crate::four_d::patterns::generate_constant(target_relay, true, duration_ms);
                         let new_effect = crate::four_d::models::Effect::new(
                             name.clone(),

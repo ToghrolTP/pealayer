@@ -16,6 +16,7 @@ interface HeaderBarProps {
   onToggleCollapse: () => void;
   connected: boolean;
   connectionMode: 'ws' | 'http';
+  appName?: string;
 }
 
 export const HeaderBar: React.FC<HeaderBarProps> = ({
@@ -23,6 +24,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   onToggleCollapse,
   connected,
   connectionMode,
+  appName,
 }) => {
   return (
     <Header
@@ -49,11 +51,11 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
         <Space size="middle" align="center">
           <img
             src="/pealayer-icon.svg"
-            alt="Pealayer Logo"
+            alt={appName ? `${appName} logo` : 'Application logo'}
             style={{ width: 28, height: 28, borderRadius: 6, objectFit: 'contain' }}
           />
           <Title level={4} style={{ margin: 0, color: '#f8fafc', fontWeight: 700 }}>
-            Pealayer Control Center
+            {appName ? `${appName} Control Center` : 'Control Center'}
           </Title>
         </Space>
       </Space>

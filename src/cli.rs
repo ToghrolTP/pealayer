@@ -90,10 +90,14 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
 }
 
 pub fn send_remote_command(cmd_str: &str) -> Result<String, String> {
+    let address = format!(
+        "127.0.0.1:{}",
+        crate::config::runtime_port("PEALAYER_IPC_PORT", 8082)
+    );
     let mut stream = TcpStream::connect_timeout(
-        &"127.0.0.1:8082".parse().unwrap(),
+        &address.parse().unwrap(),
         Duration::from_millis(500),
-    ).map_err(|e| format!("Could not connect to Pealayer on 127.0.0.1:8082: {}", e))?;
+    ).map_err(|e| format!("Could not connect to the player instance at {address}: {e}"))?;
 
     stream.set_read_timeout(Some(Duration::from_secs(2))).map_err(|e| e.to_string())?;
 
@@ -148,8 +152,12 @@ pub fn try_forward_to_existing_instance(target: &str) -> bool {
         "command": "open",
         "target": target
     }).to_string() + "\n";
+    let address = format!(
+        "127.0.0.1:{}",
+        crate::config::runtime_port("PEALAYER_IPC_PORT", 8082)
+    );
     if let Ok(mut stream) = TcpStream::connect_timeout(
-        &"127.0.0.1:8082".parse().unwrap(),
+        &address.parse().unwrap(),
         Duration::from_millis(200),
     ) {
         let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
