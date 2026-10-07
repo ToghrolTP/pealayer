@@ -3245,7 +3245,7 @@ fn draw_timeline_cue_dialog(app: &mut PealayerApp, context: &egui::Context) {
     }
     if !open || cancel {
         context.data_mut(|data| {
-            data.remove_temp::<TimelineCueDraft>(timeline_cue_dialog_id());
+            data.remove::<TimelineCueDraft>(timeline_cue_dialog_id());
         });
     } else {
         context.data_mut(|data| data.insert_temp(timeline_cue_dialog_id(), draft));
@@ -6656,18 +6656,16 @@ mod timeline_row_tests {
     fn timeline_track_state_button_always_reserves_the_same_square() {
         let context = egui::Context::default();
         let mut size = egui::Vec2::ZERO;
-        let _ = context.run(egui::RawInput::default(), |context| {
-            egui::CentralPanel::default().show(context, |ui| {
-                size = timeline_track_state_button(
-                    ui,
-                    false,
-                    TimelineTrackStateKind::Muted,
-                    crate::ui::icons::PROHIBIT,
-                    "Mute",
-                )
-                .rect
-                .size();
-            });
+        let _ = context.run_ui(egui::RawInput::default(), |ui| {
+            size = timeline_track_state_button(
+                ui,
+                false,
+                TimelineTrackStateKind::Muted,
+                crate::ui::icons::PROHIBIT,
+                "Mute",
+            )
+            .rect
+            .size();
         });
         assert_eq!(size, egui::vec2(TIMELINE_TRACK_STATE_BUTTON_SIZE, TIMELINE_TRACK_STATE_BUTTON_SIZE));
     }
@@ -16369,7 +16367,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let mut timeline_scroll_state = timeline_scroll.state;
                             let timeline_content_size = timeline_scroll.content_size;
                             let timeline_viewport = timeline_scroll.inner_rect;
-                            let ((rect, response), clicked_any_clip, clicked_any_keyframe) = timeline_scroll.inner;
+                            let ((rect, response), mut clicked_any_clip, clicked_any_keyframe) = timeline_scroll.inner;
 
                             let mut timeline_scroll_changed = false;
                             let navigation_transition_id =
