@@ -829,8 +829,13 @@ body {
     padding-bottom: env(safe-area-inset-bottom);
   }
   .app-sider .app-menu { width: 100%; min-width: 0; height: 57px; margin: 0; padding: 4px 5px; display: flex; align-items: stretch; gap: 2px; }
-  .app-menu .ant-menu-item { width: auto; flex: 1 0 40px; min-width: 40px; height: 48px; margin: 0; padding-inline: 8px !important; display: grid; place-items: center; }
-  .app-menu .ant-menu-title-content { display: none; }
+  /* Ant's collapsed-menu selectors outrank the generic app-menu rules and
+     leave the hidden 40px label participating in layout. Target that state
+     explicitly so every icon owns the whole button and is centered on both
+     axes, regardless of Ant's internal label/line-height implementation. */
+  .app-sider .app-menu.ant-menu-inline-collapsed > .ant-menu-item { width: auto; flex: 1 0 40px; min-width: 40px; height: 48px; margin: 0; padding-inline: 8px !important; display: flex; align-items: center; justify-content: center; line-height: 1; }
+  .app-sider .app-menu.ant-menu-inline-collapsed > .ant-menu-item .ant-menu-item-icon { margin-inline: 0 !important; display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+  .app-sider .app-menu.ant-menu-inline-collapsed > .ant-menu-item .ant-menu-title-content { display: none !important; }
   .app-menu .ant-menu-item-selected::after { inset: auto 8px 0 !important; border: 0 !important; border-bottom: 2px solid var(--accent) !important; }
   .app-sider .ant-layout-sider-children { width: 100%; height: 100%; }
   .remote-player__preview { min-height: 0; }
