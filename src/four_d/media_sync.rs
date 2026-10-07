@@ -226,6 +226,9 @@ pub fn spawn(
                                 plan.clock_ack_revision = revision;
                                 plan.clock_ack_epoch = current.epoch;
                                 plan.feedback = feedback["timeline"].clone();
+                                // A transient transport failure must not remain visible once
+                                // the controller has acknowledged a newer clock sample.
+                                plan.error = None;
                                 if plan.feedback["state"] == "faulted" {
                                     plan.error = Some(
                                         plan.feedback["error"]
