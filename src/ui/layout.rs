@@ -1542,11 +1542,12 @@ fn send_pwm_raw_with(
     channel: u8,
     raw: u16,
 ) {
+    let percent = f64::from(raw.min(4095)) * 100.0 / 4095.0;
     let _ = sender.send(crate::four_d::engine::EngineMessage::CoalescedControllerIntent {
         created:std::time::Instant::now(),
         control_key: format!("pwm.{channel}"),
         method: "controller.pwm.set".to_string(),
-        params: serde_json::json!({"channel": channel, "value": raw}),
+        params: serde_json::json!({"channel": channel, "percent": percent}),
         refresh_catalog: false,
     });
 }
@@ -1652,7 +1653,11 @@ fn draw_pwm_card_editor(
     } else {
         telemetry_raw
     };
-    let mut percent = pwm_percent(displayed_raw);
+    let mut percent = if awaiting_readback {
+        pwm_percent(displayed_raw)
+    } else {
+        capabilities.pwm_percent(channel.id, displayed_raw)
+    };
     let response = draw_pwm_editor_row_sized(ui, &mut percent, !control.locked, row_width);
     let raw = pwm_raw(percent);
     ui.data_mut(|data| data.insert_temp(value_id, raw));
@@ -2890,7 +2895,12 @@ fn pwm_control_intensity(
     } else {
         authoritative.or(local)
     }?;
-    Some(f32::from(raw.min(4095)) / 4095.0)
+    let percent = if awaiting_readback {
+        pwm_percent(raw)
+    } else {
+        capabilities.pwm_percent(channel.id, raw)
+    };
+    Some((percent / 100.0) as f32)
 }
 
 fn control_indicator_color(control: &crate::four_d::controller::HardwareControl) -> egui::Color32 {
@@ -3866,7 +3876,14 @@ fn open_control_dialog(
             (capabilities.telemetry.pwm_channel == Some(channel.id))
                 .then_some(capabilities.telemetry.pwm_value.unwrap_or(0))
         })
-        .map(pwm_percent)
+        .map(|raw| {
+            let channel = control
+                .key
+                .strip_prefix("pwm.")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or_default();
+            capabilities.pwm_percent(channel, raw)
+        })
         .unwrap_or(0.0);
 }
 
@@ -13101,7 +13118,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     .unwrap_or(0);
                                                 let mut percent = ui
                                                     .data_mut(|data| data.get_temp::<f64>(value_id))
-                                                    .unwrap_or_else(|| pwm_percent(telemetry_raw));
+                                                    .unwrap_or_else(|| {
+                                                        capabilities.pwm_percent(
+                                                            channel.id,
+                                                            telemetry_raw,
+                                                        )
+                                                    });
                                                 let pwm_response = draw_pwm_editor_row(
                                                     ui,
                                                     &mut percent,

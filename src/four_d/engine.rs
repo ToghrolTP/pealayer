@@ -2086,7 +2086,7 @@ mod tests {
         pending.replace(
             "pwm.0".to_string(),
             "controller.pwm.set".to_string(),
-            serde_json::json!({"channel": 0, "value": 4095}),
+            serde_json::json!({"channel": 0, "percent": 100.0}),
             false,
         );
 
@@ -2514,7 +2514,7 @@ mod tests {
             ),
             (
                 "controller.pwm.set",
-                serde_json::json!({"channel": 0, "value": 4095}),
+                serde_json::json!({"channel": 0, "percent": 100.0}),
             ),
         ] {
             assert!(!controller_call_allowed_during_estop(method, &params));

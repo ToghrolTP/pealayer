@@ -31,6 +31,14 @@ pub struct HardwareOutput {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HardwarePWMChannelConfig {
+    pub output_type: String,
+    pub icon: String,
+    pub curve: String,
+    pub gamma_milli: u16,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareAction {
     pub id: String,
     pub verb: String,
@@ -133,6 +141,7 @@ pub struct HardwareCapabilities {
     pub peripheral_names: std::collections::BTreeMap<String, String>,
     pub relays: Vec<HardwareOutput>,
     pub pwm_channels: Vec<HardwareOutput>,
+    pub pwm_channel_config: std::collections::BTreeMap<u8, HardwarePWMChannelConfig>,
     pub peripherals: Vec<HardwareOutput>,
     pub supports_rf_transmit: bool,
     pub supports_segment_display: bool,
@@ -427,6 +436,9 @@ pub struct HardwareTelemetry {
     /// Authoritative all-channel PWM readback indexed by the native logical
     /// channel number. `None` means PCController has not sampled that channel.
     pub pwm_values: Vec<Option<u16>>,
+    /// Controller-owned logical brightness in thousandths of one percent. This
+    /// is already inverse-mapped through each channel's configured curve.
+    pub pwm_logical_percent_milli: Vec<Option<u32>>,
     pub door_open: Option<bool>,
 }
 
@@ -572,6 +584,16 @@ impl HardwareStripControl {
 }
 
 impl HardwareCapabilities {
+    pub fn pwm_percent(&self, channel: u8, fallback_raw: u16) -> f64 {
+        self.telemetry
+            .pwm_logical_percent_milli
+            .get(usize::from(channel))
+            .copied()
+            .flatten()
+            .map(|value| f64::from(value) / 1000.0)
+            .unwrap_or_else(|| f64::from(fallback_raw.min(4095)) * 100.0 / 4095.0)
+    }
+
     /// Applies the typed status payload pushed by `controller.status`.
     /// Static capability/catalog data stays intact; only live board state is
     /// replaced. Returning `true` lets callers repaint only for real changes.
@@ -590,10 +612,20 @@ impl HardwareCapabilities {
         }
         let mut next_telemetry = telemetry_from_status(status, self.board_connected);
         next_telemetry.pwm_values = before_telemetry.pwm_values.clone();
+        next_telemetry.pwm_logical_percent_milli = before_telemetry.pwm_logical_percent_milli.clone();
         if let (Some(channel), Some(value)) = (next_telemetry.pwm_channel, next_telemetry.pwm_value)
             && let Some(slot) = next_telemetry.pwm_values.get_mut(usize::from(channel))
         {
+            let raw_changed = slot.is_some_and(|previous| previous != value);
             *slot = Some(value);
+            if raw_changed {
+                if let Some(percent) = next_telemetry
+                    .pwm_logical_percent_milli
+                    .get_mut(usize::from(channel))
+                {
+                    *percent = None;
+                }
+            }
         }
         self.telemetry = next_telemetry;
 
@@ -654,6 +686,7 @@ impl HardwareCapabilities {
                     false
                 } else {
                     self.telemetry.pwm_values = next;
+                    self.telemetry.pwm_logical_percent_milli = vec![None; 16];
                     true
                 }
             }
@@ -1028,6 +1061,7 @@ fn telemetry_from_status(status: &Value, board_connected: bool) -> HardwareTelem
             .unwrap_or(false)
             .then(|| status.get("pwm_value").and_then(Value::as_u64).unwrap_or(0) as u16),
         pwm_values: Vec::new(),
+        pwm_logical_percent_milli: Vec::new(),
         door_open: board_connected.then(|| {
             status
                 .get("door_open")
@@ -1325,10 +1359,10 @@ impl ControllerClient {
                 )?;
             }
             Command::PwmSet { channel, value } => {
-                let value = (u32::from(value) * 4095 / 255) as u16;
+                let percent = f64::from(value) * 100.0 / 255.0;
                 self.call(
                     "controller.pwm.set",
-                    json!({"channel": channel, "value": value}),
+                    json!({"channel": channel, "percent": percent}),
                 )?;
             }
             Command::AllOff => {
@@ -1430,10 +1464,34 @@ fn apply_pwm_values(telemetry: &mut HardwareTelemetry, values: &Value) -> bool {
         .chain(std::iter::repeat(None))
         .take(16)
         .collect::<Vec<_>>();
-    if next == telemetry.pwm_values {
+    let logical = values
+        .get("channels")
+        .and_then(Value::as_array)
+        .map(|channels| {
+            let mut result = vec![None; 16];
+            for channel in channels {
+                let Some(index) = channel
+                    .get("channel")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok())
+                    .filter(|value| *value < 16)
+                else {
+                    continue;
+                };
+                result[index] = channel
+                    .get("logical_percent")
+                    .and_then(Value::as_f64)
+                    .filter(|value| value.is_finite() && (0.0..=100.0).contains(value))
+                    .map(|value| (value * 1000.0).round() as u32);
+            }
+            result
+        })
+        .unwrap_or_else(|| vec![None; 16]);
+    if next == telemetry.pwm_values && logical == telemetry.pwm_logical_percent_milli {
         false
     } else {
         telemetry.pwm_values = next;
+        telemetry.pwm_logical_percent_milli = logical;
         true
     }
 }
@@ -2094,6 +2152,49 @@ fn parse_hardware_capabilities_with_front_panel(
     } else {
         Vec::new()
     };
+    let pwm_channel_config = if board_connected && capability_bits & CAPABILITY_PWM != 0 {
+        catalog
+            .get("peripherals")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|entry| entry.get("kind").and_then(Value::as_str) == Some("pwm"))
+            .filter_map(|entry| {
+                let channel = entry
+                    .get("index")?
+                    .as_u64()
+                    .and_then(|value| u8::try_from(value).ok())?;
+                Some((
+                    channel,
+                    HardwarePWMChannelConfig {
+                        output_type: entry
+                            .get("output_type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("general")
+                            .to_string(),
+                        icon: entry
+                            .get("icon")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        curve: entry
+                            .get("curve")
+                            .and_then(Value::as_str)
+                            .unwrap_or("linear")
+                            .to_string(),
+                        gamma_milli: entry
+                            .get("gamma")
+                            .and_then(Value::as_f64)
+                            .filter(|value| value.is_finite())
+                            .map(|value| (value.clamp(0.1, 5.0) * 1000.0).round() as u16)
+                            .unwrap_or(1000),
+                    },
+                ))
+            })
+            .collect()
+    } else {
+        std::collections::BTreeMap::new()
+    };
     let peripherals = if board_connected {
         outputs.iter().map(|(_, output)| output.clone()).collect()
     } else {
@@ -2478,6 +2579,7 @@ fn parse_hardware_capabilities_with_front_panel(
         peripheral_names,
         relays,
         pwm_channels,
+        pwm_channel_config,
         peripherals,
         supports_rf_transmit: board_connected && capability_bits & CAPABILITY_RF != 0,
         supports_segment_display: board_connected && capability_bits & CAPABILITY_SEGMENTS != 0,
@@ -3528,6 +3630,54 @@ mod tests {
         assert_eq!(capabilities.telemetry.pwm_values.len(), 16);
         assert_eq!(capabilities.telemetry.pwm_values[0], Some(0));
         assert_eq!(capabilities.telemetry.pwm_values[15], Some(1500));
+    }
+
+    #[test]
+    fn pwm_snapshot_uses_controller_logical_percent_without_reapplying_curve() {
+        let mut telemetry = HardwareTelemetry::default();
+        assert!(apply_pwm_values(
+            &mut telemetry,
+            &json!({
+                "values": [0, 3, 18, 4095],
+                "channels": [
+                    {"channel": 0, "logical_percent": 0.0},
+                    {"channel": 1, "logical_percent": 1.0},
+                    {"channel": 2, "logical_percent": 5.0},
+                    {"channel": 3, "logical_percent": 100.0}
+                ]
+            }),
+        ));
+        assert_eq!(telemetry.pwm_values[1], Some(3));
+        assert_eq!(telemetry.pwm_logical_percent_milli[1], Some(1_000));
+        assert_eq!(telemetry.pwm_logical_percent_milli[2], Some(5_000));
+        assert_eq!(telemetry.pwm_logical_percent_milli[3], Some(100_000));
+    }
+
+    #[test]
+    fn pwm_catalog_preserves_controller_output_identity_and_curve() {
+        let capabilities = parse_hardware_capabilities(
+            &json!({
+                "connected": true,
+                "hello": {"capabilities": CAPABILITY_PWM}
+            }),
+            &json!({"peripherals": [{
+                "key": "pwm.11",
+                "kind": "pwm",
+                "role": "lighting",
+                "index": 11,
+                "default_name": "Enclosure illumination",
+                "control": "pwm",
+                "output_type": "lighting",
+                "icon": "lightbulb",
+                "curve": "gamma",
+                "gamma": 2.2
+            }]}),
+        );
+        let config = capabilities.pwm_channel_config.get(&11).unwrap();
+        assert_eq!(config.output_type, "lighting");
+        assert_eq!(config.icon, "lightbulb");
+        assert_eq!(config.curve, "gamma");
+        assert_eq!(config.gamma_milli, 2_200);
     }
 
     #[test]
