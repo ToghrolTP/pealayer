@@ -12,6 +12,9 @@ const app = read('src/App.tsx');
 const statusBar = read('src/components/ApplicationStatusBar.tsx');
 const sevenSegment = read('src/components/SevenSegmentDisplay.tsx');
 const rfManager = read('src/components/RfManager.tsx');
+const effects = read('src/components/EffectsTab.tsx');
+const effectRecorder = read('src/components/EffectRecorder.tsx');
+const effectGroupDialog = read('src/components/EffectGroupDialog.tsx');
 const css = read('src/styles.css');
 
 const contracts = [
@@ -38,6 +41,8 @@ const contracts = [
   [css.includes('color-mix(in srgb, var(--accent) 74%') && !css.includes('.effect-profile__icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 8px; color: var(--green)'), 'decorative Web UI surfaces use the shared accent rather than Pealayer green'],
   [!rfManager.includes('setInterval'), 'RF manager uses push events and explicit refresh instead of polling'],
   [rfManager.includes("command('catalog', { read_board: true })") && rfManager.includes('dataSource={catalog.entries ?? []}'), 'RF manager loads and renders authoritative learned board codes'],
+  [effectRecorder.includes('<Button type="primary" danger') && !effectRecorder.includes('recordingColors'), 'effect recording is always a solid red live-state action'],
+  [effects.includes("controller_effect.group.save") && effects.includes('original_name: groupDraft.original_name') && effectGroupDialog.includes('<EffectIconPicker'), 'effect parent groups expose editable icons through the current save contract'],
 ];
 
 const failed = contracts.filter(([ok]) => !ok);

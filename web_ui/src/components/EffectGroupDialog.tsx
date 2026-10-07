@@ -1,20 +1,51 @@
 import React from 'react';
 import { Input, Modal, Space } from 'antd';
-import { FolderAddOutlined, PlusOutlined } from '@ant-design/icons';
+import { EditOutlined, FolderAddOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons';
+import { EffectIconPicker, effectGlyph } from '../effectIcons';
 import { tr, UiLocale } from '../i18n';
 
+export type EffectGroupDraft = {
+  original_name: string;
+  name: string;
+  icon: string;
+};
+
 export const EffectGroupDialog: React.FC<{
-  name: string | null;
-  setName: (name: string | null) => void;
-  create: () => void;
+  draft: EffectGroupDraft | null;
+  setDraft: (draft: EffectGroupDraft | null) => void;
+  save: () => void;
   locale: UiLocale;
-}> = ({ name, setName, create, locale }) => <Modal
-  title={<Space><FolderAddOutlined />{tr(locale, 'New group')}</Space>}
-  open={name !== null} width={360} destroyOnHidden zIndex={1200}
-  okText={tr(locale, 'Create group')} cancelText={tr(locale, 'Cancel')}
-  okButtonProps={{ disabled: !name?.trim(), icon: <PlusOutlined /> }}
-  onCancel={() => setName(null)} onOk={create}
->
-  <Input autoFocus aria-label={tr(locale, 'Group name')} placeholder={tr(locale, 'Group name')}
-    value={name ?? ''} onChange={(event) => setName(event.target.value)} onPressEnter={create} />
-</Modal>;
+}> = ({ draft, setDraft, save, locale }) => {
+  const editing = Boolean(draft?.original_name.trim());
+  return <Modal
+    title={<Space>{editing ? <EditOutlined /> : <FolderAddOutlined />}{tr(locale, editing ? 'Manage effect group' : 'New group')}</Space>}
+    open={draft !== null} width={400} destroyOnHidden zIndex={1200}
+    okText={tr(locale, editing ? 'Save to PCController' : 'Create group')} cancelText={tr(locale, 'Cancel')}
+    okButtonProps={{ disabled: !draft?.name.trim(), icon: editing ? <SaveOutlined /> : <PlusOutlined /> }}
+    onCancel={() => setDraft(null)} onOk={save}
+  >
+    {draft && <div className="effect-group-editor">
+      <label>
+        <span>{tr(locale, 'Name')}</span>
+        <Input autoFocus aria-label={tr(locale, 'Group name')} placeholder={tr(locale, 'Group name')}
+          value={draft.name} maxLength={64}
+          onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+          onPressEnter={save} />
+      </label>
+      <label>
+        <span>{tr(locale, 'Icon')}</span>
+        <EffectIconPicker
+          value={draft.icon || 'folder'}
+          searchPlaceholder={tr(locale, 'Search icons...')}
+          presetsLabel={tr(locale, 'Presets')}
+          emptyLabel={tr(locale, 'No matching icons')}
+          onChange={(icon) => setDraft({ ...draft, icon })}
+        />
+      </label>
+      <div className="effect-group-editor__preview" aria-hidden="true">
+        <span>{effectGlyph(draft.icon || 'folder')}</span>
+        <strong>{draft.name.trim() || tr(locale, 'New group')}</strong>
+      </div>
+    </div>}
+  </Modal>;
+};

@@ -3,7 +3,6 @@ import { DeleteOutlined, LoadingOutlined, StopOutlined } from '@ant-design/icons
 import { Button, Popconfirm, Select, Space, Tooltip } from 'antd';
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
-import recordingColors from '../../../assets/themes/recording-colors.json';
 
 interface EffectRecorderProps {
   state: PlayerState;
@@ -33,8 +32,7 @@ export const EffectRecorder: React.FC<EffectRecorderProps> = ({ state, sendCmd, 
   const active = Boolean(recording?.active);
   const pending = Boolean(recording?.pending);
   const canRecord = state.controller_connected && state.hardware_connected;
-  const color = recordingColors.find((option) => option.id === effect.color)?.hex ?? recordingColors[0].hex;
-  const recordDot = <span className="record-dot" style={{ backgroundColor: color }} />;
+  const recordDot = <span className="record-dot" />;
   return <Space wrap size={8} className="effect-capture-controls">
     <Select aria-label={tr(locale, 'Capture mode')} value={mode} disabled={active || pending} onChange={setMode} style={{ width: 160 }} options={[
       { value: 'automatic', label: tr(locale, 'All live sources') },
@@ -48,7 +46,7 @@ export const EffectRecorder: React.FC<EffectRecorderProps> = ({ state, sendCmd, 
         <Button icon={<DeleteOutlined />} disabled={pending}>{tr(locale, 'Discard take')}</Button>
       </Popconfirm>
     </> : <Tooltip title={tr(locale, 'Publish the current sequence and capture at its end. Delete existing steps first to replace them.')}>
-      <Button icon={pending ? <LoadingOutlined spin /> : recordDot} disabled={!canRecord || pending || !String(effect.name ?? '').trim()} onClick={() => {
+      <Button type="primary" danger icon={pending ? <LoadingOutlined spin /> : recordDot} disabled={!canRecord || pending || !String(effect.name ?? '').trim()} onClick={() => {
         const program = effect.program as { steps?: NonNullable<PlayerState['effect_recording']>['preview'] };
         take.current = { steps: structuredClone(program.steps ?? []), active: false, discard: false };
         sendCmd('controller_effect.record.start', { name: effect.name, category: effect.category, color: effect.color, mode, effect });

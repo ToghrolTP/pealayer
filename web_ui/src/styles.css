@@ -672,6 +672,15 @@ body {
 .effect-card__duration { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .effect-card__duration .anticon { font-size: 12px; }
 .effect-group-count { min-width: 22px; padding: 0 6px; }
+.effect-group-title { min-width: 0; display: inline-flex; align-items: center; gap: 8px; }
+.effect-group-title > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.effect-group-icon { width: 26px; height: 26px; flex: 0 0 26px; display: inline-grid; place-items: center; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); background: var(--surface-2); }
+.effect-group-actions .ant-btn { width: 28px; height: 28px; padding: 0; }
+.effect-group-editor { display: grid; gap: 14px; }
+.effect-group-editor > label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
+.effect-group-editor__preview { min-width: 0; padding: 10px 12px; display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); color: var(--text); }
+.effect-group-editor__preview > span { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; color: var(--muted); background: var(--surface-1); }
+.effect-group-editor__preview > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .effect-card.is-editing { cursor: default; }
 .effect-card.is-editing { grid-template-columns: 58px minmax(0, 1fr) 28px 28px; }
 .effect-card__inline-icon { width: 58px; }

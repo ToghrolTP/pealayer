@@ -18,6 +18,8 @@ const fa: Record<string, string> = {
   'Add melody': 'افزودن ملودی',
   'No configured melodies': 'ملودی پیکربندی‌شده‌ای نیست',
   'New group': 'گروه جدید',
+  'Manage effect group': 'مدیریت گروه افکت',
+  'Save to PCController': 'ذخیره در PCController',
   'action': 'عملیات',
   'Total duration': 'مدت کل',
   'Color palette': 'پالت رنگ',

@@ -266,7 +266,8 @@ pub enum InteropCommand {
         reference: String,
     },
     StopControllerEffect,
-    CreateControllerEffectGroup {
+    SaveControllerEffectGroup {
+        original_name: String,
         name: String,
         icon: String,
     },
@@ -672,11 +673,17 @@ impl InteropCommand {
                 Err("controller effect reference is invalid".to_string())
             }
             Self::SaveControllerEffect { effect } => effect.validate(),
-            Self::CreateControllerEffectGroup { name, icon }
+            Self::SaveControllerEffectGroup {
+                original_name,
+                name,
+                icon,
+            }
                 if name.trim().is_empty()
                     || name.len() > 64
+                    || original_name.len() > 64
                     || icon.len() > 64
                     || name.chars().any(char::is_control)
+                    || original_name.chars().any(char::is_control)
                     || icon.chars().any(char::is_control) =>
             {
                 Err("Group name and icon must be bounded printable values".to_owned())
@@ -771,7 +778,7 @@ pub fn command_catalog() -> Value {
             "reload_config", "add_effect_cue", "update_effect_cue", "remove_effect_cue", "set_recording",
             "get_status", "publish_toast", "dismiss_toast", "quit", "controller_effect_cue.add", "controller_effect.play",
             "controller_effect.stop", "controller_effect.save", "controller_effect.delete",
-            "controller_effect.group.create",
+            "controller_effect.group.save",
             "controller_effect.record.start", "controller_effect.record.status",
             "controller_effect.record.save", "controller_effect.record.discard",
             "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm", "refresh_hardware_catalog",
@@ -1873,14 +1880,20 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "controller_effect.stop" | "pealayer.controller_effect.stop" => {
             Some(InteropCommand::StopControllerEffect)
         }
-        "controller_effect.group.create" | "pealayer.controller_effect.group.create" => {
-            Some(InteropCommand::CreateControllerEffectGroup {
+        "controller_effect.group.save" | "pealayer.controller_effect.group.save" => {
+            Some(InteropCommand::SaveControllerEffectGroup {
+                original_name: request
+                    .params
+                    .get("original_name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing original_name".to_string())?
+                    .to_owned(),
                 name: string(&["name"])?,
                 icon: request
                     .params
                     .get("icon")
                     .and_then(Value::as_str)
-                    .unwrap_or_default()
+                    .ok_or_else(|| "missing group icon".to_string())?
                     .to_owned(),
             })
         }
@@ -3334,19 +3347,26 @@ mod tests {
     #[test]
     fn web_controller_effect_commands_are_typed_and_validated() {
         let group: JsonRpcRequest = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":1,"method":"controller_effect.group.create","params":{"name":"Cinema lighting","icon":"lamp"}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"controller_effect.group.save","params":{"original_name":"Lighting","name":"Cinema lighting","icon":"lamp"}}"#,
         ).unwrap();
         assert!(matches!(command_from_json_rpc(&group).unwrap(),
-            Some(InteropCommand::CreateControllerEffectGroup { name, icon })
-                if name == "Cinema lighting" && icon == "lamp"));
+            Some(InteropCommand::SaveControllerEffectGroup { original_name, name, icon })
+                if original_name == "Lighting" && name == "Cinema lighting" && icon == "lamp"));
         assert!(
-            InteropCommand::CreateControllerEffectGroup {
+            InteropCommand::SaveControllerEffectGroup {
+                original_name: String::new(),
                 name: " ".to_owned(),
                 icon: String::new(),
             }
             .validate()
             .is_err()
         );
+
+        let obsolete_group_create: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":1,"method":"controller_effect.group.create","params":{"name":"Legacy","icon":"folder"}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&obsolete_group_create).is_err());
         let cue: JsonRpcRequest = serde_json::from_str(
             r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.controller_effect_cue.add","params":{"reference":"effect:lighting-primary","start_time_ms":1250}}"#,
         )
