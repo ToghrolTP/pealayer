@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::{
     Mutex, OnceLock,
     atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering},
@@ -151,7 +152,7 @@ static WINDOW_MAGNETIC_SNAP_ENABLED: AtomicBool = AtomicBool::new(false);
 static WINDOW_MAGNETIC_SNAP_DISTANCE: AtomicI32 = AtomicI32::new(16);
 static WINDOW_MAGNETIC_DRAG: Mutex<MagneticDragSession> = Mutex::new(MagneticDragSession::new());
 static ORIGINAL_WINDOW_PROC: AtomicIsize = AtomicIsize::new(0);
-static SHELL_COMMAND: AtomicU32 = AtomicU32::new(0);
+static SHELL_COMMANDS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 static SHELL_PAUSED: AtomicBool = AtomicBool::new(true);
 static SHELL_MUTED: AtomicBool = AtomicBool::new(false);
 static SHELL_HAS_MEDIA: AtomicBool = AtomicBool::new(false);
@@ -160,6 +161,15 @@ static SHELL_REINITIALIZE: AtomicBool = AtomicBool::new(false);
 static TASKBAR_BUTTON_CREATED_MESSAGE: AtomicU32 = AtomicU32::new(0);
 static TASKBAR_THUMBNAIL_CLIP: Mutex<Option<(isize, Option<[i32; 4]>)>> = Mutex::new(None);
 static THUMBNAIL_METRICS_DIRTY: AtomicBool = AtomicBool::new(true);
+#[cfg(target_os = "windows")]
+static THUMBNAIL_TOOLBAR_ICONS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+
+fn queue_shell_command(command: u32) {
+    if let Ok(mut commands) = SHELL_COMMANDS.lock() {
+        commands.push_back(command);
+    }
+    crate::platform::taskbar_preview::request_repaint();
+}
 
 #[cfg(target_os = "windows")]
 pub struct GuiOwnershipGuard(windows::Win32::Foundation::HANDLE);
@@ -1597,6 +1607,39 @@ fn create_thumbnail_button_icon(
 }
 
 #[cfg(target_os = "windows")]
+fn retain_thumbnail_toolbar_icons(
+    icons: Vec<windows::Win32::UI::WindowsAndMessaging::HICON>,
+) {
+    use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, HICON};
+
+    let replacement = icons
+        .into_iter()
+        .map(|icon| icon.0 as isize)
+        .collect::<Vec<_>>();
+    let previous = THUMBNAIL_TOOLBAR_ICONS
+        .lock()
+        .map(|mut cached| std::mem::replace(&mut *cached, replacement))
+        .unwrap_or_default();
+    for raw in previous {
+        unsafe {
+            let _ = DestroyIcon(HICON(raw as *mut _));
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn destroy_thumbnail_toolbar_icons(
+    icons: Vec<windows::Win32::UI::WindowsAndMessaging::HICON>,
+) {
+    use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
+    for icon in icons {
+        unsafe {
+            let _ = DestroyIcon(icon);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn thumbnail_icon_pixels(glyph: ThumbnailGlyph, size: u32) -> image::RgbaImage {
     use ab_glyph::{Font, FontRef, PxScale, point};
     use crate::ui::icons;
@@ -1763,7 +1806,6 @@ pub fn init_taskbar_thumbnail_toolbar(hwnd_raw: isize, enabled: bool) -> Result<
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     };
     use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList};
-    use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
@@ -1781,8 +1823,12 @@ pub fn init_taskbar_thumbnail_toolbar(hwnd_raw: isize, enabled: bool) -> Result<
         let result = taskbar
             .ThumbBarAddButtons(hwnd, &buttons)
             .map_err(|e| format!("ThumbBarAddButtons failed: {e}"));
-        for icon in icons {
-            let _ = DestroyIcon(icon);
+        if result.is_ok() {
+            // Explorer may consume HICONs after this COM call returns. Keep
+            // the current state atlas alive until the next update.
+            retain_thumbnail_toolbar_icons(icons);
+        } else {
+            destroy_thumbnail_toolbar_icons(icons);
         }
         result
     }
@@ -1807,7 +1853,6 @@ pub fn update_taskbar_thumbnail_buttons(
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     };
     use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList};
-    use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
@@ -1826,8 +1871,10 @@ pub fn update_taskbar_thumbnail_buttons(
         let result = taskbar
             .ThumbBarUpdateButtons(hwnd, &buttons)
             .map_err(|e| format!("ThumbBarUpdateButtons failed: {e}"));
-        for icon in icons {
-            let _ = DestroyIcon(icon);
+        if result.is_ok() {
+            retain_thumbnail_toolbar_icons(icons);
+        } else {
+            destroy_thumbnail_toolbar_icons(icons);
         }
         result
     }
@@ -1879,16 +1926,20 @@ pub fn configure_video_taskbar_thumbnail(hwnd_raw: isize) -> Result<(), String> 
     update_video_taskbar_thumbnail(hwnd_raw, None)
 }
 
-/// Supplies the MPV-only iconic representation. A `None` rectangle restores
-/// Windows' ordinary full-window thumbnail. The shell is
-/// only called when the effective rectangle changes, so publishing the video
-/// layout every frame does not add idle COM traffic.
+/// Selects the live video rectangle for the Windows taskbar thumbnail.
+///
+/// `SetThumbnailClip` keeps the frame entirely inside DWM's compositor path,
+/// matching native media players: there is no GPU-to-CPU readback, bitmap
+/// resize, frame-rate throttle, or application-side thumbnail repaint loop.
+/// A `None` rectangle restores Windows' ordinary full-window thumbnail. The
+/// shell is only called when the effective rectangle changes, so publishing
+/// the video layout every frame does not add idle COM traffic.
 #[cfg(target_os = "windows")]
 pub fn update_video_taskbar_thumbnail(
     hwnd_raw: isize,
     video_rect: Option<[i32; 4]>,
 ) -> Result<(), String> {
-    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Foundation::{HWND, RECT};
     use windows::Win32::System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     };
@@ -1898,7 +1949,10 @@ pub fn update_video_taskbar_thumbnail(
         return Err("invalid window handle (HWND is 0)".to_string());
     }
     let normalized = video_rect.filter(|rect| rect[2] > rect[0] && rect[3] > rect[1]);
-    crate::platform::taskbar_preview::configure(hwnd_raw, normalized.is_some())?;
+    // Disable the legacy application-supplied iconic bitmap before applying a
+    // native clip. Leaving FORCE_ICONIC_REPRESENTATION enabled prevents DWM
+    // from continuously sampling the real window surface.
+    crate::platform::taskbar_preview::configure(hwnd_raw, false)?;
     if TASKBAR_THUMBNAIL_CLIP
         .lock()
         .is_ok_and(|cached| *cached == Some((hwnd_raw, normalized)))
@@ -1913,14 +1967,19 @@ pub fn update_video_taskbar_thumbnail(
         taskbar
             .HrInit()
             .map_err(|error| format!("initialize taskbar thumbnail service: {error}"))?;
-        // The iconic bitmap already contains video only; clear the legacy
-        // client-coordinate crop instead of applying a second crop to it.
+        let clip = normalized.map(|rect| RECT {
+            left: rect[0],
+            top: rect[1],
+            right: rect[2],
+            bottom: rect[3],
+        });
         taskbar
             .SetThumbnailClip(
                 hwnd,
-                std::ptr::null(),
+                clip.as_ref()
+                    .map_or(std::ptr::null(), |rect| rect as *const RECT),
             )
-            .map_err(|error| format!("clear legacy taskbar thumbnail crop: {error}"))?;
+            .map_err(|error| format!("set compositor taskbar thumbnail clip: {error}"))?;
     }
     if let Ok(mut cached) = TASKBAR_THUMBNAIL_CLIP.lock() {
         *cached = Some((hwnd_raw, normalized));
@@ -2044,14 +2103,12 @@ unsafe extern "system" fn shell_window_proc(
                 SHELL_MUTED.load(Ordering::Relaxed),
                 SHELL_HAS_MEDIA.load(Ordering::Relaxed),
             ) {
-                SHELL_COMMAND.store(command, Ordering::Release);
-                crate::platform::taskbar_preview::request_repaint();
+                queue_shell_command(command);
             }
             return LRESULT(0);
         }
         if mouse_message == WM_LBUTTONDBLCLK {
-            SHELL_COMMAND.store(TRAY_CMD_SHOW, Ordering::Release);
-            crate::platform::taskbar_preview::request_repaint();
+            queue_shell_command(TRAY_CMD_SHOW);
             return LRESULT(0);
         }
     } else if message == WM_COMMAND {
@@ -2069,8 +2126,7 @@ unsafe extern "system" fn shell_window_proc(
                     | THUMB_BUTTON_FULLSCREEN
             )
         {
-            SHELL_COMMAND.store(command, Ordering::Release);
-            crate::platform::taskbar_preview::request_repaint();
+            queue_shell_command(command);
             return LRESULT(0);
         }
     } else if message == WM_APPCOMMAND {
@@ -2081,8 +2137,7 @@ unsafe extern "system" fn shell_window_proc(
             SHELL_MEDIA_KEYS_ENABLED.load(Ordering::Relaxed),
             SHELL_HAS_MEDIA.load(Ordering::Relaxed),
         ) {
-            SHELL_COMMAND.store(command, Ordering::Release);
-            crate::platform::taskbar_preview::request_repaint();
+            queue_shell_command(command);
             return LRESULT(1);
         }
     }
@@ -2149,8 +2204,10 @@ pub fn update_shell_command_state(
 }
 
 pub fn take_shell_command() -> Option<u32> {
-    let command = SHELL_COMMAND.swap(0, Ordering::AcqRel);
-    (command != 0).then_some(command)
+    SHELL_COMMANDS
+        .lock()
+        .ok()
+        .and_then(|mut commands| commands.pop_front())
 }
 
 pub fn take_shell_reinitialize_request() -> bool {

@@ -1,8 +1,10 @@
-//! DWM consumes an MPV-only bitmap, not a screenshot/crop of egui.
-//! Readback is bounded and demand-driven: one seed frame, then <= 5 Hz while
-//! Windows is requesting previews. No decoding, disk I/O or GL runs in WndProc.
+//! Windows taskbar helpers shared by shell commands and toolbar icon rendering.
+//!
+//! The live taskbar preview now stays inside DWM through `SetThumbnailClip`.
+//! The iconic-bitmap implementation remains as a compatibility fallback, but
+//! the normal video path performs no GPU readback or image resizing here.
 
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, mpsc::SyncSender};
 use std::time::{Duration, Instant};
 
 #[derive(Default)]
@@ -30,6 +32,7 @@ static PREVIEW: Mutex<Preview> = Mutex::new(Preview {
     configuration_error: None,
 });
 static REPAINT: OnceLock<eframe::egui::Context> = OnceLock::new();
+static REPAINT_WAKE: OnceLock<SyncSender<()>> = OnceLock::new();
 
 // Win32 message values are stable ABI constants. Keeping this decision pure
 // lets every CI host verify that video-only rendering is limited to the small
@@ -39,11 +42,32 @@ fn is_static_thumbnail_request(message: u32) -> bool {
 }
 
 pub fn register_repaint(ctx: &eframe::egui::Context) {
-    let _ = REPAINT.set(ctx.clone());
+    if REPAINT.set(ctx.clone()).is_ok() {
+        // Shell callbacks run inside the native window procedure. Scheduling
+        // the repaint from a worker avoids a wake being coalesced into the
+        // WM_COMMAND currently being dispatched while the app is inactive.
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        let repaint = ctx.clone();
+        let _ = std::thread::Builder::new()
+            .name("pealayer-shell-wake".to_owned())
+            .spawn(move || {
+                while receiver.recv().is_ok() {
+                    repaint.request_repaint();
+                    // A second edge publishes the state that results from the
+                    // command (play/pause, mute, fullscreen) back to Explorer.
+                    std::thread::sleep(Duration::from_millis(12));
+                    repaint.request_repaint();
+                }
+            });
+        let _ = REPAINT_WAKE.set(sender);
+    }
 }
 
 /// Wake the GUI after a shell callback queues an action without activating it.
 pub fn request_repaint() {
+    if REPAINT_WAKE.get().is_some_and(|sender| sender.try_send(()).is_ok()) {
+        return;
+    }
     if let Some(ctx) = REPAINT.get() {
         ctx.request_repaint();
     }

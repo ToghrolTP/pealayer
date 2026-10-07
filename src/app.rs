@@ -2462,17 +2462,18 @@ impl PealayerApp {
         if self.shell_initialized
             && hwnd != 0
             && self.last_thumbnail_button_state != Some(thumbnail_state)
-            && crate::platform::windows::update_taskbar_thumbnail_buttons(
+        {
+            match crate::platform::windows::update_taskbar_thumbnail_buttons(
                 hwnd,
                 thumbnail_state.0,
                 thumbnail_state.1,
                 thumbnail_state.2,
                 thumbnail_state.3,
                 thumbnail_state.4,
-            )
-            .is_ok()
-        {
-            self.last_thumbnail_button_state = Some(thumbnail_state);
+            ) {
+                Ok(()) => self.last_thumbnail_button_state = Some(thumbnail_state),
+                Err(error) => log::warn!("Could not synchronize taskbar actions: {error}"),
+            }
         }
     }
 
