@@ -44,6 +44,13 @@ Pealayer-owned group persistence is added.
 The existing `category` storage key remains intact to preserve saved memberships;
 user-facing labels consistently say **Group**.
 
+Effect cards are draggable onto another group header in both the native and Web
+Effects Library. A drop republishes the existing authoritative effect definition
+with only its `category` changed; PCController's subsequent catalog event remains
+the source of truth for the rendered membership. Empty groups stay valid drop
+targets, but render dimmed and without a disclosure chevron because they have no
+children to expand.
+
 Automated renderer/input checks are not physical-board or desktop screenshot proof.
 
 ## Live verification, 2026-10-05

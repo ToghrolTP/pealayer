@@ -43,6 +43,8 @@ const contracts = [
   [rfManager.includes("command('catalog', { read_board: true })") && rfManager.includes('dataSource={catalog.entries ?? []}'), 'RF manager loads and renders authoritative learned board codes'],
   [effectRecorder.includes('<Button type="primary" danger') && !effectRecorder.includes('recordingColors'), 'effect recording is always a solid red live-state action'],
   [effects.includes("controller_effect.group.save") && effects.includes('original_name: groupDraft.original_name') && effectGroupDialog.includes('<EffectIconPicker'), 'effect parent groups expose editable icons through the current save contract'],
+  [effects.includes("setData('application/x-pealayer-effect'") && effects.includes('void moveEffectToGroup(effect, group.name)') && effects.includes('category,') && css.includes('.effect-group-title.is-drop-target'), 'effect cards can move between authoritative parent groups by drag and drop'],
+  [effects.includes("showArrow: group.items.length > 0") && effects.includes("collapsible: group.items.length === 0 ? 'icon'") && css.includes('.effect-group.is-empty'), 'empty effect groups are dimmed and do not expose a meaningless chevron'],
 ];
 
 const failed = contracts.filter(([ok]) => !ok);

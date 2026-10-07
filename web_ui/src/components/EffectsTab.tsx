@@ -122,15 +122,20 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
   const [selected, setSelected] = useState<string | null>(null);
   const [inlineEdit, setInlineEdit] = useState<InlineEffectEdit | null>(null);
   const [groupDraft, setGroupDraft] = useState<EffectGroupDraft | null>(null);
+  const [draggingEffect, setDraggingEffect] = useState<string | null>(null);
+  const [dropGroup, setDropGroup] = useState<string | null>(null);
+  const [movingEffect, setMovingEffect] = useState<string | null>(null);
   const captureBusy = Boolean(state.effect_recording?.active || state.effect_recording?.pending);
   const selectedEffect = effects.find((effect) => effect.reference === selected);
+  const draggedEffect = effects.find((effect) => effect.reference === draggingEffect);
+  const effectGroupName = (effect: typeof effects[number]) => effect.category || tr(locale, 'Other');
   const grouped = useMemo(() => {
     const groups = new Map<string, { name: string; icon: string; items: typeof effects }>();
     for (const group of state.controller_effect_groups ?? []) {
       groups.set(group.name, { name: group.name, icon: group.icon || 'folder', items: [] });
     }
     for (const effect of effects) {
-      const name = effect.category || tr(locale, 'Other');
+      const name = effectGroupName(effect);
       const group = groups.get(name) ?? { name, icon: 'folder', items: [] };
       groups.set(name, { ...group, items: [...group.items, effect] });
     }
@@ -233,6 +238,33 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
     setInlineEdit(null);
   };
 
+  const moveEffectToGroup = async (effect: typeof effects[number], category: string) => {
+    if (effectGroupName(effect) === category || movingEffect) return;
+    const parts = programParts(effect.program);
+    setMovingEffect(effect.reference);
+    try {
+      await sendCmd('controller_effect.save', {
+        reference: effect.reference,
+        id: effect.id,
+        name: effect.name,
+        icon: effect.icon,
+        category,
+        description: effect.description,
+        kind: effect.kind,
+        duration_ms: effect.duration_ms,
+        ...(parts.properties.color ? { color: String(parts.properties.color) } : {}),
+        default_fps: effect.default_fps ?? 20,
+        default_pixels: effect.default_pixels ?? 100,
+        program: effect.program,
+        is_new: false,
+      });
+    } finally {
+      setMovingEffect(null);
+      setDraggingEffect(null);
+      setDropGroup(null);
+    }
+  };
+
   return <section className="surface-page effects-library-page">
     <header className="surface-page__header">
       <div>
@@ -248,9 +280,35 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
     </header>
 
     {grouped.length === 0 ? <Card className="surface-card"><Empty description={tr(locale, 'No effects')}><Space wrap><Button type="primary" icon={<PlusOutlined />} onClick={() => openEditor()}>{tr(locale, 'Create effect')}</Button><Button icon={<FolderAddOutlined />} onClick={() => openGroupEditor()}>{tr(locale, 'New group')}</Button></Space></Empty></Card> :
-      <Collapse className="effect-groups" defaultActiveKey={grouped.map((group) => group.name)} items={grouped.map((group) => ({
+      <Collapse className="effect-groups" defaultActiveKey={grouped.filter((group) => group.items.length > 0).map((group) => group.name)} items={grouped.map((group) => ({
         key: group.name,
-        label: <span className="effect-group-title"><span className="effect-group-icon">{effectGlyph(group.icon || 'folder')}</span><strong>{group.name}</strong><span className="effect-group-count">{group.items.length}</span></span>,
+        className: `effect-group ${group.items.length === 0 ? 'is-empty' : ''}`,
+        showArrow: group.items.length > 0,
+        collapsible: group.items.length === 0 ? 'icon' as const : undefined,
+        label: <span
+          className={`effect-group-title ${dropGroup === group.name ? 'is-drop-target' : ''}`}
+          onDragEnter={(event) => {
+            if (!draggedEffect || effectGroupName(draggedEffect) === group.name) return;
+            event.preventDefault();
+            setDropGroup(group.name);
+          }}
+          onDragOver={(event) => {
+            if (!draggedEffect || effectGroupName(draggedEffect) === group.name) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+          }}
+          onDragLeave={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropGroup((current) => current === group.name ? null : current);
+          }}
+          onDrop={(event) => {
+            const reference = event.dataTransfer.getData('application/x-pealayer-effect') || draggingEffect;
+            const effect = effects.find((candidate) => candidate.reference === reference);
+            if (!effect || effectGroupName(effect) === group.name) return;
+            event.preventDefault();
+            event.stopPropagation();
+            void moveEffectToGroup(effect, group.name);
+          }}
+        ><span className="effect-group-icon">{effectGlyph(group.icon || 'folder')}</span><strong>{group.name}</strong><span className="effect-group-count">{group.items.length}</span></span>,
         extra: <Space.Compact className="effect-group-actions">
           <Tooltip title={tr(locale, 'Manage effect group')}><Button type="text" size="small" icon={<EditOutlined />} aria-label={tr(locale, 'Manage effect group')} onClick={(event) => { event.stopPropagation(); openGroupEditor(group); }} /></Tooltip>
           <Tooltip title={tr(locale, 'New effect in this group')}><Button type="text" size="small" icon={<PlusOutlined />} aria-label={tr(locale, 'New effect in this group')} onClick={(event) => { event.stopPropagation(); openEditor(undefined, group.name); }} /></Tooltip>
@@ -277,7 +335,18 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
             name: effect.name,
             icon: effect.icon || 'plug',
           });
-          return <Dropdown key={effect.reference} trigger={['contextMenu']} menu={{ items: actions, onClick: ({ key }) => run(key) }}><article className={`effect-card ${selected === effect.reference ? 'is-selected' : ''} ${editing ? 'is-editing' : ''}`} onClick={() => setSelected(effect.reference)}>
+          return <Dropdown key={effect.reference} trigger={['contextMenu']} menu={{ items: actions, onClick: ({ key }) => run(key) }}><article
+            className={`effect-card ${selected === effect.reference ? 'is-selected' : ''} ${editing ? 'is-editing' : ''} ${draggingEffect === effect.reference ? 'is-dragging' : ''} ${movingEffect === effect.reference ? 'is-moving' : ''}`}
+            draggable={!editing && movingEffect === null}
+            aria-grabbed={draggingEffect === effect.reference}
+            onDragStart={(event) => {
+              event.dataTransfer.effectAllowed = 'move';
+              event.dataTransfer.setData('application/x-pealayer-effect', effect.reference);
+              setDraggingEffect(effect.reference);
+            }}
+            onDragEnd={() => { setDraggingEffect(null); setDropGroup(null); }}
+            onClick={() => setSelected(effect.reference)}
+          >
             {editing ? <>
               <Select
                 className="effect-card__inline-icon"

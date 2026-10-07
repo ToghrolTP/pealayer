@@ -994,7 +994,15 @@ fn effect_group_header<R>(
             let content_width = effects_frame_content_width(outer_width);
             ui.set_width(content_width);
             add_contents(ui)
-        })
+    })
+}
+
+fn effect_group_disclosure_icon(open: bool, count: usize) -> Option<&'static str> {
+    (count > 0).then_some(if open {
+        crate::ui::icons::CARET_DOWN
+    } else {
+        crate::ui::icons::CARET_RIGHT
+    })
 }
 
 fn effect_group_action_header(
@@ -1006,6 +1014,7 @@ fn effect_group_action_header(
     count: usize,
     add_tooltip: &str,
 ) -> (egui::Response, egui::Response) {
+    let empty = count == 0;
     effect_group_header(ui, outer_width, |ui| {
         ui.horizontal(|ui| {
             let spacing = ui.spacing().item_spacing.x;
@@ -1028,17 +1037,28 @@ fn effect_group_action_header(
                     |ui| {
                         ui.style_mut().interaction.selectable_labels = false;
                         ui.set_width(title_width);
-                        ui.label(if open {
-                            crate::ui::icons::CARET_DOWN
-                        } else {
-                            crate::ui::icons::CARET_RIGHT
-                        });
-                        ui.label(icon);
-                        ui.add(egui::Label::new(egui::RichText::new(title).strong()).truncate());
+                        if let Some(disclosure) = effect_group_disclosure_icon(open, count) {
+                            ui.label(disclosure);
+                        }
+                        let icon_text = egui::RichText::new(icon);
+                        ui.label(if empty { icon_text.weak() } else { icon_text });
+                        let title_text = egui::RichText::new(title).strong();
+                        ui.add(
+                            egui::Label::new(if empty {
+                                title_text.weak()
+                            } else {
+                                title_text
+                            })
+                            .truncate(),
+                        );
                     },
                 )
                 .response
-                .interact(egui::Sense::click());
+                .interact(if empty {
+                    egui::Sense::hover()
+                } else {
+                    egui::Sense::click()
+                });
             let add_response = ui
                 .add_sized([24.0, 24.0], egui::Button::new(crate::ui::icons::PLUS))
                 .on_hover_text(add_tooltip);
@@ -1048,7 +1068,8 @@ fn effect_group_action_header(
                 .corner_radius(9.0)
                 .inner_margin(egui::Margin::symmetric(7, 2))
                 .show(ui, |ui| {
-                    ui.label(egui::RichText::new(count_text).small().strong());
+                    let count_text = egui::RichText::new(count_text).small().strong();
+                    ui.label(if empty { count_text.weak() } else { count_text });
                 });
             (title_response, add_response)
         })
@@ -8110,6 +8131,20 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn empty_effect_group_has_no_disclosure_chevron() {
+        assert_eq!(effect_group_disclosure_icon(true, 0), None);
+        assert_eq!(effect_group_disclosure_icon(false, 0), None);
+        assert_eq!(
+            effect_group_disclosure_icon(true, 1),
+            Some(crate::ui::icons::CARET_DOWN)
+        );
+        assert_eq!(
+            effect_group_disclosure_icon(false, 1),
+            Some(crate::ui::icons::CARET_RIGHT)
+        );
+    }
+
+    #[test]
     fn effect_group_add_button_click_does_not_collapse_the_group() {
         for dark in [false, true] {
             let context = egui::Context::default();
@@ -10543,6 +10578,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         if force_open {
                                             open = true;
                                         }
+                                        if presets.is_empty() {
+                                            open = false;
+                                        }
                                         let displayed_category = crate::ui::i18n::visual_text(
                                             display_language,
                                             &category,
@@ -10572,7 +10610,27 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 self.app, Some(category.clone()),
                                             );
                                         }
-                                        if group_response.clicked() {
+                                        let dragging_effect = egui::DragAndDrop::payload::<EffectDragPayload>(
+                                            ui.ctx(),
+                                        )
+                                        .is_some();
+                                        if dragging_effect && group_response.contains_pointer() {
+                                            group_response.clone().highlight();
+                                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                        }
+                                        if let Some(payload) = take_effect_drop_on_rect(
+                                            ui.ctx(),
+                                            group_response.rect,
+                                        ) && let Err(error) =
+                                            crate::ui::effects_library::move_dragged_effect_to_group(
+                                                self.app,
+                                                payload.as_ref(),
+                                                category.clone(),
+                                            )
+                                        {
+                                            self.app.set_osd(error);
+                                        }
+                                        if !presets.is_empty() && group_response.clicked() {
                                             open = !open;
                                         }
                                         group_response.context_menu(|ui| {
@@ -10628,15 +10686,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 self.app.show_effect_library_editor = true;
                                                 ui.close();
                                             }
-                                            ui.separator();
-                                            let collapse_label = if open {
-                                                self.app.tr("Collapse group")
-                                            } else {
-                                                self.app.tr("Expand group")
-                                            };
-                                            if ui.button(collapse_label).clicked() {
-                                                open = !open;
-                                                ui.close();
+                                            if !presets.is_empty() {
+                                                ui.separator();
+                                                let collapse_label = if open {
+                                                    self.app.tr("Collapse group")
+                                                } else {
+                                                    self.app.tr("Expand group")
+                                                };
+                                                if ui.button(collapse_label).clicked() {
+                                                    open = !open;
+                                                    ui.close();
+                                                }
                                             }
                                         });
                                         ui.data_mut(|data| data.insert_persisted(group_id, open));

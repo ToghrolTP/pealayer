@@ -180,6 +180,38 @@ pub(crate) fn save_advertised_effect_identity(
     app.save_controller_effect()
 }
 
+pub(crate) fn move_dragged_effect_to_group(
+    app: &mut PealayerApp,
+    payload: &crate::app::EffectDragPayload,
+    category: String,
+) -> Result<(), String> {
+    let category = category.trim();
+    if category.is_empty() || category.len() > 64 || category.chars().any(char::is_control) {
+        return Err("Effect group must be a bounded printable value".to_string());
+    }
+    let selected = if let Some(effect) = payload.controller_macro.as_ref() {
+        select_advertised_effect(
+            app,
+            crate::app::EffectPresetSource::ControllerMacro(effect.id),
+            None,
+        )
+    } else if let Some(effect) = payload.controller_strip_effect.as_ref() {
+        select_advertised_effect(
+            app,
+            crate::app::EffectPresetSource::ControllerStrip,
+            Some(effect.id.as_str()),
+        )
+    } else {
+        None
+    };
+    selected.ok_or_else(|| app.tr("Effect is no longer available"))?;
+    if app.effect_library_draft.category == category {
+        return Ok(());
+    }
+    app.effect_library_draft.category = category.to_string();
+    app.save_controller_effect()
+}
+
 pub(crate) fn duplicate_selected(app: &mut PealayerApp) {
     let duplicate_id = if app.effect_library_draft.kind == "sequence" {
         let used = app
