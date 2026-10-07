@@ -998,12 +998,11 @@ impl eframe::App for PealayerApp {
 
         // Keep the read-only status snapshot current at the configured cadence;
         // WebSocket delivery itself can be disabled independently.
-        let web_config = crate::platform::interop::get_live_config();
-        crate::peer::publish_timeline(crate::peer::TimelineState{timeline:self.timeline.clone(),muted:self.track_muted.clone(),soloed:self.track_soloed.clone()});
-        let appearance = crate::platform::interop::AppearanceState::new(
-            &web_config,
+        let web_config = crate::platform::interop::get_live_frame_config(
             ui.ctx().theme() == egui::Theme::Dark,
         );
+        crate::peer::publish_timeline(crate::peer::TimelineState{timeline:self.timeline.clone(),muted:self.track_muted.clone(),soloed:self.track_soloed.clone()});
+        let appearance = web_config.appearance.clone();
         let configured_web_sync_interval =
             std::time::Duration::from_millis(u64::from(web_config.web_sync_interval_ms));
         let web_sync_active = (self.current_video_path.is_some() && !self.is_paused)
