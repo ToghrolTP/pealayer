@@ -414,11 +414,16 @@ fn main() -> eframe::Result {
                 // `osd-overlay ass-events`, whose default face comes from the
                 // OSD renderer rather than the subtitle renderer.
                 init.set_property("osd-font", crate::subtitle::SUBTITLE_FONT_FAMILY)?;
-                // ASS/SSA tracks normally keep their embedded FontName and
-                // ignore `sub-font`. Force mpv's normal subtitle styling so
-                // the bundled Vazirmatn face is also stable in the native
-                // fallback path (processed text uses the same face explicitly).
-                init.set_property("sub-ass-override", "force")?;
+                // Preserve authored colors, inline style and positioning in
+                // track-style mode. Pealayer's explicit direction/alignment
+                // modes intentionally switch to the processed overlay.
+                init.set_property(
+                    "sub-ass-override",
+                    crate::subtitle::ass_override_mode(
+                        loaded_config.subtitle_direction,
+                        loaded_config.subtitle_alignment,
+                    ),
+                )?;
 
                 Ok(())
             })
@@ -528,7 +533,7 @@ fn main() -> eframe::Result {
                 .observe_property("vid", libmpv2::Format::String, 18)
                 .unwrap();
             mpv_client
-                .observe_property("sub-text", libmpv2::Format::String, 19)
+                .observe_property("sub-text/ass", libmpv2::Format::String, 19)
                 .unwrap();
             mpv_client
                 .observe_property("sub-pos", libmpv2::Format::Double, 20)
@@ -585,7 +590,14 @@ fn main() -> eframe::Result {
             let _ = mpv_static.set_property("speed", loaded_config.playback_speed);
             let _ = mpv_static.set_property("sub-font-size", loaded_config.subtitle_font_size);
             let _ = mpv_static.set_property("sub-delay", loaded_config.subtitle_delay_seconds);
-            let _ = mpv_static.set_property("sub-pos", loaded_config.subtitle_position_percent);
+            let _ = mpv_static.set_property(
+                "sub-pos",
+                crate::subtitle::effective_position_percent(
+                    loaded_config.subtitle_direction,
+                    loaded_config.subtitle_alignment,
+                    loaded_config.subtitle_position_percent,
+                ),
+            );
             let _ = mpv_static.set_property("audio-delay", loaded_config.audio_delay_seconds);
             if !crate::peer::active() {
                 crate::platform::windows::sync_windows_jump_list_with_options(

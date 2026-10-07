@@ -181,8 +181,10 @@ fn draw_subtitle_appearance(app: &mut PealayerApp, ui: &mut egui::Ui) {
             dialog::setting_row(
                 ui,
                 icons::TEXT_ALIGN_CENTER,
-                &app.tr("Text alignment"),
-                Some(&app.tr("Horizontal placement is independent of text direction")),
+                &app.tr("Style and alignment"),
+                Some(&app.tr(
+                    "Subtitle style preserves authored colors and positions; other choices apply Pealayer placement",
+                )),
                 |ui| {
                     use crate::subtitle::SubtitleAlignment;
                     let mut alignment = app.subtitle_alignment;
@@ -197,14 +199,16 @@ fn draw_subtitle_appearance(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         .width(150.0)
                         .show_ui(ui, |ui| {
                             for (value, label, icon) in [
+                                (SubtitleAlignment::SubtitleStyle, "Subtitle style", icons::SUBTITLES),
                                 (SubtitleAlignment::Left, "Left", icons::TEXT_ALIGN_LEFT),
                                 (SubtitleAlignment::Center, "Center", icons::TEXT_ALIGN_CENTER),
                                 (SubtitleAlignment::Right, "Right", icons::TEXT_ALIGN_RIGHT),
-                                (SubtitleAlignment::SubtitleStyle, "Subtitle style", icons::SUBTITLES),
                             ] {
                                 let response = ui.selectable_value(&mut alignment, value, format!("{icon}  {}", app.tr(label)));
                                 if value == SubtitleAlignment::SubtitleStyle {
-                                    response.on_hover_text(app.tr("Preserve subtitle styling without text processing; processed text stays centered"));
+                                    response.on_hover_text(app.tr(
+                                        "Preserve the subtitle track's colors, inline styles, and authored positions",
+                                    ));
                                 }
                             }
                         });
@@ -248,6 +252,18 @@ fn draw_subtitle_appearance(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 &app.tr("Location offset"),
                 Some(&app.tr("0% places subtitles at the top; 100% places them at the bottom")),
                 |ui| {
+                    if crate::subtitle::preserves_track_style(
+                        app.subtitle_direction,
+                        app.subtitle_alignment,
+                    ) {
+                        ui.label(
+                            egui::RichText::new(app.tr("Authored by subtitle track")).weak(),
+                        )
+                        .on_hover_text(app.tr(
+                            "Choose Left, Center, or Right to use Pealayer's custom location",
+                        ));
+                        return;
+                    }
                     let mut position = app.sub_position_percent;
                     if dialog::numeric_stepper(
                         ui,

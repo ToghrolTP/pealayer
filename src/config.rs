@@ -749,7 +749,7 @@ impl Default for AppConfig {
             subtitle_delay_seconds: 0.0,
             subtitle_position_percent: 100.0,
             subtitle_direction: crate::subtitle::SubtitleDirection::Auto,
-            subtitle_alignment: crate::subtitle::SubtitleAlignment::Center,
+            subtitle_alignment: crate::subtitle::SubtitleAlignment::SubtitleStyle,
             subtitle_text_replacements: crate::subtitle::default_text_replacements(),
             audio_delay_seconds: 0.0,
             show_subseconds: true,

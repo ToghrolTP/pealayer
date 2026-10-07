@@ -480,7 +480,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 ],
             );
             control.description = Some(
-                "Horizontal placement is independent of text direction; subtitle style preserves native styling without text processing",
+                "Subtitle style preserves authored colors and positions; Left, Center, or Right applies Pealayer's custom placement",
             );
             control
         },
@@ -491,7 +491,9 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 "Subtitles",
                 "Global text replacements",
             );
-            control.description = Some("Applied in order to every text subtitle");
+            control.description = Some(
+                "Applied in order when Pealayer direction or placement overrides are active",
+            );
             control
         },
         PreferenceControl::boolean(
@@ -1225,8 +1227,8 @@ mod tests {
             vec!["left", "center", "right", "subtitle_style"]
         );
         let contract = preferences_contract(&config);
-        assert_eq!(contract.values["subtitle_alignment"], "center");
-        assert_eq!(contract.defaults["subtitle_alignment"], "center");
+        assert_eq!(contract.values["subtitle_alignment"], "subtitle_style");
+        assert_eq!(contract.defaults["subtitle_alignment"], "subtitle_style");
         assert!(
             crate::config::AppConfig::validate_patch_shape(
                 &serde_json::json!({"subtitle_alignment":"right"})

@@ -16,10 +16,10 @@ pub enum SubtitleDirection {
 #[serde(rename_all = "snake_case")]
 pub enum SubtitleAlignment {
     Left,
-    #[default]
     Center,
     Right,
     /// Preserve native subtitle styling when no text processing is requested.
+    #[default]
     SubtitleStyle,
 }
 
@@ -88,6 +88,14 @@ pub fn requires_processed_overlay(
     alignment: SubtitleAlignment,
     replacements: &[SubtitleReplacement],
 ) -> bool {
+    // Track-style mode is the lossless path. In particular, `sub-text` and
+    // even `sub-text/ass` cannot reproduce an ASS header/style table, while
+    // plain-text formats such as SRT can still carry inline color and
+    // positioning tags. Leave all of that with libass unless the user asks
+    // Pealayer to force paragraph direction or placement.
+    if direction == SubtitleDirection::Auto && alignment == SubtitleAlignment::SubtitleStyle {
+        return false;
+    }
     alignment != SubtitleAlignment::SubtitleStyle
         || direction != SubtitleDirection::Auto
         || replacements
@@ -95,13 +103,135 @@ pub fn requires_processed_overlay(
             .any(|replacement| !replacement.from.is_empty())
 }
 
-fn escape_ass_text(text: &str) -> String {
-    text.replace('\\', "\\\\")
-        .replace('{', "\\{")
-        .replace('}', "\\}")
+pub fn preserves_track_style(
+    direction: SubtitleDirection,
+    alignment: SubtitleAlignment,
+) -> bool {
+    direction == SubtitleDirection::Auto && alignment == SubtitleAlignment::SubtitleStyle
+}
+
+pub fn ass_override_mode(
+    direction: SubtitleDirection,
+    alignment: SubtitleAlignment,
+) -> &'static str {
+    if preserves_track_style(direction, alignment) {
+        "no"
+    } else {
+        "force"
+    }
+}
+
+pub fn effective_position_percent(
+    direction: SubtitleDirection,
+    alignment: SubtitleAlignment,
+    configured: f64,
+) -> f64 {
+    if preserves_track_style(direction, alignment) {
+        // mpv documents 100 as the subtitle script's original position.
+        100.0
+    } else {
+        configured.clamp(0.0, 100.0)
+    }
+}
+
+fn skip_parenthesized(bytes: &[u8], mut index: usize) -> usize {
+    if bytes.get(index) != Some(&b'(') {
+        return index;
+    }
+    let mut depth = 0_u32;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'(' => depth += 1,
+            b')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return index + 1;
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    index
+}
+
+fn strip_ass_placement_block(block: &str) -> String {
+    let bytes = block.as_bytes();
+    let mut output = String::with_capacity(block.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'\\' {
+            let ch = block[index..].chars().next().expect("valid UTF-8");
+            output.push(ch);
+            index += ch.len_utf8();
+            continue;
+        }
+
+        let command_start = index;
+        let name_start = index + 1;
+        let rest = &bytes[name_start..];
+        let alignment_len = if rest.starts_with(b"an")
+            && rest.get(2).is_some_and(u8::is_ascii_digit)
+        {
+            Some(2)
+        } else if rest.starts_with(b"a") && rest.get(1).is_some_and(u8::is_ascii_digit) {
+            Some(1)
+        } else {
+            None
+        };
+        if let Some(name_len) = alignment_len {
+            index = name_start + name_len;
+            while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+                index += 1;
+            }
+            continue;
+        }
+
+        let placement_name_len = [b"pos".as_slice(), b"move".as_slice(), b"org".as_slice()]
+            .into_iter()
+            .find(|name| rest.starts_with(name))
+            .map(|name| name.len());
+        if let Some(name_len) = placement_name_len {
+            let mut value_start = name_start + name_len;
+            while bytes.get(value_start).is_some_and(u8::is_ascii_whitespace) {
+                value_start += 1;
+            }
+            if bytes.get(value_start) == Some(&b'(') {
+                index = skip_parenthesized(bytes, value_start);
+                continue;
+            }
+        }
+
+        output.push('\\');
+        index = command_start + 1;
+    }
+    output
+}
+
+fn normalize_ass_text(text: &str) -> String {
+    let normalized = text
         .replace("\r\n", "\\N")
         .replace('\r', "\\N")
-        .replace('\n', "\\N")
+        .replace('\n', "\\N");
+    let mut output = String::with_capacity(normalized.len());
+    let mut remainder = normalized.as_str();
+    while let Some(open) = remainder.find('{') {
+        output.push_str(&remainder[..open]);
+        let after_open = &remainder[open + 1..];
+        let Some(close) = after_open.find('}') else {
+            output.push_str(&remainder[open..]);
+            return output;
+        };
+        let block = strip_ass_placement_block(&after_open[..close]);
+        if !block.is_empty() {
+            output.push('{');
+            output.push_str(&block);
+            output.push('}');
+        }
+        remainder = &after_open[close + 1..];
+    }
+    output.push_str(remainder);
+    output
 }
 
 /// Build the single ASS event used by Pealayer's processed subtitle overlay.
@@ -114,12 +244,15 @@ pub fn overlay_ass_event(
     font_size: f64,
     position_percent: f64,
 ) -> String {
-    let escaped = escape_ass_text(text);
+    // `sub-text/ass` preserves inline color/emphasis tags from SRT and other
+    // text formats. Remove only authored placement commands when Pealayer is
+    // explicitly supplying its own alignment/location; retain the rest.
+    let styled = normalize_ass_text(text);
     let (alignment, x) = alignment.ass_anchor();
     let directed = match direction {
-        SubtitleDirection::Auto => escaped,
-        SubtitleDirection::Ltr => format!("\u{202A}{escaped}\u{202C}"),
-        SubtitleDirection::Rtl => format!("\u{202B}{escaped}\u{202C}"),
+        SubtitleDirection::Auto => styled,
+        SubtitleDirection::Ltr => format!("\u{202A}{styled}\u{202C}"),
+        SubtitleDirection::Rtl => format!("\u{202B}{styled}\u{202C}"),
     };
     let font_size = font_size.clamp(10.0, 100.0);
     // Keep a small safe-area at both edges while mapping mpv's familiar
@@ -164,7 +297,12 @@ mod tests {
         assert!(!requires_processed_overlay(
             SubtitleDirection::Auto,
             SubtitleAlignment::SubtitleStyle,
-            &[]
+            &replacements
+        ));
+        assert!(requires_processed_overlay(
+            SubtitleDirection::Rtl,
+            SubtitleAlignment::SubtitleStyle,
+            &replacements
         ));
 
         // The previous content-dependent test disagreed for these two lines,
@@ -219,6 +357,43 @@ mod tests {
     }
 
     #[test]
+    fn processed_overlay_preserves_colors_but_replaces_authored_placement() {
+        let event = overlay_ass_event(
+            r"{\an4\c&H00FFFF&}Colored{\pos(10,20)\b1} text",
+            SubtitleDirection::Auto,
+            SubtitleAlignment::Right,
+            42.0,
+            25.0,
+        );
+        assert!(event.contains(r"\an3\pos(1248,200)"));
+        assert!(event.contains(r"{\c&H00FFFF&}Colored{\b1} text"));
+        assert!(!event.contains(r"\an4"));
+        assert!(!event.contains(r"\pos(10,20)"));
+    }
+
+    #[test]
+    fn track_style_mode_is_lossless_and_uses_original_position() {
+        let replacements = default_text_replacements();
+        assert!(!requires_processed_overlay(
+            SubtitleDirection::Auto,
+            SubtitleAlignment::SubtitleStyle,
+            &replacements
+        ));
+        assert_eq!(
+            ass_override_mode(SubtitleDirection::Auto, SubtitleAlignment::SubtitleStyle),
+            "no"
+        );
+        assert_eq!(
+            effective_position_percent(
+                SubtitleDirection::Auto,
+                SubtitleAlignment::SubtitleStyle,
+                24.0
+            ),
+            100.0
+        );
+    }
+
+    #[test]
     fn subtitle_alignment_is_enforced_independently_of_direction() {
         for direction in [
             SubtitleDirection::Auto,
@@ -252,10 +427,10 @@ mod tests {
     }
 
     #[test]
-    fn subtitle_alignment_defaults_center_and_roundtrips_without_changing_direction() {
+    fn subtitle_alignment_defaults_to_track_style_and_roundtrips_without_changing_direction() {
         let old: crate::config::AppConfig =
             serde_json::from_str(r#"{"subtitle_direction":"rtl"}"#).unwrap();
-        assert_eq!(old.subtitle_alignment, SubtitleAlignment::Center);
+        assert_eq!(old.subtitle_alignment, SubtitleAlignment::SubtitleStyle);
         assert_eq!(old.subtitle_direction, SubtitleDirection::Rtl);
         for alignment in [
             SubtitleAlignment::Left,
@@ -290,6 +465,7 @@ mod tests {
             SubtitleAlignment::SubtitleStyle,
         ] {
             app.subtitle_alignment = alignment;
+            app.sub_position_percent = 25.0;
             app.sync_subtitle_rendering();
             assert_eq!(
                 app.mpv.get_property::<String>("sub-align-x").unwrap(),
@@ -298,6 +474,14 @@ mod tests {
             assert_eq!(
                 app.mpv.get_property::<String>("sub-justify").unwrap(),
                 alignment.mpv_value()
+            );
+            assert_eq!(
+                app.mpv.get_property::<String>("sub-ass-override").unwrap(),
+                ass_override_mode(SubtitleDirection::Auto, alignment)
+            );
+            assert_eq!(
+                app.mpv.get_property::<f64>("sub-pos").unwrap(),
+                effective_position_percent(SubtitleDirection::Auto, alignment, 25.0)
             );
             assert_eq!(app.runtime_config_snapshot().subtitle_alignment, alignment);
         }

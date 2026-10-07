@@ -5560,6 +5560,18 @@ impl PealayerApp {
     /// Synchronize logical subtitle visibility with either mpv's native
     /// renderer (bitmap/unmodified subtitles) or Pealayer's processed overlay.
     pub(crate) fn sync_subtitle_rendering(&mut self) {
+        let _ = self.mpv.set_property(
+            "sub-ass-override",
+            crate::subtitle::ass_override_mode(self.subtitle_direction, self.subtitle_alignment),
+        );
+        let _ = self.mpv.set_property(
+            "sub-pos",
+            crate::subtitle::effective_position_percent(
+                self.subtitle_direction,
+                self.subtitle_alignment,
+                self.sub_position_percent,
+            ),
+        );
         // Native plain-text/bitmap fallback must not retain a previous choice
         // when switching renderer or tracks. Bitmap alignment is mpv-owned.
         let _ = self
@@ -8383,7 +8395,7 @@ impl Default for PealayerApp {
         let _ = mpv_client.observe_property("demuxer-cache-duration", libmpv2::Format::Double, 15);
         let _ = mpv_client.observe_property("cache-buffering-state", libmpv2::Format::Int64, 16);
         let _ = mpv_client.observe_property("vid", libmpv2::Format::String, 18);
-        let _ = mpv_client.observe_property("sub-text", libmpv2::Format::String, 19);
+        let _ = mpv_client.observe_property("sub-text/ass", libmpv2::Format::String, 19);
         let _ = mpv_client.observe_property("sub-pos", libmpv2::Format::Double, 20);
         let _ = mpv_client.observe_property("video-out-params/aspect", libmpv2::Format::Double, 21);
         let _ = mpv_client.observe_property("paused-for-cache", libmpv2::Format::Flag, 22);
@@ -8457,7 +8469,7 @@ impl Default for PealayerApp {
             current_sid: "no".to_string(),
             sub_tracks: Vec::new(),
             subtitle_direction: crate::subtitle::SubtitleDirection::Auto,
-            subtitle_alignment: crate::subtitle::SubtitleAlignment::Center,
+            subtitle_alignment: crate::subtitle::SubtitleAlignment::SubtitleStyle,
             subtitle_text_replacements: crate::subtitle::default_text_replacements(),
             subtitle_text: String::new(),
             current_vid: "no".to_string(),
