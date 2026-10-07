@@ -1464,7 +1464,7 @@ impl eframe::App for PealayerApp {
         }
         self.update_shell_state();
         crate::branding::sync_native_window_icon(
-            ctx,
+            &ctx,
             crate::branding::PlaybackIconState::from_player(
                 self.current_video_path.is_some(),
                 self.is_paused,
