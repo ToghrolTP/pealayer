@@ -33,6 +33,7 @@ const contracts = [
   [studio.includes('state.timeline_tracks') && studio.includes('timelineRows.map'), 'timeline renders the shared native track inventory'],
   [studio.includes("kind: 'pinch'") && studio.includes("event.button !== 1") && css.includes('.timeline-grid.is-panning'), 'timeline supports two-finger pinch/pan and middle-button panning'],
   [studio.includes("trigger={['contextMenu']}") && studio.includes("sendCmd('timeline.track.update'") && studio.includes("sendCmd('timeline.track.manage'"), 'timeline track menus use shared selection, routing and management commands'],
+  [studio.includes('anyTimelineTrackSoloed') && studio.includes('is-solo-filtered') && css.includes('.timeline-row.is-muted') && css.includes('.timeline-row.is-soloed') && css.includes('.timeline-row.is-locked'), 'timeline tracks render semantic mute, solo-isolation, and lock states'],
   [library.includes("replace(/^\\\\\\\\\\?\\\\/"), 'Windows namespace prefixes are removed from breadcrumbs'],
   [library.includes("trigger={['contextMenu']}") && library.includes('Copy full path'), 'media entries expose application-style context actions'],
   [media.includes('state.osd') && css.includes('.media-osd--custom'), 'Web video surfaces render the native configurable OSD contract'],

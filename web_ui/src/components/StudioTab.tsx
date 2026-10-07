@@ -307,6 +307,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       supports_mute: false, supports_solo: false, supports_lock: false, manageable: false,
     }));
   }, [directControls, state.timeline_tracks, timelineLanes]);
+  const anyTimelineTrackSoloed = timelineRows.some((track) => track.supports_solo && track.soloed);
   const workspaceProfiles = useMemo(
     () => [...(state.workspace_profiles ?? [])].sort((left, right) => left.order - right.order || left.name.localeCompare(right.name)),
     [state.workspace_profiles],
@@ -897,6 +898,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
               key: track.key,
               ...values,
             });
+            const excludedBySolo = anyTimelineTrackSoloed && track.supports_solo && !track.soloed;
             const trackMenu = {
               items: [
                 ...(track.manageable ? [{ key: 'manage', icon: <SettingOutlined />, label: tr(locale, 'Manage...') }] : []),
@@ -917,7 +919,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
               },
             };
             return (
-              <div className={`timeline-row ${track.dimmed ? 'is-dimmed' : ''} ${track.active ? 'is-active' : ''} ${track.selected ? 'is-selected' : ''}`} key={track.key}>
+              <div className={`timeline-row ${track.dimmed ? 'is-dimmed' : ''} ${track.active ? 'is-active' : ''} ${track.selected ? 'is-selected' : ''} ${track.muted ? 'is-muted' : ''} ${track.soloed ? 'is-soloed' : ''} ${excludedBySolo ? 'is-solo-filtered' : ''} ${track.locked ? 'is-locked' : ''}`} key={track.key}>
                 <Dropdown trigger={['contextMenu']} menu={trackMenu}>
                 <div
                   className="timeline-row__label"

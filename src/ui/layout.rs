@@ -101,6 +101,98 @@ const TIMELINE_COMPACT_TRACK_ROW_HEIGHT: f32 = 32.0;
 const TIMELINE_COMFORTABLE_TRACK_ROW_HEIGHT: f32 = 40.0;
 const TIMELINE_COMPACT_ANALOG_ROW_HEIGHT: f32 = 40.0;
 const TIMELINE_COMFORTABLE_ANALOG_ROW_HEIGHT: f32 = 48.0;
+const TIMELINE_TRACK_STATE_BUTTON_SIZE: f32 = 22.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TimelineTrackStateKind {
+    Muted,
+    Soloed,
+    Locked,
+}
+
+fn timeline_track_state_color(kind: TimelineTrackStateKind) -> egui::Color32 {
+    match kind {
+        // Do not inherit the application accent: these colors communicate
+        // suppressed output, isolated output, and constrained editing.
+        TimelineTrackStateKind::Muted => egui::Color32::from_rgb(224, 88, 88),
+        TimelineTrackStateKind::Soloed => egui::Color32::from_rgb(245, 184, 65),
+        TimelineTrackStateKind::Locked => egui::Color32::from_rgb(125, 146, 160),
+    }
+}
+
+fn timeline_track_visual_opacity(muted: bool, soloed: bool, locked: bool, any_soloed: bool) -> f32 {
+    if muted {
+        0.42
+    } else if any_soloed && !soloed {
+        0.36
+    } else if locked {
+        0.72
+    } else {
+        1.0
+    }
+}
+
+fn timeline_track_cue_alpha(muted: bool, soloed: bool, locked: bool, any_soloed: bool) -> u8 {
+    (255.0 * timeline_track_visual_opacity(muted, soloed, locked, any_soloed)).round() as u8
+}
+
+fn timeline_track_state_button(
+    ui: &mut egui::Ui,
+    active: bool,
+    kind: TimelineTrackStateKind,
+    icon: &str,
+    help: &str,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(TIMELINE_TRACK_STATE_BUTTON_SIZE, TIMELINE_TRACK_STATE_BUTTON_SIZE),
+        egui::Sense::click(),
+    );
+    let semantic = timeline_track_state_color(kind);
+    let hovered = response.hovered();
+    let fill = if active {
+        semantic.gamma_multiply(if hovered { 0.30 } else { 0.20 })
+    } else if hovered {
+        ui.visuals().widgets.hovered.bg_fill
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    let stroke_color = if active {
+        semantic
+    } else if hovered {
+        ui.visuals().widgets.hovered.bg_stroke.color
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    let icon_color = if active {
+        semantic
+    } else if hovered {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().weak_text_color()
+    };
+
+    // The exact rectangle and inside stroke never change. Hover therefore
+    // cannot alter layout or nudge the glyph as a selectable label did.
+    let painter = ui.painter();
+    painter.rect_filled(rect, 4.0, fill);
+    painter.rect_stroke(
+        rect,
+        4.0,
+        egui::Stroke::new(1.0, stroke_color),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(13.0),
+        icon_color,
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response.on_hover_text(help)
+}
 
 fn timeline_track_row_height(compact: bool) -> f32 {
     if compact {
@@ -762,6 +854,26 @@ fn timeline_two_line_menu_label(
         },
     );
     job
+}
+
+fn timeline_pointer_time_ms(
+    pointer_x: f32,
+    timeline_left: f32,
+    px_per_ms: f32,
+    duration_ms: u64,
+) -> u64 {
+    if !pointer_x.is_finite()
+        || !timeline_left.is_finite()
+        || !px_per_ms.is_finite()
+        || px_per_ms <= 0.0
+    {
+        return 0;
+    }
+    (((pointer_x - timeline_left).max(0.0) / px_per_ms).round() as u64).min(duration_ms)
+}
+
+fn timeline_ruler_context_time_id() -> egui::Id {
+    egui::Id::new("timeline_ruler_context_time_ms")
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -6104,6 +6216,38 @@ mod timeline_row_tests {
     use super::*;
 
     #[test]
+    fn timeline_track_state_semantics_have_distinct_colors_and_opacity() {
+        assert_ne!(timeline_track_state_color(TimelineTrackStateKind::Muted), timeline_track_state_color(TimelineTrackStateKind::Soloed));
+        assert_ne!(timeline_track_state_color(TimelineTrackStateKind::Soloed), timeline_track_state_color(TimelineTrackStateKind::Locked));
+        assert_eq!(timeline_track_visual_opacity(true, false, false, false), 0.42);
+        assert_eq!(timeline_track_visual_opacity(false, false, false, true), 0.36);
+        assert_eq!(timeline_track_visual_opacity(false, true, false, true), 1.0);
+        assert_eq!(timeline_track_visual_opacity(false, false, true, false), 0.72);
+        assert_eq!(timeline_track_cue_alpha(true, false, false, false), 107);
+        assert_eq!(timeline_track_cue_alpha(false, false, false, true), 92);
+    }
+
+    #[test]
+    fn timeline_track_state_button_always_reserves_the_same_square() {
+        let context = egui::Context::default();
+        let mut size = egui::Vec2::ZERO;
+        let _ = context.run(egui::RawInput::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                size = timeline_track_state_button(
+                    ui,
+                    false,
+                    TimelineTrackStateKind::Muted,
+                    crate::ui::icons::PROHIBIT,
+                    "Mute",
+                )
+                .rect
+                .size();
+            });
+        });
+        assert_eq!(size, egui::vec2(TIMELINE_TRACK_STATE_BUTTON_SIZE, TIMELINE_TRACK_STATE_BUTTON_SIZE));
+    }
+
+    #[test]
     fn middle_button_timeline_pan_tracks_the_grab_offset_on_both_axes() {
         let offset = pan_timeline_offset(
             egui::vec2(120.0, 70.0),
@@ -7275,16 +7419,28 @@ mod timeline_row_tests {
     #[test]
     fn exact_keyframe_insertion_selects_and_deduplicates_the_durable_model() {
         let mut app = PealayerApp::default();
+        app.playback_time = 8.75;
+        app.seek_pos = Some(8.75);
         let (first, inserted) = app.insert_timeline_keyframe(1_250);
         assert!(inserted);
         assert_eq!(app.timeline.keyframes.len(), 1);
         assert_eq!(app.timeline.keyframes[0].time_ms, 1_250);
         assert_eq!(app.selected_timeline_keyframe, Some(first));
+        assert_eq!(app.playback_time, 8.75, "inserting a keyframe must not seek playback");
+        assert_eq!(app.seek_pos, Some(8.75), "inserting a keyframe must not change the pending seek");
 
         let (duplicate, inserted) = app.insert_timeline_keyframe(1_250);
         assert!(!inserted);
         assert_eq!(duplicate, first);
         assert_eq!(app.timeline.keyframes.len(), 1);
+    }
+
+    #[test]
+    fn exact_keyframe_context_time_is_stable_and_clamped() {
+        let captured = timeline_pointer_time_ms(350.0, 100.0, 0.25, 8_000);
+        assert_eq!(captured, 1_000);
+        assert_eq!(timeline_pointer_time_ms(4_000.0, 100.0, 0.25, 8_000), 8_000);
+        assert_eq!(timeline_pointer_time_ms(50.0, 100.0, 0.25, 8_000), 0);
     }
 
     #[test]
@@ -11972,6 +12128,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             })
                             .map(|track| track.id)
                             .collect::<std::collections::BTreeSet<_>>();
+                        let relay_solo_active = !self.app.track_soloed.is_empty();
+                        let analog_solo_active = self.app.timeline.analog_tracks.iter().any(|track| track.soloed);
                         let can_add_keyframe = can_add_timeline_keyframe(
                             &timeline_rows,
                             visible_analog_track_ids.len(),
@@ -12224,6 +12382,23 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         .selected_timeline_track
                                         .as_deref()
                                         == Some(track_row.key.as_str());
+                                    let row_muted = if matches!(track_row.kind, TimelineTrackKind::Audio(_)) {
+                                        self.app.is_muted
+                                    } else {
+                                        !track_row.relay_ids.is_empty()
+                                            && track_row.relay_ids.iter().all(|relay| self.app.track_muted.contains(relay))
+                                    };
+                                    let row_soloed = !track_row.relay_ids.is_empty()
+                                        && track_row.relay_ids.iter().all(|relay| self.app.track_soloed.contains(relay));
+                                    let row_locked = !track_row.relay_ids.is_empty()
+                                        && track_row.relay_ids.iter().all(|relay| self.app.track_locked.contains(relay));
+                                    let row_has_solo_context = relay_solo_active && !track_row.relay_ids.is_empty();
+                                    let row_visual_opacity = timeline_track_visual_opacity(
+                                        row_muted,
+                                        row_soloed,
+                                        row_locked,
+                                        row_has_solo_context,
+                                    );
                                     let row_fill = if brought_into_view || selected_track {
                                         ui.visuals().selection.bg_fill.gamma_multiply(0.24)
                                     } else if track_row.active {
@@ -12234,6 +12409,29 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         ui.visuals().faint_bg_color
                                     };
                                     ui.painter().rect_filled(rect, 0.0, row_fill);
+                                    if row_visual_opacity < 1.0 {
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            0.0,
+                                            egui::Color32::from_black_alpha(((1.0 - row_visual_opacity) * 105.0).round() as u8),
+                                        );
+                                    }
+                                    let state_color = if row_muted {
+                                        Some(timeline_track_state_color(TimelineTrackStateKind::Muted))
+                                    } else if row_soloed {
+                                        Some(timeline_track_state_color(TimelineTrackStateKind::Soloed))
+                                    } else if row_locked {
+                                        Some(timeline_track_state_color(TimelineTrackStateKind::Locked))
+                                    } else {
+                                        None
+                                    };
+                                    if let Some(state_color) = state_color {
+                                        ui.painter().rect_filled(
+                                            egui::Rect::from_min_max(rect.min, egui::pos2(rect.min.x + 3.0, rect.max.y)),
+                                            0.0,
+                                            state_color,
+                                        );
+                                    }
                                     ui.painter().rect_stroke(rect, 0.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
 
                                     // Keep the advertised icon, caption and actions vertically
@@ -12261,9 +12459,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let ui = &mut child_ui;
                                         ui.add_space(6.0);
                                         let icon_color = if track_row.active && track_row.enabled {
-                                            ui.visuals().selection.bg_fill
+                                            ui.visuals().selection.bg_fill.gamma_multiply(row_visual_opacity)
                                         } else {
-                                            ui.visuals().weak_text_color()
+                                            ui.visuals().weak_text_color().gamma_multiply(row_visual_opacity)
                                         };
                                         let (icon_rect, _) = ui.allocate_exact_size(
                                             egui::vec2(18.0, timeline_track_height),
@@ -12345,8 +12543,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 // effect captions look centered even though the
                                                 // label requested `Align::Min`.
                                                 let painter = ui.painter().with_clip_rect(identity_rect);
-                                                let title_color = ui.visuals().strong_text_color();
-                                                let detail_color = ui.visuals().weak_text_color();
+                                                let title_color = ui.visuals().strong_text_color().gamma_multiply(row_visual_opacity);
+                                                let detail_color = ui.visuals().weak_text_color().gamma_multiply(row_visual_opacity);
                                                 let title_galley = egui::WidgetText::from(
                                                     egui::RichText::new(&track_row.name)
                                                         .size(11.0)
@@ -12438,20 +12636,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     ("timeline-audio-selector", &track_row.key),
                                                 );
                                                 media_control_clicked |= selector.clicked();
-                                                let mute = ui
-                                                    .selectable_label(
-                                                        self.app.is_muted,
-                                                        if self.app.is_muted {
-                                                            crate::ui::icons::SPEAKER_SLASH
-                                                        } else {
-                                                            crate::ui::icons::SPEAKER_HIGH
-                                                        },
-                                                    )
-                                                    .on_hover_text(if self.app.is_muted {
-                                                        self.app.tr("Unmute")
-                                                    } else {
-                                                        self.app.tr("Mute")
-                                                    });
+                                                let mute_help = if self.app.is_muted { self.app.tr("Unmute") } else { self.app.tr("Mute") };
+                                                let mute = timeline_track_state_button(
+                                                    ui,
+                                                    self.app.is_muted,
+                                                    TimelineTrackStateKind::Muted,
+                                                    if self.app.is_muted { crate::ui::icons::SPEAKER_SLASH } else { crate::ui::icons::SPEAKER_HIGH },
+                                                    &mute_help,
+                                                );
                                                 if mute.clicked() {
                                                     media_control_clicked = true;
                                                     self.app.toggle_audio_muted();
@@ -12498,11 +12690,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             let locked = track_row.relay_ids.iter().all(|relay| {
                                                 self.app.track_locked.contains(relay)
                                             });
-                                            if ui
-                                                .selectable_label(locked, crate::ui::icons::LOCK)
-                                                .on_hover_text(&lock_help)
-                                                .clicked()
-                                            {
+                                            if timeline_track_state_button(ui, locked, TimelineTrackStateKind::Locked, crate::ui::icons::LOCK, &lock_help).clicked() {
                                                 for relay in &track_row.relay_ids {
                                                     if locked {
                                                         self.app.track_locked.remove(relay);
@@ -12515,11 +12703,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             let soloed = track_row.relay_ids.iter().all(|relay| {
                                                 self.app.track_soloed.contains(relay)
                                             });
-                                            if ui
-                                                .selectable_label(soloed, crate::ui::icons::TARGET)
-                                                .on_hover_text(&relay_solo_help)
-                                                .clicked()
-                                            {
+                                            if timeline_track_state_button(ui, soloed, TimelineTrackStateKind::Soloed, crate::ui::icons::TARGET, &relay_solo_help).clicked() {
                                                 for relay in &track_row.relay_ids {
                                                     if soloed {
                                                         self.app.track_soloed.remove(relay);
@@ -12534,11 +12718,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             let muted = track_row.relay_ids.iter().all(|relay| {
                                                 self.app.track_muted.contains(relay)
                                             });
-                                            if ui
-                                                .selectable_label(muted, crate::ui::icons::PROHIBIT)
-                                                .on_hover_text(&relay_mute_help)
-                                                .clicked()
-                                            {
+                                            if timeline_track_state_button(ui, muted, TimelineTrackStateKind::Muted, crate::ui::icons::PROHIBIT, &relay_mute_help).clicked() {
                                                 for relay in &track_row.relay_ids {
                                                     if muted {
                                                         self.app.track_muted.remove(relay);
@@ -12819,12 +12999,41 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         .selected_timeline_track
                                         .as_deref()
                                         == Some(track_key.as_str());
+                                    let track_visual_opacity = timeline_track_visual_opacity(
+                                        track.muted,
+                                        track.soloed,
+                                        track.locked,
+                                        analog_solo_active,
+                                    );
                                     let row_fill = if brought_into_view || selected_track {
                                         ui.visuals().selection.bg_fill.gamma_multiply(0.24)
                                     } else {
                                         ui.visuals().extreme_bg_color
                                     };
                                     ui.painter().rect_filled(rect, 0.0, row_fill);
+                                    if track_visual_opacity < 1.0 {
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            0.0,
+                                            egui::Color32::from_black_alpha(((1.0 - track_visual_opacity) * 105.0).round() as u8),
+                                        );
+                                    }
+                                    let state_color = if track.muted {
+                                        Some(timeline_track_state_color(TimelineTrackStateKind::Muted))
+                                    } else if track.soloed {
+                                        Some(timeline_track_state_color(TimelineTrackStateKind::Soloed))
+                                    } else if track.locked {
+                                        Some(timeline_track_state_color(TimelineTrackStateKind::Locked))
+                                    } else {
+                                        None
+                                    };
+                                    if let Some(state_color) = state_color {
+                                        ui.painter().rect_filled(
+                                            egui::Rect::from_min_max(rect.min, egui::pos2(rect.min.x + 3.0, rect.max.y)),
+                                            0.0,
+                                            state_color,
+                                        );
+                                    }
                                     ui.painter().rect_stroke(rect, 0.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
 
                                     // Amplitude Y-axis tick labels on track header right margin
@@ -12865,11 +13074,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             egui::vec2(18.0, timeline_analog_height),
                                             egui::Layout::left_to_right(egui::Align::Center),
                                             |ui| {
-                                                ui.label(
+                                                ui.label(egui::RichText::new(
                                                     advertised_row
                                                         .map(|row| row.icon.as_str())
                                                         .unwrap_or(crate::ui::icons::SLIDERS_HORIZONTAL),
-                                                );
+                                                ).color(ui.visuals().text_color().gamma_multiply(track_visual_opacity)));
                                             },
                                         );
                                         ui.allocate_ui(egui::vec2(88.0, 24.0), |ui| {
@@ -12933,7 +13142,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 ui.painter().with_clip_rect(name_rect).galley(
                                                     name_pos,
                                                     name_galley,
-                                                    ui.visuals().strong_text_color(),
+                                                    ui.visuals().strong_text_color().gamma_multiply(track_visual_opacity),
                                                 );
                                                 name_response.on_hover_text(format!(
                                                     "{analog_track_label}: {}\n{port_channel_label}: P{}",
@@ -13022,9 +13231,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
                                         }
 
-                                        let lock_btn = ui
-                                            .selectable_label(track.locked, crate::ui::icons::LOCK)
-                                            .on_hover_text(&lock_help);
+                                        let lock_btn = timeline_track_state_button(ui, track.locked, TimelineTrackStateKind::Locked, crate::ui::icons::LOCK, &lock_help);
                                         if lock_btn.clicked() {
                                             track.locked = !track.locked;
                                             if track.locked {
@@ -13033,17 +13240,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             analog_tracks_changed = true;
                                         }
 
-                                        let solo_btn = ui
-                                            .selectable_label(track.soloed, crate::ui::icons::TARGET)
-                                            .on_hover_text(&relay_solo_help);
+                                        let solo_btn = timeline_track_state_button(ui, track.soloed, TimelineTrackStateKind::Soloed, crate::ui::icons::TARGET, &relay_solo_help);
                                         if solo_btn.clicked() {
                                             track.soloed = !track.soloed;
                                             analog_tracks_changed = true;
                                         }
 
-                                        let mute_btn = ui
-                                            .selectable_label(track.muted, crate::ui::icons::PROHIBIT)
-                                            .on_hover_text(&actuator_mute_help);
+                                        let mute_btn = timeline_track_state_button(ui, track.muted, TimelineTrackStateKind::Muted, crate::ui::icons::PROHIBIT, &actuator_mute_help);
                                         if mute_btn.clicked() {
                                             track.muted = !track.muted;
                                             analog_tracks_changed = true;
@@ -13363,6 +13566,27 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let ruler_response = ui.interact(ruler_rect, egui::Id::new("timeline_ruler"), egui::Sense::click_and_drag())
                                             .on_hover_text(&timeline_ruler_help);
 
+                                        // Capture the ruler position before opening the menu. Once
+                                        // the popup is visible, the live pointer is over the menu,
+                                        // not the ruler; deriving the timestamp from it made exact
+                                        // keyframes jump to an unrelated (usually earlier) time.
+                                        let ruler_context_requested = !keyframe_context_owned
+                                            && ruler_rect.contains(pointer_pos.unwrap_or_default())
+                                            && ui.input(|input| input.pointer.button_released(egui::PointerButton::Secondary));
+                                        if ruler_context_requested {
+                                            if let Some(position) = pointer_pos {
+                                                let pointer_ms = timeline_pointer_time_ms(
+                                                    position.x,
+                                                    rect.min.x,
+                                                    px_per_ms,
+                                                    (total_seconds * 1_000.0).round() as u64,
+                                                );
+                                                ui.ctx().data_mut(|data| {
+                                                    data.insert_temp(timeline_ruler_context_time_id(), pointer_ms);
+                                                });
+                                            }
+                                        }
+
                                         if !keyframe_context_owned { ruler_response.context_menu(|ui| {
                                             ui.label(egui::RichText::new(self.app.tr("Timeline keyframe")).strong());
                                             let playhead_ms = (self.app.playback_time * 1_000.0)
@@ -13384,10 +13608,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 ui.ctx().request_repaint();
                                                 ui.close();
                                             }
-                                            if let Some(position) = pointer_pos {
-                                                let pointer_ms = (((position.x - rect.min.x).max(0.0) / px_per_ms)
-                                                    .round() as u64)
-                                                    .min((total_seconds * 1_000.0).round() as u64);
+                                            let pointer_ms = ui.ctx().data(|data| {
+                                                data.get_temp::<u64>(timeline_ruler_context_time_id())
+                                            });
+                                            if let Some(pointer_ms) = pointer_ms {
                                                 if ui
                                                     .add_enabled(
                                                         can_add_keyframe,
@@ -13764,6 +13988,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         if let Some(pos) = pointer_pos {
                                             if (ruler_rect.contains(pos)
                                                 || ruler_response.dragged_by(egui::PointerButton::Primary))
+                                                && !popup_was_open
+                                                && !egui::Popup::is_any_open(ui.ctx())
                                                 && !clicked_any_keyframe
                                                 && self.app.active_drag.is_none()
                                                 && self.app.lasso_origin.is_none()
@@ -13805,22 +14031,40 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
                                         }
 
-                                        // Draw horizontal track separators and backgrounds
+                                        // Draw horizontal track separators and semantic state backgrounds.
                                         for i in 0..=timeline_rows.len() {
                                             let grid_y =
                                                 tracks_top + i as f32 * timeline_track_height;
 
-                                            // Lock row background darkening
-                                            if let Some(relay_id) = relay_for_timeline_row(&timeline_rows, i as i32) {
-                                                if self.app.track_locked.contains(&relay_id) {
-                                                    let track_rect = egui::Rect::from_min_max(
-                                                        egui::pos2(rect.min.x, grid_y),
-                                                        egui::pos2(
-                                                            rect.max.x,
-                                                            grid_y + timeline_track_height,
-                                                        ),
+                                            if let Some(track_row) = timeline_rows.get(i)
+                                                && !track_row.relay_ids.is_empty()
+                                            {
+                                                let muted = track_row.relay_ids.iter().all(|relay| self.app.track_muted.contains(relay));
+                                                let soloed = track_row.relay_ids.iter().all(|relay| self.app.track_soloed.contains(relay));
+                                                let locked = track_row.relay_ids.iter().all(|relay| self.app.track_locked.contains(relay));
+                                                let opacity = timeline_track_visual_opacity(muted, soloed, locked, relay_solo_active);
+                                                let track_rect = egui::Rect::from_min_max(
+                                                    egui::pos2(rect.min.x, grid_y),
+                                                    egui::pos2(rect.max.x, grid_y + timeline_track_height),
+                                                );
+                                                if opacity < 1.0 {
+                                                    painter.rect_filled(
+                                                        track_rect,
+                                                        0.0,
+                                                        egui::Color32::from_black_alpha(((1.0 - opacity) * 92.0).round() as u8),
                                                     );
-                                                    painter.rect_filled(track_rect, 0.0, ui.visuals().faint_bg_color);
+                                                }
+                                                let tint = if muted {
+                                                    Some(TimelineTrackStateKind::Muted)
+                                                } else if soloed {
+                                                    Some(TimelineTrackStateKind::Soloed)
+                                                } else if locked {
+                                                    Some(TimelineTrackStateKind::Locked)
+                                                } else {
+                                                    None
+                                                };
+                                                if let Some(kind) = tint {
+                                                    painter.rect_filled(track_rect, 0.0, timeline_track_state_color(kind).gamma_multiply(0.07));
                                                 }
                                             }
 
@@ -14175,9 +14419,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 };
                                                 let stroke_width = if is_selected { 2.0_f32 } else if is_mismatched { 1.5_f32 } else { 1.0_f32 };
 
-                                                let is_muted = relay_id
-                                                    .is_some_and(|relay_id| self.app.track_muted.contains(&relay_id));
-                                                let alpha = if is_muted { 128 } else { 255 };
+                                                let is_muted = relay_id.is_some_and(|relay_id| self.app.track_muted.contains(&relay_id));
+                                                let is_soloed = relay_id.is_some_and(|relay_id| self.app.track_soloed.contains(&relay_id));
+                                                let is_locked = relay_id.is_some_and(|relay_id| self.app.track_locked.contains(&relay_id));
+                                                let alpha = timeline_track_cue_alpha(
+                                                    is_muted,
+                                                    is_soloed,
+                                                    is_locked,
+                                                    relay_id.is_some() && relay_solo_active,
+                                                );
 
                                                 // Draw clip box
                                                 painter.rect_filled(clip_rect, 4.0, egui::Color32::from_rgba_unmultiplied(142, 68, 173, alpha)); // Purple clip
@@ -14629,6 +14879,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 crate::four_d::models::hardware_timeline_track_key(
                                                     &format!("pwm.{}", track.channel),
                                                 );
+                                            let track_visual_opacity = timeline_track_visual_opacity(
+                                                track.muted,
+                                                track.soloed,
+                                                track.locked,
+                                                analog_solo_active,
+                                            );
                                             let row_fill = if self
                                                 .app
                                                 .selected_timeline_track
@@ -14640,6 +14896,25 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 ui.visuals().extreme_bg_color
                                             };
                                             painter.rect_filled(row_rect, 0.0, row_fill);
+                                            if track_visual_opacity < 1.0 {
+                                                painter.rect_filled(
+                                                    row_rect,
+                                                    0.0,
+                                                    egui::Color32::from_black_alpha(((1.0 - track_visual_opacity) * 92.0).round() as u8),
+                                                );
+                                            }
+                                            let state_tint = if track.muted {
+                                                Some(TimelineTrackStateKind::Muted)
+                                            } else if track.soloed {
+                                                Some(TimelineTrackStateKind::Soloed)
+                                            } else if track.locked {
+                                                Some(TimelineTrackStateKind::Locked)
+                                            } else {
+                                                None
+                                            };
+                                            if let Some(kind) = state_tint {
+                                                painter.rect_filled(row_rect, 0.0, timeline_track_state_color(kind).gamma_multiply(0.07));
+                                            }
 
                                             // Centerline guide (50% intensity)
                                             painter.line_segment(
@@ -14660,11 +14935,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
 
                                             // Draw translucent fill under curve (Curve Gradient Underlay)
-                                            let fill_col = if track.muted {
-                                                egui::Color32::from_rgba_unmultiplied(100, 100, 100, 20)
+                                            let curve_color = if track.muted {
+                                                egui::Color32::from_rgb(118, 118, 118)
+                                            } else if track.soloed {
+                                                timeline_track_state_color(TimelineTrackStateKind::Soloed)
+                                            } else if track.locked {
+                                                timeline_track_state_color(TimelineTrackStateKind::Locked)
                                             } else {
-                                                egui::Color32::from_rgba_unmultiplied(0, 220, 255, 25)
+                                                egui::Color32::from_rgb(0, 220, 255)
                                             };
+                                            let curve_color = curve_color.gamma_multiply(track_visual_opacity);
+                                            let fill_col = egui::Color32::from_rgba_unmultiplied(
+                                                curve_color.r(),
+                                                curve_color.g(),
+                                                curve_color.b(),
+                                                if track.muted { 16 } else { 25 },
+                                            );
                                             for window in points.windows(2) {
                                                 let p1 = window[0];
                                                 let p2 = window[1];
@@ -14678,11 +14964,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
 
                                             // Draw curve line
-                                            let curve_color = if track.muted {
-                                                egui::Color32::from_rgb(110, 110, 110)
-                                            } else {
-                                                egui::Color32::from_rgb(0, 220, 255)
-                                            };
                                             painter.add(egui::Shape::line(
                                                 points,
                                                 egui::Stroke::new(1.8_f32, curve_color),

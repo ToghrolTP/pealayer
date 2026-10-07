@@ -468,7 +468,13 @@ body {
 .timeline-tracks { position: relative; min-height: 80px; padding-block: 8px; background-image: repeating-linear-gradient(90deg, transparent 0, transparent calc(5% - 1px), color-mix(in srgb, var(--line) 38%, transparent) 5%); background-size: calc(100% - 262px) 100%; background-position: 180px 0; background-repeat: repeat-y; }
 .timeline-row { min-width: 680px; height: 42px; display: grid; grid-template-columns: var(--timeline-label-width) minmax(400px, 1fr) var(--timeline-end-width); align-items: center; }
 .timeline-row.is-dimmed { opacity: .48; }
+.timeline-row.is-muted { opacity: .44; }
+.timeline-row.is-solo-filtered { opacity: .36; }
+.timeline-row.is-locked:not(.is-muted):not(.is-solo-filtered) { opacity: .72; }
 .timeline-row.is-selected .timeline-row__label { background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: inset 2px 0 var(--accent); }
+.timeline-row.is-muted .timeline-row__label { background: color-mix(in srgb, var(--red) 7%, transparent); box-shadow: inset 3px 0 var(--red); }
+.timeline-row.is-soloed .timeline-row__label { background: color-mix(in srgb, var(--amber) 10%, transparent); box-shadow: inset 3px 0 var(--amber); }
+.timeline-row.is-locked:not(.is-muted):not(.is-soloed) .timeline-row__label { background: color-mix(in srgb, var(--muted) 8%, transparent); box-shadow: inset 3px 0 var(--muted); }
 .timeline-row__label { min-width: 0; height: 100%; padding-inline: 14px 6px; display: flex; align-items: center; gap: 8px; color: var(--text); cursor: default; user-select: none; }
 .timeline-row__label > span { color: var(--accent); }
 .timeline-row__identity { min-width: 0; flex: 1 1 auto; display: grid; align-content: center; gap: 1px; color: var(--text) !important; }
