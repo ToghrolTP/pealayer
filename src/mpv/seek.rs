@@ -1,4 +1,5 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
@@ -14,6 +15,19 @@ pub enum SeekMode {
 /// A target position and mode requested by the UI.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PendingSeek {
+    pub request_id: u64,
+    pub target_time: f64,
+    pub mode: SeekMode,
+}
+
+/// A seek command that has been accepted by the backend worker.
+///
+/// This is deliberately distinct from mpv's `PlaybackRestart` event: command
+/// acceptance tells the UI which coalesced request was actually dispatched,
+/// while `PlaybackRestart` confirms that decoding reached a displayable frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CompletedSeek {
+    pub request_id: u64,
     pub target_time: f64,
     pub mode: SeekMode,
 }
@@ -36,12 +50,19 @@ impl MpvSeekBackend {
 
 impl SeekBackend for MpvSeekBackend {
     fn execute_seek(&self, target_time: f64, mode: SeekMode) {
+        if let Some(client)=crate::peer::client() {
+            let _=client.queue("/api/player/command",serde_json::json!({"command":"seek_to","seconds":target_time.max(0.0)}));
+            return;
+        }
         let t = target_time.max(0.0);
         let t_str = t.to_string();
         match mode {
             SeekMode::Scrub => {
-                // "absolute" flag in mpv seeks to timestamp and decodes the target preview frame
-                let _ = self.mpv.command("seek", &[&t_str, "absolute"]);
+                // Preview seeks must stay cheap enough to follow the pointer.
+                // Plain `absolute` is precise by default in mpv and can spend
+                // long enough decoding from a previous keyframe that a drag
+                // appears frozen. The exact frame is requested on release.
+                let _ = self.mpv.command("seek", &[&t_str, "absolute+keyframes"]);
             }
             SeekMode::Commit => {
                 // "absolute+exact" performs precision seek to exact frame on release
@@ -55,6 +76,8 @@ impl SeekBackend for MpvSeekBackend {
 /// and executes them asynchronously on a background worker without blocking the UI thread.
 pub struct SeekController {
     state: Arc<(Mutex<Option<PendingSeek>>, Condvar)>,
+    completed: Arc<Mutex<VecDeque<CompletedSeek>>>,
+    next_request_id: AtomicU64,
     is_running: Arc<AtomicBool>,
     worker_handle: Option<thread::JoinHandle<()>>,
 }
@@ -64,9 +87,11 @@ impl SeekController {
         let state: Arc<(Mutex<Option<PendingSeek>>, Condvar)> =
             Arc::new((Mutex::new(None), Condvar::new()));
         let is_running = Arc::new(AtomicBool::new(true));
+        let completed = Arc::new(Mutex::new(VecDeque::new()));
 
         let state_clone = Arc::clone(&state);
         let is_running_clone = Arc::clone(&is_running);
+        let completed_clone = Arc::clone(&completed);
 
         let worker_handle = thread::spawn(move || {
             let (lock, cvar) = &*state_clone;
@@ -81,12 +106,19 @@ impl SeekController {
 
                 if let Some(req) = seek_req {
                     backend.execute_seek(req.target_time, req.mode);
+                    completed_clone.lock().unwrap().push_back(CompletedSeek {
+                        request_id: req.request_id,
+                        target_time: req.target_time,
+                        mode: req.mode,
+                    });
                 }
             }
         });
 
         Self {
             state,
+            completed,
+            next_request_id: AtomicU64::new(1),
             is_running,
             worker_handle: Some(worker_handle),
         }
@@ -94,25 +126,36 @@ impl SeekController {
 
     /// Submits a scrub preview request. Rapid successive calls are coalesced so
     /// intermediate targets are skipped if the backend is currently busy decoding.
-    pub fn request_scrub(&self, target_time: f64) {
+    pub fn request_scrub(&self, target_time: f64) -> u64 {
+        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (lock, cvar) = &*self.state;
         let mut guard = lock.lock().unwrap();
         *guard = Some(PendingSeek {
+            request_id,
             target_time,
             mode: SeekMode::Scrub,
         });
         cvar.notify_one();
+        request_id
     }
 
     /// Submits a final commit seek request. Overwrites any pending scrub requests.
-    pub fn request_commit(&self, target_time: f64) {
+    pub fn request_commit(&self, target_time: f64) -> u64 {
+        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (lock, cvar) = &*self.state;
         let mut guard = lock.lock().unwrap();
         *guard = Some(PendingSeek {
+            request_id,
             target_time,
             mode: SeekMode::Commit,
         });
         cvar.notify_one();
+        request_id
+    }
+
+    /// Drains backend acknowledgements without blocking the UI thread.
+    pub fn take_completed(&self) -> Vec<CompletedSeek> {
+        self.completed.lock().unwrap().drain(..).collect()
     }
 }
 

@@ -1,6 +1,6 @@
 use egui_dock::DockState;
 use pealayer::config::AppConfig;
-use pealayer::ui::layout::{create_initial_layout, PealayerTab};
+use pealayer::ui::layout::{PealayerTab, create_initial_layout};
 
 #[test]
 fn test_config_workspace_dock_layout_field() {
@@ -17,9 +17,10 @@ fn test_config_workspace_dock_layout_field() {
 }
 
 #[test]
-fn test_pealayer_tab_all_contains_five_tabs() {
-    assert_eq!(PealayerTab::ALL.len(), 5);
+fn test_pealayer_tab_all_contains_six_tabs() {
+    assert_eq!(PealayerTab::ALL.len(), 6);
     assert!(PealayerTab::ALL.contains(&PealayerTab::ProgramMonitor));
+    assert!(PealayerTab::ALL.contains(&PealayerTab::MediaInspector));
     assert!(PealayerTab::ALL.contains(&PealayerTab::Timeline));
     assert!(PealayerTab::ALL.contains(&PealayerTab::EffectControls));
     assert!(PealayerTab::ALL.contains(&PealayerTab::EffectsLibrary));
@@ -35,13 +36,22 @@ fn test_dock_state_serde_roundtrip() {
     let deserialized: DockState<PealayerTab> =
         serde_json::from_str(&json_str).expect("deserialize dock state from JSON");
 
-    for tab in PealayerTab::ALL {
+    for tab in PealayerTab::ALL
+        .into_iter()
+        .filter(|tab| *tab != PealayerTab::MediaInspector)
+    {
         assert!(
             deserialized.find_tab(&tab).is_some(),
             "tab {:?} should be present after round-trip",
             tab
         );
     }
+    assert!(
+        deserialized
+            .find_tab(&PealayerTab::MediaInspector)
+            .is_none(),
+        "the optional Media Inspector must remain hidden in the default workspace"
+    );
 }
 
 #[test]
@@ -52,6 +62,7 @@ fn test_pealayer_tab_titles_and_icons() {
         assert!(!tab.icon().is_empty());
     }
     assert_eq!(PealayerTab::ProgramMonitor.title(&app), "Program Monitor");
+    assert_eq!(PealayerTab::MediaInspector.title(&app), "Media Inspector");
     assert_eq!(PealayerTab::Timeline.title(&app), "Timeline");
     assert_eq!(PealayerTab::EffectControls.title(&app), "Effect Controls");
     assert_eq!(PealayerTab::EffectsLibrary.title(&app), "Effects Library");
@@ -63,7 +74,9 @@ use pealayer::ui::layout::restore_tab_to_canonical_slot;
 #[test]
 fn test_restore_timeline_to_canonical_slot() {
     let mut dock_state = create_initial_layout();
-    let path = dock_state.find_tab(&PealayerTab::Timeline).expect("find timeline");
+    let path = dock_state
+        .find_tab(&PealayerTab::Timeline)
+        .expect("find timeline");
     dock_state.remove_tab(path);
     assert!(dock_state.find_tab(&PealayerTab::Timeline).is_none());
 
@@ -74,12 +87,23 @@ fn test_restore_timeline_to_canonical_slot() {
 #[test]
 fn test_restore_controls_next_to_hardware_monitor() {
     let mut dock_state = create_initial_layout();
-    let path = dock_state.find_tab(&PealayerTab::EffectControls).expect("find effect controls");
+    let path = dock_state
+        .find_tab(&PealayerTab::EffectControls)
+        .expect("find effect controls");
     dock_state.remove_tab(path);
     assert!(dock_state.find_tab(&PealayerTab::EffectControls).is_none());
 
     restore_tab_to_canonical_slot(&mut dock_state, PealayerTab::EffectControls);
     assert!(dock_state.find_tab(&PealayerTab::EffectControls).is_some());
+}
+
+#[test]
+fn test_restore_optional_media_inspector() {
+    let mut dock_state = create_initial_layout();
+    assert!(dock_state.find_tab(&PealayerTab::MediaInspector).is_none());
+
+    restore_tab_to_canonical_slot(&mut dock_state, PealayerTab::MediaInspector);
+    assert!(dock_state.find_tab(&PealayerTab::MediaInspector).is_some());
 }
 
 #[test]
@@ -102,7 +126,8 @@ static CONFIG_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[test]
 fn test_pealayer_app_tab_toggle_and_focus() {
     let _guard = CONFIG_TEST_MUTEX.lock().unwrap();
-    let temp_dir = std::env::temp_dir().join(format!("pealayer_dock_toggle_{}", uuid::Uuid::new_v4()));
+    let temp_dir =
+        std::env::temp_dir().join(format!("pealayer_dock_toggle_{}", uuid::Uuid::new_v4()));
     let _ = std::fs::create_dir_all(&temp_dir);
     let config_path = temp_dir.join("config.json");
     unsafe {
@@ -136,15 +161,20 @@ fn test_corrupt_dock_json_fallback() {
     let fallback = serde_json::from_str::<DockState<PealayerTab>>(invalid_json)
         .unwrap_or_else(|_| create_initial_layout());
 
-    for tab in PealayerTab::ALL {
+    for tab in PealayerTab::ALL
+        .into_iter()
+        .filter(|tab| *tab != PealayerTab::MediaInspector)
+    {
         assert!(fallback.find_tab(&tab).is_some());
     }
+    assert!(fallback.find_tab(&PealayerTab::MediaInspector).is_none());
 }
 
 #[test]
 fn test_app_save_dock_layout_persists_to_config() {
     let _guard = CONFIG_TEST_MUTEX.lock().unwrap();
-    let temp_dir = std::env::temp_dir().join(format!("pealayer_dock_persist_{}", uuid::Uuid::new_v4()));
+    let temp_dir =
+        std::env::temp_dir().join(format!("pealayer_dock_persist_{}", uuid::Uuid::new_v4()));
     let _ = std::fs::create_dir_all(&temp_dir);
     let config_path = temp_dir.join("config.json");
     unsafe {
@@ -157,8 +187,13 @@ fn test_app_save_dock_layout_persists_to_config() {
     let cfg = pealayer::config::AppConfig::load();
     assert!(cfg.workspace_dock_layout.is_some());
     let layout_json = cfg.workspace_dock_layout.unwrap();
-    let deserialized: DockState<PealayerTab> = serde_json::from_str(&layout_json).expect("valid dock state JSON");
-    assert!(deserialized.find_tab(&PealayerTab::ProgramMonitor).is_some());
+    let deserialized: DockState<PealayerTab> =
+        serde_json::from_str(&layout_json).expect("valid dock state JSON");
+    assert!(
+        deserialized
+            .find_tab(&PealayerTab::ProgramMonitor)
+            .is_some()
+    );
 
     unsafe {
         std::env::remove_var("PEALAYER_CONFIG_FILE");
@@ -178,7 +213,10 @@ fn test_workspace_window_menu_translations() {
     let app = pealayer::app::PealayerApp::default();
     assert_eq!(app.tr("Window"), "Window");
     assert_eq!(app.tr("Panels"), "Panels");
-    assert_eq!(app.tr("Reset Workspace to Default"), "Reset Workspace to Default");
+    assert_eq!(
+        app.tr("Reset Workspace to Default"),
+        "Reset Workspace to Default"
+    );
 
     let fa = pealayer::config::AppLanguage::Persian;
     assert_eq!(

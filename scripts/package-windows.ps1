@@ -3,7 +3,8 @@ param(
     [switch]$NoUpx,
     [switch]$SkipTests,
     [switch]$Run,
-    [string]$Branding
+    [string]$Branding,
+    [string]$LibmpvDirectory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,6 +24,7 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 }
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'libmpv-windows.ps1')
 if ($Branding) {
     $resolvedBranding = (Resolve-Path -LiteralPath $Branding -ErrorAction Stop).Path
     $brandDocument = Get-Content -Raw -LiteralPath $resolvedBranding | ConvertFrom-Json
@@ -34,9 +36,21 @@ if ($Branding) {
 }
 $machineRustupHome = [Environment]::GetEnvironmentVariable('RUSTUP_HOME', 'Machine')
 if ($machineRustupHome) { $env:RUSTUP_HOME = $machineRustupHome }
-$systemRustBin = Join-Path $env:ProgramFiles 'Rust\bin'
-if (Test-Path -LiteralPath (Join-Path $systemRustBin 'cargo.exe')) {
-    $env:Path = $systemRustBin + ';' + $env:Path
+$userProfileDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+$rustBin = @(
+    (Join-Path $env:ProgramFiles 'Rust\bin')
+    (Join-Path $userProfileDirectory '.cargo\bin')
+) + @(
+    Get-ChildItem -LiteralPath (Join-Path $userProfileDirectory '.rustup\toolchains') -Directory -ErrorAction SilentlyContinue |
+        Sort-Object -Property Name |
+        ForEach-Object { Join-Path $_.FullName 'bin' }
+) | Where-Object {
+    $cargo = Get-Item -LiteralPath (Join-Path $_ 'cargo.exe') -ErrorAction SilentlyContinue
+    $rustc = Get-Item -LiteralPath (Join-Path $_ 'rustc.exe') -ErrorAction SilentlyContinue
+    $cargo -and $cargo.Length -gt 0 -and $rustc -and $rustc.Length -gt 0
+} | Select-Object -First 1
+if ($rustBin) {
+    $env:Path = $rustBin + ';' + $env:Path
 }
 $cargoTargetDirectory = if ($env:CARGO_TARGET_DIR) {
     if ([System.IO.Path]::IsPathRooted($env:CARGO_TARGET_DIR)) {
@@ -55,25 +69,15 @@ $outputDirectory = if ((Split-Path -Leaf $sourceDirectory) -ieq 'source') {
 } else {
     Join-Path $repositoryRoot 'bin'
 }
-$libmpvDirectory = if ($env:LIBMPV_DIR) { $env:LIBMPV_DIR } else { Join-Path $env:ProgramFiles 'MPV' }
 $rustHost = (& rustc -vV | Select-String '^host:' | ForEach-Object { $_.Line.Substring(5).Trim() })
 if (-not $rustHost) { throw 'Could not determine the native Rust host triple.' }
-$importLibraryNames = if ($rustHost -like '*-msvc') { @('mpv.lib') } else { @('libmpv.dll.a', 'libmpv.a') }
-$libmpvImportLibrary = $importLibraryNames |
-    ForEach-Object { Join-Path $libmpvDirectory $_ } |
-    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-    Select-Object -First 1
-if (-not $libmpvImportLibrary) {
-    throw "Required libmpv import library for $rustHost is missing. Expected one of: $($importLibraryNames -join ', ') in $libmpvDirectory"
-}
-$libmpvRuntime = @('libmpv-2.dll', 'mpv-2.dll') |
-    ForEach-Object { Join-Path $libmpvDirectory $_ } |
-    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-    Select-Object -First 1
-if (-not $libmpvRuntime) {
-    throw "Required libmpv runtime is missing. Expected libmpv-2.dll or mpv-2.dll in $libmpvDirectory"
-}
-$env:Path = $libmpvDirectory + ';' + $env:Path
+$libmpv = Resolve-PealayerLibmpv -RepositoryRoot $repositoryRoot -RustHost $rustHost -ExplicitDirectory $LibmpvDirectory
+$libmpvSourceDirectory = $libmpv.SourceDirectory
+$libmpvDirectory = $libmpv.LinkDirectory
+$libmpvImportLibrary = $libmpv.ImportLibrary
+$libmpvRuntime = $libmpv.RuntimeLibrary
+$hostProfile = Save-PealayerWindowsHostProfile -RepositoryRoot $repositoryRoot -Resolution $libmpv -PersistUserEnvironment
+Set-PealayerLibmpvBuildEnvironment -Resolution $libmpv
 $upxCommand = Get-Command upx.exe -ErrorAction SilentlyContinue
 $upxPath = if ($upxCommand) { $upxCommand.Source } else { $null }
 if (-not $upxPath) {
@@ -84,19 +88,26 @@ if (-not $upxPath) {
 }
 
 if (-not $SkipTests) {
-    $env:LIBMPV_DIR = $libmpvDirectory
-    $separator = [char]0x1f
-    $linkFlag = "-Lnative=$libmpvDirectory"
-    if ($env:CARGO_ENCODED_RUSTFLAGS) {
-        $env:CARGO_ENCODED_RUSTFLAGS += $separator + $linkFlag
-    } else {
-        $env:CARGO_ENCODED_RUSTFLAGS = $linkFlag
-    }
     & cargo test --locked --jobs 1
     if ($LASTEXITCODE -ne 0) { throw "cargo test failed with exit code $LASTEXITCODE" }
 }
 
-& (Join-Path $PSScriptRoot 'run-windows.ps1') -BuildOnly
+$webUiDirectory = Join-Path $repositoryRoot 'web_ui'
+$webUiPackage = Join-Path $webUiDirectory 'package.json'
+if (Test-Path -LiteralPath $webUiPackage -PathType Leaf) {
+    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if (-not $npm) { $npm = Get-Command npm -ErrorAction SilentlyContinue }
+    if (-not $npm) { throw 'npm is required to build the Pealayer Web UI.' }
+    Push-Location -LiteralPath $webUiDirectory
+    try {
+        & $npm.Source run build
+        if ($LASTEXITCODE -ne 0) { throw "Web UI build failed with exit code $LASTEXITCODE" }
+    } finally {
+        Pop-Location
+    }
+}
+
+& (Join-Path $PSScriptRoot 'run-windows.ps1') -BuildOnly -LibmpvDirectory $libmpvSourceDirectory
 
 New-Item -ItemType Directory -Force -Path $stagingDirectory,$outputDirectory | Out-Null
 $effectiveExecutableName = if ($env:APP_EXECUTABLE_NAME) {
@@ -113,7 +124,7 @@ $effectiveExecutableFile = "$effectiveExecutableName.exe"
 $stagedExecutable = Join-Path $stagingDirectory $effectiveExecutableFile
 $stagedRuntime = Join-Path $stagingDirectory 'libmpv-2.dll'
 Copy-Item -LiteralPath (Join-Path $releaseDirectory 'pealayer.exe') -Destination $stagedExecutable -Force
-Copy-Item -LiteralPath $libmpvRuntime -Destination $stagedRuntime -Force
+Copy-PealayerLibmpvRuntime -RuntimeLibrary $libmpvRuntime -DestinationDirectory $stagingDirectory
 
 $resource = (Get-Item -LiteralPath $stagedExecutable).VersionInfo
 $expectedProductName = if ($env:APP_NAME) {
@@ -143,7 +154,7 @@ $smoke = Start-Process -FilePath $stagedExecutable -ArgumentList '--smoke-test' 
 if ($smoke.ExitCode -ne 0) { throw "Packaged Pealayer/libmpv smoke test failed with exit code $($smoke.ExitCode)" }
 
 Copy-Item -LiteralPath $stagedExecutable -Destination $outputDirectory -Force
-Copy-Item -LiteralPath $stagedRuntime -Destination $outputDirectory -Force
+Copy-PealayerLibmpvRuntime -RuntimeLibrary $stagedRuntime -DestinationDirectory $outputDirectory
 $fontSource = Join-Path $repositoryRoot 'assets\fonts\Vazirmatn-Regular.ttf'
 if (-not (Test-Path -LiteralPath $fontSource -PathType Leaf)) {
     throw "Bundled Persian fallback font is missing: $fontSource"
@@ -156,12 +167,23 @@ $webDistribution = Join-Path $repositoryRoot 'web_ui\dist'
 $webUiPackaged = $false
 if (Test-Path -LiteralPath (Join-Path $webDistribution 'index.html')) {
     $packagedWebDistribution = Join-Path $outputDirectory 'web_ui\dist'
+    $resolvedOutputDirectory = [System.IO.Path]::GetFullPath($outputDirectory).TrimEnd('\', '/')
+    $resolvedPackagedWebDistribution = [System.IO.Path]::GetFullPath($packagedWebDistribution)
+    if (-not $resolvedPackagedWebDistribution.StartsWith(
+        $resolvedOutputDirectory + [System.IO.Path]::DirectorySeparatorChar,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw 'Refusing to replace a Web UI package outside the canonical output directory.'
+    }
+    if (Test-Path -LiteralPath $resolvedPackagedWebDistribution) {
+        Remove-Item -LiteralPath $resolvedPackagedWebDistribution -Recurse -Force
+    }
     New-Item -ItemType Directory -Force -Path $packagedWebDistribution | Out-Null
     Copy-Item -Path (Join-Path $webDistribution '*') -Destination $packagedWebDistribution -Recurse -Force
     $webUiPackaged = $true
 }
 
-$artifacts = @($effectiveExecutableFile,'libmpv-2.dll','assets/fonts/Vazirmatn-Regular.ttf') | ForEach-Object {
+$artifacts = @($effectiveExecutableFile,'libmpv-2.dll','mpv-2.dll','assets/fonts/Vazirmatn-Regular.ttf') | ForEach-Object {
     $path = Join-Path $outputDirectory $_
     [ordered]@{
         path = $_
@@ -176,6 +198,16 @@ $manifest = [ordered]@{
     git_dirty = [bool](& git -C $repositoryRoot status --porcelain)
     built_at_utc = [DateTime]::UtcNow.ToString('o')
     target = (& rustc -vV | Select-String '^host:' | ForEach-Object { $_.Line.Substring(5).Trim() })
+    build_host = [ordered]@{
+        computer_name = $env:COMPUTERNAME
+        profile = $hostProfile.ProfilePath
+        libmpv_source_directory = $libmpvSourceDirectory
+        libmpv_link_directory = $libmpvDirectory
+        resolution_source = $libmpv.ResolutionSource
+        import_library = Get-PealayerFileIdentity -Path $libmpvImportLibrary
+        import_source = Get-PealayerFileIdentity -Path $libmpv.ImportSource
+        runtime = Get-PealayerFileIdentity -Path $libmpvRuntime
+    }
     identity = [ordered]@{
         format = 'application-brand'
         application_name = $resource.ProductName

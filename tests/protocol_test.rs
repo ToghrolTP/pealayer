@@ -1,4 +1,6 @@
-use pealayer::four_d::protocol::{Command, ProtocolError, cobs_decode, cobs_encode, crc8, parse_frame};
+use pealayer::four_d::protocol::{
+    Command, ProtocolError, cobs_decode, cobs_encode, crc8, parse_frame,
+};
 
 #[test]
 fn test_crc8_known_vector() {
@@ -70,9 +72,18 @@ fn test_command_roundtrip_all_variants() {
     let commands = vec![
         Command::Ping,
         Command::RelaySet { id: 1, state: true },
-        Command::RelaySet { id: 2, state: false },
-        Command::PwmSet { channel: 0, value: 0 },
-        Command::PwmSet { channel: 255, value: 255 },
+        Command::RelaySet {
+            id: 2,
+            state: false,
+        },
+        Command::PwmSet {
+            channel: 0,
+            value: 0,
+        },
+        Command::PwmSet {
+            channel: 255,
+            value: 255,
+        },
         Command::AllOff,
     ];
     for cmd in commands {
@@ -83,7 +94,8 @@ fn test_command_roundtrip_all_variants() {
         // Test without trailing 0x00 delimiter
         if frame.last() == Some(&0x00) {
             let without_delim = &frame[..frame.len() - 1];
-            let parsed_no_delim = parse_frame(without_delim).expect("Failed to parse frame without trailing zero");
+            let parsed_no_delim =
+                parse_frame(without_delim).expect("Failed to parse frame without trailing zero");
             assert_eq!(cmd, parsed_no_delim);
         }
     }
@@ -114,7 +126,10 @@ fn test_corrupt_crc_rejected() {
 fn test_corrupt_cobs_rejected() {
     // Malformed block offset that exceeds slice length
     let invalid_offset = vec![0x05, 0x01, 0x02, 0x00];
-    assert_eq!(parse_frame(&invalid_offset), Err(ProtocolError::InvalidCobs));
+    assert_eq!(
+        parse_frame(&invalid_offset),
+        Err(ProtocolError::InvalidCobs)
+    );
 
     // Zero byte inside COBS body
     let zero_inside = vec![0x03, 0x00, 0x01, 0x00];

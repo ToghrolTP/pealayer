@@ -1,5 +1,16 @@
-use crate::app::PealayerApp;
+use crate::app::{MediaTrackKey, MediaTrackType, PealayerApp};
+use crate::ui::{dialog, icons};
 use eframe::egui;
+
+const AUDIO_DIALOG_WIDTH: f32 = 520.0;
+const AUDIO_DIALOG_DEFAULT_HEIGHT: f32 = 500.0;
+const AUDIO_DIALOG_MIN_HEIGHT: f32 = 330.0;
+const AUDIO_DIALOG_MAX_HEIGHT: f32 = 620.0;
+const AUDIO_DIALOG_FOOTER_RESERVE: f32 = 42.0;
+const AUDIO_TRACK_POPUP_HEIGHT: f32 = 220.0;
+
+pub const MIN_AUDIO_DELAY: f64 = -600.0;
+pub const MAX_AUDIO_DELAY: f64 = 600.0;
 
 pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if !app.show_audio_settings {
@@ -7,124 +18,242 @@ pub fn draw_settings_dialog(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 
     let mut open = app.show_audio_settings;
+    let geometry = dialog::bounded_geometry(
+        ui.ctx().content_rect(),
+        20.0,
+        egui::vec2(AUDIO_DIALOG_WIDTH, AUDIO_DIALOG_DEFAULT_HEIGHT),
+        egui::vec2(390.0, AUDIO_DIALOG_MIN_HEIGHT),
+        egui::vec2(600.0, AUDIO_DIALOG_MAX_HEIGHT),
+    );
+    let mut close_requested = dialog::escape_pressed(ui.ctx());
 
-    egui::Window::new(format!("{} {}", crate::ui::icons::MUSIC_NOTE, app.tr("Audio Settings")))
-        .open(&mut open)
-        .collapsible(true)
-        .resizable(true)
-        .default_size([420.0, 320.0])
-        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .show(ui.ctx(), |ui| {
-          ui.with_layout(crate::ui::i18n::vertical_layout(app.rtl), |ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
+    egui::Window::new(format!(
+        "{} {}",
+        icons::MUSIC_NOTE,
+        app.tr("Audio Settings")
+    ))
+    .id(egui::Id::new("audio_settings_dialog_professional_v4"))
+    .open(&mut open)
+    .collapsible(false)
+    .resizable(true)
+    .default_rect(geometry.default_rect)
+    .min_size(geometry.min_size)
+    .max_size(geometry.max_size)
+    .constrain_to(geometry.bounds)
+    .movable(true)
+    .frame(dialog::opaque_window_frame_from_context(ui.ctx()))
+    .show(ui.ctx(), |ui| {
+        let body_height = (ui.available_height() - AUDIO_DIALOG_FOOTER_RESERVE).max(120.0);
+        dialog::scroll_column(ui, "audio_settings_body_v4", Some(body_height), |ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 
-            // Track Selection
-            ui.with_layout(crate::ui::i18n::layout(app.rtl, egui::Align::Center), |ui| {
-                ui.label(app.tr("Track:"));
-                let current_label = if app.current_aid == "no" {
-                    app.tr("None").to_string()
-                } else {
-                    let mut label = format!("Track {}", app.current_aid);
-                    for t in &app.audio_tracks {
-                        if t.id.to_string() == app.current_aid {
-                            let parts: Vec<&str> = vec![
-                                t.lang.as_deref().unwrap_or(""),
-                                t.title.as_deref().unwrap_or(""),
-                            ]
-                            .into_iter()
-                            .filter(|s| !s.is_empty())
-                            .collect();
-                            if !parts.is_empty() {
-                                label = format!("Track {} ({})", t.id, parts.join(" - "));
-                            }
-                            break;
-                        }
-                    }
-                    label
-                };
+            draw_audio_track(app, ui);
+            ui.add_space(5.0);
+            draw_audio_output(app, ui);
+            ui.add_space(5.0);
+            draw_audio_timing(app, ui);
+            ui.add_space(5.0);
+            draw_external_audio(app, ui);
+        });
 
-                let none_label = app.tr("None");
-                egui::ComboBox::from_id_salt("audio_track_combo")
+        ui.add_space(6.0);
+        ui.separator();
+        ui.add_space(6.0);
+        dialog::action_row(ui, app.rtl, |ui| {
+            if dialog::action_button(ui, icons::X, &app.tr("Close"))
+                .on_hover_text("Esc")
+                .clicked()
+            {
+                close_requested = true;
+            }
+        });
+    });
+
+    app.show_audio_settings = open && !close_requested;
+}
+
+fn draw_audio_track(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    dialog::section(ui, icons::LIST_CHECKS, &app.tr("Audio track"), |ui| {
+        let current_label = audio_track_label(app, &app.current_aid);
+        let tracks = app.audio_tracks.clone();
+        dialog::setting_row(
+            ui,
+            icons::MUSIC_NOTE,
+            &app.tr("Active track"),
+            Some(&app.tr("Choose an embedded or externally loaded audio stream")),
+            |ui| {
+                egui::ComboBox::from_id_salt("audio_track_combo_v4")
                     .selected_text(current_label)
+                    .width(ui.available_width().clamp(150.0, 275.0))
+                    .height(AUDIO_TRACK_POPUP_HEIGHT)
                     .show_ui(ui, |ui| {
                         if ui
-                            .selectable_value(&mut app.current_aid, "no".to_string(), none_label)
+                            .selectable_label(app.current_aid == "no", app.tr("None"))
                             .clicked()
                         {
-                            let _ = app.mpv.set_property("aid", "no");
+                            app.disable_media_track(MediaTrackType::Audio);
                         }
-                        for track in &app.audio_tracks {
-                            let track_id_str = track.id.to_string();
-                            let parts: Vec<&str> = vec![
-                                track.lang.as_deref().unwrap_or(""),
-                                track.title.as_deref().unwrap_or(""),
-                            ]
-                            .into_iter()
-                            .filter(|s| !s.is_empty())
-                            .collect();
-                            
-                            let label = if parts.is_empty() {
-                                format!("Track {}", track.id)
-                            } else {
-                                format!("Track {} ({})", track.id, parts.join(" - "))
-                            };
-
-                            if ui
-                                .selectable_value(&mut app.current_aid, track_id_str.clone(), label)
-                                .clicked()
-                            {
-                                let _ = app.mpv.set_property("aid", track_id_str);
+                        for track in tracks {
+                            let id = track.id.to_string();
+                            let label = audio_track_label(app, &id);
+                            if ui.selectable_label(app.current_aid == id, label).clicked() {
+                                app.select_media_track(MediaTrackKey {
+                                    kind: MediaTrackType::Audio,
+                                    id: track.id,
+                                });
                             }
                         }
                     });
-            });
-
-            ui.separator();
-
-            // Synchronization
-            ui.label(app.tr("Synchronization"));
-            ui.with_layout(crate::ui::i18n::layout(app.rtl, egui::Align::Center), |ui| {
-                ui.label(app.tr("Delay (s):"));
-                let mut delay = app.audio_delay;
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut delay)
-                            .speed(0.1)
-                            .range(MIN_AUDIO_DELAY..=MAX_AUDIO_DELAY),
-                    )
-                    .changed()
-                {
-                    app.audio_delay = delay;
-                    let _ = app.mpv.set_property("audio-delay", delay);
-                }
-                if ui.button(app.tr("Reset")).clicked() {
-                    app.audio_delay = 0.0;
-                    let _ = app.mpv.set_property("audio-delay", 0.0);
-                }
-            });
-
-            ui.separator();
-
-            // Load External
-            if ui.button(app.tr("Load External Audio...")).clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Audio Files", &["mp3", "flac", "wav", "m4a", "aac", "ogg"])
-                    .pick_file()
-                {
-                    if let Some(path_str) = path.to_str() {
-                        let _ = app.mpv.command("audio-add", &[path_str]);
-                        app.refresh_audio_tracks();
-                    }
-                }
-            }
-          });
-        });
-
-    app.show_audio_settings = open;
+            },
+        );
+    });
 }
 
-pub const MIN_AUDIO_DELAY: f64 = -600.0;
-pub const MAX_AUDIO_DELAY: f64 = 600.0;
+fn draw_audio_output(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    dialog::section(ui, icons::SPEAKER_HIGH, &app.tr("Output"), |ui| {
+        dialog::setting_row(
+            ui,
+            if app.is_muted {
+                icons::SPEAKER_SLASH
+            } else {
+                icons::SPEAKER_HIGH
+            },
+            &app.tr("Sound"),
+            Some(&app.tr("Temporarily silence playback without changing volume")),
+            |ui| {
+                let mut audible = !app.is_muted;
+                if ui.toggle_value(&mut audible, app.tr("Enabled")).changed() {
+                    app.set_audio_muted(!audible);
+                }
+            },
+        );
+        ui.separator();
+
+        dialog::setting_row(
+            ui,
+            icons::SLIDERS_HORIZONTAL,
+            &app.tr("Volume"),
+            Some(&app.tr("Adjust playback volume from 0% to 130%")),
+            |ui| {
+                let mut volume = app.volume;
+                let mut changed = dialog::receive_numeric_paste(ui, "volume", &mut volume, &(0.0..=130.0), "%");
+                let response = ui.add_sized(
+                    [190.0, 24.0],
+                    egui::Slider::new(&mut volume, 0.0..=130.0).suffix("%"),
+                );
+                let wheel_steps = app.numeric_input_steps.get("volume").copied()
+                    .unwrap_or_else(|| crate::config::NumericInputSteps::for_step(1.0));
+                changed |= dialog::numeric_slider_wheel(ui, &response, &mut volume, 0.0..=130.0, wheel_steps);
+                changed |= dialog::numeric_context_menu(ui, &response, "volume", &mut volume, 0.0..=130.0, 1.0, crate::config::AppConfig::default().volume, "%", &mut app.numeric_input_steps, app.language, 1e-9);
+                if response.changed() || changed {
+                    app.volume = volume;
+                    let _ = app.mpv.set_property("volume", volume);
+                }
+                if changed || response.drag_stopped() || (response.changed() && !response.dragged()) {
+                    app.save_config();
+                }
+            },
+        );
+    });
+}
+
+fn draw_audio_timing(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    dialog::section(
+        ui,
+        icons::CLOCK_COUNTER_CLOCKWISE,
+        &app.tr("Synchronization"),
+        |ui| {
+            dialog::setting_row(
+                ui,
+                icons::CLOCK,
+                &app.tr("Audio delay"),
+                Some(&app.tr("Use negative values when audio is heard too late")),
+                |ui| {
+                    let mut delay = app.audio_delay;
+                    if dialog::numeric_stepper(
+                        ui,
+                        "audio_delay_seconds",
+                        &mut delay,
+                        MIN_AUDIO_DELAY..=MAX_AUDIO_DELAY,
+                        0.1,
+                        0.0,
+                        1,
+                        " s",
+                        &mut app.numeric_input_steps,
+                        app.language,
+                    ) {
+                        app.audio_delay = clamp_audio_delay(delay);
+                        let _ = app.mpv.set_property("audio-delay", app.audio_delay);
+                        app.save_config();
+                    }
+                },
+            );
+            ui.horizontal(|ui| {
+                if ui
+                    .small_button(format!(
+                        "{}  {}",
+                        icons::ARROW_COUNTER_CLOCKWISE,
+                        app.tr("Reset timing")
+                    ))
+                    .clicked()
+                {
+                    app.audio_delay = 0.0;
+                    let _ = app.mpv.set_property("audio-delay", 0.0);
+                    app.save_config();
+                }
+            });
+        },
+    );
+}
+
+fn draw_external_audio(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    dialog::section(ui, icons::FOLDER_OPEN, &app.tr("External audio"), |ui| {
+        ui.label(
+            egui::RichText::new(app.tr("Attach an audio file to the current media"))
+                .small()
+                .weak(),
+        );
+        if ui
+            .button(format!("{}  {}", icons::PLUS, app.tr("Add audio file...")))
+            .clicked()
+        {
+            if crate::peer::active() {
+                crate::ui::peer_browser::open(ui.ctx(), crate::ui::peer_browser::Purpose::Audio, None);
+            } else if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Audio Files", &["mp3", "flac", "wav", "m4a", "aac", "ogg"])
+                .pick_file()
+            && let Some(path_str) = path.to_str()
+            {
+            let _ = app.mpv.command("audio-add", &[path_str]);
+            app.refresh_media_tracks();
+            }
+        }
+    });
+}
+
+fn audio_track_label(app: &PealayerApp, id: &str) -> String {
+    if id == "no" {
+        return app.tr("None");
+    }
+    let Some(track) = app
+        .audio_tracks
+        .iter()
+        .find(|track| track.id.to_string() == id)
+    else {
+        return format!("{} {id}", app.tr("Track"));
+    };
+    let details = [track.lang.as_deref(), track.title.as_deref()]
+        .into_iter()
+        .flatten()
+        .filter(|part| !part.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    if details.is_empty() {
+        format!("{} {}", app.tr("Track"), track.id)
+    } else {
+        format!("{} {} — {details}", app.tr("Track"), track.id)
+    }
+}
 
 pub fn clamp_audio_delay(delay: f64) -> f64 {
     delay.clamp(MIN_AUDIO_DELAY, MAX_AUDIO_DELAY)
@@ -135,10 +264,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_audio_delay_range_clamping() {
+    fn audio_values_and_geometry_are_bounded() {
         assert_eq!(clamp_audio_delay(0.0), 0.0);
         assert_eq!(clamp_audio_delay(-800.0), -600.0);
         assert_eq!(clamp_audio_delay(950.0), 600.0);
-        assert_eq!(clamp_audio_delay(-12.4), -12.4);
+        assert!(AUDIO_DIALOG_MIN_HEIGHT < AUDIO_DIALOG_DEFAULT_HEIGHT);
+        assert!(AUDIO_DIALOG_DEFAULT_HEIGHT < AUDIO_DIALOG_MAX_HEIGHT);
+        assert!(AUDIO_TRACK_POPUP_HEIGHT < AUDIO_DIALOG_MAX_HEIGHT);
     }
 }

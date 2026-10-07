@@ -1,0 +1,458 @@
+[
+  {
+    "content": [
+      {
+        "height": 728,
+        "scrollWidth": 305,
+        "width": 305
+      }
+    ],
+    "documentWidth": 320,
+    "panels": [],
+    "surface": "#/player",
+    "theme": "light",
+    "width": 320
+  },
+  {
+    "content": [
+      {
+        "height": 728,
+        "scrollWidth": 305,
+        "width": 305
+      }
+    ],
+    "documentWidth": 320,
+    "panels": [
+      {
+        "className": "studio-panel effects-panel",
+        "scrollWidth": 287,
+        "width": 287
+      },
+      {
+        "className": "studio-panel player-panel-web",
+        "scrollWidth": 287,
+        "width": 287
+      },
+      {
+        "className": "studio-panel timeline-panel-web",
+        "scrollWidth": 287,
+        "width": 287
+      }
+    ],
+    "surface": "#/timeline",
+    "theme": "light",
+    "width": 320
+  },
+  {
+    "content": [
+      {
+        "height": 728,
+        "scrollWidth": 305,
+        "width": 305
+      }
+    ],
+    "documentWidth": 320,
+    "panels": [],
+    "surface": "#/effects",
+    "theme": "light",
+    "width": 320
+  },
+  {
+    "content": [
+      {
+        "height": 728,
+        "scrollWidth": 305,
+        "width": 305
+      }
+    ],
+    "documentWidth": 320,
+    "panels": [],
+    "surface": "#/hardware",
+    "theme": "light",
+    "width": 320
+  },
+  {
+    "content": [
+      {
+        "height": 728,
+        "scrollWidth": 305,
+        "width": 305
+      }
+    ],
+    "documentWidth": 320,
+    "panels": [],
+    "surface": "#/library",
+    "theme": "light",
+    "width": 320
+  },
+  {
+    "content": [
+      {
+        "height": 728,
+        "scrollWidth": 305,
+        "width": 305
+      }
+    ],
+    "documentWidth": 320,
+    "panels": [],
+    "surface": "#/about",
+    "theme": "light",
+    "width": 320
+  },
+  {
+    "content": [
+      {
+        "height": 728,
+        "scrollWidth": 305,
+        "width": 305
+      }
+    ],
+    "documentWidth": 320,
+    "panels": [],
+    "surface": "#/preferences",
+    "theme": "light",
+    "width": 320
+  },
+  {
+    "content": [
+      {
+        "height": 728,
+        "scrollWidth": 375,
+        "width": 375
+      }
+    ],
+    "documentWidth": 390,
+    "panels": [],
+    "surface": "#/player",
+    "theme": "light",
+    "width": 390
+  },
+  {
+    "content": [
+      {
+        "height": 728,
+        "scrollWidth": 375,
+        "width": 375
+      }
+    ],
+    "documentWidth": 390,
+    "panels": [
+      {
+        "className": "studio-panel effects-panel",
+        "scrollWidth": 357,
+        "width": 357
+      },
+      {
+        "className": "studio-panel player-panel-web",
+        "scrollWidth": 357,
+        "width": 357
+      },
+      {
+        "className": "studio-panel timeline-panel-web",
+        "scrollWidth": 357,
+        "width": 357
+      }
+    ],
+    "surface": "#/timeline",
+    "theme": "light",
+    "width": 390
+  },
+  {
+    "content": [
+      {
+        "height": 728,
+        "scrollWidth": 375,
+        "width": 375
+      }
+    ],
+    "documentWidth": 390,
+    "panels": [],
+    "surface": "#/effects",
+    "theme": "light",
+    "width": 390
+  },
+  {
+    "content": [
+      {
+        "height": 728,
+        "scrollWidth": 375,
+        "width": 375
+      }
+    ],
+    "documentWidth": 390,
+    "panels": [],
+    "surface": "#/hardware",
+    "theme": "light",
+    "width": 390
+  },
+  {
+    "content": [
+      {
+        "height": 728,
+        "scrollWidth": 375,
+        "width": 375
+      }
+    ],
+    "documentWidth": 390,
+    "panels": [],
+    "surface": "#/library",
+    "theme": "light",
+    "width": 390
+  },
+  {
+    "content": [
+      {
+        "height": 728,
+        "scrollWidth": 375,
+        "width": 375
+      }
+    ],
+    "documentWidth": 390,
+    "panels": [],
+    "surface": "#/about",
+    "theme": "light",
+    "width": 390
+  },
+  {
+    "content": [
+      {
+        "height": 728,
+        "scrollWidth": 375,
+        "width": 375
+      }
+    ],
+    "documentWidth": 390,
+    "panels": [],
+    "surface": "#/preferences",
+    "theme": "light",
+    "width": 390
+  },
+  {
+    "content": [
+      {
+        "height": 782,
+        "scrollWidth": 673,
+        "width": 673
+      }
+    ],
+    "documentWidth": 768,
+    "panels": [],
+    "surface": "#/player",
+    "theme": "light",
+    "width": 768
+  },
+  {
+    "content": [
+      {
+        "height": 782,
+        "scrollWidth": 673,
+        "width": 673
+      }
+    ],
+    "documentWidth": 768,
+    "panels": [
+      {
+        "className": "studio-panel effects-panel",
+        "scrollWidth": 655,
+        "width": 655
+      },
+      {
+        "className": "studio-panel player-panel-web",
+        "scrollWidth": 655,
+        "width": 655
+      },
+      {
+        "className": "studio-panel timeline-panel-web",
+        "scrollWidth": 655,
+        "width": 655
+      }
+    ],
+    "surface": "#/timeline",
+    "theme": "light",
+    "width": 768
+  },
+  {
+    "content": [
+      {
+        "height": 782,
+        "scrollWidth": 673,
+        "width": 673
+      }
+    ],
+    "documentWidth": 768,
+    "panels": [],
+    "surface": "#/effects",
+    "theme": "light",
+    "width": 768
+  },
+  {
+    "content": [
+      {
+        "height": 782,
+        "scrollWidth": 673,
+        "width": 673
+      }
+    ],
+    "documentWidth": 768,
+    "panels": [],
+    "surface": "#/hardware",
+    "theme": "light",
+    "width": 768
+  },
+  {
+    "content": [
+      {
+        "height": 782,
+        "scrollWidth": 673,
+        "width": 673
+      }
+    ],
+    "documentWidth": 768,
+    "panels": [],
+    "surface": "#/library",
+    "theme": "light",
+    "width": 768
+  },
+  {
+    "content": [
+      {
+        "height": 782,
+        "scrollWidth": 673,
+        "width": 673
+      }
+    ],
+    "documentWidth": 768,
+    "panels": [],
+    "surface": "#/about",
+    "theme": "light",
+    "width": 768
+  },
+  {
+    "content": [
+      {
+        "height": 782,
+        "scrollWidth": 673,
+        "width": 673
+      }
+    ],
+    "documentWidth": 768,
+    "panels": [],
+    "surface": "#/preferences",
+    "theme": "light",
+    "width": 768
+  },
+  {
+    "content": [
+      {
+        "height": 782,
+        "scrollWidth": 1045,
+        "width": 1045
+      }
+    ],
+    "documentWidth": 1280,
+    "panels": [],
+    "surface": "#/player",
+    "theme": "light",
+    "width": 1280
+  },
+  {
+    "content": [
+      {
+        "height": 782,
+        "scrollWidth": 1045,
+        "width": 1045
+      }
+    ],
+    "documentWidth": 1280,
+    "panels": [
+      {
+        "className": "studio-panel effects-panel",
+        "scrollWidth": 339,
+        "width": 339
+      },
+      {
+        "className": "studio-panel player-panel-web",
+        "scrollWidth": 665,
+        "width": 665
+      },
+      {
+        "className": "studio-panel timeline-panel-web",
+        "scrollWidth": 665,
+        "width": 665
+      }
+    ],
+    "surface": "#/timeline",
+    "theme": "light",
+    "width": 1280
+  },
+  {
+    "content": [
+      {
+        "height": 782,
+        "scrollWidth": 1045,
+        "width": 1045
+      }
+    ],
+    "documentWidth": 1280,
+    "panels": [],
+    "surface": "#/effects",
+    "theme": "light",
+    "width": 1280
+  },
+  {
+    "content": [
+      {
+        "height": 782,
+        "scrollWidth": 1045,
+        "width": 1045
+      }
+    ],
+    "documentWidth": 1280,
+    "panels": [],
+    "surface": "#/hardware",
+    "theme": "light",
+    "width": 1280
+  },
+  {
+    "content": [
+      {
+        "height": 782,
+        "scrollWidth": 1045,
+        "width": 1045
+      }
+    ],
+    "documentWidth": 1280,
+    "panels": [],
+    "surface": "#/library",
+    "theme": "light",
+    "width": 1280
+  },
+  {
+    "content": [
+      {
+        "height": 782,
+        "scrollWidth": 1045,
+        "width": 1045
+      }
+    ],
+    "documentWidth": 1280,
+    "panels": [],
+    "surface": "#/about",
+    "theme": "light",
+    "width": 1280
+  },
+  {
+    "content": [
+      {
+        "height": 782,
+        "scrollWidth": 1045,
+        "width": 1045
+      }
+    ],
+    "documentWidth": 1280,
+    "panels": [],
+    "surface": "#/preferences",
+    "theme": "light",
+    "width": 1280
+  }
+]

@@ -16,13 +16,19 @@ pub fn mru_key_name(index: usize) -> String {
 
 #[cfg(target_os = "windows")]
 pub fn save_settings_to_registry(cfg: &AppConfig) -> Result<(), String> {
-    use winreg::enums::*;
     use winreg::RegKey;
+    use winreg::enums::*;
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (settings_key, _) = hkcu
         .create_subkey(r"Software\Pealayer\Settings")
         .map_err(|e| format!("Failed to open Settings registry key: {e}"))?;
+
+    let config_json = serde_json::to_string(cfg)
+        .map_err(|error| format!("Failed to serialize complete settings: {error}"))?;
+    settings_key
+        .set_value("ConfigJson", &config_json)
+        .map_err(|e| format!("Failed to set complete ConfigJson: {e}"))?;
 
     settings_key
         .set_value("Volume", &volume_to_dword(cfg.volume))
@@ -63,14 +69,20 @@ pub fn save_settings_to_registry(_cfg: &AppConfig) -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 pub fn load_settings_from_registry() -> Result<Option<AppConfig>, String> {
-    use winreg::enums::*;
     use winreg::RegKey;
+    use winreg::enums::*;
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let settings_key = match hkcu.open_subkey(r"Software\Pealayer\Settings") {
         Ok(k) => k,
         Err(_) => return Ok(None),
     };
+
+    if let Ok(config_json) = settings_key.get_value::<String, _>("ConfigJson") {
+        if let Ok(config) = serde_json::from_str::<AppConfig>(&config_json) {
+            return Ok(Some(config));
+        }
+    }
 
     let volume: u32 = settings_key.get_value("Volume").unwrap_or(100);
     let is_muted: u32 = settings_key.get_value("IsMuted").unwrap_or(0);
@@ -106,8 +118,8 @@ pub fn load_settings_from_registry() -> Result<Option<AppConfig>, String> {
 
 #[cfg(target_os = "windows")]
 pub fn clear_registry_settings() -> Result<(), String> {
-    use winreg::enums::*;
     use winreg::RegKey;
+    use winreg::enums::*;
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let _ = hkcu.delete_subkey_all(r"Software\Pealayer\Settings");

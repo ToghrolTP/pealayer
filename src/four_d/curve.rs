@@ -50,6 +50,12 @@ pub struct AnalogTrack {
     /// Whether this track is temporarily muted in playback
     #[serde(default)]
     pub muted: bool,
+    /// Whether this is one of the only analog tracks allowed to output.
+    #[serde(default)]
+    pub soloed: bool,
+    /// Whether editing and live manipulation are disabled for this track.
+    #[serde(default)]
+    pub locked: bool,
     /// Whether this track is armed for live motion capture recording
     #[serde(default)]
     pub armed: bool,
@@ -69,15 +75,24 @@ impl AnalogTrack {
             channel,
             enabled: true,
             muted: false,
+            soloed: false,
+            locked: false,
             armed: false,
             keyframes: Vec::new(),
         }
     }
 
+    pub fn allows_output(&self, any_track_soloed: bool) -> bool {
+        self.enabled && !self.muted && (!any_track_soloed || self.soloed)
+    }
+
     /// Adds a keyframe, maintaining sorted chronological order.
     /// If a keyframe already exists at `time_ms`, it is replaced in-place.
     pub fn add_keyframe(&mut self, keyframe: Keyframe) {
-        match self.keyframes.binary_search_by_key(&keyframe.time_ms, |k| k.time_ms) {
+        match self
+            .keyframes
+            .binary_search_by_key(&keyframe.time_ms, |k| k.time_ms)
+        {
             Ok(idx) => {
                 self.keyframes[idx] = keyframe;
             }
@@ -152,5 +167,23 @@ impl AnalogTrack {
     pub fn evaluate_u16(&self, time_ms: u64) -> u16 {
         let val = self.evaluate(time_ms);
         (val * 4095.0).round().clamp(0.0, 4095.0) as u16
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AnalogTrack;
+
+    #[test]
+    fn analog_mute_and_solo_are_output_controls_not_audio_state() {
+        let mut track = AnalogTrack::new("PWM", 1);
+        assert!(track.allows_output(false));
+        assert!(!track.allows_output(true));
+
+        track.soloed = true;
+        assert!(track.allows_output(true));
+
+        track.muted = true;
+        assert!(!track.allows_output(true));
     }
 }

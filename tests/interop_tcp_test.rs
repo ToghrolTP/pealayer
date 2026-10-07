@@ -1,12 +1,21 @@
 use pealayer::cli::send_remote_command;
-use pealayer::platform::interop::{set_live_status, InteropCommand, PlayerStatusResponse};
+use pealayer::platform::interop::{InteropCommand, PlayerStatusResponse, set_live_status};
 use std::time::Duration;
 
 #[test]
 fn test_loopback_tcp_interop_commands_and_status() {
     unsafe {
         std::env::set_var("PEALAYER_PORT", "18085");
-        std::env::set_var("PEALAYER_SOCKET_PATH", format!("/tmp/pealayer_tcp_{}.sock", std::process::id()));
+        // Keep this integration listener isolated from a real Pealayer that
+        // may already own the production native pipe on the developer host.
+        std::env::set_var(
+            "APP_NAME",
+            format!("PealayerInteropTest{}", std::process::id()),
+        );
+        std::env::set_var(
+            "PEALAYER_SOCKET_PATH",
+            format!("/tmp/pealayer_tcp_{}.sock", std::process::id()),
+        );
     }
     let ctx = eframe::egui::Context::default();
     let application_identity =
@@ -19,6 +28,7 @@ fn test_loopback_tcp_interop_commands_and_status() {
             "en".to_string(),
             "ltr".to_string(),
             "system".to_string(),
+            [0, 120, 212],
         ),
     );
 
@@ -48,10 +58,8 @@ fn test_loopback_tcp_interop_commands_and_status() {
     };
     set_live_status(mock_status);
 
-    let status_line = send_remote_command(
-        r#"{"jsonrpc":"2.0","id":2,"method":"get_status"}"#,
-    )
-    .expect("Failed to query status over unified HTTP IPC");
+    let status_line = send_remote_command(r#"{"jsonrpc":"2.0","id":2,"method":"get_status"}"#)
+        .expect("Failed to query status over unified HTTP IPC");
     assert!(status_line.contains("\"volume\":85.0"));
     assert!(status_line.contains("\"playback_time\":12.34"));
     assert!(status_line.contains("/movies/test.mp4"));

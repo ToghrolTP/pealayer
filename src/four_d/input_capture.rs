@@ -24,13 +24,17 @@ impl InputCaptureState {
     }
 
     pub fn set_throttle(&mut self, value: f32) {
-        if value.is_nan() { return; }
+        if value.is_nan() {
+            return;
+        }
         self.current_throttle = value.clamp(0.0, 1.0);
         self.last_update = Instant::now();
     }
 
     pub fn ramp_throttle(&mut self, delta: f32) {
-        if delta.is_nan() { return; }
+        if delta.is_nan() {
+            return;
+        }
         self.current_throttle = (self.current_throttle + delta).clamp(0.0, 1.0);
         self.last_update = Instant::now();
     }

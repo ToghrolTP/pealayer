@@ -115,7 +115,7 @@ pub fn cobs_decode(input: &[u8]) -> Result<Vec<u8>, ProtocolError> {
 }
 
 /// Strongly typed commands for 4D cinema hardware control.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum Command {
     Ping,
     RelaySet { id: u8, state: bool },

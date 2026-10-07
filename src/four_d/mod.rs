@@ -1,10 +1,12 @@
+pub mod controller;
 pub mod curve;
 pub mod curve_record;
-pub mod controller;
 pub mod embedded_host;
 pub mod engine;
 pub mod history;
 pub mod input_capture;
 pub mod models;
+pub mod media_sync;
+pub mod media_timeline;
 pub mod patterns;
 pub mod protocol;

@@ -11,7 +11,7 @@ fn install_advertised_relay(app: &PealayerApp, id: u8, name: &str) {
         active_relays: Default::default(),
         relays: vec![HardwareOutput {
             id,
-            key: "fixture.output".to_string(),
+            key: format!("relay.{id}"),
             name: name.to_string(),
             role: "fixture".to_string(),
             control: "relay".to_string(),
@@ -34,6 +34,7 @@ fn effect_drop_uses_only_the_live_advertised_output() {
         actions: generate_constant(42, true, 500),
         controller_macro: None,
         controller_strip_effect: None,
+        controller_lane: None,
     };
 
     assert!(app.handle_effect_drop(&payload, 0, 1.0));
@@ -68,6 +69,7 @@ fn a_different_advertised_output_rejects_the_payload() {
         actions: generate_constant(42, true, 500),
         controller_macro: None,
         controller_strip_effect: None,
+        controller_lane: None,
     };
     assert!(!app.handle_effect_drop(&payload, 0, 1.0));
     assert!(app.timeline.instances.is_empty());

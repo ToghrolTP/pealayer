@@ -1,3 +1,4 @@
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -14,8 +15,29 @@ enum HardwareTransport {
     },
 }
 
+// ControllerClient separates wire failures from server rejection messages.
+// A broken TCP stream must be discarded, but an invalid binding must not
+// disconnect a healthy coordinator. Never retry a mutation here: it may have
+// already executed before the connection failed.
+fn controller_wire_failed(error: &str) -> bool {
+    [
+        "encode PCController JSON-RPC request:",
+        "write PCController JSON-RPC request:",
+        "read PCController JSON-RPC response:",
+        "decode PCController JSON-RPC response:",
+        "PCController closed the JSON-RPC connection",
+        "PCController coordinator identity changed;",
+        "validate selected PCController:",
+    ]
+    .iter()
+    .any(|prefix| error.starts_with(prefix))
+}
+
 impl HardwareTransport {
     fn send(&mut self, command: Command) -> Result<(), String> {
+        if matches!(command, Command::RelaySet { id: 0, .. }) {
+            return Err("relay ID must be non-zero".to_string());
+        }
         match self {
             Self::Controller(client) => client.send_command(command),
             Self::DirectSerial { port, sequence } => {
@@ -106,7 +128,10 @@ impl HardwareTransport {
         &mut self,
     ) -> Result<Option<crate::four_d::controller::HardwareCapabilities>, String> {
         match self {
-            Self::Controller(client) => client.hardware_capabilities().map(Some),
+            Self::Controller(client) => {
+                client.verify_selected_coordinator()?;
+                client.isolated_hardware_capabilities().map(Some)
+            }
             Self::DirectSerial { .. } => Ok(None),
         }
     }
@@ -117,11 +142,134 @@ impl HardwareTransport {
         params: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
         match self {
-            Self::Controller(client) => client.call(method, params),
-            Self::DirectSerial { .. } => Err(
-                "this hardware action requires the PCController coordinator".to_string(),
-            ),
+            Self::Controller(client) => {
+                if method.starts_with("controller.rf.") {
+                    client.verify_selected_coordinator()?;
+                }
+                client.call(method, params)
+            }
+            Self::DirectSerial { .. } => {
+                Err("this hardware action requires the PCController coordinator".to_string())
+            }
         }
+    }
+}
+
+fn play_controller_effect(
+    transport: &mut HardwareTransport,
+    reference: &str,
+) -> Result<serde_json::Value, String> {
+    transport.call_controller(
+        "controller.command.execute",
+        serde_json::json!({"command": format!("effect play {reference}")}),
+    )
+}
+
+fn stop_controller_effect(
+    transport: &mut HardwareTransport,
+    reference: &str,
+) -> Result<serde_json::Value, String> {
+    transport.call_controller(
+        "controller.command.execute",
+        serde_json::json!({"command": format!("effect stop {reference}")}),
+    )
+}
+
+const EMERGENCY_STOP_CONTROLLER_COMMANDS: [&str; 5] = [
+    "effect cancel",
+    "effect stop",
+    "keyboard stop",
+    "relay side left stop",
+    "relay side right stop",
+];
+
+/// Releases physical outputs before and after cancelling every coordinator-side
+/// source that could reassert motion. Direct-serial diagnostics have no host
+/// coordinator to cancel, so the board-level all-relays-off path is issued
+/// twice there as well.
+fn enforce_emergency_stop(transport: &mut HardwareTransport) -> Result<(), String> {
+    let mut errors = Vec::new();
+    if matches!(transport, HardwareTransport::Controller(_)) {
+        if let Err(error) = transport.call_controller(
+            "controller.estop.set",
+            serde_json::json!({
+                "active": true,
+                "source": "pealayer",
+                "reason": "operator engaged E-STOP",
+            }),
+        ) {
+            errors.push(format!("engage PCController E-STOP contract: {error}"));
+        }
+    }
+    if let Err(error) = transport.send(Command::AllOff) {
+        errors.push(format!("initial output release: {error}"));
+    }
+    if matches!(transport, HardwareTransport::Controller(_)) {
+        for command in EMERGENCY_STOP_CONTROLLER_COMMANDS {
+            if let Err(error) = transport.call_controller(
+                "controller.command.execute",
+                serde_json::json!({"command": command}),
+            ) {
+                errors.push(format!("{command}: {error}"));
+            }
+        }
+    }
+    if let Err(error) = transport.send(Command::AllOff) {
+        errors.push(format!("final output release: {error}"));
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn controller_call_allowed_during_estop(method: &str, params: &serde_json::Value) -> bool {
+    // Presentation changes cannot energize hardware. Keeping rename, icon,
+    // visibility, and lock edits available while the output latch is active
+    // prevents an unrelated safety state from making configuration appear
+    // broken.
+    if method == "controller.peripheral.presentation.update" {
+        return true;
+    }
+    if matches!(method,"controller.rf.catalog" | "controller.rf.binding.put" | "controller.rf.binding.remove" | "controller.rf.list" | "controller.rf.learn.status" | "controller.rf.learn.cancel" | "controller.rf.remove") { return true; }
+    if method == "controller.rf.map" && params.get("action").and_then(serde_json::Value::as_str) == Some("none") { return true; }
+    if method == "controller.estop.set" {
+        return params
+            .get("active")
+            .and_then(serde_json::Value::as_bool)
+            .is_some();
+    }
+    if method == "controller.pwm.off" {
+        return true;
+    }
+    if method != "controller.command.execute" {
+        return false;
+    }
+    let Some(command) = params.get("command").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    let words = command
+        .split_whitespace()
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    match words
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        ["relay", "off"]
+        | ["keyboard", "stop"]
+        | ["effect", "cancel"]
+        | ["effect", "stop"]
+        | ["strip", "stop"]
+        | ["strip", "clear"]
+        | ["strip", "status"]
+        | ["rgb", "effect", "stop"] => true,
+        ["effect", "stop", _] => true,
+        ["relay", "side", "left" | "right", "stop"] => true,
+        _ => false,
     }
 }
 
@@ -146,10 +294,80 @@ pub struct CompiledControllerStripEffect {
     pub start: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledDirectPwmCue {
+    pub start_time_ms: u64,
+    pub end_time_ms: u64,
+    pub channel: u8,
+    pub value_basis_points: u16,
+}
+
 #[derive(Debug, Clone)]
 pub struct ControllerCallResult {
     pub operation: String,
     pub result: Result<serde_json::Value, String>,
+}
+
+#[derive(Debug)]
+struct PendingControllerIntent {
+    method: String,
+    params: serde_json::Value,
+    refresh_catalog: bool,
+}
+
+/// A bounded, fair latest-value queue for live hardware controls.
+///
+/// Motion buttons, relays, and PWM sliders represent desired state rather
+/// than an audit log. Replacing an older pending value for the same stable
+/// control key prevents a slow board acknowledgement from building an
+/// unbounded FIFO of stale movement commands. The insertion-order side queue
+/// keeps different controls moving fairly under concurrent input.
+#[derive(Debug, Default)]
+struct PendingControllerIntents {
+    order: VecDeque<String>,
+    latest: HashMap<String, PendingControllerIntent>,
+}
+
+impl PendingControllerIntents {
+    fn replace(
+        &mut self,
+        control_key: String,
+        method: String,
+        params: serde_json::Value,
+        refresh_catalog: bool,
+    ) {
+        let is_new = !self.latest.contains_key(&control_key);
+        self.latest.insert(
+            control_key.clone(),
+            PendingControllerIntent {
+                method,
+                params,
+                refresh_catalog,
+            },
+        );
+        if is_new {
+            self.order.push_back(control_key);
+        }
+    }
+
+    fn pop_front(&mut self) -> Option<(String, PendingControllerIntent)> {
+        while let Some(control_key) = self.order.pop_front() {
+            if let Some(intent) = self.latest.remove(&control_key) {
+                return Some((control_key, intent));
+            }
+        }
+        None
+    }
+
+    fn clear(&mut self) {
+        self.order.clear();
+        self.latest.clear();
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.latest.len()
+    }
 }
 
 pub enum EngineMessage {
@@ -157,34 +375,54 @@ pub enum EngineMessage {
     UpdateControllerMacros(Vec<CompiledControllerMacro>),
     UpdateControllerStripEffects(Vec<CompiledControllerStripEffect>),
     UpdateAnalogTracks(Vec<crate::four_d::curve::AnalogTrack>),
-    LiveActuatorOverride { channel: u8, value: u8 },
+    UpdateDirectPwmCues(Vec<CompiledDirectPwmCue>),
+    LiveActuatorOverride {
+        channel: u8,
+        value: u8,
+    },
     Seek(u64), // Emitted when user seeks, to clear current active queue and reset hardware
     SendCommand(Command), // Manual override or direct hardware command
+    ReconfigureEndpoint {
+        endpoint: String,
+        connect: bool,
+    },
     ControllerCall {
         method: String,
         params: serde_json::Value,
+    },
+    ReplyControllerCall {
+        method: String,
+        params: serde_json::Value,
+        reply: mpsc::Sender<Result<serde_json::Value, String>>,
     },
     TrackedControllerCall {
         operation: String,
         method: String,
         params: serde_json::Value,
     },
-    InvokeControllerAction {
-        action_id: String,
+    CoalescedControllerIntent {
+        created: std::time::Instant,
+        control_key: String,
+        method: String,
+        params: serde_json::Value,
+        refresh_catalog: bool,
     },
-    UpdatePeripheralPresentation {
-        key: String,
-        name: Option<String>,
-        icon: Option<String>,
-        group: Option<String>,
-        expected_revision: Option<String>,
-        fallback_names: std::collections::BTreeMap<String, String>,
-    },
+}
+
+type StateNotifier = Arc<dyn Fn() + Send + Sync>;
+
+fn notify_state_change(notifier: &Mutex<Option<StateNotifier>>) {
+    // Never invoke an interface callback while holding the engine's lock.
+    let callback = notifier.lock().ok().and_then(|slot| slot.clone());
+    if let Some(callback) = callback { callback(); }
 }
 
 pub struct EngineHandle {
     lifecycle: Arc<()>,
     pub playback_time_ms: Arc<AtomicU64>,
+    pub media_playback: Arc<Mutex<super::media_sync::PlaybackSample>>,
+    pub prepared_timeline: Arc<Mutex<super::media_timeline::PreparedTimeline>>,
+    pub media_clock_owned: Arc<AtomicBool>,
     pub is_playing: Arc<AtomicBool>,
     pub estop_active: Arc<AtomicBool>,
     pub connection_requested: Arc<AtomicBool>,
@@ -195,6 +433,8 @@ pub struct EngineHandle {
     pub hardware_capabilities: Arc<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
     pub controller_call_results: Arc<Mutex<std::collections::VecDeque<ControllerCallResult>>>,
     catalog_refresh_requested: Arc<AtomicBool>,
+    rf_catalog_refresh_requested: Arc<AtomicBool>,
+    state_notifier: Arc<Mutex<Option<StateNotifier>>>,
     pub sender: mpsc::Sender<EngineMessage>,
 }
 
@@ -204,21 +444,37 @@ pub struct EngineHandle {
 #[derive(Clone)]
 pub struct ControllerPushTarget {
     lifecycle: std::sync::Weak<()>,
+    estop_active: std::sync::Weak<AtomicBool>,
+    is_playing: std::sync::Weak<AtomicBool>,
     connection_requested: std::sync::Weak<AtomicBool>,
     serial_port: std::sync::Weak<Mutex<String>>,
     hardware_capabilities:
         std::sync::Weak<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
     catalog_refresh_requested: std::sync::Weak<AtomicBool>,
+    rf_catalog_refresh_requested: std::sync::Weak<AtomicBool>,
 }
 
 impl EngineHandle {
+    pub fn set_state_notifier(&self, notify: impl Fn() + Send + Sync + 'static) {
+        if let Ok(mut slot) = self.state_notifier.lock() { *slot = Some(Arc::new(notify)); }
+    }
+    pub(crate) fn playback_lifecycle(&self) -> std::sync::Weak<()> { Arc::downgrade(&self.lifecycle) }
+    pub fn attach_playback_clock(&self, mpv:&'static libmpv2::Mpv) {super::media_timeline::observe_mpv(self,mpv);}
+    pub fn request_prepared_play(&self)->bool {
+        if !self.serial_port.lock().is_ok_and(|endpoint| super::controller::is_controller_endpoint(&endpoint)) {return false}
+        if let Ok(mut plan)=self.prepared_timeline.lock() && plan.has_items() {plan.play_requested=true;return true}
+        false
+    }
     pub fn controller_push_target(&self) -> ControllerPushTarget {
         ControllerPushTarget {
             lifecycle: Arc::downgrade(&self.lifecycle),
+            estop_active: Arc::downgrade(&self.estop_active),
+            is_playing: Arc::downgrade(&self.is_playing),
             connection_requested: Arc::downgrade(&self.connection_requested),
             serial_port: Arc::downgrade(&self.serial_port),
             hardware_capabilities: Arc::downgrade(&self.hardware_capabilities),
             catalog_refresh_requested: Arc::downgrade(&self.catalog_refresh_requested),
+            rf_catalog_refresh_requested: Arc::downgrade(&self.rf_catalog_refresh_requested),
         }
     }
 
@@ -238,13 +494,68 @@ impl EngineHandle {
     }
 
     pub fn request_catalog_refresh(&self) {
-        self.catalog_refresh_requested.store(true, Ordering::Relaxed);
+        self.catalog_refresh_requested
+            .store(true, Ordering::Relaxed);
+    }
+
+    pub fn take_rf_catalog_refresh_request(&self) -> bool {
+        self.rf_catalog_refresh_requested
+            .swap(false, Ordering::AcqRel)
+    }
+
+    pub fn queue_controller_intent(
+        &self,
+        control_key: impl Into<String>,
+        method: impl Into<String>,
+        params: serde_json::Value,
+        refresh_catalog: bool,
+    ) -> Result<(), String> {
+        self.sender
+            .send(EngineMessage::CoalescedControllerIntent {
+                created: std::time::Instant::now(),
+                control_key: control_key.into(),
+                method: method.into(),
+                params,
+                refresh_catalog,
+            })
+            .map_err(|_| "hardware engine is unavailable".to_string())
+    }
+
+    pub fn set_emergency_stop(&self, active: bool) {
+        self.estop_active.store(active, Ordering::SeqCst);
+        if active {
+            // Stop timeline dispatch immediately; the engine thread performs the
+            // acknowledged hardware release on its next (5 ms) pass.
+            self.is_playing.store(false, Ordering::SeqCst);
+        }
+        let _ = self.sender.send(EngineMessage::ControllerCall {
+            method: "controller.estop.set".to_string(),
+            params: serde_json::json!({
+                "active": active,
+                "source": "pealayer",
+                "reason": if active {
+                    "operator engaged E-STOP"
+                } else {
+                    "operator released E-STOP"
+                },
+            }),
+        });
     }
 }
 
 impl ControllerPushTarget {
     pub(crate) fn is_alive(&self) -> bool {
         self.lifecycle.strong_count() > 0
+    }
+
+    /// Push and RPC must refer to the same coordinator, even when a local
+    /// tunnel shares the endpoint during a restart. A subscription must not
+    /// replace the identity that the authoritative RPC catalog established.
+    pub(crate) fn matches_source_instance(&self, instance_id: &str) -> bool {
+        self.hardware_capabilities.upgrade().and_then(|capabilities| {
+            capabilities.lock().ok().and_then(|slot| slot.as_ref().map(|value|
+                !instance_id.is_empty() && value.host_instance_id == instance_id))
+        }).unwrap_or(false)
     }
 
     /// Returns the selected WebSocket URL only while the user wants a
@@ -267,11 +578,56 @@ impl ControllerPushTarget {
 
     pub(crate) fn apply_notification(&self, method: &str, params: &serde_json::Value) -> bool {
         if matches!(method, "controller.state" | "controller.event")
-            && params.get("kind").and_then(serde_json::Value::as_str)
-                == Some("peripherals.changed")
+            && params.get("kind").and_then(serde_json::Value::as_str) == Some("emergency_stop")
+        {
+            let active = params.get("state").and_then(|state| {
+                state.as_bool().or_else(|| {
+                    state
+                        .as_str()
+                        .and_then(|state| state.trim().parse::<bool>().ok())
+                })
+            });
+            if let (Some(active), Some(estop)) = (active, self.estop_active.upgrade()) {
+                let changed = estop.swap(active, Ordering::SeqCst) != active;
+                if active && let Some(is_playing) = self.is_playing.upgrade() {
+                    is_playing.store(false, Ordering::SeqCst);
+                }
+                return changed;
+            }
+        }
+        if matches!(method, "controller.state" | "controller.event")
+            && matches!(
+                params.get("kind").and_then(serde_json::Value::as_str),
+                Some("peripherals.changed" | "melodies.changed")
+            )
         {
             if let Some(refresh) = self.catalog_refresh_requested.upgrade() {
                 refresh.store(true, Ordering::Relaxed);
+                return true;
+            }
+        }
+        if matches!(method, "controller.state" | "controller.event")
+            && params.get("kind").and_then(serde_json::Value::as_str) == Some("macro.recording")
+        {
+            // The event is edge-triggered; the authoritative sequence preview
+            // lives in controller.snapshot. Coalesce bursts through the
+            // existing refresh flag instead of opening another transport.
+            if let Some(refresh) = self.catalog_refresh_requested.upgrade() {
+                refresh.store(true, Ordering::Relaxed);
+                return true;
+            }
+        }
+        if matches!(method, "controller.state" | "controller.event")
+            && params
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| kind.starts_with("rf.learn."))
+        {
+            // PCController publishes RF learning lifecycle/capture events.
+            // Consume those edges in the app loop and fetch one authoritative
+            // board catalog instead of polling while the dialog is open.
+            if let Some(refresh) = self.rf_catalog_refresh_requested.upgrade() {
+                refresh.store(true, Ordering::Release);
                 return true;
             }
         }
@@ -285,11 +641,37 @@ impl ControllerPushTarget {
             return false;
         };
         match method {
-            "controller.status" => capabilities.apply_status_notification(params),
+            "controller.status" => {
+                // A status push proves that the coordinator can hear the board,
+                // but it does not carry the board identity or capability
+                // catalog.  After a disconnect, publishing it as connected here
+                // creates a short, contradictory UI frame: connected=true with
+                // an empty name and zero controls.  Keep the cached board
+                // unavailable until the engine atomically installs the complete
+                // authoritative snapshot requested below.
+                if !capabilities.board_connected {
+                    if let Some(refresh) = self.catalog_refresh_requested.upgrade() {
+                        refresh.store(true, Ordering::Relaxed);
+                    }
+                    false
+                } else {
+                    capabilities.apply_status_notification(params)
+                }
+            }
             "controller.state" | "controller.event" => {
                 capabilities.apply_state_notification(params)
             }
-            "controller.error" => capabilities.mark_board_disconnected(),
+            "controller.error" => {
+                // The coordinator transport can remain healthy while its board
+                // disappears (USB reset, cable fault, firmware reboot). Mark
+                // the cached board state unavailable immediately, but also
+                // request an authoritative refresh so recovery is discovered
+                // without restarting Pealayer or waiting for the slow baseline.
+                if let Some(refresh) = self.catalog_refresh_requested.upgrade() {
+                    refresh.store(true, Ordering::Relaxed);
+                }
+                capabilities.mark_board_disconnected()
+            }
             _ => false,
         }
     }
@@ -332,14 +714,13 @@ fn should_yield_direct_transport(
     is_direct && !diagnostic_override && coordinator_reachable
 }
 
-fn controller_method_is_unavailable(error: &str) -> bool {
-    let error = error.to_ascii_lowercase();
-    error.contains("-32601") || error.contains("method not found") || error.contains("unknown method")
-}
-
 pub fn spawn_engine() -> EngineHandle {
+    if crate::peer::active() { return spawn_peer_engine(); }
     let lifecycle = Arc::new(());
     let playback_time_ms = Arc::new(AtomicU64::new(0));
+    let media_playback = Arc::new(Mutex::new(super::media_sync::PlaybackSample::default()));
+    let prepared_timeline=Arc::new(Mutex::new(super::media_timeline::PreparedTimeline::default()));
+    let media_clock_owned=Arc::new(AtomicBool::new(false));
     let is_playing = Arc::new(AtomicBool::new(false));
     let estop_active = Arc::new(AtomicBool::new(false));
     let connection_requested = Arc::new(AtomicBool::new(false));
@@ -352,8 +733,12 @@ pub fn spawn_engine() -> EngineHandle {
     let hardware_capabilities = Arc::new(Mutex::new(None));
     let controller_call_results = Arc::new(Mutex::new(std::collections::VecDeque::new()));
     let catalog_refresh_requested = Arc::new(AtomicBool::new(false));
+    let rf_catalog_refresh_requested = Arc::new(AtomicBool::new(false));
+    let state_notifier = Arc::new(Mutex::new(None));
 
     let (tx, rx) = mpsc::channel();
+    super::media_sync::spawn(Arc::downgrade(&lifecycle), Arc::clone(&media_playback),
+        Arc::clone(&is_connected), Arc::clone(&serial_port),Arc::clone(&prepared_timeline));
 
     let engine_time = Arc::clone(&playback_time_ms);
     let engine_playing = Arc::clone(&is_playing);
@@ -366,6 +751,7 @@ pub fn spawn_engine() -> EngineHandle {
     let engine_capabilities = Arc::clone(&hardware_capabilities);
     let engine_controller_call_results = Arc::clone(&controller_call_results);
     let engine_catalog_refresh_requested = Arc::clone(&catalog_refresh_requested);
+    let engine_state_notifier = Arc::clone(&state_notifier);
 
     thread::spawn(move || {
         let mut queue: Vec<CompiledAction> = Vec::new();
@@ -376,6 +762,7 @@ pub fn spawn_engine() -> EngineHandle {
         let mut current_controller_strip_effect_index = 0;
         let mut active_strip_effect: Option<String> = None;
         let mut analog_tracks: Vec<crate::four_d::curve::AnalogTrack> = Vec::new();
+        let mut direct_pwm_cues: Vec<CompiledDirectPwmCue> = Vec::new();
         let mut last_pwm_values = [0u8; 16];
         let mut was_playing = false;
         let mut was_estop = false;
@@ -383,11 +770,12 @@ pub fn spawn_engine() -> EngineHandle {
         let mut last_owner_check = std::time::Instant::now();
         let mut last_capability_refresh = std::time::Instant::now();
         let mut last_connect_attempt: Option<std::time::Instant> = None;
+        let mut pending_controller_intents = PendingControllerIntents::default();
 
         let mut active_transport: Option<HardwareTransport> = None;
 
         loop {
-            let estop_now = engine_estop.load(Ordering::Relaxed);
+            let estop_now = engine_estop.load(Ordering::SeqCst);
             let requested = engine_connection_requested.load(Ordering::Relaxed);
             let mut connected = active_transport.is_some();
             engine_connected.store(connected, Ordering::Relaxed);
@@ -430,10 +818,7 @@ pub fn spawn_engine() -> EngineHandle {
                 match transport {
                     Ok(transport) => {
                         let description = transport.description();
-                        println!(
-                            "[Engine] Connected hardware transport: {}",
-                            description
-                        );
+                        println!("[Engine] Connected hardware transport: {}", description);
                         if let Ok(mut guard) = engine_transport_description.lock() {
                             *guard = Some(description);
                         }
@@ -444,6 +829,9 @@ pub fn spawn_engine() -> EngineHandle {
                                     if let Ok(mut guard) = engine_capabilities.lock() {
                                         *guard = capabilities;
                                     }
+                                    if let Ok(mut guard) = engine_conn_error.lock() {
+                                        *guard = None;
+                                    }
                                 }
                                 Err(error) => {
                                     if let Ok(mut guard) = engine_conn_error.lock() {
@@ -451,6 +839,10 @@ pub fn spawn_engine() -> EngineHandle {
                                             "connected, but capability discovery failed: {error}"
                                         ));
                                     }
+                                    engine_connected.store(false, Ordering::Relaxed);
+                                    connected = false;
+                                    active_transport = None;
+                                    continue;
                                 }
                             }
                             // A coordinator-side renderer can outlive a dropped
@@ -458,18 +850,56 @@ pub fn spawn_engine() -> EngineHandle {
                             // strip state; playback will issue the next cue.
                             let _ = transport.call_controller(
                                 "controller.command.execute",
-                                serde_json::json!({"command": "strip stop"}),
+                                serde_json::json!({"command": "effect stop"}),
                             );
+                            if matches!(transport, HardwareTransport::Controller(_)) {
+                                let local_active = engine_estop.load(Ordering::SeqCst);
+                                match transport
+                                    .call_controller("controller.estop.get", serde_json::json!({}))
+                                {
+                                    Ok(state)
+                                        if state
+                                            .get("active")
+                                            .and_then(serde_json::Value::as_bool)
+                                            == Some(true) =>
+                                    {
+                                        engine_estop.store(true, Ordering::SeqCst);
+                                        engine_playing.store(false, Ordering::SeqCst);
+                                    }
+                                    Ok(_) if local_active => {
+                                        if let Err(error) = transport.call_controller(
+                                            "controller.estop.set",
+                                            serde_json::json!({
+                                                "active": true,
+                                                "source": "pealayer",
+                                                "reason": "reassert local E-STOP after reconnect",
+                                            }),
+                                        ) && let Ok(mut guard) = engine_conn_error.lock()
+                                        {
+                                            *guard = Some(format!(
+                                                "synchronize PCController E-STOP: {error}"
+                                            ));
+                                        }
+                                    }
+                                    Ok(_) => {}
+                                    Err(error) => {
+                                        if let Ok(mut guard) = engine_conn_error.lock() {
+                                            *guard =
+                                                Some(format!("read PCController E-STOP: {error}"));
+                                        }
+                                    }
+                                }
+                            }
                             active_strip_effect = None;
                         }
                         engine_connected.store(true, Ordering::Relaxed);
                         connected = true;
                         let estop_reassert_error = engine_estop
-                            .load(Ordering::Relaxed)
+                            .load(Ordering::SeqCst)
                             .then(|| {
                                 active_transport
                                     .as_mut()
-                                    .and_then(|transport| transport.send(Command::AllOff).err())
+                                    .and_then(|transport| enforce_emergency_stop(transport).err())
                             })
                             .flatten();
                         if let Some(error) = estop_reassert_error {
@@ -505,11 +935,11 @@ pub fn spawn_engine() -> EngineHandle {
                 if let Some(ref mut transport) = active_transport {
                     let _ = transport.call_controller(
                         "controller.command.execute",
-                        serde_json::json!({"command": "macro cancel"}),
+                        serde_json::json!({"command": "effect cancel"}),
                     );
                     let _ = transport.call_controller(
                         "controller.command.execute",
-                        serde_json::json!({"command": "strip stop"}),
+                        serde_json::json!({"command": "effect stop"}),
                     );
                     let _ = transport.send(Command::AllOff);
                 }
@@ -526,7 +956,33 @@ pub fn spawn_engine() -> EngineHandle {
                 println!("[Engine] Disconnected hardware transport");
             }
 
+            if estop_now && !was_estop {
+                // Never let an intent accepted before E-STOP execute after the
+                // emergency release. Fresh input is evaluated against the
+                // latched safety state below.
+                pending_controller_intents.clear();
+                last_pwm_values.fill(0);
+                active_strip_effect = None;
+                if connected {
+                    if let Some(ref mut transport) = active_transport
+                        && let Err(error) = enforce_emergency_stop(transport)
+                        && let Ok(mut guard) = engine_conn_error.lock()
+                    {
+                        *guard = Some(format!("emergency stop: {error}"));
+                    }
+                    let port_name = {
+                        let guard = engine_port.lock().unwrap();
+                        guard.clone()
+                    };
+                    println!("[{}] ALL_OFF + MOTION_STOP (E-STOP)", port_name);
+                }
+            }
+            was_estop = estop_now;
+
             // Check for new messages (non-blocking)
+            // Evaluate after connection changes, including the first connect.
+            let coordinator_timeline = active_transport.as_ref()
+                .is_some_and(|transport| !transport.is_direct_serial());
             let mut channel_disconnected = false;
             loop {
                 let msg = match rx.try_recv() {
@@ -546,33 +1002,25 @@ pub fn spawn_engine() -> EngineHandle {
                     EngineMessage::UpdateControllerMacros(new_queue) => {
                         controller_macros = new_queue;
                         let current_time = engine_time.load(Ordering::Relaxed);
-                        current_controller_macro_index = controller_macros
-                            .partition_point(|cue| cue.time_ms < current_time);
+                        current_controller_macro_index =
+                            controller_macros.partition_point(|cue| cue.time_ms < current_time);
                     }
                     EngineMessage::UpdateControllerStripEffects(new_queue) => {
                         let current_time = engine_time.load(Ordering::Relaxed);
-                        let playing = engine_playing.load(Ordering::Relaxed);
+                        let playing = engine_playing.load(Ordering::Relaxed)
+                            && !engine_estop.load(Ordering::SeqCst);
                         let desired = playing
                             .then(|| active_controller_strip_effect_at(&new_queue, current_time))
                             .flatten()
                             .map(str::to_owned);
-                        if active_strip_effect != desired {
+                        if !coordinator_timeline && active_strip_effect != desired {
                             if let Some(ref mut transport) = active_transport {
-                                if active_strip_effect.is_some() {
-                                    let _ = transport.call_controller(
-                                        "controller.command.execute",
-                                        serde_json::json!({"command": "strip stop"}),
-                                    );
+                                if let Some(id) = active_strip_effect.as_deref() {
+                                    let _ = stop_controller_effect(transport, id);
                                 }
                                 active_strip_effect = None;
                                 if let Some(id) = desired.as_deref() {
-                                    if transport
-                                        .call_controller(
-                                            "controller.command.execute",
-                                            serde_json::json!({"command": format!("strip effect play {id}")}),
-                                        )
-                                        .is_ok()
-                                    {
+                                    if play_controller_effect(transport, id).is_ok() {
                                         active_strip_effect = Some(id.to_string());
                                     }
                                 }
@@ -591,7 +1039,14 @@ pub fn spawn_engine() -> EngineHandle {
                         analog_tracks = tracks;
                         last_pwm_values.fill(0);
                     }
+                    EngineMessage::UpdateDirectPwmCues(cues) => {
+                        direct_pwm_cues = cues;
+                        last_pwm_values.fill(0);
+                    }
                     EngineMessage::LiveActuatorOverride { channel, value } => {
+                        if engine_estop.load(Ordering::SeqCst) {
+                            continue;
+                        }
                         let ch = channel as usize;
                         if ch < 16 && value != last_pwm_values[ch] {
                             last_pwm_values[ch] = value;
@@ -617,16 +1072,15 @@ pub fn spawn_engine() -> EngineHandle {
                     EngineMessage::Seek(time) => {
                         let resume_strip = engine_playing.load(Ordering::Relaxed)
                             && !engine_estop.load(Ordering::Relaxed);
-                        if connected {
+                        if connected && !coordinator_timeline {
                             if let Some(ref mut transport) = active_transport {
                                 let _ = transport.call_controller(
                                     "controller.command.execute",
-                                    serde_json::json!({"command": "macro cancel"}),
+                                    serde_json::json!({"command": "effect cancel"}),
                                 );
-                                let _ = transport.call_controller(
-                                    "controller.command.execute",
-                                    serde_json::json!({"command": "strip stop"}),
-                                );
+                                if let Some(id) = active_strip_effect.as_deref() {
+                                    let _ = stop_controller_effect(transport, id);
+                                }
                                 active_strip_effect = None;
                                 if let Err(e) = transport.send(Command::AllOff) {
                                     if let Ok(mut guard) = engine_conn_error.lock() {
@@ -638,13 +1092,7 @@ pub fn spawn_engine() -> EngineHandle {
                                         &controller_strip_effects,
                                         time,
                                     ) {
-                                        if transport
-                                            .call_controller(
-                                                "controller.command.execute",
-                                                serde_json::json!({"command": format!("strip effect play {id}")}),
-                                            )
-                                            .is_ok()
-                                        {
+                                        if play_controller_effect(transport, id).is_ok() {
                                             active_strip_effect = Some(id.to_string());
                                         }
                                     }
@@ -667,6 +1115,11 @@ pub fn spawn_engine() -> EngineHandle {
                         last_pwm_values.fill(0);
                     }
                     EngineMessage::SendCommand(cmd) => {
+                        if engine_estop.load(Ordering::SeqCst)
+                            && !matches!(cmd, Command::Ping | Command::AllOff)
+                        {
+                            continue;
+                        }
                         if connected {
                             if let Some(ref mut transport) = active_transport {
                                 if let Err(e) = transport.send(cmd) {
@@ -678,7 +1131,48 @@ pub fn spawn_engine() -> EngineHandle {
                             }
                         }
                     }
+                    EngineMessage::ReconfigureEndpoint { endpoint, connect } => {
+                        pending_controller_intents.clear();
+                        if let Some(ref mut transport) = active_transport {
+                            let _ = transport.call_controller(
+                                "controller.command.execute",
+                                serde_json::json!({"command": "effect cancel"}),
+                            );
+                            if let Some(id) = active_strip_effect.as_deref() {
+                                let _ = stop_controller_effect(transport, id);
+                            }
+                            let _ = transport.send(Command::AllOff);
+                        }
+                        active_transport = None;
+                        active_strip_effect = None;
+                        connected = false;
+                        engine_connected.store(false, Ordering::Relaxed);
+                        if let Ok(mut guard) = engine_transport_description.lock() {
+                            *guard = None;
+                        }
+                        if let Ok(mut guard) = engine_capabilities.lock() {
+                            *guard = None;
+                        }
+                        if let Ok(mut guard) = engine_port.lock() {
+                            *guard = endpoint;
+                        }
+                        engine_connection_requested.store(connect, Ordering::Relaxed);
+                        last_connect_attempt = None;
+                    }
+                    EngineMessage::ReplyControllerCall { method, params, reply } => {
+                        let result = if engine_estop.load(Ordering::SeqCst) && !controller_call_allowed_during_estop(&method, &params) {
+                            Err("hardware command blocked while E-STOP is active".to_string())
+                        } else {
+                            active_transport.as_mut().ok_or_else(|| "PCController is not connected".to_string()).and_then(|transport| transport.call_controller(&method, params))
+                        };
+                        let _ = reply.send(result);
+                    }
                     EngineMessage::ControllerCall { method, params } => {
+                        if engine_estop.load(Ordering::SeqCst)
+                            && !controller_call_allowed_during_estop(&method, &params)
+                        {
+                            continue;
+                        }
                         if connected {
                             if let Some(ref mut transport) = active_transport {
                                 if let Err(error) = transport.call_controller(&method, params) {
@@ -695,7 +1189,11 @@ pub fn spawn_engine() -> EngineHandle {
                         method,
                         params,
                     } => {
-                        let result = if connected {
+                        let result = if engine_estop.load(Ordering::SeqCst)
+                            && !controller_call_allowed_during_estop(&method, &params)
+                        {
+                            Err("hardware command blocked while E-STOP is active".to_string())
+                        } else if connected {
                             active_transport
                                 .as_mut()
                                 .ok_or_else(|| "PCController transport is unavailable".to_string())
@@ -703,6 +1201,16 @@ pub fn spawn_engine() -> EngineHandle {
                         } else {
                             Err("PCController is not connected".to_string())
                         };
+                        if let Err(error) = &result
+                            && controller_wire_failed(error)
+                        {
+                            if let Ok(mut guard) = engine_conn_error.lock() {
+                                *guard = Some(format!("{method}: {error}"));
+                            }
+                            // The shared cleanup below drops the stale stream;
+                            // normal connection recovery obtains a new one.
+                            engine_connected.store(false, Ordering::Relaxed);
+                        }
                         if result.is_ok()
                             && matches!(operation.as_str(), "macro-save" | "macro-discard")
                         {
@@ -712,90 +1220,59 @@ pub fn spawn_engine() -> EngineHandle {
                             results.push_back(ControllerCallResult { operation, result });
                         }
                     }
-                    EngineMessage::InvokeControllerAction { action_id } => {
-                        if connected {
-                            if let Some(ref mut transport) = active_transport {
-                                match transport.call_controller(
-                                    "controller.action.invoke",
-                                    serde_json::json!({"action_id": action_id}),
-                                ) {
-                                    Ok(_) => {
-                                        // Pull an authoritative snapshot immediately. Push
-                                        // events remain the lowest-latency path, while this
-                                        // closes the race for coordinators that do not emit
-                                        // state changes for semantic actions yet.
-                                        engine_catalog_refresh_requested
-                                            .store(true, Ordering::Relaxed);
-                                    }
-                                    Err(error) => {
-                                        if let Ok(mut guard) = engine_conn_error.lock() {
-                                            *guard = Some(format!("invoke controller action: {error}"));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    EngineMessage::UpdatePeripheralPresentation {
-                        key,
-                        name,
-                        icon,
-                        group,
-                        expected_revision,
-                        fallback_names,
+                    EngineMessage::CoalescedControllerIntent {
+                        created: _,
+                        control_key,
+                        method,
+                        params,
+                        refresh_catalog,
                     } => {
-                        if connected {
-                            if let Some(ref mut transport) = active_transport {
-                                let mut params = serde_json::Map::new();
-                                params.insert("key".to_string(), serde_json::Value::String(key));
-                                if let Some(name) = name {
-                                    params.insert("name".to_string(), serde_json::Value::String(name));
-                                }
-                                if let Some(icon) = icon {
-                                    params.insert("icon".to_string(), serde_json::Value::String(icon));
-                                }
-                                if let Some(group) = group {
-                                    params.insert("group".to_string(), serde_json::Value::String(group));
-                                }
-                                if let Some(revision) = expected_revision {
-                                    params.insert(
-                                        "expected_revision".to_string(),
-                                        serde_json::Value::String(revision),
-                                    );
-                                }
-                                let update = transport.call_controller(
-                                    "controller.peripheral.presentation.update",
-                                    serde_json::Value::Object(params),
-                                );
-                                let update = match update {
-                                    Err(error) if controller_method_is_unavailable(&error) => {
-                                        transport.call_controller(
-                                            "controller.peripherals.set",
-                                            serde_json::json!({"peripheral_names": fallback_names}),
-                                        )
-                                    }
-                                    result => result,
-                                };
-                                match update {
-                                    Ok(_) => {
-                                        engine_catalog_refresh_requested
-                                            .store(true, Ordering::Relaxed);
-                                    }
-                                    Err(error) => {
-                                        if let Ok(mut guard) = engine_conn_error.lock() {
-                                            *guard = Some(format!(
-                                                "update peripheral presentation: {error}"
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        pending_controller_intents.replace(
+                            control_key,
+                            method,
+                            params,
+                            refresh_catalog,
+                        );
                     }
                 }
             }
             if channel_disconnected {
                 break;
+            }
+
+            // Dispatch at most one acknowledged live-control RPC per engine
+            // pass. All input above is drained and coalesced first, so a slow
+            // PCController/board can delay one in-flight call but can never
+            // create a stale command train that starves feedback and recovery.
+            if let Some((control_key, intent)) = pending_controller_intents.pop_front() {
+                if engine_estop.load(Ordering::SeqCst)
+                    && !controller_call_allowed_during_estop(&intent.method, &intent.params)
+                {
+                    if let Ok(mut guard) = engine_conn_error.lock() {
+                        *guard = Some(format!(
+                            "controller intent for {control_key} blocked while E-STOP is active"
+                        ));
+                    }
+                } else if connected
+                    && let Some(ref mut transport) = active_transport
+                {
+                    match transport.call_controller(&intent.method, intent.params) {
+                        Ok(_) if intent.refresh_catalog => {
+                            // Push events remain the lowest-latency path. The
+                            // authoritative pull self-corrects a dropped or
+                            // reordered event on the current contract.
+                            engine_catalog_refresh_requested.store(true, Ordering::Relaxed);
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            if let Ok(mut guard) = engine_conn_error.lock() {
+                                *guard = Some(format!(
+                                    "apply controller intent for {control_key}: {error}"
+                                ));
+                            }
+                        }
+                    }
+                }
             }
 
             if !engine_connected.load(Ordering::Relaxed) && active_transport.is_some() {
@@ -849,13 +1326,25 @@ pub fn spawn_engine() -> EngineHandle {
             // Clearing the flag before a connection exists can lose a
             // peripherals.changed notification and makes reconnection retain a
             // stale controller catalog.
-            let catalog_refresh_requested = connected
-                && engine_catalog_refresh_requested.swap(false, Ordering::Relaxed);
+            let catalog_refresh_requested =
+                connected && engine_catalog_refresh_requested.swap(false, Ordering::Relaxed);
+            let board_recovery_due = connected
+                && engine_capabilities
+                    .lock()
+                    .ok()
+                    .and_then(|capabilities| {
+                        capabilities
+                            .as_ref()
+                            .map(|capabilities| !capabilities.board_connected)
+                    })
+                    .unwrap_or(false)
+                && last_capability_refresh.elapsed() >= Duration::from_secs(2);
             if connected
                 // Live relay, telemetry, and status-LED changes arrive on the
                 // controller WebSocket. This slow refresh is only a recovery
                 // baseline for catalog/config changes or a missed push epoch.
                 && (catalog_refresh_requested
+                    || board_recovery_due
                     || last_capability_refresh.elapsed() >= Duration::from_secs(30))
                 && active_transport
                     .as_ref()
@@ -865,38 +1354,58 @@ pub fn spawn_engine() -> EngineHandle {
                 if let Some(ref mut transport) = active_transport {
                     match transport.refresh_capabilities() {
                         Ok(capabilities) => {
+                            let board_connected = capabilities
+                                .as_ref()
+                                .is_some_and(|capabilities| capabilities.board_connected);
                             if let Ok(mut guard) = engine_capabilities.lock() {
                                 let mut capabilities = capabilities;
                                 if let (Some(current), Some(ref mut refreshed)) =
                                     (guard.as_ref(), capabilities.as_mut())
                                 {
-                                    refreshed.preserve_newer_live_led_from(current);
+                                    refreshed.preserve_newer_live_state_from(current);
                                 }
                                 *guard = capabilities;
                             }
+                            if board_connected {
+                                if let Ok(mut guard) = engine_conn_error.lock() {
+                                    *guard = None;
+                                }
+                            }
                         }
                         Err(error) => {
+                            if controller_wire_failed(&error) {
+                                engine_connected.store(false, Ordering::Relaxed);
+                            }
                             if let Ok(mut guard) = engine_conn_error.lock() {
                                 *guard =
                                     Some(format!("refresh PCController capabilities: {error}"));
                             }
-                            engine_connected.store(false, Ordering::Relaxed);
                         }
                     }
+                    // Push notifications request discovery before its result
+                    // exists. Wake every interface after installing that result
+                    // too; otherwise a paused/idle GUI and its cached Web state
+                    // can remain one captured edge behind indefinitely.
+                    notify_state_change(&engine_state_notifier);
                 }
             }
 
+            let estop_now = engine_estop.load(Ordering::SeqCst);
             if estop_now && !was_estop {
                 last_pwm_values.fill(0);
+                active_strip_effect = None;
                 if connected {
-                    if let Some(ref mut transport) = active_transport {
-                        let _ = transport.send(Command::AllOff);
+                    if let Some(ref mut transport) = active_transport
+                        && let Err(error) = enforce_emergency_stop(transport)
+                        && let Ok(mut guard) = engine_conn_error.lock()
+                    {
+                        *guard = Some(format!("emergency stop: {error}"));
                     }
                     let port_name = {
                         let guard = engine_port.lock().unwrap();
                         guard.clone()
                     };
-                    println!("[{}] ALL_OFF (E-STOP)", port_name);
+                    println!("[{}] ALL_OFF + MOTION_STOP (E-STOP)", port_name);
                 }
             }
             was_estop = estop_now;
@@ -904,17 +1413,17 @@ pub fn spawn_engine() -> EngineHandle {
             let is_playing_now = engine_playing.load(Ordering::Relaxed) && !estop_now;
 
             // Handle pause state transition
-            if was_playing && !is_playing_now {
+            if !coordinator_timeline && was_playing && !is_playing_now {
                 last_pwm_values.fill(0);
                 if connected {
                     if let Some(ref mut transport) = active_transport {
                         let _ = transport.call_controller(
                             "controller.command.execute",
-                            serde_json::json!({"command": "macro cancel"}),
+                            serde_json::json!({"command": "effect cancel"}),
                         );
                         let _ = transport.call_controller(
                             "controller.command.execute",
-                            serde_json::json!({"command": "strip stop"}),
+                            serde_json::json!({"command": "effect stop"}),
                         );
                         active_strip_effect = None;
                         let _ = transport.send(Command::AllOff);
@@ -926,41 +1435,30 @@ pub fn spawn_engine() -> EngineHandle {
                     println!("[{}] ALL_OFF (Pause)", port_name);
                 }
             }
-            if !was_playing && is_playing_now {
+            if !coordinator_timeline && !was_playing && is_playing_now {
                 let current_time = engine_time.load(Ordering::Relaxed);
-                let desired = active_controller_strip_effect_at(
-                    &controller_strip_effects,
-                    current_time,
-                )
-                .map(str::to_owned);
+                let desired =
+                    active_controller_strip_effect_at(&controller_strip_effects, current_time)
+                        .map(str::to_owned);
                 if active_strip_effect != desired {
                     if let Some(ref mut transport) = active_transport {
-                        if active_strip_effect.is_some() {
-                            let _ = transport.call_controller(
-                                "controller.command.execute",
-                                serde_json::json!({"command": "strip stop"}),
-                            );
+                        if let Some(id) = active_strip_effect.as_deref() {
+                            let _ = stop_controller_effect(transport, id);
                         }
                         active_strip_effect = None;
                         if let Some(id) = desired.as_deref() {
-                            if transport
-                                .call_controller(
-                                    "controller.command.execute",
-                                    serde_json::json!({"command": format!("strip effect play {id}")}),
-                                )
-                                .is_ok()
-                            {
+                            if play_controller_effect(transport, id).is_ok() {
                                 active_strip_effect = Some(id.to_string());
                             }
                         }
                     }
                 }
-                current_controller_strip_effect_index = controller_strip_effects
-                    .partition_point(|cue| cue.time_ms <= current_time);
+                current_controller_strip_effect_index =
+                    controller_strip_effects.partition_point(|cue| cue.time_ms <= current_time);
             }
             was_playing = is_playing_now;
 
-            if is_playing_now {
+            if !coordinator_timeline && is_playing_now {
                 let current_time = engine_time.load(Ordering::Relaxed);
 
                 while current_controller_macro_index < controller_macros.len() {
@@ -970,13 +1468,16 @@ pub fn spawn_engine() -> EngineHandle {
                     }
                     if connected {
                         if let Some(ref mut transport) = active_transport {
-                            let command = format!("macro play {} {}", cue.id, cue.mode);
+                            let command = format!("effect play {} {}", cue.id, cue.mode);
                             if let Err(error) = transport.call_controller(
                                 "controller.command.execute",
                                 serde_json::json!({"command": command}),
                             ) {
                                 if let Ok(mut guard) = engine_conn_error.lock() {
-                                    *guard = Some(format!("start controller macro {}: {error}", cue.id));
+                                    *guard = Some(format!(
+                                        "start controller effect {}: {error}",
+                                        cue.id
+                                    ));
                                 }
                                 engine_connected.store(false, Ordering::Relaxed);
                             }
@@ -992,21 +1493,18 @@ pub fn spawn_engine() -> EngineHandle {
                     }
                     if connected {
                         if let Some(ref mut transport) = active_transport {
-                            if !cue.start
-                                && active_strip_effect.as_deref() != Some(cue.id.as_str())
+                            if !cue.start && active_strip_effect.as_deref() != Some(cue.id.as_str())
                             {
                                 current_controller_strip_effect_index += 1;
                                 continue;
                             }
-                            let command = if cue.start {
-                                format!("strip effect play {}", cue.id)
+                            let reference = cue.id.clone();
+                            let result = if cue.start {
+                                play_controller_effect(transport, &reference)
                             } else {
-                                "strip stop".to_string()
+                                stop_controller_effect(transport, &reference)
                             };
-                            if let Err(error) = transport.call_controller(
-                                "controller.command.execute",
-                                serde_json::json!({"command": command}),
-                            ) {
+                            if let Err(error) = result {
                                 if let Ok(mut guard) = engine_conn_error.lock() {
                                     *guard = Some(format!(
                                         "{} strip effect {}: {error}",
@@ -1055,17 +1553,50 @@ pub fn spawn_engine() -> EngineHandle {
                     }
                 }
 
-                // Evaluate continuous analog curves
-                for track in &analog_tracks {
-                    if track.enabled && !track.muted && (track.channel as usize) < 16 {
-                        let ch = track.channel as usize;
-                        let val = track.evaluate_u8(current_time);
+                // Evaluate continuous analog curves. Muting or soloing must
+                // actively transmit zero once; merely skipping a track leaves
+                // the physical PWM output latched at its previous value.
+                let analog_solo_active = analog_tracks
+                    .iter()
+                    .any(|track| track.enabled && track.soloed);
+                let pwm_channels = analog_tracks
+                    .iter()
+                    .map(|track| track.channel)
+                    .chain(direct_pwm_cues.iter().map(|cue| cue.channel))
+                    .collect::<std::collections::BTreeSet<_>>();
+                for channel in pwm_channels {
+                    if (channel as usize) < 16 {
+                        let ch = channel as usize;
+                        // Direct value cues are layered in timeline order and
+                        // temporarily override a curve. When the interval ends,
+                        // the underlying curve (or zero) is restored.
+                        let direct = direct_pwm_cues.iter().rev().find(|cue| {
+                            cue.channel == channel
+                                && current_time >= cue.start_time_ms
+                                && current_time < cue.end_time_ms
+                        });
+                        let val = direct.map(|cue| {
+                            ((u32::from(cue.value_basis_points) * 255 + 5_000) / 10_000) as u8
+                        }).unwrap_or_else(|| {
+                            analog_tracks
+                                .iter()
+                                .rev()
+                                .find(|track| track.channel == channel)
+                                .map(|track| {
+                                    if track.allows_output(analog_solo_active) {
+                                        track.evaluate_u8(current_time)
+                                    } else {
+                                        0
+                                    }
+                                })
+                                .unwrap_or(0)
+                        });
                         if val != last_pwm_values[ch] {
                             last_pwm_values[ch] = val;
                             if connected {
                                 if let Some(ref mut transport) = active_transport {
                                     let cmd = Command::PwmSet {
-                                        channel: track.channel,
+                                        channel,
                                         value: val,
                                     };
                                     if let Err(e) = transport.send(cmd) {
@@ -1101,6 +1632,9 @@ pub fn spawn_engine() -> EngineHandle {
     EngineHandle {
         lifecycle,
         playback_time_ms,
+        media_playback,
+        prepared_timeline,
+        media_clock_owned,
         is_playing,
         estop_active,
         connection_requested,
@@ -1111,6 +1645,8 @@ pub fn spawn_engine() -> EngineHandle {
         hardware_capabilities,
         controller_call_results,
         catalog_refresh_requested,
+        rf_catalog_refresh_requested,
+        state_notifier,
         sender: tx,
     }
 }
@@ -1156,6 +1692,7 @@ pub fn compile_timeline(
         // Evaluate desired state based on Z-Index
         for relay_id in relay_ids.iter().copied() {
             let mut desired_state = false;
+            let mut has_active_state = false;
 
             let is_ignored = muted.contains(&relay_id) || (has_solo && !soloed.contains(&relay_id));
 
@@ -1189,6 +1726,7 @@ pub fn compile_timeline(
 
                             if let Some(state) = latest_action_state {
                                 desired_state = state;
+                                has_active_state = true;
                                 break; // Stop looking at lower layers
                             }
                         }
@@ -1196,11 +1734,11 @@ pub fn compile_timeline(
                 }
             }
 
-            if desired_state
-                != current_relay_states
-                    .get(&relay_id)
-                    .copied()
-                    .unwrap_or(false)
+            // `Off` is an authored command too. Treat the first sampled state
+            // as unknown rather than assuming the physical relay is already
+            // off, otherwise a standalone Off cue would compile to nothing.
+            if (has_active_state || current_relay_states.contains_key(&relay_id))
+                && current_relay_states.get(&relay_id).copied() != Some(desired_state)
             {
                 compiled.push(CompiledAction {
                     time_ms: t,
@@ -1215,6 +1753,115 @@ pub fn compile_timeline(
     compiled
 }
 
+pub fn compile_direct_pwm_cues(timeline: &Timeline) -> Vec<CompiledDirectPwmCue> {
+    timeline
+        .instances
+        .iter()
+        .filter_map(|instance| {
+            let effect = timeline
+                .templates
+                .iter()
+                .find(|template| template.id == instance.effect_id)?;
+            let direct = effect.direct_control.as_ref()?;
+            let channel = direct
+                .control_key
+                .strip_prefix("pwm.")?
+                .parse::<u8>()
+                .ok()?;
+            if channel >= 16
+                || !timeline
+                    .track_state(&crate::four_d::models::hardware_timeline_track_key(
+                        &direct.control_key,
+                    ))
+                    .linked
+            {
+                return None;
+            }
+            Some(CompiledDirectPwmCue {
+                start_time_ms: instance.start_time_ms,
+                end_time_ms: instance.start_time_ms.saturating_add(effect.duration_ms),
+                channel,
+                value_basis_points: direct.value_basis_points,
+            })
+        })
+        .collect()
+}
+
+fn spawn_peer_engine() -> EngineHandle {
+    let lifecycle=Arc::new(());
+    let (tx,rx)=mpsc::channel();
+    let handle=EngineHandle {
+        lifecycle:lifecycle.clone(),playback_time_ms:Arc::new(AtomicU64::new(0)),media_playback:Arc::new(Mutex::new(super::media_sync::PlaybackSample::default())),
+        prepared_timeline:Arc::new(Mutex::new(super::media_timeline::PreparedTimeline::default())),media_clock_owned:Arc::new(AtomicBool::new(false)),
+        is_playing:Arc::new(AtomicBool::new(false)),estop_active:Arc::new(AtomicBool::new(false)),connection_requested:Arc::new(AtomicBool::new(true)),is_connected:Arc::new(AtomicBool::new(false)),
+        serial_port:Arc::new(Mutex::new(crate::peer::client().unwrap().origin.to_string())),active_transport:Arc::new(Mutex::new(Some("pealayer:remote".into()))),
+        connection_error:Arc::new(Mutex::new(None)),hardware_capabilities:Arc::new(Mutex::new(None)),controller_call_results:Arc::new(Mutex::new(VecDeque::new())),
+        catalog_refresh_requested:Arc::new(AtomicBool::new(false)),rf_catalog_refresh_requested:Arc::new(AtomicBool::new(false)),state_notifier:Arc::new(Mutex::new(None)),sender:tx,
+    };
+    let owner=Arc::downgrade(&lifecycle);
+    let capabilities=handle.hardware_capabilities.clone();
+    let connected=handle.is_connected.clone();
+    let estop=handle.estop_active.clone();
+    let results=handle.controller_call_results.clone();
+    let errors=handle.connection_error.clone();
+    let notifier=handle.state_notifier.clone();
+    thread::spawn(move || {
+        let client=crate::peer::client().unwrap();
+        let mut revision=0;
+        let mut pending=PendingControllerIntents::default();
+        let mut deadlines=HashMap::new();
+        while owner.strong_count()>0 {
+            if let Some(snapshot)=client.snapshot() {
+                connected.store(snapshot.received.elapsed()<Duration::from_secs(2),Ordering::Relaxed);
+                if snapshot.revision!=revision {
+                revision=snapshot.revision;
+                if let Ok(mut value)=capabilities.lock(){*value=snapshot.session.hardware;}
+                estop.store(snapshot.session.status.get("estop_active").and_then(serde_json::Value::as_bool).unwrap_or(false),Ordering::SeqCst);
+                if let Ok(mut error)=errors.lock(){*error=client.error.lock().ok().and_then(|value|value.clone());}
+                }
+            }
+            let mut incoming=Vec::new();
+            match rx.recv_timeout(Duration::from_millis(20)) {
+                Ok(message)=>incoming.push(message),
+                Err(mpsc::RecvTimeoutError::Timeout)=>{},
+                Err(mpsc::RecvTimeoutError::Disconnected)=>break,
+            }
+            incoming.extend(rx.try_iter());
+            for message in incoming {
+                    let call=|method:String,params:serde_json::Value| client.post("/api/peer/controller",&serde_json::json!({"method":method,"params":params}));
+                    match message {
+                        EngineMessage::TrackedControllerCall {operation,method,params}=>{
+                            let result=call(method,params);
+                            if let Ok(mut values)=results.lock(){values.push_back(ControllerCallResult {operation,result});}
+                            notify_state_change(&notifier);
+                        }
+                        EngineMessage::ReplyControllerCall {method,params,reply}=>{let _=reply.send(call(method,params));}
+                        EngineMessage::CoalescedControllerIntent {control_key,method,params,refresh_catalog,created}=>{
+                            deadlines.insert(control_key.clone(),created);
+                            pending.replace(control_key,method,params,refresh_catalog);
+                        }
+                        EngineMessage::ControllerCall {method,params}=>{
+                            if let Err(error)=call(method,params) && let Ok(mut slot)=errors.lock(){*slot=Some(error)}
+                        }
+                        EngineMessage::SendCommand(command)=>{let _=client.queue("/api/peer/hardware",serde_json::to_value(command).unwrap_or_default());}
+                        EngineMessage::LiveActuatorOverride {channel,value}=>{let _=client.queue("/api/peer/hardware",serde_json::to_value(Command::PwmSet {channel,value}).unwrap_or_default());}
+                        // Only the authority schedules outputs. Local cue edits
+                        // are sent through the shared timeline session endpoint.
+                        EngineMessage::UpdateQueue(_) | EngineMessage::UpdateControllerMacros(_) | EngineMessage::UpdateControllerStripEffects(_) | EngineMessage::UpdateAnalogTracks(_) | EngineMessage::UpdateDirectPwmCues(_) | EngineMessage::Seek(_) | EngineMessage::ReconfigureEndpoint {..}=>{}
+                    }
+            }
+            if !connected.load(Ordering::Relaxed){pending.clear();deadlines.clear();}
+            if let Some((key,intent))=pending.pop_front(){
+                let created=deadlines.remove(&key).unwrap_or_else(std::time::Instant::now);
+                if created.elapsed()<=Duration::from_millis(500){
+                    if let Err(error)=client.post("/api/peer/controller",&serde_json::json!({"method":intent.method,"params":intent.params})) && let Ok(mut slot)=errors.lock(){*slot=Some(error);}
+                }else if let Ok(mut slot)=errors.lock(){*slot=Some(format!("Expired remote intent for {key} was discarded"));}
+            }
+        }
+    });
+    handle
+}
+
 pub fn compile_controller_macros(timeline: &Timeline) -> Vec<CompiledControllerMacro> {
     let mut compiled = timeline
         .instances
@@ -1224,6 +1871,15 @@ pub fn compile_controller_macros(timeline: &Timeline) -> Vec<CompiledControllerM
                 .templates
                 .iter()
                 .find(|template| template.id == instance.effect_id)?;
+            let lane = effect
+                .controller_lane
+                .unwrap_or(crate::four_d::models::ControllerEffectLane::Sequence);
+            if !timeline
+                .track_state(&crate::four_d::models::controller_effect_timeline_track_key(lane))
+                .linked
+            {
+                return None;
+            }
             let controller_macro = effect.controller_macro.as_ref()?;
             Some(CompiledControllerMacro {
                 time_ms: instance.start_time_ms,
@@ -1236,9 +1892,7 @@ pub fn compile_controller_macros(timeline: &Timeline) -> Vec<CompiledControllerM
     compiled
 }
 
-pub fn compile_controller_strip_effects(
-    timeline: &Timeline,
-) -> Vec<CompiledControllerStripEffect> {
+pub fn compile_controller_strip_effects(timeline: &Timeline) -> Vec<CompiledControllerStripEffect> {
     let mut compiled = Vec::new();
     for instance in &timeline.instances {
         let Some(effect) = timeline
@@ -1251,6 +1905,16 @@ pub fn compile_controller_strip_effects(
         let Some(strip) = effect.controller_strip_effect.as_ref() else {
             continue;
         };
+        if !timeline
+            .track_state(
+                &crate::four_d::models::controller_effect_timeline_track_key(
+                    crate::four_d::models::ControllerEffectLane::Lighting,
+                ),
+            )
+            .linked
+        {
+            continue;
+        }
         if !crate::four_d::controller::valid_strip_effect_id(&strip.id) {
             continue;
         }
@@ -1260,7 +1924,9 @@ pub fn compile_controller_strip_effects(
             start: true,
         });
         compiled.push(CompiledControllerStripEffect {
-            time_ms: instance.start_time_ms.saturating_add(effect.duration_ms.max(1)),
+            time_ms: instance
+                .start_time_ms
+                .saturating_add(effect.duration_ms.max(1)),
             id: strip.id.clone(),
             start: false,
         });
@@ -1341,7 +2007,98 @@ pub fn evaluate_relay_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn state_notifier_runs_after_unlocking_and_only_when_requested() {
+        let slot: Arc<Mutex<Option<StateNotifier>>> = Arc::new(Mutex::new(None));
+        notify_state_change(&slot);
+        let callback_slot = Arc::clone(&slot);
+        let calls = Arc::new(AtomicU64::new(0));
+        let callback_calls = Arc::clone(&calls);
+        *slot.lock().unwrap() = Some(Arc::new(move || {
+            assert!(callback_slot.try_lock().is_ok());
+            callback_calls.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        notify_state_change(&slot);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        *slot.lock().unwrap() = None;
+    }
     use crate::four_d::models::{AtomicAction, Effect, EffectInstance, Timeline};
+
+    #[test]
+    fn rapid_motion_intents_stay_bounded_and_keep_the_final_stop() {
+        let mut pending = PendingControllerIntents::default();
+
+        // Fifteen commands per second for fifteen seconds used to form a FIFO
+        // behind acknowledged controller calls. A live control now occupies
+        // exactly one pending slot regardless of input duration or rate.
+        for index in 0..225 {
+            let action_id = if index % 2 == 0 {
+                "seat.a.down"
+            } else {
+                "seat.a.up"
+            };
+            pending.replace(
+                "seat.a".to_string(),
+                "controller.action.invoke".to_string(),
+                serde_json::json!({"action_id": action_id}),
+                true,
+            );
+        }
+        pending.replace(
+            "seat.a".to_string(),
+            "controller.action.invoke".to_string(),
+            serde_json::json!({"action_id": "seat.a.stop"}),
+            true,
+        );
+
+        assert_eq!(pending.len(), 1);
+        let (control_key, intent) = pending.pop_front().expect("final motion intent");
+        assert_eq!(control_key, "seat.a");
+        assert_eq!(intent.method, "controller.action.invoke");
+        assert_eq!(intent.params["action_id"], "seat.a.stop");
+        assert!(intent.refresh_catalog);
+        assert_eq!(pending.len(), 0);
+    }
+
+    #[test]
+    fn rapid_hardware_intents_remain_fair_across_controls() {
+        let mut pending = PendingControllerIntents::default();
+        pending.replace(
+            "seat.a".to_string(),
+            "controller.action.invoke".to_string(),
+            serde_json::json!({"action_id": "seat.a.up"}),
+            true,
+        );
+        pending.replace(
+            "relay.5".to_string(),
+            "controller.command.execute".to_string(),
+            serde_json::json!({"command": "relay 5 on"}),
+            false,
+        );
+        pending.replace(
+            "seat.a".to_string(),
+            "controller.action.invoke".to_string(),
+            serde_json::json!({"action_id": "seat.a.stop"}),
+            true,
+        );
+        pending.replace(
+            "pwm.0".to_string(),
+            "controller.pwm.set".to_string(),
+            serde_json::json!({"channel": 0, "value": 4095}),
+            false,
+        );
+
+        assert_eq!(pending.len(), 3);
+        let (first_key, first) = pending.pop_front().expect("seat intent");
+        let (second_key, _) = pending.pop_front().expect("relay intent");
+        let (third_key, _) = pending.pop_front().expect("pwm intent");
+        assert_eq!(first_key, "seat.a");
+        assert_eq!(first.params["action_id"], "seat.a.stop");
+        assert_eq!(second_key, "relay.5");
+        assert_eq!(third_key, "pwm.0");
+    }
 
     #[test]
     fn compiles_controller_macro_as_one_video_synchronized_cue() {
@@ -1355,7 +2112,9 @@ mod tests {
         );
         let effect_id = effect.id;
         timeline.templates.push(effect);
-        timeline.instances.push(EffectInstance::new(effect_id, 2_250));
+        timeline
+            .instances
+            .push(EffectInstance::new(effect_id, 2_250));
 
         assert_eq!(
             compile_controller_macros(&timeline),
@@ -1366,56 +2125,149 @@ mod tests {
             }]
         );
         assert!(compile_timeline(&timeline, &Default::default(), &Default::default()).is_empty());
+        timeline.set_track_linked(
+            crate::four_d::models::controller_effect_timeline_track_key(
+                crate::four_d::models::ControllerEffectLane::Sequence,
+            ),
+            false,
+        );
+        assert!(compile_controller_macros(&timeline).is_empty());
+    }
+
+    #[test]
+    fn compiles_direct_pwm_value_as_a_bounded_resizable_interval() {
+        let mut timeline = Timeline::new();
+        let effect = Effect::direct_control(
+            "House lights".into(),
+            String::new(),
+            1_250,
+            "pwm.12".into(),
+            3_750,
+            None,
+        );
+        let effect_id = effect.id;
+        timeline.templates.push(effect);
+        timeline.instances.push(EffectInstance::new(effect_id, 4_000));
+        assert_eq!(
+            compile_direct_pwm_cues(&timeline),
+            vec![CompiledDirectPwmCue {
+                start_time_ms: 4_000,
+                end_time_ms: 5_250,
+                channel: 12,
+                value_basis_points: 3_750,
+            }]
+        );
+        timeline.set_track_linked("hardware:pwm.12", false);
+        assert!(compile_direct_pwm_cues(&timeline).is_empty());
+    }
+
+    #[test]
+    fn standalone_direct_relay_off_is_not_optimized_away() {
+        let mut timeline = Timeline::new();
+        let effect = Effect::direct_control(
+            "Relay off".into(),
+            String::new(),
+            1_000,
+            "relay.5".into(),
+            0,
+            Some(5),
+        );
+        let effect_id = effect.id;
+        timeline.templates.push(effect);
+        timeline.instances.push(EffectInstance::new(effect_id, 2_000));
+        let compiled = compile_timeline(&timeline, &Default::default(), &Default::default());
+        assert_eq!(compiled.len(), 1);
+        assert_eq!(compiled[0].time_ms, 2_000);
+        assert_eq!(compiled[0].relay_id, 5);
+        assert!(!compiled[0].state);
     }
 
     #[test]
     fn compiles_advertised_strip_effect_into_bounded_start_and_stop_cues() {
+        // Effect identifiers are opaque, runtime-advertised values. Generate
+        // fixtures here so no PCController effect catalog is baked into Rust.
+        let primary_effect_id = uuid::Uuid::new_v4().simple().to_string();
+        let overlapping_effect_id = uuid::Uuid::new_v4().simple().to_string();
         let mut timeline = Timeline::new();
         let effect = Effect::controller_strip_effect(
-            "Police".to_string(),
+            "Advertised effect".to_string(),
             5_000,
-            "police".to_string(),
+            primary_effect_id.clone(),
         );
         let effect_id = effect.id;
         timeline.templates.push(effect);
-        timeline.instances.push(EffectInstance::new(effect_id, 2_250));
+        timeline
+            .instances
+            .push(EffectInstance::new(effect_id, 2_250));
 
         assert_eq!(
             compile_controller_strip_effects(&timeline),
             vec![
                 CompiledControllerStripEffect {
                     time_ms: 2_250,
-                    id: "police".to_string(),
+                    id: primary_effect_id.clone(),
                     start: true,
                 },
                 CompiledControllerStripEffect {
                     time_ms: 7_250,
-                    id: "police".to_string(),
+                    id: primary_effect_id.clone(),
                     start: false,
                 },
             ]
         );
+        timeline.set_track_linked(
+            crate::four_d::models::controller_effect_timeline_track_key(
+                crate::four_d::models::ControllerEffectLane::Lighting,
+            ),
+            false,
+        );
+        assert!(compile_controller_strip_effects(&timeline).is_empty());
+        timeline.set_track_linked(
+            crate::four_d::models::controller_effect_timeline_track_key(
+                crate::four_d::models::ControllerEffectLane::Lighting,
+            ),
+            true,
+        );
         let compiled = compile_controller_strip_effects(&timeline);
         assert_eq!(active_controller_strip_effect_at(&compiled, 2_249), None);
-        assert_eq!(active_controller_strip_effect_at(&compiled, 2_250), Some("police"));
+        assert_eq!(
+            active_controller_strip_effect_at(&compiled, 2_250),
+            Some(primary_effect_id.as_str())
+        );
         assert_eq!(active_controller_strip_effect_at(&compiled, 7_250), None);
 
         let overlap = vec![
-            CompiledControllerStripEffect { time_ms: 0, id: "police".to_string(), start: true },
-            CompiledControllerStripEffect { time_ms: 50, id: "white-thunder".to_string(), start: true },
-            CompiledControllerStripEffect { time_ms: 100, id: "police".to_string(), start: false },
-            CompiledControllerStripEffect { time_ms: 150, id: "white-thunder".to_string(), start: false },
+            CompiledControllerStripEffect {
+                time_ms: 0,
+                id: primary_effect_id.clone(),
+                start: true,
+            },
+            CompiledControllerStripEffect {
+                time_ms: 50,
+                id: overlapping_effect_id.clone(),
+                start: true,
+            },
+            CompiledControllerStripEffect {
+                time_ms: 100,
+                id: primary_effect_id.clone(),
+                start: false,
+            },
+            CompiledControllerStripEffect {
+                time_ms: 150,
+                id: overlapping_effect_id.clone(),
+                start: false,
+            },
         ];
         assert_eq!(
             active_controller_strip_effect_at(&overlap, 100),
-            Some("white-thunder")
+            Some(overlapping_effect_id.as_str())
         );
         assert_eq!(active_controller_strip_effect_at(&overlap, 150), None);
 
         let unsafe_effect = Effect::controller_strip_effect(
             "Malformed".to_string(),
             5_000,
-            "police 100 30".to_string(),
+            format!("{primary_effect_id} 100 30"),
         );
         let unsafe_effect_id = unsafe_effect.id;
         timeline.templates.push(unsafe_effect);
@@ -1424,7 +2276,7 @@ mod tests {
             .push(EffectInstance::new(unsafe_effect_id, 10_000));
         let compiled = compile_controller_strip_effects(&timeline);
         assert_eq!(compiled.len(), 2);
-        assert!(compiled.iter().all(|cue| cue.id == "police"));
+        assert!(compiled.iter().all(|cue| cue.id == primary_effect_id));
     }
 
     #[test]
@@ -1625,6 +2477,116 @@ mod tests {
     }
 
     #[test]
+    fn tracked_controller_calls_recover_wire_errors_not_domain_rejections() {
+        assert!(controller_wire_failed("encode PCController JSON-RPC request: socket aborted"));
+        assert!(controller_wire_failed("read PCController JSON-RPC response: timed out"));
+        assert!(controller_wire_failed("PCController closed the JSON-RPC connection"));
+        assert!(controller_wire_failed("PCController coordinator identity changed; reconnecting the command stream"));
+        assert!(!controller_wire_failed("RF binding name already exists"));
+        assert!(!controller_wire_failed("virtual keyboard is disabled"));
+        assert!(!controller_wire_failed("PCController is not connected"));
+    }
+
+    #[test]
+    fn emergency_stop_plan_releases_every_motion_source() {
+        assert_eq!(
+            EMERGENCY_STOP_CONTROLLER_COMMANDS,
+            [
+                "effect cancel",
+                "effect stop",
+                "keyboard stop",
+                "relay side left stop",
+                "relay side right stop",
+            ]
+        );
+    }
+
+    #[test]
+    fn emergency_stop_blocks_commands_that_can_reenergize_outputs() {
+        for (method, params) in [
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "relay 1 on"}),
+            ),
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "effect play seat-rise"}),
+            ),
+            (
+                "controller.pwm.set",
+                serde_json::json!({"channel": 0, "value": 4095}),
+            ),
+        ] {
+            assert!(!controller_call_allowed_during_estop(method, &params));
+        }
+        for (method, params) in [
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "relay off"}),
+            ),
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "relay side left stop"}),
+            ),
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "keyboard stop"}),
+            ),
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "strip clear"}),
+            ),
+            (
+                "controller.command.execute",
+                serde_json::json!({"command": "strip status"}),
+            ),
+            ("controller.pwm.off", serde_json::json!({})),
+            (
+                "controller.peripheral.presentation.update",
+                serde_json::json!({"key": "relay.5", "name": "Aisle lamp"}),
+            ),
+            ("controller.estop.set", serde_json::json!({"active": true})),
+            ("controller.estop.set", serde_json::json!({"active": false})),
+        ] {
+            assert!(controller_call_allowed_during_estop(method, &params));
+        }
+
+        assert!(!controller_call_allowed_during_estop(
+            "controller.estop.set",
+            &serde_json::json!({}),
+        ));
+    }
+
+    #[test]
+    fn emergency_stop_handle_latches_and_pauses_timeline_dispatch() {
+        let handle = spawn_engine();
+        handle.is_playing.store(true, Ordering::Relaxed);
+        handle.set_emergency_stop(true);
+        assert!(handle.estop_active.load(Ordering::SeqCst));
+        assert!(!handle.is_playing.load(Ordering::SeqCst));
+        handle.set_emergency_stop(false);
+        assert!(!handle.estop_active.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn controller_push_updates_the_shared_emergency_stop_latch() {
+        let handle = spawn_engine();
+        let target = handle.controller_push_target();
+        handle.is_playing.store(true, Ordering::SeqCst);
+        assert!(target.apply_notification(
+            "controller.event",
+            &serde_json::json!({"kind": "emergency_stop", "state": "true"}),
+        ));
+        assert!(handle.estop_active.load(Ordering::SeqCst));
+        assert!(!handle.is_playing.load(Ordering::SeqCst));
+        assert!(target.apply_notification(
+            "controller.event",
+            &serde_json::json!({"kind": "emergency_stop", "state": "false"}),
+        ));
+        assert!(!handle.estop_active.load(Ordering::SeqCst));
+    }
+
+    #[test]
     fn presentation_change_notification_requests_authoritative_catalog_refresh() {
         let handle = spawn_engine();
         let target = handle.controller_push_target();
@@ -1637,13 +2599,45 @@ mod tests {
     }
 
     #[test]
-    fn presentation_fallback_only_accepts_unknown_method_errors() {
-        assert!(controller_method_is_unavailable(
-            "PCController JSON-RPC error: {\"code\":-32601,\"message\":\"method not found\"}"
+    fn melody_change_notification_requests_authoritative_catalog_refresh() {
+        let handle = spawn_engine();
+        let target = handle.controller_push_target();
+        assert!(!handle.catalog_refresh_requested.load(Ordering::Relaxed));
+        assert!(target.apply_notification(
+            "controller.state",
+            &serde_json::json!({"kind": "melodies.changed", "action": "refresh"}),
         ));
-        assert!(!controller_method_is_unavailable(
-            "PCController JSON-RPC error: revision conflict"
+        assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn rf_learning_notification_requests_authoritative_rf_catalog_refresh() {
+        let handle = spawn_engine();
+        let target = handle.controller_push_target();
+        assert!(!handle.take_rf_catalog_refresh_request());
+        assert!(target.apply_notification(
+            "controller.event",
+            &serde_json::json!({"kind": "rf.learn.capture", "id": 4}),
         ));
+        assert!(handle.take_rf_catalog_refresh_request());
+        assert!(!handle.take_rf_catalog_refresh_request());
+        assert!(!handle.catalog_refresh_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn recording_event_requests_authoritative_live_preview_refresh() {
+        let handle = spawn_engine();
+        let target = handle.controller_push_target();
+        assert!(!handle.catalog_refresh_requested.load(Ordering::Relaxed));
+        assert!(target.apply_notification(
+            "controller.event",
+            &serde_json::json!({
+                "kind": "macro.recording",
+                "lifecycle": "captured",
+                "metadata": {"steps": "3"}
+            }),
+        ));
+        assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
     }
 
     #[test]
@@ -1683,6 +2677,7 @@ mod tests {
                 ..Default::default()
             });
         let target = handle.controller_push_target();
+        assert!(!handle.catalog_refresh_requested.load(Ordering::Relaxed));
         assert!(target.apply_notification(
             "controller.error",
             &serde_json::json!({"message": "board disconnected"}),
@@ -1691,6 +2686,42 @@ mod tests {
         let capabilities = capabilities.as_ref().unwrap();
         assert!(!capabilities.board_connected);
         assert!(capabilities.status_led.is_none());
+        assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn status_push_does_not_publish_a_partial_board_during_recovery() {
+        let handle = spawn_engine();
+        *handle.hardware_capabilities.lock().unwrap() =
+            Some(crate::four_d::controller::HardwareCapabilities {
+                board_connected: false,
+                board_name: "PCController".to_string(),
+                relays: vec![crate::four_d::controller::HardwareOutput {
+                    id: 5,
+                    key: "relay.5".to_string(),
+                    name: "User relay 5".to_string(),
+                    role: "user".to_string(),
+                    control: "relay".to_string(),
+                }],
+                ..Default::default()
+            });
+        let target = handle.controller_push_target();
+
+        assert!(!target.apply_notification(
+            "controller.status",
+            &serde_json::json!({
+                "status": {
+                    "active_relays": 16,
+                    "sensors": {"voltage_mv": 12200}
+                }
+            }),
+        ));
+
+        let capabilities = handle.hardware_capabilities.lock().unwrap();
+        let capabilities = capabilities.as_ref().unwrap();
+        assert!(!capabilities.board_connected);
+        assert!(capabilities.active_relays.is_empty());
+        assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
     }
 
     #[test]

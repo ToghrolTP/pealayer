@@ -61,6 +61,9 @@ fn web_ui_routes_known_application_copy_through_localization() {
         "'System & Media Metadata'",
         "'Playback Status'",
     ] {
-        assert!(dictionary.contains(required), "missing Persian key {required}");
+        assert!(
+            dictionary.contains(required),
+            "missing Persian key {required}"
+        );
     }
 }

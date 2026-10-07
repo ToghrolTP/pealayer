@@ -111,7 +111,10 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     for template in &app.timeline.templates {
                         ui.label(crate::ui::icons::SPARKLE);
                         ui.label(app.display_text(&template.name));
-                        ui.label(format!("{}ms", template.duration_ms));
+                        ui.label(crate::duration::format_effect_duration_for_language(
+                            display_language,
+                            template.duration_ms,
+                        ));
                         if ui.button(app.tr("Add to timeline")).clicked() {
                             let new_instance = crate::four_d::models::EffectInstance::new(
                                 template.id,
@@ -127,92 +130,123 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
             ui.add_space(10.0);
 
             // --- Collapsible Custom Template Creator ---
-            ui.collapsing(app.tr("Create custom template"), |ui| {
-                let name_id = ui.make_persistent_id("new_tmpl_name");
-                let icon_id = ui.make_persistent_id("new_tmpl_icon");
-                let duration_id = ui.make_persistent_id("new_tmpl_duration");
-                let relay_id_id = ui.make_persistent_id("new_tmpl_relay");
+            let custom_template_label = app.tr("Create custom template");
+            if crate::ui::icons::disclosure_header(
+                ui,
+                "custom_template_creator_disclosure",
+                &custom_template_label,
+                false,
+            ) {
+                ui.indent("custom_template_creator_content", |ui| {
+                    let name_id = ui.make_persistent_id("new_tmpl_name");
+                    let icon_id = ui.make_persistent_id("new_tmpl_icon");
+                    let duration_id = ui.make_persistent_id("new_tmpl_duration");
+                    let relay_id_id = ui.make_persistent_id("new_tmpl_relay");
 
-                let mut name = ui.data_mut(|d| d.get_temp::<String>(name_id).unwrap_or_default());
-                let mut icon = ui.data_mut(|d| d.get_temp::<String>(icon_id).unwrap_or_default());
-                let mut duration_ms =
-                    ui.data_mut(|d| d.get_temp::<u64>(duration_id).unwrap_or(1000));
-                let default_relay = relay_capabilities
-                    .first()
-                    .map(|relay| relay.id)
-                    .unwrap_or(0);
-                let mut target_relay =
-                    ui.data_mut(|d| d.get_temp::<u8>(relay_id_id).unwrap_or(default_relay));
-
-                egui::Grid::new("create_template_grid").show(ui, |ui| {
-                    ui.label(app.tr("Name:"));
-                    ui.text_edit_singleline(&mut name);
-                    ui.end_row();
-
-                    ui.label(app.tr("Icon:"));
-                    ui.text_edit_singleline(&mut icon);
-                    ui.end_row();
-
-                    ui.label(app.tr("Duration (ms):"));
-                    ui.add(egui::Slider::new(&mut duration_ms, 50..=10000).suffix("ms"));
-                    ui.end_row();
-
-                    ui.label(app.tr("Output:"));
-                    egui::ComboBox::from_id_salt("custom_template_relay")
-                        .selected_text(
-                            relay_capabilities
-                                .iter()
-                                .find(|relay| relay.id == target_relay)
-                                .map(|relay| app.display_text(&relay.name))
-                                .unwrap_or_else(|| app.tr("No advertised output")),
-                        )
-                        .show_ui(ui, |ui| {
-                            for relay in &relay_capabilities {
-                                ui.selectable_value(
-                                    &mut target_relay,
-                                    relay.id,
-                                    app.display_text(&relay.name),
-                                );
-                            }
-                        });
-                    ui.end_row();
-                });
-
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(
-                            target_relay != 0 && !name.trim().is_empty(),
-                            egui::Button::new(app.tr("Create")),
-                        )
-                        .clicked()
-                    {
-                        let actions = crate::four_d::patterns::generate_constant(
-                            target_relay,
-                            true,
-                            duration_ms,
-                        );
-                        let new_effect = crate::four_d::models::Effect::with_target(
-                            name.clone(),
-                            icon.clone(),
-                            duration_ms,
-                            crate::four_d::models::HardwareTarget::Relay(target_relay),
-                            actions,
-                        );
-                        app.timeline.templates.push(new_effect);
-
-                        // Clear the temp name field
-                        name.clear();
-                        dirty = true;
+                    let mut name =
+                        ui.data_mut(|d| d.get_temp::<String>(name_id).unwrap_or_default());
+                    let mut icon =
+                        ui.data_mut(|d| d.get_temp::<String>(icon_id).unwrap_or_default());
+                    if icon.trim().is_empty() {
+                        icon = "sparkle".to_string();
                     }
-                });
+                    let mut duration_ms =
+                        ui.data_mut(|d| d.get_temp::<u64>(duration_id).unwrap_or(1000));
+                    let default_relay = relay_capabilities
+                        .first()
+                        .map(|relay| relay.id)
+                        .unwrap_or(0);
+                    let mut target_relay =
+                        ui.data_mut(|d| d.get_temp::<u8>(relay_id_id).unwrap_or(default_relay));
 
-                ui.data_mut(|d| {
-                    d.insert_temp(name_id, name);
-                    d.insert_temp(icon_id, icon);
-                    d.insert_temp(duration_id, duration_ms);
-                    d.insert_temp(relay_id_id, target_relay);
+                    egui::Grid::new("create_template_grid").show(ui, |ui| {
+                        ui.label(app.tr("Name:"));
+                        let name_align = crate::ui::i18n::input_alignment(app.rtl, &name);
+                        ui.add(egui::TextEdit::singleline(&mut name).horizontal_align(name_align));
+                        ui.end_row();
+
+                        ui.label(app.tr("Icon:"));
+                        let search_hint = app.tr("Search icons...");
+                        let presets_label = app.tr("Presets");
+                        let no_matches_label = app.tr("No matching icons");
+                        crate::ui::icons::searchable_control_icon_picker(
+                            ui,
+                            "custom_template_icon_picker",
+                            &mut icon,
+                            240.0,
+                            &search_hint,
+                            &presets_label,
+                            &no_matches_label,
+                            app.language,
+                        );
+                        ui.end_row();
+
+                        ui.label(app.tr("Duration:"));
+                        ui.add(crate::duration::time_value_drag(
+                            &mut duration_ms,
+                            50..=10_000,
+                            50.0,
+                            app.human_readable_time_units,
+                        ));
+                        ui.end_row();
+
+                        ui.label(app.tr("Output:"));
+                        egui::ComboBox::from_id_salt("custom_template_relay")
+                            .selected_text(
+                                relay_capabilities
+                                    .iter()
+                                    .find(|relay| relay.id == target_relay)
+                                    .map(|relay| app.display_text(&relay.name))
+                                    .unwrap_or_else(|| app.tr("No advertised output")),
+                            )
+                            .show_ui(ui, |ui| {
+                                for relay in &relay_capabilities {
+                                    ui.selectable_value(
+                                        &mut target_relay,
+                                        relay.id,
+                                        app.display_text(&relay.name),
+                                    );
+                                }
+                            });
+                        ui.end_row();
+                    });
+
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                target_relay != 0 && !name.trim().is_empty(),
+                                egui::Button::new(app.tr("Create")),
+                            )
+                            .clicked()
+                        {
+                            let actions = crate::four_d::patterns::generate_constant(
+                                target_relay,
+                                true,
+                                duration_ms,
+                            );
+                            let new_effect = crate::four_d::models::Effect::with_target(
+                                name.clone(),
+                                icon.clone(),
+                                duration_ms,
+                                crate::four_d::models::HardwareTarget::Relay(target_relay),
+                                actions,
+                            );
+                            app.timeline.templates.push(new_effect);
+
+                            // Clear the temp name field
+                            name.clear();
+                            dirty = true;
+                        }
+                    });
+
+                    ui.data_mut(|d| {
+                        d.insert_temp(name_id, name);
+                        d.insert_temp(icon_id, icon);
+                        d.insert_temp(duration_id, duration_ms);
+                        d.insert_temp(relay_id_id, target_relay);
+                    });
                 });
-            });
+            }
 
             ui.add_space(20.0);
 
@@ -354,13 +388,21 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             }
 
                             // Pick current time from seekbar/playback
-                            if ui.button(crate::ui::icons::RECORD).on_hover_text(&set_current_label).clicked() {
+                            if ui
+                                .button(crate::ui::icons::RECORD)
+                                .on_hover_text(&set_current_label)
+                                .clicked()
+                            {
                                 instance.start_time_ms = (app.playback_time * 1000.0) as u64;
                                 dirty = true;
                             }
 
                             // Seek video to this event's start time
-                            if ui.button(crate::ui::icons::MAGNIFYING_GLASS).on_hover_text(&seek_event_label).clicked() {
+                            if ui
+                                .button(crate::ui::icons::MAGNIFYING_GLASS)
+                                .on_hover_text(&seek_event_label)
+                                .clicked()
+                            {
                                 let seconds = instance.start_time_ms as f64 / 1000.0;
                                 let _ =
                                     app.mpv.command("seek", &[&seconds.to_string(), "absolute"]);
@@ -401,9 +443,12 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "{}: {}ms | {}: {}",
+                                    "{}: {} | {}: {}",
                                     duration_label,
-                                    duration_ms,
+                                    crate::duration::format_effect_duration_for_language(
+                                        display_language,
+                                        duration_ms,
+                                    ),
                                     end_label,
                                     format_ms(end_time_ms)
                                 ))

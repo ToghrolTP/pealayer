@@ -5,8 +5,19 @@ use std::time::Duration;
 
 fn get(port: u16, path: &str) -> String {
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let request =
+        format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    response
+}
+
+fn post(port: u16, path: &str, payload: &str) -> String {
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
     let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+        payload.len()
     );
     stream.write_all(request.as_bytes()).unwrap();
     let mut response = String::new();
@@ -21,10 +32,11 @@ fn test_web_command_aliases_and_browsing() {
 
     std::thread::sleep(Duration::from_millis(100));
 
-    // 1. Test POST /api/player/command with open_video and path
-    let payload = r#"{"command":"open_video","path":"/tmp/test_clip.mp4"}"#;
+    // 1. Test POST /api/player/command with the current typed command shape.
+    let payload = r#"{"command":"open","target":"/tmp/test_clip.mp4"}"#;
 
-    let mut stream = std::net::TcpStream::connect("127.0.0.1:18080").expect("Failed to connect to web server");
+    let mut stream =
+        std::net::TcpStream::connect("127.0.0.1:18080").expect("Failed to connect to web server");
     let req = format!(
         "POST /api/player/command HTTP/1.1\r\nHost: 127.0.0.1:18080\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         payload.len(),
@@ -35,7 +47,9 @@ fn test_web_command_aliases_and_browsing() {
     stream.read_to_string(&mut resp).unwrap();
     assert!(resp.contains("200 OK"));
 
-    let received = cmd_rx.recv_timeout(Duration::from_secs(1)).expect("Did not receive command");
+    let received = cmd_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("Did not receive command");
     if let InteropCommand::Open { target } = received {
         assert_eq!(target, "/tmp/test_clip.mp4");
     } else {
@@ -45,8 +59,8 @@ fn test_web_command_aliases_and_browsing() {
     // Remote URLs, including live protocols, travel through the same API
     // command without being coerced into filesystem paths.
     let live_payload = r#"{"command":"open","target":"rtsp://camera.invalid/live"}"#;
-    let mut live_stream = std::net::TcpStream::connect("127.0.0.1:18080")
-        .expect("Failed to connect to web server");
+    let mut live_stream =
+        std::net::TcpStream::connect("127.0.0.1:18080").expect("Failed to connect to web server");
     let live_request = format!(
         "POST /api/player/command HTTP/1.1\r\nHost: 127.0.0.1:18080\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         live_payload.len(),
@@ -62,8 +76,9 @@ fn test_web_command_aliases_and_browsing() {
     ));
 
     // 2. Test set_volume with level
-    let mut stream2 = std::net::TcpStream::connect("127.0.0.1:18080").expect("Failed to connect to web server");
-    let payload2 = r#"{"command":"set_volume","level":75.0}"#;
+    let mut stream2 =
+        std::net::TcpStream::connect("127.0.0.1:18080").expect("Failed to connect to web server");
+    let payload2 = r#"{"command":"set_volume","value":75.0}"#;
     let req2 = format!(
         "POST /api/player/command HTTP/1.1\r\nHost: 127.0.0.1:18080\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         payload2.len(),
@@ -74,7 +89,9 @@ fn test_web_command_aliases_and_browsing() {
     stream2.read_to_string(&mut resp2).unwrap();
     assert!(resp2.contains("200 OK"));
 
-    let received2 = cmd_rx.recv_timeout(Duration::from_secs(1)).expect("Did not receive command");
+    let received2 = cmd_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("Did not receive command");
     if let InteropCommand::SetVolume { value } = received2 {
         assert_eq!(value, 75.0);
     } else {
@@ -89,7 +106,8 @@ fn test_web_fs_browse_endpoint() {
 
     std::thread::sleep(Duration::from_millis(100));
 
-    let mut stream = std::net::TcpStream::connect("127.0.0.1:18082").expect("Failed to connect to web server");
+    let mut stream =
+        std::net::TcpStream::connect("127.0.0.1:18082").expect("Failed to connect to web server");
     let req = "GET /api/fs/browse HTTP/1.1\r\nHost: 127.0.0.1:18082\r\nConnection: close\r\n\r\n";
     use std::io::{Read, Write};
     stream.write_all(req.as_bytes()).unwrap();
@@ -110,6 +128,7 @@ fn status_is_unknown_until_first_authoritative_snapshot() {
             "fa".to_string(),
             "rtl".to_string(),
             "dark".to_string(),
+            [56, 210, 122],
         ),
     );
     std::thread::sleep(Duration::from_millis(100));
@@ -127,6 +146,42 @@ fn status_is_unknown_until_first_authoritative_snapshot() {
 }
 
 #[test]
+fn config_api_returns_live_settings_and_accepts_validated_patches() {
+    let ctx = eframe::egui::Context::default();
+    let mut config = pealayer::config::AppConfig::default();
+    config.hardware_endpoint = Some("pccontroller://config-api-test:8787".to_string());
+    pealayer::platform::interop::set_live_config(config);
+    let (_state_tx, cmd_rx) = spawn_web_server(18088, ctx);
+    std::thread::sleep(Duration::from_millis(100));
+
+    let current = get(18088, "/api/config");
+    assert!(current.contains("200 OK"));
+    assert!(current.contains("pccontroller://config-api-test:8787"));
+
+    let response = post(
+        18088,
+        "/api/config",
+        r#"{"theme":"dark","show_subseconds":false}"#,
+    );
+    assert!(response.contains("202 Accepted"));
+    let command = cmd_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(matches!(
+        command,
+        InteropCommand::UpdateConfig { values }
+            if values.get("theme").and_then(serde_json::Value::as_str) == Some("dark")
+                && values.get("show_subseconds").and_then(serde_json::Value::as_bool) == Some(false)
+    ));
+
+    let rejected = post(18088, "/api/config", r#"{"unknown_setting":true}"#);
+    assert!(rejected.contains("400 Bad Request"));
+    assert!(rejected.contains("unknown configuration setting"));
+
+    let invalid_value = post(18088, "/api/config", r#"{"volume":999}"#);
+    assert!(invalid_value.contains("400 Bad Request"));
+    assert!(invalid_value.contains("volume must be between 0 and 130"));
+}
+
+#[test]
 fn http_websocket_and_ipc_share_one_port() {
     let ctx = eframe::egui::Context::default();
     let (_state_tx, cmd_rx) = spawn_web_server(18086, ctx);
@@ -134,7 +189,9 @@ fn http_websocket_and_ipc_share_one_port() {
 
     let health = get(18086, "/healthz");
     assert!(health.contains("200 OK"));
-    assert!(health.contains("\"transport\":\"unified\""));
+    assert!(health.contains("\"service\":\"pealayer\""));
+    assert!(health.contains("\"rpc\":\"2.0\""));
+    assert!(!health.contains("\"transport\""));
 
     let (mut websocket, _) = tungstenite::connect("ws://127.0.0.1:18086/ws")
         .expect("WebSocket must upgrade on the unified port");
@@ -150,7 +207,8 @@ fn http_websocket_and_ipc_share_one_port() {
     let mut ipc = std::net::TcpStream::connect("127.0.0.1:18086").unwrap();
     let request = format!(
         "POST /api/ipc HTTP/1.1\r\nHost: 127.0.0.1:18086\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        payload.len(), payload
+        payload.len(),
+        payload
     );
     ipc.write_all(request.as_bytes()).unwrap();
     let mut response = String::new();
