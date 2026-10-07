@@ -13,7 +13,6 @@ struct Preview {
     frame: Option<image::RgbaImage>,
     captured: Option<Instant>,
     requested: Option<Instant>,
-    requested_size: Option<(u32, u32)>,
     requests: u64,
     delivered: u64,
     last_error: Option<String>,
@@ -26,7 +25,6 @@ static PREVIEW: Mutex<Preview> = Mutex::new(Preview {
     frame: None,
     captured: None,
     requested: None,
-    requested_size: None,
     requests: 0,
     delivered: 0,
     last_error: None,
@@ -159,8 +157,37 @@ pub fn configure(hwnd: isize, enabled: bool) -> Result<(), String> {
     state.frame = None;
     state.captured = None;
     state.requested = None;
-    state.requested_size = None;
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CapturePlan {
+    Idle,
+    Capture,
+    RetryAfter(Duration),
+}
+
+fn capture_plan(
+    enabled: bool,
+    has_frame: bool,
+    requested_age: Option<Duration>,
+    captured_age: Option<Duration>,
+) -> CapturePlan {
+    const ACTIVE_WINDOW: Duration = Duration::from_secs(1);
+    const FRAME_INTERVAL: Duration = Duration::from_millis(33);
+    if !enabled {
+        return CapturePlan::Idle;
+    }
+    if !has_frame {
+        return CapturePlan::Capture;
+    }
+    if !requested_age.is_some_and(|age| age < ACTIVE_WINDOW) {
+        return CapturePlan::Idle;
+    }
+    match captured_age {
+        Some(age) if age < FRAME_INTERVAL => CapturePlan::RetryAfter(FRAME_INTERVAL - age),
+        _ => CapturePlan::Capture,
+    }
 }
 
 pub fn reset_shell() {
@@ -180,7 +207,7 @@ pub unsafe fn capture(
     media: &str,
 ) {
     use eframe::glow::{self, HasContext};
-    let needed = if let Ok(mut state) = PREVIEW.lock() {
+    let plan = if let Ok(mut state) = PREVIEW.lock() {
         if !state.enabled || width <= 0 || height <= 0 {
             return;
         }
@@ -189,18 +216,28 @@ pub unsafe fn capture(
             state.frame = None;
             state.captured = None;
         }
-        state.frame.is_none()
-            || (state
-                .requested
-                .is_some_and(|at| at.elapsed() < Duration::from_secs(1))
-                && state
-                    .captured
-                    .is_none_or(|at| at.elapsed() >= Duration::from_millis(33)))
+        capture_plan(
+            state.enabled,
+            state.frame.is_some(),
+            state.requested.map(|at| at.elapsed()),
+            state.captured.map(|at| at.elapsed()),
+        )
     } else {
-        false
+        CapturePlan::Idle
     };
-    if !needed {
-        return;
+    match plan {
+        CapturePlan::Idle => return,
+        CapturePlan::RetryAfter(delay) => {
+            // DWM can ask for the invalidated thumbnail immediately. If the
+            // 30 Hz limiter simply returns here, no later paint is guaranteed
+            // and the taskbar freezes on that frame. Schedule the exact next
+            // eligible capture to keep the preview live while it is visible.
+            if let Some(ctx) = REPAINT.get() {
+                ctx.request_repaint_after(delay);
+            }
+            return;
+        }
+        CapturePlan::Capture => {}
     }
     let (w, h) = fit_size(width as u32, height as u32, 640, 360);
     unsafe {
@@ -296,19 +333,8 @@ pub unsafe fn capture(
         for pixel in rgba.chunks_exact_mut(4) {
             pixel[3] = 255;
         }
-        let frame = image::RgbaImage::from_raw(w, h, rgba);
-        let requested_size = PREVIEW.lock().ok().and_then(|state| {
-            state
-                .requested
-                .is_some_and(|at| at.elapsed() < Duration::from_secs(1))
-                .then_some(state.requested_size)
-                .flatten()
-        });
-        if let (Some(frame), Some(size)) = (frame.as_ref(), requested_size) {
-            publish_thumbnail(hwnd, frame, size);
-        }
         if let Ok(mut state) = PREVIEW.lock() {
-            state.frame = frame;
+            state.frame = image::RgbaImage::from_raw(w, h, rgba);
             state.captured = Some(Instant::now());
         }
         let _ = windows::Win32::Graphics::Dwm::DwmInvalidateIconicBitmaps(
@@ -374,10 +400,6 @@ pub fn handle_request(hwnd: isize, message: u32, lparam: isize) -> bool {
         }
         state.requests += 1;
         state.requested = Some(Instant::now());
-        state.requested_size = Some((
-            ((lparam as u32 >> 16) & 0xffff).max(1),
-            (lparam as u32 & 0xffff).max(1),
-        ));
         state.frame.clone()
     };
     if let Some(ctx) = REPAINT.get() {
@@ -455,5 +477,37 @@ mod tests {
         assert_eq!(super::fit_size(1920, 1080, 320, 240), (320, 180));
         assert_eq!(super::fit_size(1080, 1920, 320, 180), (101, 180));
         assert_eq!(super::fit_size(1920, 800, 320, 180), (320, 133));
+    }
+
+    #[test]
+    fn active_preview_schedules_the_next_eligible_frame_instead_of_stalling() {
+        use std::time::Duration;
+        assert_eq!(
+            super::capture_plan(
+                true,
+                true,
+                Some(Duration::from_millis(5)),
+                Some(Duration::from_millis(20)),
+            ),
+            super::CapturePlan::RetryAfter(Duration::from_millis(13))
+        );
+        assert_eq!(
+            super::capture_plan(
+                true,
+                true,
+                Some(Duration::from_millis(40)),
+                Some(Duration::from_millis(33)),
+            ),
+            super::CapturePlan::Capture
+        );
+        assert_eq!(
+            super::capture_plan(
+                true,
+                true,
+                Some(Duration::from_secs(2)),
+                Some(Duration::from_secs(1)),
+            ),
+            super::CapturePlan::Idle
+        );
     }
 }
