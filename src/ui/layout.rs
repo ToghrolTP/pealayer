@@ -13232,6 +13232,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         );
                                         let mut toolbar_ui = ui.new_child(
                                             egui::UiBuilder::new()
+                                                .layer_id(egui::LayerId::new(
+                                                    egui::Order::Foreground,
+                                                    egui::Id::new("timeline-ruler-toolbar-layer"),
+                                                ))
                                                 .max_rect(toolbar_rect)
                                                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
                                         );
