@@ -641,6 +641,9 @@ pub struct AppConfig {
     pub motion_control_mode: MotionControlMode,
     pub compact_hardware_controls: bool,
     pub compact_timeline_tracks: bool,
+    /// Keep cue labels inside their clip bounds and elide long text. Disable
+    /// this to preserve the legacy overflow behavior for users who prefer it.
+    pub timeline_hide_cue_text_overflow: bool,
     pub timeline_header_wheel_vertical_scroll: bool,
     pub timeline_plain_wheel_action: TimelineWheelBehavior,
     pub timeline_ctrl_wheel_action: TimelineWheelBehavior,
@@ -814,6 +817,7 @@ impl Default for AppConfig {
             motion_control_mode: MotionControlMode::Hold,
             compact_hardware_controls: false,
             compact_timeline_tracks: true,
+            timeline_hide_cue_text_overflow: true,
             timeline_header_wheel_vertical_scroll: true,
             timeline_plain_wheel_action: TimelineWheelBehavior::Zoom,
             timeline_ctrl_wheel_action: TimelineWheelBehavior::VerticalScroll,

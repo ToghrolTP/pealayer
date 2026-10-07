@@ -934,11 +934,113 @@ fn sequence_cue_context_menu(
     action
 }
 
+fn sequence_cue_drag_mode(
+    duration_resizable: bool,
+    left: f32,
+    right: f32,
+    pointer_x: f32,
+) -> crate::app::DragMode {
+    if duration_resizable {
+        crate::app::classify_clip_drag_mode(left, right, pointer_x)
+    } else {
+        crate::app::DragMode::Move
+    }
+}
+
+fn paint_sequence_resize_handles(
+    painter: &egui::Painter,
+    cue: egui::Rect,
+    color: egui::Color32,
+) {
+    painter.line_segment(
+        [
+            cue.left_top() + egui::vec2(4.0, 5.0),
+            cue.left_bottom() + egui::vec2(4.0, -5.0),
+        ],
+        egui::Stroke::new(1.5, color),
+    );
+    painter.line_segment(
+        [
+            cue.right_top() + egui::vec2(-4.0, 5.0),
+            cue.right_bottom() + egui::vec2(-4.0, -5.0),
+        ],
+        egui::Stroke::new(1.5, color),
+    );
+}
+
+fn paint_sequence_move_grip(
+    painter: &egui::Painter,
+    cue: egui::Rect,
+    color: egui::Color32,
+) {
+    let center_x = if cue.width() < 40.0 {
+        cue.center().x
+    } else {
+        cue.left() + 10.0
+    };
+    let half_height = ((cue.height() - 10.0) / 2.0).clamp(3.0, 7.0);
+    for offset in [-2.5_f32, 0.0, 2.5] {
+        painter.line_segment(
+            [
+                egui::pos2(center_x + offset, cue.center().y - half_height),
+                egui::pos2(center_x + offset, cue.center().y + half_height),
+            ],
+            egui::Stroke::new(1.35, color.gamma_multiply(0.82)),
+        );
+    }
+}
+
+fn paint_sequence_cue_label(
+    painter: &egui::Painter,
+    cue: egui::Rect,
+    label: &str,
+    font_id: egui::FontId,
+    color: egui::Color32,
+    hide_overflow: bool,
+    duration_resizable: bool,
+) {
+    let left_padding = if duration_resizable { 8.0 } else { 18.0 };
+    if !hide_overflow {
+        painter.text(
+            cue.left_center() + egui::vec2(left_padding, 0.0),
+            egui::Align2::LEFT_CENTER,
+            label,
+            font_id,
+            color,
+        );
+        return;
+    }
+
+    let right_padding = if duration_resizable { 8.0 } else { 5.0 };
+    let content_rect = egui::Rect::from_min_max(
+        egui::pos2(cue.left() + left_padding, cue.top() + 2.0),
+        egui::pos2(cue.right() - right_padding, cue.bottom() - 2.0),
+    );
+    if content_rect.width() < 2.0 || content_rect.height() < 2.0 {
+        return;
+    }
+    let mut job = egui::text::LayoutJob {
+        wrap: egui::text::TextWrapping::truncate_at_width(content_rect.width()),
+        ..Default::default()
+    };
+    job.append(label, 0.0, egui::TextFormat::simple(font_id, color));
+    let galley = painter.layout_job(job);
+    painter.with_clip_rect(content_rect).galley(
+        egui::pos2(
+            content_rect.left(),
+            content_rect.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        color,
+    );
+}
+
 fn draw_sequence_timeline(
     ui: &mut egui::Ui,
     draft: &mut ControllerEffectDraft,
     selected_index: &mut usize,
     human_readable_time_units: bool,
+    hide_cue_text_overflow: bool,
 ) {
     let state_prefix = (
         "effect-sequence-timeline",
@@ -1118,6 +1220,7 @@ fn draw_sequence_timeline(
 
                         for &index in indexes {
                             let step = &draft.steps[index];
+                            let duration_resizable = step.duration_ms.is_some();
                             let start_ms = step.at_us.div_ceil(1_000);
                             let display_duration =
                                 u64::from(step.duration_ms.unwrap_or_default()).max(60);
@@ -1130,11 +1233,40 @@ fn draw_sequence_timeline(
                                     row.bottom() - 6.0,
                                 ),
                             );
-                            let response = ui.interact(
+                            let mut response = ui.interact(
                                 cue,
                                 egui::Id::new((state_prefix.clone(), "cue", index)),
                                 egui::Sense::click_and_drag(),
                             );
+                            let cue_label = sequence_cue_label(step);
+                            let duration_label = step.duration_ms.map_or_else(
+                                || "Instant cue (drag to move)".to_string(),
+                                |duration| crate::duration::format_time_value_ms(u64::from(duration)),
+                            );
+                            response = response.on_hover_text(format!(
+                                "{}\nLane: {}\nStarts: {}\nDuration: {}",
+                                cue_label,
+                                label,
+                                crate::duration::format_time_value_ms(start_ms),
+                                duration_label,
+                            ));
+                            if response.hovered()
+                                && let Some(pointer) = ui.ctx().pointer_latest_pos()
+                            {
+                                let drag_mode = sequence_cue_drag_mode(
+                                    duration_resizable,
+                                    cue.left(),
+                                    cue.right(),
+                                    pointer.x,
+                                );
+                                ui.ctx().set_cursor_icon(match drag_mode {
+                                    crate::app::DragMode::Move => egui::CursorIcon::Grab,
+                                    crate::app::DragMode::ResizeLeft
+                                    | crate::app::DragMode::ResizeRight => {
+                                        egui::CursorIcon::ResizeHorizontal
+                                    }
+                                });
+                            }
                             let selected = *selected_index == index;
                             let interaction = ui.style().interact_selectable(&response, selected);
                             let fill = if selected {
@@ -1158,31 +1290,32 @@ fn draw_sequence_timeline(
                                 ),
                                 egui::StrokeKind::Inside,
                             );
-                            painter.text(
-                                cue.left_center() + egui::vec2(8.0, 0.0),
-                                egui::Align2::LEFT_CENTER,
-                                sequence_cue_label(step),
+                            paint_sequence_cue_label(
+                                &painter,
+                                cue,
+                                &cue_label,
                                 egui::FontId::proportional(11.5),
                                 if selected {
                                     visuals.selection.stroke.color
                                 } else {
                                     interaction.fg_stroke.color
                                 },
+                                hide_cue_text_overflow,
+                                duration_resizable,
                             );
-                            if response.hovered() || selected {
-                                painter.line_segment(
-                                    [
-                                        cue.left_top() + egui::vec2(4.0, 5.0),
-                                        cue.left_bottom() + egui::vec2(4.0, -5.0),
-                                    ],
-                                    egui::Stroke::new(1.5, interaction.fg_stroke.color),
-                                );
-                                painter.line_segment(
-                                    [
-                                        cue.right_top() + egui::vec2(-4.0, 5.0),
-                                        cue.right_bottom() + egui::vec2(-4.0, -5.0),
-                                    ],
-                                    egui::Stroke::new(1.5, interaction.fg_stroke.color),
+                            if duration_resizable {
+                                if response.hovered() || selected {
+                                    paint_sequence_resize_handles(
+                                        &painter,
+                                        cue,
+                                        interaction.fg_stroke.color,
+                                    );
+                                }
+                            } else {
+                                paint_sequence_move_grip(
+                                    &painter,
+                                    cue,
+                                    interaction.fg_stroke.color,
                                 );
                             }
                             if response.clicked() || response.double_clicked() {
@@ -1196,7 +1329,8 @@ fn draw_sequence_timeline(
                                             drag_id,
                                             SequenceCueDragState {
                                                 index,
-                                                mode: crate::app::classify_clip_drag_mode(
+                                                mode: sequence_cue_drag_mode(
+                                                    duration_resizable,
                                                     cue.left(),
                                                     cue.right(),
                                                     pointer.x,
@@ -1505,6 +1639,7 @@ fn draw_sequence_step_editor(
     rtl_ui: bool,
     capabilities: Option<&crate::four_d::controller::HardwareCapabilities>,
     human_readable_time_units: bool,
+    hide_cue_text_overflow: bool,
 ) {
     let selection_id = egui::Id::new((
         "effect-sequence-selected-cue",
@@ -1519,6 +1654,7 @@ fn draw_sequence_step_editor(
         draft,
         &mut selected_index,
         human_readable_time_units,
+        hide_cue_text_overflow,
     );
     ui.data_mut(|data| data.insert_persisted(selection_id, selected_index));
     ui.add_space(8.0);
@@ -2264,6 +2400,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let mut open = app.show_effect_library_editor;
     let display_language = app.language;
     let human_readable_time_units = app.human_readable_time_units;
+    let hide_cue_text_overflow = app.timeline_hide_cue_text_overflow;
     let capabilities = app.advertised_hardware();
     let capture_locked = app.hardware_effect_authoring.active
         || app.hardware_effect_authoring.pending_operation.is_some()
@@ -2592,6 +2729,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     rtl_ui,
                                     capabilities.as_ref(),
                                     human_readable_time_units,
+                                    hide_cue_text_overflow,
                                 ));
                                 ui.add_space(8.0);
                                 if crate::ui::icons::disclosure_header(
@@ -2819,6 +2957,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn instantaneous_sequence_cues_are_move_only() {
+        assert_eq!(
+            sequence_cue_drag_mode(false, 10.0, 110.0, 10.0),
+            crate::app::DragMode::Move,
+        );
+        assert_eq!(
+            sequence_cue_drag_mode(false, 10.0, 110.0, 110.0),
+            crate::app::DragMode::Move,
+        );
+        assert_eq!(
+            sequence_cue_drag_mode(true, 10.0, 110.0, 10.0),
+            crate::app::DragMode::ResizeLeft,
+        );
+        assert_eq!(
+            sequence_cue_drag_mode(true, 10.0, 110.0, 110.0),
+            crate::app::DragMode::ResizeRight,
+        );
+    }
+
+    #[test]
     fn sequence_cue_menu_values_are_channel_specific() {
         assert_eq!(
             sequence_cue_value_options("motion"),
@@ -2890,7 +3048,7 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ui| draw_sequence_timeline(ui, draft, selected, true),
+                    |ui| draw_sequence_timeline(ui, draft, selected, true, true),
                 );
                 output.textures_delta.clear();
                 output
@@ -3383,7 +3541,7 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ui| draw_sequence_timeline(ui, draft, selected, true),
+                |ui| draw_sequence_timeline(ui, draft, selected, true, true),
             );
             output.textures_delta.clear();
             output

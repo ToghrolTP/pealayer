@@ -848,6 +848,7 @@ fn main() -> eframe::Result {
                 held_motion_action: None,
                 compact_hardware_controls: loaded_config.compact_hardware_controls,
                 compact_timeline_tracks: loaded_config.compact_timeline_tracks,
+                timeline_hide_cue_text_overflow: loaded_config.timeline_hide_cue_text_overflow,
                 timeline_header_wheel_vertical_scroll: loaded_config
                     .timeline_header_wheel_vertical_scroll,
                 timeline_plain_wheel_action: loaded_config.timeline_plain_wheel_action,

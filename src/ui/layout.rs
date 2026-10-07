@@ -13956,11 +13956,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                                 let start_x = rect.min.x + (instance.start_time_ms as f32 * px_per_ms);
                                                 let end_x = start_x + (effect.duration_ms.max(1) as f32 * px_per_ms);
+                                                let minimum_clip_width = if duration_resizable { 8.0 } else { 18.0 };
 
                                                 let clip_rect = egui::Rect::from_min_max(
                                                     egui::pos2(start_x, track_y + 4.0),
                                                     egui::pos2(
-                                                        end_x.max(start_x + 8.0),
+                                                        end_x.max(start_x + minimum_clip_width),
                                                         track_y + cue_row_height - 4.0,
                                                     ),
                                                 );
@@ -13975,6 +13976,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     ui.interact(clip_rect, clip_id, egui::Sense::click_and_drag())
                                                 };
 
+                                                let duration = crate::duration::format_effect_duration_for_language(
+                                                    self.app.language,
+                                                    effect.duration_ms,
+                                                );
+                                                let mut cue_tooltip = format!(
+                                                    "{}\n{}: {}",
+                                                    effect.name,
+                                                    self.app.tr("Duration"),
+                                                    duration,
+                                                );
+                                                if !duration_resizable {
+                                                    cue_tooltip.push_str(&format!(
+                                                        "\n{}",
+                                                        self.app.tr("Intrinsic duration — drag to move"),
+                                                    ));
+                                                }
                                                 if is_mismatched {
                                                     let required_name = effect
                                                         .target
@@ -13986,8 +14003,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         "Hardware target mismatch\nEffect: {}\nRequired output: {}\nRight-click to relocate when that output is available.",
                                                         effect.name, required_name
                                                     );
-                                                    clip_response = clip_response.on_hover_text(warn_msg);
+                                                    cue_tooltip.push_str("\n\n");
+                                                    cue_tooltip.push_str(&warn_msg);
                                                 }
+                                                clip_response = clip_response.on_hover_text(cue_tooltip);
 
                                                 clip_response.context_menu(|ui| {
                                                     if ui
@@ -14147,6 +14166,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let right_active = hovered_handle == Some(crate::app::DragMode::ResizeRight);
                                                 if duration_resizable {
                                                     render_clip_handles(&painter, clip_rect, left_active, right_active, alpha);
+                                                } else {
+                                                    render_clip_move_grip(&painter, clip_rect, alpha);
                                                 }
 
                                                 // Clip name label
@@ -14156,12 +14177,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 } else {
                                                     format!("{} {}", crate::ui::icons::SPARKLE, displayed_effect_name)
                                                 };
-                                                painter.text(
-                                                    clip_rect.left_center() + egui::vec2(12.0, 0.0),
-                                                    egui::Align2::LEFT_CENTER,
+                                                render_timeline_cue_label(
+                                                    &painter,
+                                                    clip_rect,
                                                     title,
                                                     egui::FontId::proportional(10.0),
                                                     egui::Color32::from_rgba_unmultiplied(255, 255, 255, alpha),
+                                                    self.app.timeline_hide_cue_text_overflow,
+                                                    duration_resizable,
                                                 );
                                             }
                                         }
@@ -14191,6 +14214,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             let right_active = self.app.active_drag.as_ref().map(|d| d.mode) == Some(crate::app::DragMode::ResizeRight);
                                             if effect.duration_resizable() {
                                                 render_clip_handles(&painter, clip_rect, left_active, right_active, 255);
+                                            } else {
+                                                render_clip_move_grip(&painter, clip_rect, 255);
                                             }
 
                                             // Clip name label
@@ -14200,12 +14225,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             } else {
                                                 format!("{} {}", crate::ui::icons::SPARKLE, displayed_effect_name)
                                             };
-                                            painter.text(
-                                                clip_rect.left_center() + egui::vec2(12.0, 0.0),
-                                                egui::Align2::LEFT_CENTER,
+                                            render_timeline_cue_label(
+                                                &painter,
+                                                clip_rect,
                                                 title,
                                                 egui::FontId::proportional(10.0),
                                                 egui::Color32::WHITE,
+                                                self.app.timeline_hide_cue_text_overflow,
+                                                effect.duration_resizable(),
                                             );
                                         }
 
@@ -17296,4 +17323,91 @@ fn render_clip_handles(
             egui::Stroke::new(1.0_f32, right_notch_color),
         );
     }
+}
+
+/// Paints a centered move affordance on intrinsic-duration cues. Unlike the
+/// edge handles on resizable cues, this grip deliberately sits inside the
+/// clip so it cannot be mistaken for a duration control.
+fn render_clip_move_grip(painter: &egui::Painter, clip_rect: egui::Rect, alpha: u8) {
+    if clip_rect.width() < 12.0 || clip_rect.height() < 12.0 {
+        return;
+    }
+
+    let compact = clip_rect.width() < 30.0;
+    let center_x = if compact {
+        clip_rect.center().x
+    } else {
+        clip_rect.left() + 11.0
+    };
+    let grip_height = (clip_rect.height() - 10.0).clamp(6.0, 12.0);
+    let grip_rect = egui::Rect::from_center_size(
+        egui::pos2(center_x, clip_rect.center().y),
+        egui::vec2(12.0, grip_height + 6.0),
+    );
+    let alpha_scale = alpha as f32 / 255.0;
+    painter.rect_filled(
+        grip_rect,
+        3.0,
+        egui::Color32::from_rgba_unmultiplied(0, 0, 0, (42.0 * alpha_scale) as u8),
+    );
+
+    let bar_color =
+        egui::Color32::from_rgba_unmultiplied(255, 255, 255, (175.0 * alpha_scale) as u8);
+    for offset in [-3.0_f32, 0.0, 3.0] {
+        painter.line_segment(
+            [
+                egui::pos2(center_x + offset, clip_rect.center().y - grip_height / 2.0),
+                egui::pos2(center_x + offset, clip_rect.center().y + grip_height / 2.0),
+            ],
+            egui::Stroke::new(1.25, bar_color),
+        );
+    }
+}
+
+/// Renders a cue label with native egui elision while preserving the opt-in
+/// legacy overflow mode. The painter is constrained to the cue interior so
+/// glyphs never leak through rounded borders in ellipsis mode.
+fn render_timeline_cue_label(
+    painter: &egui::Painter,
+    clip_rect: egui::Rect,
+    title: String,
+    font_id: egui::FontId,
+    color: egui::Color32,
+    hide_overflow: bool,
+    duration_resizable: bool,
+) {
+    let left_padding = if duration_resizable { 12.0 } else { 22.0 };
+    if !hide_overflow {
+        painter.text(
+            clip_rect.left_center() + egui::vec2(left_padding, 0.0),
+            egui::Align2::LEFT_CENTER,
+            title,
+            font_id,
+            color,
+        );
+        return;
+    }
+
+    let right_padding = if duration_resizable { 12.0 } else { 6.0 };
+    let content_rect = egui::Rect::from_min_max(
+        egui::pos2(clip_rect.left() + left_padding, clip_rect.top() + 2.0),
+        egui::pos2(clip_rect.right() - right_padding, clip_rect.bottom() - 2.0),
+    );
+    if content_rect.width() < 2.0 || content_rect.height() < 2.0 {
+        return;
+    }
+
+    let mut job = egui::text::LayoutJob {
+        wrap: egui::text::TextWrapping::truncate_at_width(content_rect.width()),
+        ..Default::default()
+    };
+    job.append(&title, 0.0, egui::TextFormat::simple(font_id, color));
+    let galley = painter.layout_job(job);
+    let position = egui::pos2(
+        content_rect.left(),
+        content_rect.center().y - galley.size().y / 2.0,
+    );
+    painter
+        .with_clip_rect(content_rect)
+        .galley(position, galley, color);
 }
