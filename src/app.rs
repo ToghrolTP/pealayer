@@ -4127,6 +4127,27 @@ impl PealayerApp {
             InteropCommand::RefreshHardwareCatalog => {
                 self.engine_handle.request_catalog_refresh();
             }
+            InteropCommand::PlayHardwareMelody { name, repeats } => {
+                if let Err(error) = self.play_buzzer_melody(&name, repeats) {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::PlayHardwareTone {
+                frequency_hz,
+                duration_ms,
+            } => {
+                if let Err(error) = self.play_buzzer_tone(frequency_hz, duration_ms) {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::StopHardwareBuzzer => {
+                if let Err(error) = self.stop_buzzer() {
+                    self.set_osd(error);
+                    return;
+                }
+            }
             InteropCommand::UpdateHardwarePresentation { key, fields } => {
                 let Some(capabilities) = self
                     .advertised_hardware()

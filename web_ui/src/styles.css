@@ -600,6 +600,20 @@ body {
 .strip-control__effect { grid-column: 1 / -1; }
 .strip-control__actions { min-height: 34px; margin-top: 14px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .strip-control__actions .ant-btn-primary { min-width: 130px; }
+.buzzer-control.ant-card { overflow: hidden; border-color: color-mix(in srgb, var(--accent) 22%, var(--line)); background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 4%, var(--surface-1)), var(--surface-1) 58%); }
+.buzzer-control.is-playing.ant-card { box-shadow: inset 3px 0 0 var(--green), var(--shadow-sm); }
+.buzzer-control__icon { width: 28px; height: 28px; display: inline-grid; place-items: center; border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--line)); border-radius: 8px; color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface-2)); }
+.buzzer-control__status { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line)); border-radius: 12px; background: color-mix(in srgb, var(--accent) 5%, var(--surface-2)); }
+.buzzer-control__status > div { min-width: 0; display: grid; gap: 3px; }
+.buzzer-control__status span, .buzzer-control label > span { color: var(--muted); font-size: 11px; font-weight: 650; }
+.buzzer-control__status strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.buzzer-control__melody { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(90px, .25fr) minmax(250px, .65fr); align-items: end; gap: 12px; }
+.buzzer-control label { min-width: 0; display: grid; gap: 5px; }
+.buzzer-control .ant-select, .buzzer-control .ant-input-number { width: 100%; }
+.buzzer-control__actions { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+.buzzer-control__actions .ant-btn-primary { min-width: 130px; }
+.buzzer-control__tone { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(130px, .34fr) minmax(130px, .34fr) auto; align-items: end; gap: 12px; }
+.buzzer-control__tone > div { display: grid; gap: 3px; }
 .seven-segment-display {
   --segment-intensity: 1;
   width: min(100%, 300px);
@@ -791,7 +805,7 @@ body {
   .preferences-rail { position: static; display: flex; overflow-x: auto; }
   .preferences-rail button { width: auto; flex: 0 0 auto; display: flex; white-space: nowrap; }
   .hardware-summary-grid { grid-template-columns: 1fr; }
-  .strip-control__configuration, .strip-control__editor { grid-template-columns: 1fr; align-items: stretch; }
+  .strip-control__configuration, .strip-control__editor, .buzzer-control__melody, .buzzer-control__tone { grid-template-columns: 1fr; align-items: stretch; }
   .strip-control__modes .ant-segmented-group { overflow-x: auto; }
 }
 

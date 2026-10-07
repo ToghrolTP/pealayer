@@ -98,6 +98,7 @@ export interface PlayerState {
     status_led?: { red: number; green: number; blue: number } | null;
     warnings?: Array<{ code: string; severity: string; message: string }>;
     melodies?: HardwareMelody[];
+    buzzer?: { playing: boolean; melody_id: number; melody_name: string; board_silent: boolean };
     settings?: Record<string, number | boolean> | null;
     front_panel?: {
       raw_segments: number[]; brightness: number; blink: boolean; segments_active: boolean;

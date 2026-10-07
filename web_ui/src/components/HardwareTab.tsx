@@ -38,6 +38,7 @@ import {
   PlayCircleOutlined,
   PushpinOutlined,
   ReloadOutlined,
+  SoundOutlined,
   StopOutlined,
   UnlockOutlined,
   PoweroffOutlined,
@@ -119,6 +120,11 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
   const [stripPixel, setStripPixel] = useState(0);
   const [stripMode, setStripMode] = useState('solid');
   const [stripEffectId, setStripEffectId] = useState('');
+  const [melodyName, setMelodyName] = useState('');
+  const [melodyRepeats, setMelodyRepeats] = useState(1);
+  const [melodyLoop, setMelodyLoop] = useState(false);
+  const [toneFrequency, setToneFrequency] = useState(440);
+  const [toneDuration, setToneDuration] = useState(250);
   const [pwmDrafts, setPwmDrafts] = useState<Record<string, number>>({});
   const [managerOpen, setManagerOpen] = useState(false);
   const [detailKey, setDetailKey] = useState<string | null>(null);
@@ -132,6 +138,10 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
     () => [...(details?.controls ?? [])].sort((left, right) => left.order - right.order || left.key.localeCompare(right.key)),
     [details],
   );
+  const melodies = details?.melodies ?? [];
+  const selectedMelody = melodies.some((melody) => melody.name === melodyName)
+    ? melodyName
+    : melodies[0]?.name ?? '';
   const updatePresentation = (key: string, fields: Record<string, unknown>) =>
     sendCmd('hardware.presentation.update', { key, fields });
   const displayedActive = (control: HardwareControl) => optimisticActive[control.key]?.value ?? Boolean(control.active);
@@ -620,6 +630,93 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
 
     <Collapse className="hardware-sections" defaultActiveKey={grouped.map((item) => item.key)} items={grouped} />
     <RfManager rf={state.rf} sendCmd={sendCmd} />
+
+    <Card
+      className={`surface-card buzzer-control${details.buzzer?.playing ? ' is-playing' : ''}`}
+      title={<Space><span className="buzzer-control__icon"><SoundOutlined /></span><span>{tr(locale, 'Buzzer & melodies')}</span></Space>}
+      extra={<Space size="small">
+        <Tag color={details.buzzer?.playing ? 'success' : 'default'}>
+          {details.buzzer?.playing ? tr(locale, 'Playing') : tr(locale, 'Idle')}
+        </Tag>
+        <Tooltip title={tr(locale, 'Refresh melody catalog')}>
+          <Button
+            type="text"
+            size="small"
+            icon={<ReloadOutlined />}
+            aria-label={tr(locale, 'Refresh melody catalog')}
+            onClick={() => sendCmd('hardware.catalog.refresh')}
+          />
+        </Tooltip>
+      </Space>}
+    >
+      <div className="buzzer-control__status">
+        <div>
+          <span>{tr(locale, 'Current output')}</span>
+          <strong>{details.buzzer?.playing ? details.buzzer.melody_name || tr(locale, 'Playing melody') : tr(locale, 'Silent')}</strong>
+        </div>
+        <Tag color={details.buzzer?.board_silent ? 'warning' : 'processing'}>
+          {tr(locale, details.buzzer?.board_silent ? 'Board muted' : 'Board audible')}
+        </Tag>
+      </div>
+
+      <div className="buzzer-control__melody">
+        <label>
+          <span>{tr(locale, 'Configured melody')}</span>
+          <Select
+            value={selectedMelody || undefined}
+            placeholder={tr(locale, 'No configured melodies')}
+            options={melodies.map((melody) => ({
+              value: melody.name,
+              label: `${melody.name} · ${melody.duration_ms} ms · ${melody.notes.length} ${tr(locale, 'notes')}`,
+            }))}
+            onChange={setMelodyName}
+            onOpenChange={(open) => { if (open) void sendCmd('hardware.catalog.refresh'); }}
+          />
+        </label>
+        <label>
+          <span>{tr(locale, 'Repeats')}</span>
+          <InputNumber min={1} max={20} value={melodyRepeats} disabled={melodyLoop} onChange={(value) => setMelodyRepeats(value ?? 1)} />
+        </label>
+        <label className="buzzer-control__loop">
+          <span>{tr(locale, 'Playback mode')}</span>
+          <Segmented
+            value={melodyLoop ? 'loop' : 'repeat'}
+            options={[
+              { value: 'repeat', label: tr(locale, 'Repeat count') },
+              { value: 'loop', label: tr(locale, 'Loop until stopped') },
+            ]}
+            onChange={(value) => setMelodyLoop(value === 'loop')}
+          />
+        </label>
+      </div>
+
+      <div className="buzzer-control__actions">
+        <Button
+          type="primary"
+          icon={<PlayCircleOutlined />}
+          disabled={!selectedMelody || Boolean(state.estop_active)}
+          onClick={() => sendCmd('hardware.buzzer.melody', { name: selectedMelody, repeats: melodyLoop ? 0 : melodyRepeats })}
+        >{tr(locale, 'Play melody')}</Button>
+        <Button icon={<StopOutlined />} onClick={() => sendCmd('hardware.buzzer.stop')}>{tr(locale, 'Stop buzzer')}</Button>
+      </div>
+
+      <Divider />
+      <div className="buzzer-control__tone">
+        <div>
+          <Typography.Text strong>{tr(locale, 'Tone tester')}</Typography.Text>
+          <Typography.Text type="secondary">{tr(locale, 'Send a precise diagnostic tone to the board')}</Typography.Text>
+        </div>
+        <label><span>{tr(locale, 'Frequency')}</span><InputNumber min={20} max={20000} addonAfter="Hz" value={toneFrequency} onChange={(value) => setToneFrequency(value ?? 440)} /></label>
+        <label><span>{tr(locale, 'Duration')}</span><InputNumber min={1} max={65535} addonAfter="ms" value={toneDuration} onChange={(value) => setToneDuration(value ?? 250)} /></label>
+        <Button
+          icon={<SoundOutlined />}
+          disabled={Boolean(state.estop_active)}
+          onClick={() => sendCmd('hardware.buzzer.tone', { frequency_hz: toneFrequency, duration_ms: toneDuration })}
+        >{tr(locale, 'Play tone')}</Button>
+      </div>
+
+      {details.buzzer?.board_silent && <Alert type="warning" showIcon message={tr(locale, 'The physical board is muted; playback requests will be accepted but may not be audible.')} />}
+    </Card>
 
     {strip && <Card
       className={`surface-card strip-control${strip.running ? ' is-running' : ''}`}

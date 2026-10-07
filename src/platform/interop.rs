@@ -305,6 +305,15 @@ pub enum InteropCommand {
         percent: f64,
     },
     RefreshHardwareCatalog,
+    PlayHardwareMelody {
+        name: String,
+        repeats: u8,
+    },
+    PlayHardwareTone {
+        frequency_hz: u16,
+        duration_ms: u16,
+    },
+    StopHardwareBuzzer,
     UpdateHardwarePresentation {
         key: String,
         fields: Value,
@@ -523,6 +532,18 @@ impl InteropCommand {
                 if !percent.is_finite() || !(0.0..=100.0).contains(percent) =>
             {
                 Err("PWM percent must be a finite value from 0 to 100".to_string())
+            }
+            Self::PlayHardwareMelody { name, repeats }
+                if name.trim().is_empty() || name.len() > 64 || *repeats > 20 =>
+            {
+                Err("melody playback requires a configured name and 0–20 repeats".to_string())
+            }
+            Self::PlayHardwareTone {
+                frequency_hz,
+                duration_ms,
+            } if !(20..=20_000).contains(frequency_hz) || *duration_ms == 0 =>
+            {
+                Err("buzzer tone requires 20–20000 Hz and a positive duration".to_string())
             }
             Self::ConfigureAddressableStrip { pixels } if *pixels == 0 => {
                 Err("addressable strip pixel count must be greater than zero".to_string())
@@ -1951,6 +1972,35 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         }
         "hardware.catalog.refresh" | "pealayer.hardware.catalog.refresh" => {
             Some(InteropCommand::RefreshHardwareCatalog)
+        }
+        "hardware.buzzer.melody" | "pealayer.hardware.buzzer.melody" => {
+            let repeats = request
+                .params
+                .get("repeats")
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .ok_or_else(|| "missing valid melody repeat count".to_string())?;
+            Some(InteropCommand::PlayHardwareMelody {
+                name: string(&["name", "melody"])?,
+                repeats,
+            })
+        }
+        "hardware.buzzer.tone" | "pealayer.hardware.buzzer.tone" => {
+            let word = |name: &str| {
+                request
+                    .params
+                    .get(name)
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u16::try_from(value).ok())
+                    .ok_or_else(|| format!("missing valid buzzer {name}"))
+            };
+            Some(InteropCommand::PlayHardwareTone {
+                frequency_hz: word("frequency_hz")?,
+                duration_ms: word("duration_ms")?,
+            })
+        }
+        "hardware.buzzer.stop" | "pealayer.hardware.buzzer.stop" => {
+            Some(InteropCommand::StopHardwareBuzzer)
         }
         "hardware.presentation.update" | "pealayer.hardware.presentation.update" => {
             Some(InteropCommand::UpdateHardwarePresentation {
@@ -3704,6 +3754,45 @@ mod tests {
             command_from_json_rpc(&refresh).unwrap(),
             Some(InteropCommand::RefreshHardwareCatalog)
         ));
+    }
+
+    #[test]
+    fn parses_complete_buzzer_web_controls() {
+        let melody: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"melody","method":"hardware.buzzer.melody","params":{"name":"attention","repeats":3}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&melody).unwrap(),
+            Some(InteropCommand::PlayHardwareMelody { name, repeats: 3 }) if name == "attention"
+        ));
+
+        let tone: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"tone","method":"hardware.buzzer.tone","params":{"frequency_hz":440,"duration_ms":250}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&tone).unwrap(),
+            Some(InteropCommand::PlayHardwareTone {
+                frequency_hz: 440,
+                duration_ms: 250,
+            })
+        ));
+
+        let stop: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"stop","method":"hardware.buzzer.stop"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&stop).unwrap(),
+            Some(InteropCommand::StopHardwareBuzzer)
+        );
+
+        let invalid: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"tone","method":"hardware.buzzer.tone","params":{"frequency_hz":10,"duration_ms":0}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&invalid).is_err());
     }
 
     #[test]
