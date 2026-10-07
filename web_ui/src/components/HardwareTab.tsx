@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { RfManager } from './RfManager';
 import {
   Alert,
@@ -48,10 +48,12 @@ import {
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
 import { GroupSelect } from './GroupSelect';
+import { effectGlyph } from '../effectIcons';
+import { SevenSegmentDisplay } from './SevenSegmentDisplay';
 
 interface HardwareTabProps {
   state: PlayerState;
-  sendCmd: (command: string, payload?: Record<string, unknown>) => void;
+  sendCmd: (command: string, payload?: Record<string, unknown>) => Promise<boolean>;
   locale: UiLocale;
 }
 
@@ -65,7 +67,8 @@ const isMotionControl = (control: HardwareControl) =>
 
 const isStopAction = (action: HardwareAction) => action.verb.toLowerCase() === 'stop';
 
-const controlIcon = (kind: string) => {
+const controlIcon = (kind: string, customIcon = '') => {
+  if (customIcon.trim()) return effectGlyph(customIcon);
   if (/pwm|mosfet/i.test(kind)) return <DashboardOutlined />;
   if (/seat|motion/i.test(kind)) return <ExperimentOutlined />;
   if (/light|strip|led/i.test(kind)) return <BulbOutlined />;
@@ -123,6 +126,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
   const [renameDraft, setRenameDraft] = useState('');
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [dropKey, setDropKey] = useState<string | null>(null);
+  const [optimisticActive, setOptimisticActive] = useState<Record<string, { value: boolean; startedAt: number }>>({});
   const heldMotionPointers = useRef(new Map<string, number>());
   const controls = useMemo(
     () => [...(details?.controls ?? [])].sort((left, right) => left.order - right.order || left.key.localeCompare(right.key)),
@@ -130,13 +134,46 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
   );
   const updatePresentation = (key: string, fields: Record<string, unknown>) =>
     sendCmd('hardware.presentation.update', { key, fields });
+  const displayedActive = (control: HardwareControl) => optimisticActive[control.key]?.value ?? Boolean(control.active);
+  useEffect(() => {
+    const authoritative = new Map((details?.controls ?? []).map((control) => [control.key, Boolean(control.active)]));
+    const now = Date.now();
+    setOptimisticActive((current) => {
+      const next = { ...current };
+      let changed = false;
+      for (const [key, pending] of Object.entries(current)) {
+        if (authoritative.get(key) === pending.value || now - pending.startedAt > 2_500) {
+          delete next[key];
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [details]);
+  const invokeAction = (control: HardwareControl, action: HardwareAction) => {
+    const verb = action.verb.toLowerCase();
+    if (!isMotionControl(control) && ['on', 'off', 'toggle'].includes(verb)) {
+      const value = verb === 'on' ? true : verb === 'off' ? false : !displayedActive(control);
+      setOptimisticActive((current) => ({ ...current, [control.key]: { value, startedAt: Date.now() } }));
+    }
+    return sendCmd('hardware.action.invoke', { action_id: action.id }).then((accepted) => {
+      if (!accepted) {
+        setOptimisticActive((current) => {
+          const next = { ...current };
+          delete next[control.key];
+          return next;
+        });
+      }
+      return accepted;
+    });
+  };
   const toggleAction = (control: HardwareControl) => {
-    const wanted = control.active ? 'off' : 'on';
+    const wanted = displayedActive(control) ? 'off' : 'on';
     return control.actions.find((action) => action.verb.toLowerCase() === wanted)
       ?? control.actions.find((action) => action.verb.toLowerCase() === 'toggle');
   };
   const actionInputProps = (control: HardwareControl, action: HardwareAction) => {
-    const invoke = () => sendCmd('hardware.action.invoke', { action_id: action.id });
+    const invoke = () => void invokeAction(control, action);
     const keyboardInvoke = (event: React.MouseEvent<HTMLElement>) => {
       if (event.detail === 0) invoke();
     };
@@ -192,7 +229,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
     };
   };
   const visibleActions = (control: HardwareControl) => control.actions.filter(
-    (action) => !isStopAction(action) || Boolean(control.active),
+    (action) => !isStopAction(action) || displayedActive(control),
   );
   const moveControl = (key: string, delta: number) => {
     const source = controls.find((control) => control.key === key);
@@ -225,11 +262,12 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
         {section.controls.sort((left, right) => left.order - right.order).map((control) => {
           const isPwm = /pwm|mosfet/i.test(control.kind);
           const value = pwmDrafts[control.key] ?? control.percent ?? 0;
+          const active = displayedActive(control);
           const immediateToggle = !isPwm ? toggleAction(control) : undefined;
           const contextItems = [
             { key: 'manage', label: tr(locale, 'Manage'), icon: <ToolOutlined /> },
             { key: 'rename', label: tr(locale, 'Rename'), icon: <ExperimentOutlined /> },
-            immediateToggle ? { key: 'toggle', label: tr(locale, control.active ? 'Off' : 'On'), icon: <PoweroffOutlined /> } : null,
+            immediateToggle ? { key: 'toggle', label: tr(locale, active ? 'Off' : 'On'), icon: <PoweroffOutlined /> } : null,
             { type: 'divider' as const },
             { key: 'visibility', label: tr(locale, control.hidden ? 'Show in Hardware Monitor' : 'Hide from Hardware Monitor'), icon: control.hidden ? <EyeOutlined /> : <EyeInvisibleOutlined /> },
             { key: 'lock', label: tr(locale, control.locked ? 'Unlock' : 'Lock'), icon: control.locked ? <UnlockOutlined /> : <LockOutlined /> },
@@ -242,7 +280,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
               onClick: ({ key }) => {
                 if (key === 'manage') { setDetailKey(control.key); setManagerOpen(true); }
                 if (key === 'rename') { setRenamingKey(control.key); setRenameDraft(control.name || control.default_name); setManagerOpen(true); }
-                if (key === 'toggle' && immediateToggle) sendCmd('hardware.action.invoke', { action_id: immediateToggle.id });
+                if (key === 'toggle' && immediateToggle) void invokeAction(control, immediateToggle);
                 if (key === 'visibility') updatePresentation(control.key, { hidden: !control.hidden });
                 if (key === 'lock') updatePresentation(control.key, { locked: !control.locked });
               },
@@ -263,7 +301,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
               setDropKey(null);
             }}
           >
-            <span className="hardware-control__icon">{controlIcon(control.kind)}</span>
+            <span className="hardware-control__icon">{controlIcon(control.kind, control.icon)}</span>
             <span
               className="hardware-control__drag"
               draggable
@@ -304,9 +342,9 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
               <output>{value.toFixed(1)}%</output>
             </div> : <button
               type="button"
-              className={`hardware-control__indicator ${control.active ? 'is-on' : ''}`}
-              aria-label={control.active ? tr(locale, 'On') : tr(locale, 'Off')}
-              title={tr(locale, control.active ? 'Turn off' : 'Turn on')}
+              className={`hardware-control__indicator ${active ? 'is-on' : ''}`}
+              aria-label={active ? tr(locale, 'On') : tr(locale, 'Off')}
+              title={tr(locale, active ? 'Turn off' : 'Turn on')}
               disabled={!immediateToggle || control.locked || !state.hardware_connected || Boolean(state.estop_active)}
               {...(immediateToggle ? actionInputProps(control, immediateToggle) : {})}
             />}
@@ -315,6 +353,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                 <Button
                   disabled={control.locked || !state.hardware_connected || (state.estop_active && action.verb !== 'stop')}
                   danger={action.verb === 'stop'}
+                  type={(action.verb.toLowerCase() === 'on' && active) || (action.verb.toLowerCase() === 'off' && !active) ? 'primary' : 'default'}
                   {...actionInputProps(control, action)}
                 >
                   {action.name || action.verb}
@@ -325,7 +364,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
         })}
       </div>,
     }));
-  }, [details, locale, pwmDrafts, sendCmd, state.estop_active, state.hardware_connected, dragKey, dropKey, controls]);
+  }, [details, locale, pwmDrafts, sendCmd, state.estop_active, state.hardware_connected, dragKey, dropKey, controls, optimisticActive]);
 
   if (!details || !state.controller_connected) {
     return <section className="surface-page hardware-page">
@@ -407,7 +446,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
       }}
     >
       {detailKey ? controls.filter((control) => control.key === detailKey).map((control) => <div className="channel-detail" key={control.key}>
-        <div className="channel-detail__identity"><span>{controlIcon(control.kind)}</span><div><strong>{control.name || control.default_name}</strong><code>{controlIdentity(control)}</code></div></div>
+        <div className="channel-detail__identity"><span>{controlIcon(control.kind, control.icon)}</span><div><strong>{control.name || control.default_name}</strong><code>{controlIdentity(control)}</code></div></div>
         <label><span>{tr(locale, 'Name')}</span><Input defaultValue={control.name || control.default_name} onPressEnter={(event) => updatePresentation(control.key, { name: event.currentTarget.value.trim() })} /></label>
         <label><span>{tr(locale, 'Group')}</span><GroupSelect value={control.group ?? ''} groups={controls.map((item) => item.group ?? '')} locale={locale} onChange={(group) => updatePresentation(control.key, { group })} /></label>
         <dl className="detail-list">
@@ -440,7 +479,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                 />}
               </header>
               {peers.map((control, index) => {
-                const active = Boolean(control.active);
+                const active = displayedActive(control);
                 const onAction = control.actions.find((action) => action.verb.toLowerCase() === 'on');
                 const offAction = control.actions.find((action) => action.verb.toLowerCase() === 'off');
                 const baseLiveActions = onAction && offAction
@@ -633,9 +672,13 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
     </Card>}
 
     {details.front_panel && <Card className="surface-card front-panel-card" title={<Space><DesktopOutlined />{tr(locale, 'Front panel')}</Space>}>
-      <div className="segment-display" aria-label={tr(locale, 'Seven segment display')}>
-        {details.front_panel.raw_segments.map((segment, index) => <span key={index}>{segment.toString(16).padStart(2, '0').toUpperCase()}</span>)}
-      </div>
+      <SevenSegmentDisplay
+        segments={details.front_panel.raw_segments}
+        brightness={details.front_panel.brightness}
+        active={details.front_panel.segments_active}
+        blinking={details.front_panel.blink}
+        label={tr(locale, 'Seven segment display')}
+      />
       <Space wrap>{['K1', 'K2', 'K3', 'K4'].map((key) => <Button key={key} onClick={() => sendCmd('hardware.front_panel.press', { key })}>{key}</Button>)}</Space>
       {details.front_panel.lcd_available && <div className="lcd-display"><span>{details.front_panel.lcd_line_1}</span><span>{details.front_panel.lcd_line_2}</span></div>}
     </Card>}

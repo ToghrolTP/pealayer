@@ -8,10 +8,9 @@ import {
   FolderOpenOutlined,
   InfoCircleOutlined,
   SettingOutlined,
-  ApiOutlined,
-  ClockCircleOutlined,
 } from '@ant-design/icons';
 import { HeaderBar } from './components/HeaderBar';
+import { ApplicationStatusBar, StatusBarVisibility } from './components/ApplicationStatusBar';
 import { SharedToasts } from './components/SharedToasts';
 import { FujiLoader } from './components/FujiLoader';
 import { WebViewBoundary } from './components/WebViewBoundary';
@@ -281,6 +280,24 @@ const App: React.FC = () => {
     signalInteraction();
     return rawSendCmd(command, payload);
   }, [connected, platform.online, rawSendCmd, signalInteraction, runtime?.locale]);
+
+  const updateStatusBarVisibility = useCallback((visibility: StatusBarVisibility) => {
+    setAppConfig((previous) => {
+      const next = { ...(previous ?? {}), status_bar: visibility };
+      persistJson(STORAGE.config, next);
+      return next;
+    });
+    void fetch(apiEndpoint('/api/config'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status_bar: visibility }),
+    }).then(async (response) => {
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || `Status bar update failed (${response.status})`);
+      }
+    }).catch((error) => void message.error(String(error)));
+  }, [apiEndpoint]);
 
   const resolveWebSocketUrl = useCallback(() => {
     const fallbackProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -660,15 +677,15 @@ const App: React.FC = () => {
             </WebViewBoundary>
           </Content>
         </Layout>
-        <footer className="app-statusbar" aria-label={tr(runtime?.locale || 'en', 'Application status')}>
-          <span className={`app-statusbar__connection ${connected ? 'is-online' : ''}`}>
-            <i />{connected ? `${tr(runtime?.locale || 'en', 'Connected')} · ${connectionMode.toUpperCase()}` : tr(runtime?.locale || 'en', 'Offline')}
-          </span>
-          <span><ApiOutlined />{state.hardware_connected ? (state.hardware?.board_name || 'PCController') : tr(runtime?.locale || 'en', 'Board unavailable')}</span>
-          {state.current_video && <span><ClockCircleOutlined />{state.playing ? tr(runtime?.locale || 'en', 'Playing') : tr(runtime?.locale || 'en', 'Paused')} · {Math.max(0, state.playback_time ?? 0).toFixed(1)}s</span>}
-          {state.update?.state && state.update.state !== 'idle' && <span className="app-statusbar__update">{state.update.message}</span>}
-          <strong>{activeTab === 'timeline' ? tr(runtime?.locale || 'en', 'Timeline') : tr(runtime?.locale || 'en', menuItems.find(item => item?.key === activeTab)?.label as string || activeTab)}</strong>
-        </footer>
+        <ApplicationStatusBar
+          state={state}
+          connected={connected}
+          connectionMode={connectionMode}
+          activeSurface={activeTab === 'timeline' ? tr(runtime?.locale || 'en', 'Timeline') : tr(runtime?.locale || 'en', menuItems.find(item => item?.key === activeTab)?.label as string || activeTab)}
+          locale={runtime?.locale || 'en'}
+          visibility={appConfig?.status_bar}
+          onVisibilityChange={updateStatusBarVisibility}
+        />
       </Layout>
     </ConfigProvider>
   );

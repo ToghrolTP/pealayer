@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Table, Breadcrumb, Button, Input, Tag, Space, Avatar, message, Popconfirm, Spin, Typography } from 'antd';
+import { Card, Table, Breadcrumb, Button, Input, Tag, Space, Avatar, message, Popconfirm, Spin, Typography, Dropdown } from 'antd';
 import {
   FolderOutlined,
   VideoCameraOutlined,
@@ -8,6 +8,7 @@ import {
   ReloadOutlined,
   DeleteOutlined,
   SearchOutlined,
+  CopyOutlined,
 } from '@ant-design/icons';
 import { tr, UiLocale } from '../i18n';
 
@@ -83,6 +84,32 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
     }
   };
 
+  const entryContextMenu = (record: FileEntry) => ({
+    items: [
+      record.is_dir
+        ? { key: 'open', icon: <FolderOutlined />, label: tr(locale, 'Open folder') }
+        : record.is_media
+          ? { key: 'play', icon: <PlayCircleOutlined />, label: tr(locale, 'Play') }
+          : null,
+      { key: 'copy', icon: <CopyOutlined />, label: tr(locale, 'Copy full path') },
+      { type: 'divider' as const },
+      { key: 'refresh', icon: <ReloadOutlined />, label: tr(locale, 'Refresh') },
+    ].filter(Boolean) as any,
+    onClick: async ({ key }: { key: string }) => {
+      if (key === 'open') await fetchDirectory(record.path);
+      if (key === 'play') handlePlayMedia(record.path, record.name);
+      if (key === 'refresh') await fetchDirectory(currentPath);
+      if (key === 'copy') {
+        try {
+          await navigator.clipboard.writeText(record.path);
+          void message.success(tr(locale, 'Path copied'));
+        } catch {
+          void message.error(tr(locale, 'Unable to copy path'));
+        }
+      }
+    },
+  });
+
   const handleDeleteFile = async (filePath: string) => {
     try {
       const res = await fetch(`${apiBaseUrl}/api/fs/trash`, {
@@ -119,7 +146,8 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
       dataIndex: 'name',
       key: 'name',
       render: (_: any, record: FileEntry) => (
-        <Space size="middle">
+        <Dropdown trigger={['contextMenu']} menu={entryContextMenu(record)}>
+        <Space size="middle" className="media-library__entry">
           {record.is_dir ? (
             <Avatar shape="square" icon={<FolderOutlined />} className="media-library__avatar media-library__avatar--folder" />
           ) : record.has_thumbnail ? (
@@ -147,6 +175,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
             </Text>
           )}
         </Space>
+        </Dropdown>
       ),
     },
     {

@@ -1139,6 +1139,7 @@ impl eframe::App for PealayerApp {
                 playback_rate: self.playback_rate,
                 playback_time: self.playback_time,
                 duration: self.duration,
+                media_fps: self.media_fps,
                 current_video: self
                     .current_video_path
                     .as_ref()
@@ -7433,6 +7434,11 @@ fn web_hardware_details(
             "audio_temperature_centi_c": capabilities.telemetry.audio_temperature_centi_c,
             "door_open": capabilities.telemetry.door_open,
         },
+        "status_led": capabilities.status_led.as_ref().map(|status| serde_json::json!({
+            "red": status.red,
+            "green": status.green,
+            "blue": status.blue,
+        })),
         "warnings": capabilities.warnings.iter().map(|warning| serde_json::json!({
             "code": warning.code,
             "severity": warning.severity,

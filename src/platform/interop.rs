@@ -1114,6 +1114,8 @@ pub struct PlayerStatusResponse {
     pub playback_rate: f64,
     pub playback_time: f64,
     pub duration: f64,
+    #[serde(default)]
+    pub media_fps: f64,
     pub current_video: Option<String>,
     #[serde(default)]
     pub chapters: Vec<WebMediaChapter>,
@@ -1406,6 +1408,7 @@ impl Default for PlayerStatusResponse {
             playback_rate: default_playback_rate(),
             playback_time: 0.0,
             duration: 0.0,
+            media_fps: 0.0,
             current_video: None,
             chapters: Vec::new(),
             current_chapter_index: None,

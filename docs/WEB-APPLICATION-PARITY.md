@@ -18,21 +18,21 @@ widths, and has been exercised against live state rather than sample data.
 
 | Area | Current state | Completion evidence | Remaining work |
 | --- | --- | --- | --- |
-| Application shell | In progress | Installable SPA/PWA, responsive navigation, shared appearance and connection state | Finish application-style command header, footer/status items and compact/mobile command access |
+| Application shell | In progress | Installable SPA/PWA, responsive navigation, shared appearance and connection state; footer now consumes the native persisted visibility contract and exposes right-click hide/show actions | Finish application-style command header and compact/mobile command access |
 | Playback surface | In progress | Browser-native video now uses Pealayer's seekable byte-range endpoint and follows the Rust/mpv clock; unsupported browser codecs fall back to the backend frame surface | Add negotiated low-latency transcoded canvas stream over WebSocket, browser capability reporting and stream diagnostics |
-| Transport | Mostly complete | Play/pause, seek, volume, mute, rate, chapters, thumbnail preview and remote-folder previous/next use shared commands | Complete track selectors, frame-step state, contextual shortcuts and exact buffer visualization |
-| Hardware monitor | In progress | Live advertised controls, press-time relay actions, clickable indicators, PWM, motion hold/release, drag ordering and complete card context menu | Unify custom icons with egui, bulk management, bindings, channel timeline actions and every advertised board setting |
+| Transport | Mostly complete | Play/pause, seek, volume, mute, rate, chapters, thumbnail preview and remote-folder previous/next use shared commands; the primary timeline action now has a fixed circular hit target | Complete track selectors, frame-step state, contextual shortcuts and exact buffer visualization |
+| Hardware monitor | In progress | Live advertised controls, pointer-down relay actions with immediate optimistic feedback and authoritative reconciliation, clickable indicators, PWM, motion hold/release, drag ordering, custom channel icons and complete card context menu | Complete bulk management, bindings, channel timeline actions and every advertised board setting |
 | Emergency stop | Complete for Web interaction | Filled red danger control, immediate pointer-down dispatch and shared interlock state | Continue physical-board acceptance whenever hardware is attached |
-| Front panel | In progress | Live seven-segment data and K1–K4 commands are sourced from PCController | Match the complete egui board-information experience, segment renderer, LCD/settings tabs and contextual commands |
+| Front panel | In progress | Live PCController masks now render as four illuminated seven-segment glyphs, with brightness/activity/blink state plus K1–K4 commands and LCD text | Match the complete egui board-information tabs, settings and contextual commands |
 | Effects library | In progress | Live PCController catalog, groups, create/manage/rename/play/delete, drag source and context menus | Finish group management, all custom picker behavior and visual parity at every responsive width |
 | Effect editor and recording | In progress | Sequence editing and board/app recording share PCController effect contracts | Complete professional multi-lane editor, selection, easing, fades, repeat/blink authoring, offline drafts and conflict handling |
 | Timeline | In progress | Web receives the native ordered track inventory and its authoritative selected, linked, visible, muted, soloed and locked state; row selection, action buttons and right-click menus invoke the same validated Rust commands as egui; cues move and conditionally resize | Complete keyframe editing, browser-native manage dialogs, track routing/selectors, keyboard editing, snapping, vertical reordering and exact scroll/navigation behavior |
-| Media library | In progress | Browse/play/thumbnails and native path requests work; Windows extended path prefixes are removed from breadcrumbs | Add complete file context menus, metadata, safe rename workflows and richer remote-folder parity |
+| Media library | In progress | Browse/play/thumbnails and native path requests work; Windows extended path prefixes are removed from breadcrumbs; file and folder rows expose open/play/copy/refresh context actions | Add metadata, safe rename workflows and richer remote-folder parity |
 | Preferences | In progress | Rust-generated preference contract drives the Web controls and appearance is synchronized | Ensure every native setting/control type and import/export workflow is represented and visually verified |
 | Dialogs | In progress | Connection, remote location, channel management, RF management, effect editing and workspace management exist | Add full About, media/track properties, audio, subtitles, board information, update, bindings and remaining native dialogs without duplicating state logic |
 | Messaging and OSD | Mostly complete | Shared toasts and the native configurable OSD contract render across Web, egui, HTTP, JSON-RPC and WebSocket | Complete icon-name coverage and visual acceptance for every custom anchor/color combination |
 | Updates | In progress | URL update and truthful byte progress exist | Replace explanatory filler with contextual state/actions and complete peer/CI source selection parity |
-| Footer/status bar | In progress | Web renders live connection transport, board, playback, update and active-surface state | Add the shared visibility/order contract plus hide/show context menus and transient messages matching egui |
+| Footer/status bar | Mostly complete | Web renders configured hardware, physical status RGB, telemetry, frame/playback state, warnings, transient update/OSD messages, E-STOP and workspace state; persisted hide/show controls work from the whole bar or individual items | Add shared item ordering and complete narrow/mobile prioritization acceptance |
 | Responsive and accessibility | In progress | Automated phone/desktop layout contracts, modal height constraints and reduced-motion handling exist | Add screenshot interaction passes at phone, tablet, narrow desktop, desktop, light, dark, keyboard-only and touch sizes |
 | Headless operation | In progress | Rust backend hosts the PWA, REST, WebSocket, IPC and range-serving media endpoint | Remove the native-window dependency for truly display-less startup and complete transcoded streaming fallback |
 
@@ -55,6 +55,14 @@ widths, and has been exercised against live state rather than sample data.
   `pealayer.timeline.track.manage`. Track keys are validated once at the shared
   transport boundary; the Web client contains no channel-specific mutation
   rules.
+- **Immediate hardware interaction and board presentation:** Relay buttons and
+  indicators update on primary pointer-down, then reconcile with the next
+  PCController snapshot instead of appearing inert while the board command is
+  already in flight. Custom channel icons are shared with effects, and the
+  front panel renders actual segment masks instead of hexadecimal debug text.
+- **Shared status-bar configuration:** Web reads and writes the native
+  `status_bar` configuration, renders only live state, and offers right-click
+  hide/show actions without creating a second browser-only preference model.
 
 ## Regression rules
 
