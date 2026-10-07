@@ -1,7 +1,7 @@
 use crate::app::PealayerApp;
 use eframe::egui;
 use serde_json::{Value, json};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub const OPERATIONS: &[&str] = &["catalog", "learn.start", "learn.status", "learn.cancel", "map", "remove", "clear", "transmit", "binding.put", "binding.remove"];
 
@@ -15,7 +15,6 @@ pub struct RfState {
     error_is_catalog: bool,
     pending_name: String,
     tab: usize,
-    last_poll: Instant,
     draft: Value,
     previous_name: String,
     allow_keyboard: bool,
@@ -37,7 +36,7 @@ impl Default for RfState {
     fn default() -> Self {
         Self { open:false, pending:false, error:String::new(), catalog:Value::Null,
             last_result:Value::Null, last_operation:String::new(), error_is_catalog:false,
-            pending_name:String::new(), tab:0, last_poll:Instant::now(), draft:new_binding(),
+            pending_name:String::new(), tab:0, draft:new_binding(),
             previous_name:String::new(), allow_keyboard:false, code:String::new(), bits:24,
             protocol:1, pulse_us:0, repeats:1, board_map:json!({"id":0,"action":"none"}) }
     }
@@ -91,7 +90,6 @@ impl PealayerApp {
         self.rf.pending_name = pending_name;
         if operation != "catalog" { self.rf.error.clear(); self.rf.error_is_catalog = false; }
         self.rf.pending = true;
-        self.rf.last_poll = Instant::now();
         Ok(())
     }
 }
@@ -189,7 +187,6 @@ fn action_editor(ui: &mut egui::Ui, action: &mut Value, catalog:&Value) {
 
 pub fn draw(app:&mut PealayerApp, ui:&mut egui::Ui) {
     if !app.rf.open { return; }
-    if !app.rf.pending && app.rf.last_poll.elapsed() >= Duration::from_secs(1) { request(app,"catalog",json!({})); }
     ui.ctx().request_repaint_after(Duration::from_millis(250));
     let geometry=crate::ui::dialog::bounded_geometry(ui.ctx().content_rect(),24.0,egui::vec2(820.0,610.0),egui::vec2(480.0,380.0),egui::vec2(980.0,760.0));
     let mut open=true;
@@ -268,6 +265,9 @@ pub fn draw(app:&mut PealayerApp, ui:&mut egui::Ui) {
                             if learning { ui.colored_label(ui.visuals().selection.bg_fill,"Learning…"); if ui.button("Stop learning").clicked() { request(app,"learn.cancel",json!({})); } }
                             else if ui.add_enabled(catalog["connected"]==true && !app.rf.pending,egui::Button::new(format!("{} Learn buttons",crate::ui::icons::PLUS))).clicked() { request(app,"learn.start",json!({"mode":"timer","timeout_ms":30000})); }
                         });
+                        if array(&catalog["entries"]).is_empty() {
+                            ui.label(egui::RichText::new("No learned RF buttons. Refresh to read the board or learn a new button.").weak());
+                        }
                         for entry in array(&catalog["entries"]) {
                             egui::Frame::group(ui.style()).show(ui,|ui| {
                                 ui.horizontal_wrapped(|ui| {
@@ -325,3 +325,43 @@ pub fn draw(app:&mut PealayerApp, ui:&mut egui::Ui) {
 }
 
 fn actions_len_button(ui:&mut egui::Ui) -> egui::Response { ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| ui.button(crate::ui::icons::TRASH).on_hover_text("Remove action")).inner }
+
+#[cfg(test)]
+mod tests {
+    use super::RfState;
+    use serde_json::json;
+
+    #[test]
+    fn shallow_catalog_refresh_preserves_authoritative_board_entries() {
+        let mut state = RfState::default();
+        state.apply_catalog(json!({
+            "connected": true,
+            "entries_sampled": true,
+            "entries": [{"id": 0, "code": 42}]
+        }));
+
+        state.apply_catalog(json!({"connected": true, "bindings": []}));
+
+        assert_eq!(state.catalog["entries"][0]["code"], 42);
+        assert_eq!(state.catalog["entries_sampled"], true);
+    }
+
+    #[test]
+    fn authoritative_catalog_replaces_board_entries() {
+        let mut state = RfState::default();
+        state.apply_catalog(json!({
+            "connected": true,
+            "entries_sampled": true,
+            "entries": [{"id": 0, "code": 42}]
+        }));
+
+        state.apply_catalog(json!({
+            "connected": true,
+            "entries_sampled": true,
+            "entries": [{"id": 1, "code": 99}]
+        }));
+
+        assert_eq!(state.catalog["entries"].as_array().map(Vec::len), Some(1));
+        assert_eq!(state.catalog["entries"][0]["code"], 99);
+    }
+}

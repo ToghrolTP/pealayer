@@ -3,7 +3,9 @@
 Open **Workspace → RF controls…** (also available in Hardware Monitor and the RF
 tool in Effects Library). In the Web Hardware page, use **RF controls → Manage**.
 
-Use **Remotes → Learn buttons**, press a remote button, stop learning and refresh.
+Use **Remotes → Learn buttons** and press a remote button. Pealayer reads the
+learned-code catalog when the manager opens and refreshes it from PCController's
+RF learning events; **Refresh** remains available for an explicit board read.
 Choose **Assign** to bind it. Choose **Application → pealayer (all) → Toggle** for
 play/pause. **Down** runs immediately on reception; use **Up** for a separate
 release action. Multiple ordered actions can be added to an assignment.

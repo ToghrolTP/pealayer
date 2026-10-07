@@ -822,6 +822,14 @@ impl eframe::App for PealayerApp {
             self.process_shell_commands(ui.ctx());
         }
         self.process_controller_call_results();
+        if !self.rf.pending && self.engine_handle.take_rf_catalog_refresh_request() {
+            if let Err(error) = self.request_rf(
+                "catalog",
+                serde_json::json!({"read_board": true}),
+            ) {
+                self.rf.error = error;
+            }
+        }
         let preview_now = std::time::Instant::now();
         self.hardware_effect_authoring
             .expire_effect_preview(preview_now);

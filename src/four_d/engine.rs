@@ -433,6 +433,7 @@ pub struct EngineHandle {
     pub hardware_capabilities: Arc<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
     pub controller_call_results: Arc<Mutex<std::collections::VecDeque<ControllerCallResult>>>,
     catalog_refresh_requested: Arc<AtomicBool>,
+    rf_catalog_refresh_requested: Arc<AtomicBool>,
     state_notifier: Arc<Mutex<Option<StateNotifier>>>,
     pub sender: mpsc::Sender<EngineMessage>,
 }
@@ -450,6 +451,7 @@ pub struct ControllerPushTarget {
     hardware_capabilities:
         std::sync::Weak<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
     catalog_refresh_requested: std::sync::Weak<AtomicBool>,
+    rf_catalog_refresh_requested: std::sync::Weak<AtomicBool>,
 }
 
 impl EngineHandle {
@@ -472,6 +474,7 @@ impl EngineHandle {
             serial_port: Arc::downgrade(&self.serial_port),
             hardware_capabilities: Arc::downgrade(&self.hardware_capabilities),
             catalog_refresh_requested: Arc::downgrade(&self.catalog_refresh_requested),
+            rf_catalog_refresh_requested: Arc::downgrade(&self.rf_catalog_refresh_requested),
         }
     }
 
@@ -493,6 +496,11 @@ impl EngineHandle {
     pub fn request_catalog_refresh(&self) {
         self.catalog_refresh_requested
             .store(true, Ordering::Relaxed);
+    }
+
+    pub fn take_rf_catalog_refresh_request(&self) -> bool {
+        self.rf_catalog_refresh_requested
+            .swap(false, Ordering::AcqRel)
     }
 
     pub fn queue_controller_intent(
@@ -609,6 +617,20 @@ impl ControllerPushTarget {
                 return true;
             }
         }
+        if matches!(method, "controller.state" | "controller.event")
+            && params
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| kind.starts_with("rf.learn."))
+        {
+            // PCController publishes RF learning lifecycle/capture events.
+            // Consume those edges in the app loop and fetch one authoritative
+            // board catalog instead of polling while the dialog is open.
+            if let Some(refresh) = self.rf_catalog_refresh_requested.upgrade() {
+                refresh.store(true, Ordering::Release);
+                return true;
+            }
+        }
         let Some(capabilities) = self.hardware_capabilities.upgrade() else {
             return false;
         };
@@ -711,6 +733,7 @@ pub fn spawn_engine() -> EngineHandle {
     let hardware_capabilities = Arc::new(Mutex::new(None));
     let controller_call_results = Arc::new(Mutex::new(std::collections::VecDeque::new()));
     let catalog_refresh_requested = Arc::new(AtomicBool::new(false));
+    let rf_catalog_refresh_requested = Arc::new(AtomicBool::new(false));
     let state_notifier = Arc::new(Mutex::new(None));
 
     let (tx, rx) = mpsc::channel();
@@ -1622,6 +1645,7 @@ pub fn spawn_engine() -> EngineHandle {
         hardware_capabilities,
         controller_call_results,
         catalog_refresh_requested,
+        rf_catalog_refresh_requested,
         state_notifier,
         sender: tx,
     }
@@ -1772,7 +1796,7 @@ fn spawn_peer_engine() -> EngineHandle {
         is_playing:Arc::new(AtomicBool::new(false)),estop_active:Arc::new(AtomicBool::new(false)),connection_requested:Arc::new(AtomicBool::new(true)),is_connected:Arc::new(AtomicBool::new(false)),
         serial_port:Arc::new(Mutex::new(crate::peer::client().unwrap().origin.to_string())),active_transport:Arc::new(Mutex::new(Some("pealayer:remote".into()))),
         connection_error:Arc::new(Mutex::new(None)),hardware_capabilities:Arc::new(Mutex::new(None)),controller_call_results:Arc::new(Mutex::new(VecDeque::new())),
-        catalog_refresh_requested:Arc::new(AtomicBool::new(false)),state_notifier:Arc::new(Mutex::new(None)),sender:tx,
+        catalog_refresh_requested:Arc::new(AtomicBool::new(false)),rf_catalog_refresh_requested:Arc::new(AtomicBool::new(false)),state_notifier:Arc::new(Mutex::new(None)),sender:tx,
     };
     let owner=Arc::downgrade(&lifecycle);
     let capabilities=handle.hardware_capabilities.clone();
@@ -2584,6 +2608,20 @@ mod tests {
             &serde_json::json!({"kind": "melodies.changed", "action": "refresh"}),
         ));
         assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn rf_learning_notification_requests_authoritative_rf_catalog_refresh() {
+        let handle = spawn_engine();
+        let target = handle.controller_push_target();
+        assert!(!handle.take_rf_catalog_refresh_request());
+        assert!(target.apply_notification(
+            "controller.event",
+            &serde_json::json!({"kind": "rf.learn.capture", "id": 4}),
+        ));
+        assert!(handle.take_rf_catalog_refresh_request());
+        assert!(!handle.take_rf_catalog_refresh_request());
+        assert!(!handle.catalog_refresh_requested.load(Ordering::Relaxed));
     }
 
     #[test]
