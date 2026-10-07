@@ -631,13 +631,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .window_handle
         .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
     #[cfg(target_os = "windows")]
+    let composition_media = app
+        .current_video_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().into_owned());
+    #[cfg(target_os = "windows")]
     let taskbar_media = app
         .windows_video_taskbar_thumbnail
-        .then(|| {
-            app.current_video_path
-                .as_ref()
-                .map(|path| path.to_string_lossy().into_owned())
-        })
+        .then(|| composition_media.clone())
         .flatten();
     app.taskbar_video_rect = taskbar_video_rect;
 
@@ -656,7 +657,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         && if app.windows_detached_video_panel {
             crate::platform::d3d11_composition::active()
         } else if composition_popup_fallback {
-            if let Some(media) = taskbar_media.as_deref() {
+            if let Some(media) = composition_media.as_deref() {
                 crate::platform::d3d11_composition::capture_for_overlay(
                     hwnd,
                     media,
@@ -668,7 +669,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 ui.ctx()
                     .request_repaint_after(std::time::Duration::from_millis(16));
             }
-            if let Some(frame) = crate::platform::taskbar_preview::frame_rgba() {
+            if let Some(frame) = crate::platform::d3d11_composition::overlay_frame_rgba() {
                 let size = [frame.width() as usize, frame.height() as usize];
                 let image = egui::ColorImage::from_rgba_unmultiplied(size, frame.as_raw());
                 if let Some(texture) = app.d3d11_overlay_texture.as_mut() {
@@ -691,6 +692,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             );
             false
         } else {
+            crate::platform::d3d11_composition::clear_overlay_frame();
+            app.d3d11_overlay_texture = None;
             crate::platform::d3d11_composition::update(
                 &app.mpv_client,
                 hwnd,

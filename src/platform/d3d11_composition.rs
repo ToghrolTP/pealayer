@@ -54,6 +54,7 @@ struct CompositionState {
     flip_chain_advanced: bool,
     media: String,
     last_overlay_capture: Option<Instant>,
+    overlay_frame: Option<image::RgbaImage>,
 }
 
 fn create_state(hwnd: isize) -> windows::core::Result<CompositionState> {
@@ -86,6 +87,7 @@ fn create_state(hwnd: isize) -> windows::core::Result<CompositionState> {
         flip_chain_advanced: false,
         media: String::new(),
         last_overlay_capture: None,
+        overlay_frame: None,
     })
 }
 
@@ -266,15 +268,28 @@ fn capture_composition_frame(
             },
         )
     };
-    let media_time = crate::platform::windows::shell_player_time();
-    crate::platform::taskbar_preview::submit_capture_at(hwnd, frame, media_time);
-    if !state.logged_thumbnail_capture {
-        log::info!(
-            "D3D11 video-only taskbar thumbnail capture is active ({}x{})",
-            target_width,
-            target_height
-        );
-        state.logged_thumbnail_capture = true;
+    match purpose {
+        CapturePurpose::Taskbar => {
+            let media_time = crate::platform::windows::shell_player_time();
+            crate::platform::taskbar_preview::submit_capture_at(hwnd, frame, media_time);
+            if !state.logged_thumbnail_capture {
+                log::info!(
+                    "D3D11 video-only taskbar thumbnail capture is active ({}x{})",
+                    target_width,
+                    target_height
+                );
+                state.logged_thumbnail_capture = true;
+            }
+        }
+        CapturePurpose::PopupOverlay { .. } => {
+            // Popup composition is a separate consumer from Explorer's
+            // taskbar preview. Reusing the taskbar cache here meant a paused
+            // popup displayed whichever older frame Explorer last requested,
+            // then closing it revealed the actual DirectComposition frame.
+            // Keep the current swapchain readback private to the popup so
+            // opening or closing a menu cannot mutate the paused thumbnail.
+            state.overlay_frame = Some(frame);
+        }
     }
     Ok(())
 }
@@ -293,6 +308,29 @@ pub fn capture_for_overlay(hwnd: isize, media: &str, maximum: (u32, u32)) {
             )
         {
             log::debug!("D3D11 popup fallback capture failed: {error}");
+        }
+    });
+}
+
+/// Return the latest readback used only while egui must paint above the
+/// DirectComposition visual. This intentionally does not share Explorer's
+/// lower-rate taskbar thumbnail cache.
+pub fn overlay_frame_rgba() -> Option<image::RgbaImage> {
+    STATE.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|state| state.overlay_frame.clone())
+    })
+}
+
+/// Drop the popup-only readback after the visual is reattached. Clearing both
+/// the pixels and throttle timestamp guarantees the next popup starts from the
+/// frame currently presented by the swapchain rather than a prior menu open.
+pub fn clear_overlay_frame() {
+    STATE.with(|slot| {
+        if let Some(state) = slot.borrow_mut().as_mut() {
+            state.overlay_frame = None;
+            state.last_overlay_capture = None;
         }
     });
 }

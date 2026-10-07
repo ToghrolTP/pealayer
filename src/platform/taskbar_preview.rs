@@ -143,10 +143,6 @@ pub fn request_fullscreen(fullscreen: bool) {
     request_repaint();
 }
 
-pub(crate) fn frame_rgba() -> Option<image::RgbaImage> {
-    PREVIEW.lock().ok()?.frame.clone()
-}
-
 /// Freeze the frame Explorer is already displaying when playback pauses.
 ///
 /// Selecting another history entry here made the thumbnail visibly jump at
