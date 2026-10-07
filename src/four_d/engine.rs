@@ -1258,9 +1258,9 @@ pub fn spawn_engine() -> EngineHandle {
                 {
                     match transport.call_controller(&intent.method, intent.params) {
                         Ok(_) if intent.refresh_catalog => {
-                            // Push events remain the lowest-latency path. This
-                            // pull closes the race for older coordinators that
-                            // do not publish the corresponding state change.
+                            // Push events remain the lowest-latency path. The
+                            // authoritative pull self-corrects a dropped or
+                            // reordered event on the current contract.
                             engine_catalog_refresh_requested.store(true, Ordering::Relaxed);
                         }
                         Ok(_) => {}

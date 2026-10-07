@@ -77,7 +77,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
   }, []);
 
   const handlePlayMedia = (filePath: string, fileName: string) => {
-    sendCmd('open_video', { path: filePath });
+    sendCmd('pealayer.open', { target: filePath });
     message.success(`${tr(locale, 'Playing:')} ${fileName}`);
     if (onMediaPlayStarted) {
       onMediaPlayStarted();

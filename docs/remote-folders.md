@@ -30,7 +30,7 @@ Send these JSON commands to native IPC, `POST /api/ipc`, `POST /api/player/comma
 {"command":"close_remote_browser"}
 ```
 
-Equivalent JSON-RPC methods are `pealayer.remote.browse`, `.select`, `.sort`, `.close`, and the existing `pealayer.player.open`, `next` and `previous` commands. Example:
+Equivalent JSON-RPC methods are `pealayer.remote.browse`, `.select`, `.sort`, `.close`, and the current `pealayer.open`, `pealayer.next`, and `pealayer.previous` commands. Example:
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"pealayer.remote.browse","params":{"target":"https://files.example/folder/","use_proxy":false}}

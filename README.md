@@ -232,7 +232,7 @@ The default endpoint is `pccontroller://127.0.0.1:8787`. Relay commands use PCCo
 
 Hardware discovery and connection are enabled by default and can be disabled in **Preferences → PCController and hardware**. At startup Pealayer probes the configured coordinator and the canonical local endpoint, prefers a healthy coordinator whose advertised board profile is both attached and configured, and otherwise selects `pccontroller://127.0.0.1:8787` so the bundled-host/external-host retry path remains available. It does not infer a seat profile from relay order.
 
-PCController's peripheral catalog is authoritative for stable control/action keys and mutable names, icons, and groups. Pealayer renders semantic controls only from advertised action IDs, invokes them through `controller.action.invoke`, and edits channel names through the presentation contract. Older coordinators remain rename-compatible through `controller.peripherals.set`. Renames made in PCController WebUI/TUI are refreshed into Pealayer after the `peripherals.changed` notification (with periodic catalog refresh as recovery), while saved projects continue to identify hardware by stable keys rather than labels.
+PCController's peripheral catalog is authoritative for stable control/action keys and mutable names, icons, and groups. Pealayer renders semantic controls only from advertised action IDs, invokes them through `controller.action.invoke`, and edits channel names through the current typed presentation contract. Renames made in PCController WebUI/TUI are refreshed into Pealayer after the `peripherals.changed` notification (with periodic catalog refresh as recovery), while saved projects continue to identify hardware by stable keys rather than labels.
 
 Live motion, relay, and PWM input uses bounded latest-intent delivery per stable control key. Pealayer drains and coalesces rapid UI/API input before issuing one acknowledged controller RPC per engine pass, so a slow board reply cannot build a stale command FIFO or starve feedback. Different controls retain fair insertion order, the final stop/off/value always replaces an older pending value for that control, and E-STOP or endpoint changes discard pre-existing intents.
 
@@ -240,8 +240,8 @@ Seat direction indicators use PCController's semantic per-side motion state.
 While the firmware safely disables a side before reversing its direction relay,
 Pealayer continues to show the accepted `requested` direction and marks it as
 transitioning; after board feedback settles, it shows the reconciled `applied`
-direction. Raw relay edges remain available for recording and diagnostics, and
-Pealayer falls back to those edges when connected to an older coordinator.
+direction. Raw relay edges remain available for recording and diagnostics, but
+Pealayer does not reinterpret them as a substitute semantic-motion contract.
 
 #### Hardware effect authoring
 
@@ -329,7 +329,7 @@ notifications, and vibration remain capability/secure-context dependent.
 | `GET` | `/api/player/commands` | Discovers the shared typed command contract and supported transports |
 | `POST` | `/api/player/command` | Dispatches player commands (JSON payload), including local files and remote media URLs |
 | `POST` | `/api/rpc` | JSON-RPC 2.0 methods such as `pealayer.play`, `pealayer.seek`, `pealayer.open`, and `pealayer.status`; status includes the same `application` and `runtime` self-diagnostics as the REST snapshot |
-| `POST` | `/api/ipc` | CLI and single-instance command transport; accepts legacy command JSON or newline-compatible JSON-RPC payloads |
+| `POST` | `/api/ipc` | CLI and single-instance command transport; accepts typed command JSON or newline-compatible JSON-RPC payloads |
 | `POST` | `/api/osd` | Shows a message using optional anchor/X-Y percentages, font size, icon, colors, timeout, padding, and corner radius; an empty message hides it |
 | `DELETE` | `/api/osd` | Immediately hides the currently displayed OSD and status-bar message |
 | `GET` | `/healthz` | Service/API liveness for coordinators and supervisors |

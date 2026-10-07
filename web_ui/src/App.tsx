@@ -232,13 +232,8 @@ const App: React.FC = () => {
     pending.finish(!error);
   }, []);
   const rawSendCmd = useCallback((command: string, payload: Record<string, any> = {}): Promise<boolean> => {
-    const methodAliases: Record<string, string> = {
-      add_effect_cue: 'pealayer.timeline.effect.add',
-      remove_effect_cue: 'pealayer.timeline.effect.remove',
-      set_recording: 'pealayer.recording.set',
-    };
     const id = nextRequestId.current++;
-    const request = { jsonrpc: '2.0', id, method: methodAliases[command] || command, params: payload };
+    const request = { jsonrpc: '2.0', id, method: command, params: payload };
     return new Promise((finish) => {
       const timer = window.setTimeout(() => {
         completeRequest({ id, error: { message: 'Command acknowledgement timed out; check the current state before retrying.' } });

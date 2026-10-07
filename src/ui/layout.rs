@@ -2699,14 +2699,15 @@ pub(crate) fn motion_control_direction(
     } else {
         None
     };
-    let Some((direction_relay, enable_relay, aliases, is_left)) = side else {
+    let Some((_, _, _, is_left)) = side else {
         return MotionDirectionState::Unknown;
     };
 
     // PCController owns semantic intent and reconciles it with every physical
     // relay edge. During the board's mandatory break-before-make interval,
-    // display the requested direction while retaining raw relay feedback for
-    // diagnostics, recording, and compatibility with older coordinators.
+    // display the requested direction. Raw relay feedback remains available
+    // for diagnostics and recording, but it is not a second API contract for
+    // reconstructing semantic state.
     if let Some(motion) = &capabilities.motion {
         let state = if is_left { &motion.left } else { &motion.right };
         let presented = if state.transitioning {
@@ -2722,34 +2723,7 @@ pub(crate) fn motion_control_direction(
         }
     }
 
-    let mut up = false;
-    let mut down = false;
-    for relay in &capabilities.relays {
-        if !capabilities.active_relays.contains(&relay.id) {
-            continue;
-        }
-        let role = relay.role.to_ascii_lowercase();
-        if !aliases.iter().any(|alias| role.contains(alias)) {
-            continue;
-        }
-        up |= role.contains("up");
-        down |= role.contains("down");
-    }
-    match (up, down) {
-        (true, false) => return MotionDirectionState::Up,
-        (false, true) => return MotionDirectionState::Down,
-        (true, true) => return MotionDirectionState::Unknown,
-        (false, false) => {}
-    }
-    if capabilities.active_relays.contains(&enable_relay) {
-        if capabilities.active_relays.contains(&direction_relay) {
-            MotionDirectionState::Down
-        } else {
-            MotionDirectionState::Up
-        }
-    } else {
-        MotionDirectionState::Stopped
-    }
+    MotionDirectionState::Unknown
 }
 
 pub(crate) fn motion_direction_color(
@@ -7628,7 +7602,7 @@ mod timeline_row_tests {
     }
 
     #[test]
-    fn seat_stop_visibility_ignores_other_sides_and_unrelated_relays() {
+    fn seat_stop_visibility_requires_semantic_motion_state() {
         let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
         capabilities.relays = vec![
             crate::four_d::controller::HardwareOutput {
@@ -7664,11 +7638,21 @@ mod timeline_row_tests {
         capabilities.active_relays.insert(5);
         assert!(!motion_control_is_active(&capabilities, &left));
         capabilities.active_relays.insert(1);
+        assert!(!motion_control_is_active(&capabilities, &left));
+        capabilities.motion = Some(crate::four_d::controller::HardwareMotionState {
+            left: crate::four_d::controller::HardwareMotionSide {
+                requested: "up".into(),
+                applied: "up".into(),
+                transitioning: false,
+                revision: 1,
+            },
+            ..Default::default()
+        });
         assert!(motion_control_is_active(&capabilities, &left));
     }
 
     #[test]
-    fn seat_indicator_reports_up_or_down_from_live_interlocked_relays() {
+    fn seat_indicator_does_not_infer_semantics_from_raw_relays() {
         let control = crate::four_d::controller::HardwareControl {
             key: "seat.a".into(),
             kind: "seat".into(),
@@ -7679,25 +7663,17 @@ mod timeline_row_tests {
         let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
         assert_eq!(
             motion_control_direction(&capabilities, &control),
-            MotionDirectionState::Stopped
+            MotionDirectionState::Unknown
         );
         capabilities.active_relays.insert(2);
         assert_eq!(
             motion_control_direction(&capabilities, &control),
-            MotionDirectionState::Up
-        );
-        assert_eq!(
-            motion_direction_color(&control, MotionDirectionState::Up),
-            egui::Color32::from_rgb(255, 136, 0)
+            MotionDirectionState::Unknown
         );
         capabilities.active_relays.insert(1);
         assert_eq!(
             motion_control_direction(&capabilities, &control),
-            MotionDirectionState::Down
-        );
-        assert_eq!(
-            motion_direction_color(&control, MotionDirectionState::Down),
-            egui::Color32::from_rgb(0, 136, 255)
+            MotionDirectionState::Unknown
         );
     }
 

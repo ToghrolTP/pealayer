@@ -144,9 +144,7 @@ pub enum InteropCommand {
     SeekAbs {
         percentage: f64,
     },
-    #[serde(alias = "volume")]
     SetVolume {
-        #[serde(alias = "level")]
         value: f64,
     },
     SetMute {
@@ -163,9 +161,7 @@ pub enum InteropCommand {
     DisableMediaTrack {
         kind: String,
     },
-    #[serde(alias = "open_video")]
     Open {
-        #[serde(alias = "path")]
         target: String,
     },
     BrowseRemote { #[serde(default)] target: String, #[serde(default)] use_proxy: Option<bool> },
@@ -1552,64 +1548,60 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
     let command = match request.method.as_str() {
         "pealayer.rf" | "rf_control" => Some(InteropCommand::RfControl { operation: string(&["operation"])?, params: request.params.get("params").cloned().unwrap_or_else(||serde_json::json!({})) }),
         "pealayer.rf.open" => Some(InteropCommand::OpenRfManager),
-        "play" | "pealayer.play" | "pealayer.player.play" => Some(InteropCommand::Play),
-        "pause" | "pealayer.pause" | "pealayer.player.pause" => Some(InteropCommand::Pause),
-        "toggle" | "toggle_pause" | "pealayer.toggle" | "pealayer.player.toggle" => {
+        "play" | "pealayer.play" => Some(InteropCommand::Play),
+        "pause" | "pealayer.pause" => Some(InteropCommand::Pause),
+        "toggle" | "toggle_pause" | "pealayer.toggle" => {
             Some(InteropCommand::TogglePause)
         }
-        "stop" | "pealayer.stop" | "pealayer.player.stop" => Some(InteropCommand::Stop),
-        "next" | "pealayer.next" | "pealayer.player.next" => Some(InteropCommand::Next),
-        "previous" | "prev" | "pealayer.previous" | "pealayer.player.previous" => {
+        "stop" | "pealayer.stop" => Some(InteropCommand::Stop),
+        "next" | "pealayer.next" => Some(InteropCommand::Next),
+        "previous" | "prev" | "pealayer.previous" => {
             Some(InteropCommand::Previous)
         }
         "chapter_previous"
         | "previous_chapter"
-        | "pealayer.chapter.previous"
-        | "pealayer.player.chapter.previous" => Some(InteropCommand::PreviousChapter),
+        | "pealayer.chapter.previous" => Some(InteropCommand::PreviousChapter),
         "chapter_next"
         | "next_chapter"
-        | "pealayer.chapter.next"
-        | "pealayer.player.chapter.next" => Some(InteropCommand::NextChapter),
-        "chapter" | "set_chapter" | "pealayer.chapter.set" | "pealayer.player.chapter.set" => {
+        | "pealayer.chapter.next" => Some(InteropCommand::NextChapter),
+        "chapter" | "set_chapter" | "pealayer.chapter.set" => {
             let index = request
                 .params
                 .get("index")
-                .or_else(|| request.params.get("chapter"))
                 .and_then(Value::as_i64)
                 .ok_or_else(|| "missing integer parameter: index".to_string())?;
             Some(InteropCommand::SetChapter { index })
         }
-        "seek" | "pealayer.seek" | "pealayer.player.seek" => Some(InteropCommand::Seek {
+        "seek" | "pealayer.seek" => Some(InteropCommand::Seek {
             seconds: number(&["seconds"])?,
         }),
-        "seek_to" | "pealayer.seek_to" | "pealayer.player.seek_to" => {
+        "seek_to" | "pealayer.seek_to" => {
             Some(InteropCommand::SeekTo {
-                seconds: number(&["seconds", "position"])?,
+                seconds: number(&["seconds"])?,
             })
         }
-        "seek_abs" | "pealayer.seek_absolute" | "pealayer.player.seek_absolute" => {
+        "seek_abs" | "pealayer.seek_absolute" => {
             Some(InteropCommand::SeekAbs {
                 percentage: number(&["percentage"])?,
             })
         }
-        "volume" | "set_volume" | "pealayer.volume.set" | "pealayer.player.volume.set" => {
+        "volume" | "set_volume" | "pealayer.volume.set" => {
             Some(InteropCommand::SetVolume {
-                value: number(&["value", "level"])?,
+                value: number(&["value"])?,
             })
         }
-        "mute" | "set_mute" | "pealayer.mute.set" | "pealayer.player.mute.set" => {
+        "mute" | "set_mute" | "pealayer.mute.set" => {
             let muted = request
                 .params
                 .get("muted")
-                .or_else(|| request.params.get("enabled"))
                 .and_then(Value::as_bool)
                 .ok_or_else(|| "missing boolean parameter: muted".to_string())?;
             Some(InteropCommand::SetMute { muted })
         }
-        "toggle_mute" | "pealayer.mute.toggle" | "pealayer.player.mute.toggle" => {
+        "toggle_mute" | "pealayer.mute.toggle" => {
             Some(InteropCommand::ToggleMute)
         }
-        "rate" | "set_rate" | "pealayer.rate.set" | "pealayer.player.rate.set" => {
+        "rate" | "set_rate" | "pealayer.rate.set" => {
             Some(InteropCommand::SetRate {
                 rate: number(&["rate", "value"])?,
             })
@@ -1629,9 +1621,9 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 kind: string(&["kind", "type"])?.trim().to_ascii_lowercase(),
             })
         }
-        "open" | "open_video" | "pealayer.open" | "pealayer.player.open" => {
+        "open" | "pealayer.open" => {
             Some(InteropCommand::Open {
-                target: string(&["target", "path"])?,
+                target: string(&["target"])?,
             })
         }
         "browse_remote" | "pealayer.remote.browse" => Some(InteropCommand::BrowseRemote { target: request.params.get("target").and_then(Value::as_str).unwrap_or_default().into(), use_proxy: request.params.get("use_proxy").and_then(Value::as_bool) }),
@@ -1640,8 +1632,7 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "close_remote_browser" | "pealayer.remote.close" => Some(InteropCommand::CloseRemoteBrowser),
         "fullscreen"
         | "set_fullscreen"
-        | "pealayer.fullscreen.set"
-        | "pealayer.player.fullscreen.set" => {
+        | "pealayer.fullscreen.set" => {
             let enabled = request
                 .params
                 .get("enabled")
@@ -2137,7 +2128,7 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
             })
         }
         "config.reload" | "pealayer.config.reload" => Some(InteropCommand::ReloadConfig),
-        "get_status" | "player.status" | "pealayer.status" | "pealayer.player.status" | "pealayer.messages.state" => None,
+        "get_status" | "player.status" | "pealayer.status" | "pealayer.messages.state" => None,
         method => return Err(format!("unknown Pealayer JSON-RPC method: {method}")),
     };
     if let Some(command) = &command {
@@ -3127,28 +3118,12 @@ mod tests {
             panic!("Expected Open command");
         }
 
-        let open_alias_json = r#"{"command":"open_video","path":"/video2.mp4"}"#;
-        let cmd: InteropCommand = serde_json::from_str(open_alias_json).unwrap();
-        if let InteropCommand::Open { target } = cmd {
-            assert_eq!(target, "/video2.mp4");
-        } else {
-            panic!("Expected Open command with aliases");
-        }
-
         let live_json = r#"{"command":"open","target":"rtsp://camera.invalid/live"}"#;
         let cmd: InteropCommand = serde_json::from_str(live_json).unwrap();
         assert!(matches!(
             cmd,
             InteropCommand::Open { target } if target == "rtsp://camera.invalid/live"
         ));
-
-        let vol_alias_json = r#"{"command":"volume","level":45.0}"#;
-        let cmd: InteropCommand = serde_json::from_str(vol_alias_json).unwrap();
-        if let InteropCommand::SetVolume { value } = cmd {
-            assert_eq!(value, 45.0);
-        } else {
-            panic!("Expected SetVolume command with aliases");
-        }
 
         assert_eq!(
             parse_text_command("preferences").unwrap(),
@@ -3584,6 +3559,24 @@ mod tests {
         assert_eq!(
             command_from_json_rpc(&front_panel).unwrap(),
             Some(InteropCommand::OpenBoardInformation { tab: 2 })
+        );
+    }
+
+    #[test]
+    fn obsolete_player_namespace_and_parameter_aliases_are_rejected() {
+        let obsolete_method: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.player.open","params":{"target":"movie.mkv"}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&obsolete_method).is_err());
+
+        let obsolete_parameter: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":2,"method":"pealayer.open","params":{"path":"movie.mkv"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&obsolete_parameter).unwrap_err(),
+            "missing string parameter: target"
         );
     }
 

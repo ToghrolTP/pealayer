@@ -89,7 +89,7 @@ pub struct DirectControlCue {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum CueDurationPolicy {
-    /// Migration-safe policy: infer from the cue's authoritative source.
+    /// Infer from the cue's authoritative source.
     #[default]
     Auto,
     /// The referenced program owns its duration; placement is move-only.
@@ -123,29 +123,6 @@ pub enum ControllerEffectLane {
 
 pub fn default_hardware_target() -> HardwareTarget {
     HardwareTarget::Any
-}
-
-// One-way project-file migration, not a second public hardware taxonomy.
-// Physical output IDs come only from the authored actions, never from labels.
-fn migrate_project_targets(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(fields) => {
-            let legacy = fields.get("target").and_then(serde_json::Value::as_str)
-                .is_some_and(|name| matches!(name, "Water" | "Wind" | "SeatVibration" | "Smoke" | "Auxiliary"));
-            if legacy && let Some(actions) = fields.get("actions").and_then(serde_json::Value::as_array) {
-                let ids = actions.iter().filter_map(|action| action.get("relay_id").and_then(serde_json::Value::as_u64)).collect::<std::collections::BTreeSet<_>>();
-                let target = if ids.len() == 1 {
-                    serde_json::json!({"Relay": ids.iter().next().copied().unwrap()})
-                } else {
-                    serde_json::json!("Any")
-                };
-                fields.insert("target".to_string(), target);
-            }
-            for child in fields.values_mut() { migrate_project_targets(child); }
-        }
-        serde_json::Value::Array(items) => for item in items { migrate_project_targets(item); },
-        _ => {}
-    }
 }
 
 /// A reusable template or macro defining a sequence of actions.
@@ -403,8 +380,8 @@ pub struct Timeline {
     #[serde(default)]
     pub keyframes: Vec<TimelineKeyframe>,
     /// Stable link/visibility policy for media, controller-effect, and hardware
-    /// tracks. Missing entries deliberately mean linked and visible so older
-    /// project files retain their previous appearance.
+    /// tracks. Missing entries deliberately mean linked and visible so a
+    /// partially authored current project remains usable and self-correcting.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub track_states: std::collections::BTreeMap<String, TimelineTrackState>,
 }
@@ -435,20 +412,6 @@ mod tests {
         assert!(serde_json::from_str::<AtomicAction>(r#"{"relay_id":0,"state":true,"offset_ms":0}"#).is_err());
         assert_eq!(HardwareTarget::Relay(0).primary_relay_id(), None);
         assert!(!HardwareTarget::Relay(0).is_compatible_with_relay(0));
-    }
-
-    #[test]
-    fn project_migration_preserves_explicit_output_ids_not_label_meanings() {
-        let mut value = serde_json::json!({"target":"Water","actions":[{"relay_id":7,"state":true,"offset_ms":12}]});
-        let actions = value["actions"].clone();
-        migrate_project_targets(&mut value);
-        assert_eq!(value["target"], serde_json::json!({"Relay":7}));
-        assert_eq!(value["actions"], actions);
-        value["target"] = serde_json::json!("Auxiliary");
-        value["actions"].as_array_mut().unwrap().push(serde_json::json!({"relay_id":8,"state":false,"offset_ms":15}));
-        migrate_project_targets(&mut value);
-        assert_eq!(value["target"], "Any");
-        assert_eq!(value["actions"].as_array().unwrap().len(), 2);
     }
 
     #[test]
@@ -510,7 +473,7 @@ mod tests {
         let timeline: Timeline = serde_json::from_str(
             r#"{"instances":[],"templates":[],"analog_tracks":[],"keyframes":[]}"#,
         )
-        .expect("older timeline JSON should remain readable");
+        .expect("current timeline JSON may omit default track preferences");
         assert_eq!(
             timeline.track_state("hardware:relay.5"),
             TimelineTrackState::default()
@@ -717,9 +680,7 @@ impl Timeline {
     pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
         let file = std::fs::File::open(path)?;
         let reader = std::io::BufReader::new(file);
-        let mut value: serde_json::Value = serde_json::from_reader(reader)?;
-        migrate_project_targets(&mut value);
-        let timeline = serde_json::from_value(value)?;
+        let timeline = serde_json::from_reader(reader)?;
         Ok(timeline)
     }
 

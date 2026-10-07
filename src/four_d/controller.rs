@@ -1081,8 +1081,9 @@ impl ControllerRpcError {
         Self { message, kind: None, resource: None, retryable: false, retry_after_ms: None }
     }
     pub(crate) fn is_resource_busy(&self, resource: &str) -> bool {
-        (self.kind.as_deref() == Some("resource_busy") && self.resource.as_deref() == Some(resource) && self.retryable)
-            || (resource == "addressable_strip" && self.message == "stop standalone strip streaming before preparing media playback")
+        self.kind.as_deref() == Some("resource_busy")
+            && self.resource.as_deref() == Some(resource)
+            && self.retryable
     }
 }
 impl From<String> for ControllerRpcError {
@@ -1344,10 +1345,12 @@ impl ControllerClient {
     pub fn hardware_capabilities(&mut self) -> Result<HardwareCapabilities, String> {
         let snapshot = self.call("controller.snapshot", json!({}))?;
         let peripherals = self.call("controller.peripherals.get", json!({}))?;
-        // Named melodies are host configuration, not board capability data.
-        // Keep the whole catalog usable with older coordinators that do not
-        // expose this method yet by treating method absence as an empty list.
-        let melodies = self.call("controller.melodies.list", json!({})).ok();
+        // Named melodies are host configuration, not board capability data,
+        // but they are part of the current coordinator contract. A malformed
+        // or unavailable catalog fails this refresh so the engine retains the
+        // last known-good snapshot and retries instead of publishing false
+        // empty state.
+        let melodies = self.call("controller.melodies.list", json!({}))?;
         let pwm_values = self.call("controller.pwm.values", json!({})).ok();
         // controller.snapshot already carries the latest authoritative
         // front-panel state. A synchronous controller.front_panel call waits
@@ -1359,7 +1362,7 @@ impl ControllerClient {
         if let Some(values) = pwm_values.as_ref() {
             apply_pwm_values(&mut capabilities.telemetry, values);
         }
-        capabilities.melodies = melodies.as_ref().map(parse_melodies).unwrap_or_default();
+        capabilities.melodies = parse_melodies(&melodies)?;
         Ok(capabilities)
     }
 
@@ -1377,12 +1380,12 @@ impl ControllerClient {
     }
 }
 
-fn parse_melodies(value: &Value) -> Vec<HardwareMelody> {
-    let Some(values) = value.as_array() else {
-        return Vec::new();
-    };
+fn parse_melodies(value: &Value) -> Result<Vec<HardwareMelody>, String> {
+    let values = value
+        .as_array()
+        .ok_or_else(|| "PCController returned a non-array melody catalog".to_string())?;
     let mut names = std::collections::BTreeSet::new();
-    values
+    Ok(values
         .iter()
         .take(32)
         .filter_map(|value| serde_json::from_value::<HardwareMelody>(value.clone()).ok())
@@ -1409,7 +1412,7 @@ fn parse_melodies(value: &Value) -> Vec<HardwareMelody> {
                 Some(melody)
             }
         })
-        .collect()
+        .collect())
 }
 
 fn apply_pwm_values(telemetry: &mut HardwareTelemetry, values: &Value) -> bool {
@@ -2582,12 +2585,6 @@ mod tests {
         assert!(!error.is_resource_busy("relay"));
     }
     #[test]
-    fn legacy_strip_conflict_remains_retryable_during_rolling_upgrade() {
-        let error = ControllerRpcError::from_message("stop standalone strip streaming before preparing media playback".into());
-        assert!(error.is_resource_busy("addressable_strip"));
-    }
-
-    #[test]
     fn json_rpc_error_message_has_safe_string_and_missing_message_fallbacks() {
         assert_eq!(
             controller_json_rpc_error_message(&json!("controller is busy")),
@@ -3029,10 +3026,18 @@ mod tests {
             {"name":"attention","notes":[{"frequency_hz":440,"duration_ms":100}]},
             {"name":"bad-frequency","notes":[{"frequency_hz":10,"duration_ms":100}]},
             {"name":"bad-duration","notes":[{"frequency_hz":440,"duration_ms":0}]}
-        ]));
+        ])).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].name, "Attention");
         assert_eq!(parsed[0].duration_ms(), 165);
+    }
+
+    #[test]
+    fn melody_catalog_rejects_wrong_top_level_shape() {
+        assert_eq!(
+            parse_melodies(&json!({"melodies": []})).unwrap_err(),
+            "PCController returned a non-array melody catalog"
+        );
     }
 
     #[test]

@@ -1027,7 +1027,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                         icon={<DeleteOutlined />}
                         onClick={(event) => {
                           event.stopPropagation();
-                          sendCmd('remove_effect_cue', { instance_id: cue.id });
+                          sendCmd('pealayer.timeline.effect.remove', { instance_id: cue.id });
                         }}
                       />
                       {cue.resizable && <span className="timeline-cue__resize timeline-cue__resize--right" aria-hidden="true" />}

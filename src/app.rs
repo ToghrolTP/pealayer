@@ -3429,8 +3429,8 @@ impl PealayerApp {
                         // The authoritative response has already updated the
                         // rendered catalog and revision. Refresh in the
                         // background to verify the complete catalog and to
-                        // recover gracefully from an older controller that did
-                        // not return the typed presentation payload.
+                        // self-correct after a dropped/reordered event or a
+                        // malformed current-contract response.
                         self.engine_handle.request_catalog_refresh();
                     }
                     if is_board_operation {

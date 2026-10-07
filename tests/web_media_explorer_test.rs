@@ -32,8 +32,8 @@ fn test_web_command_aliases_and_browsing() {
 
     std::thread::sleep(Duration::from_millis(100));
 
-    // 1. Test POST /api/player/command with open_video and path
-    let payload = r#"{"command":"open_video","path":"/tmp/test_clip.mp4"}"#;
+    // 1. Test POST /api/player/command with the current typed command shape.
+    let payload = r#"{"command":"open","target":"/tmp/test_clip.mp4"}"#;
 
     let mut stream =
         std::net::TcpStream::connect("127.0.0.1:18080").expect("Failed to connect to web server");
@@ -78,7 +78,7 @@ fn test_web_command_aliases_and_browsing() {
     // 2. Test set_volume with level
     let mut stream2 =
         std::net::TcpStream::connect("127.0.0.1:18080").expect("Failed to connect to web server");
-    let payload2 = r#"{"command":"set_volume","level":75.0}"#;
+    let payload2 = r#"{"command":"set_volume","value":75.0}"#;
     let req2 = format!(
         "POST /api/player/command HTTP/1.1\r\nHost: 127.0.0.1:18080\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         payload2.len(),

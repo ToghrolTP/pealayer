@@ -537,7 +537,6 @@ pub struct AppConfig {
     pub timeline_animated_navigation: bool,
     pub timeline_navigation_transition_ms: u32,
     pub non_user_control_visibility: NonUserControlVisibility,
-    #[serde(alias = "prefix_relay_numbers")]
     pub prefix_relay_identifiers: bool,
     pub live_pwm_updates: bool,
     pub hardware_actions_on_press: bool,
@@ -605,8 +604,6 @@ pub struct AppConfig {
     pub workspace_profiles: BTreeMap<String, WorkspaceProfile>,
     #[serde(default)]
     pub workspace_profiles_initialized: bool,
-    #[serde(default)]
-    pub workspace_profiles_revision: u32,
     #[serde(default)]
     pub active_workspace_profile: Option<String>,
     /// One unsynchronised working copy. PCController remains the effect
@@ -756,7 +753,6 @@ impl Default for AppConfig {
             workspace_session: WorkspaceProfile::default(),
             workspace_profiles: default_workspace_profiles(),
             workspace_profiles_initialized: true,
-            workspace_profiles_revision: 1,
             active_workspace_profile: Some("nle".to_string()),
             effect_working_draft: None,
             effect_cue_session: None,
@@ -1165,8 +1161,7 @@ impl AppConfig {
 
     fn normalize_workspace_profiles(&mut self) {
         self.normalize_playback_positions();
-        let migrating_profile_metadata = self.workspace_profiles_revision < 1;
-        if !self.workspace_profiles_initialized || migrating_profile_metadata {
+        if !self.workspace_profiles_initialized {
             for (id, profile) in default_workspace_profiles() {
                 self.workspace_profiles.entry(id).or_insert(profile);
             }
@@ -1183,13 +1178,6 @@ impl AppConfig {
         for (id, profile) in &mut self.workspace_profiles {
             if profile.name.trim().is_empty() {
                 profile.name = id.clone();
-            }
-            if migrating_profile_metadata {
-                if id == "simple" && profile.name == "simple" {
-                    profile.name = "Simple".to_string();
-                } else if id == "nle" && profile.name == "nle" {
-                    profile.name = "NLE".to_string();
-                }
             }
             if profile.icon.trim().is_empty() {
                 profile.icon = if profile.nle { "timeline" } else { "monitor" }.to_string();
@@ -1218,7 +1206,6 @@ impl AppConfig {
                 profile.order = order as i32;
             }
         }
-        self.workspace_profiles_revision = 1;
         if self
             .active_workspace_profile
             .as_ref()
@@ -1277,23 +1264,7 @@ impl AppConfig {
                     }
                 }
 
-                // Transparent Migration from legacy recent.json if present
-                let legacy_path =
-                    PathBuf::from(std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".to_string()))
-                        .join(".config")
-                        .join("pealayer")
-                        .join("recent.json");
-
-                let mut config = Self::default();
-                if legacy_path.exists() {
-                    if let Ok(data) = std::fs::read_to_string(&legacy_path) {
-                        if let Ok(list) = serde_json::from_str::<Vec<PathBuf>>(&data) {
-                            config.recent_media = list;
-                        }
-                    }
-                }
-
-                config
+                Self::default()
             }
         }
     }
@@ -1925,7 +1896,6 @@ mod tests {
         assert!(!migrated.workspace_profiles_initialized);
         migrated.normalize_workspace_profiles();
         assert!(migrated.workspace_profiles_initialized);
-        assert_eq!(migrated.workspace_profiles_revision, 1);
         assert_eq!(
             migrated
                 .workspace_profiles
@@ -1959,39 +1929,6 @@ mod tests {
 
         assert_eq!(config.playback_positions.len(), 2);
         assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn first_profile_metadata_migration_repairs_seed_captions_and_order_once() {
-        let mut migrated = AppConfig::default();
-        migrated.workspace_profiles_revision = 0;
-        {
-            let simple = migrated.workspace_profiles.get_mut("simple").unwrap();
-            simple.name = "simple".to_string();
-            simple.order = 0;
-        }
-        {
-            let nle = migrated.workspace_profiles.get_mut("nle").unwrap();
-            nle.name = "nle".to_string();
-            nle.order = 0;
-        }
-        migrated.normalize_workspace_profiles();
-
-        assert_eq!(migrated.workspace_profiles["simple"].name, "Simple");
-        assert_eq!(migrated.workspace_profiles["simple"].order, 0);
-        assert_eq!(migrated.workspace_profiles["nle"].name, "NLE");
-        assert_eq!(migrated.workspace_profiles["nle"].order, 1);
-
-        {
-            let simple = migrated.workspace_profiles.get_mut("simple").unwrap();
-            simple.name = "Cinema".to_string();
-            simple.order = 1;
-        }
-        migrated.workspace_profiles.get_mut("nle").unwrap().order = 0;
-        migrated.normalize_workspace_profiles();
-        assert_eq!(migrated.workspace_profiles["simple"].name, "Cinema");
-        assert_eq!(migrated.workspace_profiles["nle"].order, 0);
-        assert_eq!(migrated.workspace_profiles["simple"].order, 1);
     }
 
     #[test]
