@@ -13,6 +13,7 @@ struct Preview {
     frame: Option<image::RgbaImage>,
     captured: Option<Instant>,
     requested: Option<Instant>,
+    capture_refresh_requested: Option<Instant>,
     requests: u64,
     delivered: u64,
     last_error: Option<String>,
@@ -25,6 +26,7 @@ static PREVIEW: Mutex<Preview> = Mutex::new(Preview {
     frame: None,
     captured: None,
     requested: None,
+    capture_refresh_requested: None,
     requests: 0,
     delivered: 0,
     last_error: None,
@@ -157,6 +159,7 @@ pub fn configure(hwnd: isize, enabled: bool) -> Result<(), String> {
     state.frame = None;
     state.captured = None;
     state.requested = None;
+    state.capture_refresh_requested = None;
     Ok(())
 }
 
@@ -188,6 +191,16 @@ fn capture_plan(
         Some(age) if age < FRAME_INTERVAL => CapturePlan::RetryAfter(FRAME_INTERVAL - age),
         _ => CapturePlan::Capture,
     }
+}
+
+fn is_capture_refresh(request_age: Option<Duration>) -> bool {
+    // DwmInvalidateIconicBitmaps normally causes a prompt
+    // WM_DWMSENDICONICTHUMBNAIL callback. That callback acknowledges the frame
+    // we just captured; it is not fresh evidence that the user is still
+    // hovering the taskbar preview. Treat only the bounded, immediate callback
+    // as our own refresh so a single shell request cannot renew the one-second
+    // capture lease forever.
+    request_age.is_some_and(|age| age < Duration::from_millis(250))
 }
 
 pub fn reset_shell() {
@@ -336,6 +349,7 @@ pub unsafe fn capture(
         if let Ok(mut state) = PREVIEW.lock() {
             state.frame = image::RgbaImage::from_raw(w, h, rgba);
             state.captured = Some(Instant::now());
+            state.capture_refresh_requested = Some(Instant::now());
         }
         let _ = windows::Win32::Graphics::Dwm::DwmInvalidateIconicBitmaps(
             windows::Win32::Foundation::HWND(hwnd as *mut _),
@@ -399,7 +413,16 @@ pub fn handle_request(hwnd: isize, message: u32, lparam: isize) -> bool {
             return false;
         }
         state.requests += 1;
-        state.requested = Some(Instant::now());
+        let now = Instant::now();
+        let capture_refresh = is_capture_refresh(
+            state
+                .capture_refresh_requested
+                .take()
+                .map(|requested| now.saturating_duration_since(requested)),
+        );
+        if !capture_refresh {
+            state.requested = Some(now);
+        }
         state.frame.clone()
     };
     if let Some(ctx) = REPAINT.get() {
@@ -453,6 +476,7 @@ pub fn diagnostics() -> serde_json::Value {
         "toolbar_icon_size":crate::platform::windows::thumbnail_toolbar_metrics(crate::platform::windows::get_registered_hwnd()).0,
         "frame_size":state.frame.as_ref().map(|f| [f.width(),f.height()]),
         "frame_age_ms":state.captured.map(|at| at.elapsed().as_millis() as u64),
+        "capture_refresh_pending_ms":state.capture_refresh_requested.map(|at| at.elapsed().as_millis() as u64),
         "dwm_requests":state.requests,"dwm_delivered":state.delivered,"last_error":state.last_error,
         "shell_commands":crate::platform::windows::shell_command_diagnostics()})
 }
@@ -509,5 +533,15 @@ mod tests {
             ),
             super::CapturePlan::Idle
         );
+    }
+
+    #[test]
+    fn capture_generated_thumbnail_request_does_not_renew_preview_lease() {
+        use std::time::Duration;
+        assert!(super::is_capture_refresh(Some(Duration::from_millis(10))));
+        assert!(super::is_capture_refresh(Some(Duration::from_millis(249))));
+        assert!(!super::is_capture_refresh(Some(Duration::from_millis(250))));
+        assert!(!super::is_capture_refresh(Some(Duration::from_secs(2))));
+        assert!(!super::is_capture_refresh(None));
     }
 }
