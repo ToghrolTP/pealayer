@@ -776,6 +776,16 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
               }}
               tooltip={seekbarHoverThumbnails ? { open: false } : { formatter: (value) => formatTime(((value ?? 0) / 100) * durationSeconds) }}
             />
+            {durationSeconds > 0 && chapters
+              .filter((chapter) => chapter.time_seconds >= 0 && chapter.time_seconds <= durationSeconds)
+              .map((chapter) => (
+                <span
+                  key={chapter.index}
+                  aria-hidden="true"
+                  className={`studio-scrubber__chapter${state.current_chapter_index === chapter.index ? ' is-active' : ''}`}
+                  style={{ left: `${(chapter.time_seconds / durationSeconds) * 100}%` }}
+                />
+              ))}
           </SeekThumbnailPreview>
           <span className="studio-timecode studio-timecode--muted">
             {state.live ? tr(locale, 'LIVE') : formatTime(durationSeconds)}

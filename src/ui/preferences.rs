@@ -632,6 +632,7 @@ fn native_tr(language: AppLanguage, key: &'static str) -> String {
 }
 
 fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> PreferencesOutcome {
+    crate::ui::sync_elegance_theme(ui.ctx());
     let language = crate::config::resolved_language_preference(&draft.config);
     let tr = |key: &'static str| native_tr(language, key);
     let rtl = crate::config::resolve_language(language) == AppLanguage::Persian;
@@ -755,44 +756,37 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
         });
     });
     if draft.confirm_close {
-        egui::Window::new(format!(
-            "{} {}",
-            crate::ui::icons::WARNING,
-            tr("Unsaved preferences")
-        ))
-        .id(egui::Id::new("preferences-confirm-close"))
-        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-        .collapsible(false)
-        .resizable(false)
-        .movable(false)
-        .show(ui.ctx(), |ui| {
-            ui.set_min_width(360.0);
-            ui.label(tr("Save your changes before closing Preferences?"));
-            ui.add_space(10.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::ui::dialog::action_button(ui, crate::ui::icons::X, &tr("Cancel"))
-                    .clicked()
-                {
-                    draft.confirm_close = false;
+        let mut confirm_open = true;
+        let mut cancel = false;
+        let mut discard = false;
+        let mut save = false;
+        elegance::Modal::new("preferences-confirm-close", &mut confirm_open)
+            .heading(tr("Unsaved preferences"))
+            .header_icon(crate::ui::icons::WARNING)
+            .header_accent(elegance::Accent::Amber)
+            .alert(true)
+            .close_on_backdrop(false)
+            .footer(|ui| {
+                if ui.add(elegance::Button::new(tr("Save")).accent(elegance::Accent::Green)).clicked() {
+                    save = true;
                 }
-                if crate::ui::dialog::action_button(ui, crate::ui::icons::TRASH, &tr("Discard"))
-                    .clicked()
-                {
-                    outcome.discard = true;
-                    draft.confirm_close = false;
+                if ui.add(elegance::Button::new(tr("Discard")).accent(elegance::Accent::Red)).clicked() {
+                    discard = true;
                 }
-                if crate::ui::dialog::primary_action_button(
-                    ui,
-                    crate::ui::icons::FLOPPY_DISK,
-                    &tr("Save"),
-                )
-                .clicked()
-                {
-                    outcome.request_save();
-                    draft.confirm_close = false;
+                if ui.add(elegance::Button::new(tr("Cancel")).outline()).clicked() {
+                    cancel = true;
                 }
+            })
+            .show(ui.ctx(), |ui| {
+                ui.label(tr("Save your changes before closing Preferences?"));
             });
-        });
+        if save {
+            outcome.request_save();
+        }
+        if discard {
+            outcome.discard = true;
+        }
+        draft.confirm_close = confirm_open && !cancel && !save && !discard;
     }
     outcome
 }

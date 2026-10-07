@@ -1287,6 +1287,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui-elegance"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc9166537d7784125371f8c31c5d2be0913439ca6e1723d8973cad841472297b"
+dependencies = [
+ "egui",
+ "js-sys",
+]
+
+[[package]]
 name = "egui-phosphor"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3470,6 +3480,7 @@ dependencies = [
  "ab_glyph",
  "ar-reshaper",
  "eframe",
+ "egui-elegance",
  "egui-phosphor",
  "egui_dock",
  "env_logger",

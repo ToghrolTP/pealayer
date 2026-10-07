@@ -3146,86 +3146,61 @@ fn draw_timeline_cue_dialog(app: &mut PealayerApp, context: &egui::Context) {
     let mut open = true;
     let mut cancel = false;
     let mut submit = false;
-    egui::Window::new(format!("{} — {}", app.tr("Add cue"), draft.track_name))
-        .id(timeline_cue_dialog_id().with("window"))
-        .collapsible(false)
-        .resizable(false)
-        .default_width(360.0)
-        .open(&mut open)
-        .show(context, |ui| {
-            ui.label(
-                egui::RichText::new(&draft.control_key)
-                    .monospace()
-                    .weak()
-                    .small(),
-            );
-            ui.add_space(6.0);
-            egui::Grid::new("timeline-add-cue-fields")
-                .num_columns(2)
-                .spacing([14.0, 10.0])
-                .show(ui, |ui| {
-                    ui.label(app.tr("Start time"));
-                    ui.add(crate::duration::time_value_drag(
-                        &mut draft.start_time_ms,
-                        0..=86_400_000,
-                        10.0,
-                        app.human_readable_time_units,
-                    ));
-                    ui.end_row();
-
-                    ui.label(app.tr("Duration"));
-                    ui.add(crate::duration::time_value_drag(
-                        &mut draft.duration_ms,
-                        100..=86_400_000,
-                        10.0,
-                        app.human_readable_time_units,
-                    ));
-                    ui.end_row();
-
-                    ui.label(app.tr("Action"));
-                    match &mut draft.action {
-                        TimelineCueDraftAction::Relay { enabled } => {
-                            egui::ComboBox::from_id_salt("timeline-add-cue-relay-action")
-                                .selected_text(if *enabled { app.tr("On") } else { app.tr("Off") })
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(enabled, true, app.tr("On"));
-                                    ui.selectable_value(enabled, false, app.tr("Off"));
-                                });
-                        }
-                        TimelineCueDraftAction::Pwm { value_basis_points } => {
-                            ui.add(
-                                egui::Slider::new(value_basis_points, 0..=10_000)
-                                    .custom_formatter(|value, _| format!("{:.2}%", value / 100.0))
-                                    .custom_parser(|text| {
-                                        text.trim()
-                                            .trim_end_matches('%')
-                                            .trim()
-                                            .parse::<f64>()
-                                            .ok()
-                                            .map(|percent| (percent.clamp(0.0, 100.0) * 100.0).round())
-                                    }),
-                            );
-                        }
-                    }
-                    ui.end_row();
-                });
-
-            if let Some(error) = draft.error.as_deref() {
-                ui.add_space(6.0);
-                ui.colored_label(egui::Color32::from_rgb(224, 88, 88), error);
+    crate::ui::sync_elegance_theme(context);
+    elegance::Modal::new("timeline-add-cue-dialog", &mut open)
+        .heading(app.tr("Add cue"))
+        .subtitle(draft.track_name.clone())
+        .header_icon(crate::ui::icons::PLUS)
+        .max_width(440.0)
+        .footer(|ui| {
+            if ui.add(elegance::Button::new(app.tr("Add cue")).accent(elegance::Accent::Green)).clicked() {
+                submit = true;
             }
+            if ui.add(elegance::Button::new(app.tr("Cancel")).outline()).clicked() {
+                cancel = true;
+            }
+        })
+        .show(context, |ui| {
+            ui.add(elegance::Badge::new(draft.control_key.as_str(), elegance::BadgeTone::Neutral).preserve_case());
+            ui.add_space(10.0);
+            elegance::Card::new().heading(app.tr("Timing")).show(ui, |ui| {
+                egui::Grid::new("timeline-add-cue-timing")
+                    .num_columns(2)
+                    .spacing([14.0, 10.0])
+                    .show(ui, |ui| {
+                        ui.label(app.tr("Start time"));
+                        ui.add(crate::duration::time_value_drag(
+                            &mut draft.start_time_ms, 0..=86_400_000, 10.0,
+                            app.human_readable_time_units,
+                        ));
+                        ui.end_row();
+                        ui.label(app.tr("Duration"));
+                        ui.add(crate::duration::time_value_drag(
+                            &mut draft.duration_ms, 100..=86_400_000, 10.0,
+                            app.human_readable_time_units,
+                        ));
+                        ui.end_row();
+                    });
+            });
             ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button(app.tr("Cancel")).clicked() {
-                    cancel = true;
+            elegance::Card::new().heading(app.tr("Action")).show(ui, |ui| match &mut draft.action {
+                TimelineCueDraftAction::Relay { enabled } => {
+                    let mut selected = usize::from(*enabled);
+                    if ui.add(elegance::SegmentedControl::new(&mut selected, [app.tr("Off"), app.tr("On")])).changed() {
+                        *enabled = selected == 1;
+                    }
                 }
-                if ui
-                    .button(format!("{} {}", crate::ui::icons::PLUS, app.tr("Add cue")))
-                    .clicked()
-                {
-                    submit = true;
+                TimelineCueDraftAction::Pwm { value_basis_points } => {
+                    ui.add(egui::Slider::new(value_basis_points, 0..=10_000)
+                        .custom_formatter(|value, _| format!("{:.2}%", value / 100.0))
+                        .custom_parser(|text| text.trim().trim_end_matches('%').trim().parse::<f64>().ok()
+                            .map(|percent| (percent.clamp(0.0, 100.0) * 100.0).round())));
                 }
             });
+            if let Some(error) = draft.error.as_deref() {
+                ui.add_space(8.0);
+                elegance::Callout::new(elegance::CalloutTone::Danger).body(error).show(ui, |_| {});
+            }
         });
 
     if submit {
@@ -10508,6 +10483,19 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     {
                                         self.app.toggle_audio_muted();
                                     }
+                                    let mut volume = self.app.volume;
+                                    let volume_response = ui
+                                        .add_sized([76.0, 18.0], egui::Slider::new(&mut volume, 0.0..=130.0).show_value(false))
+                                        .on_hover_text(format!("{}: {:.0}%", self.app.tr("Volume"), volume));
+                                    if volume_response.changed() {
+                                        let _ = self.app.mpv.set_property("volume", volume);
+                                        self.app.volume = volume;
+                                    }
+                                    if (volume_response.changed() && !volume_response.dragged())
+                                        || volume_response.drag_stopped()
+                                    {
+                                        self.app.save_config();
+                                    }
                                     crate::ui::media_tracks::menu_button(
                                         self.app,
                                         ui,
@@ -10683,6 +10671,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 as f32,
                                         );
                                     }
+                                    crate::ui::controls::paint_seekbar_chapters(
+                                        ui, &response, self.app.duration, &self.app.media_chapters(),
+                                        self.app.active_media_chapter().map(|chapter| chapter.index),
+                                    );
                                     let show_seek_preview =
                                         self.app.nle_seekbar_hover_thumbnails;
                                     crate::ui::seek_preview::draw(
@@ -11581,7 +11573,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         }
                     }
                     PealayerTab::EffectsLibrary => {
-                        ui.horizontal(|ui| {
+                        // Fixed rows and scrolling cards share one trailing edge.
+                        let scroll = &ui.spacing().scroll;
+                        let scrollbar_width = scroll.bar_width + scroll.bar_inner_margin + scroll.bar_outer_margin;
+                        let effects_width = effects_panel_content_width(ui.available_width() - scrollbar_width);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(effects_width, 0.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| ui.horizontal(|ui| {
                             ui.heading(self.app.tr("Effects Library"));
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
@@ -11613,11 +11612,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     }
                                 },
                             );
-                        });
+                            }),
+                        );
                         ui.add_space(4.0);
 
                         // 1. Instant search edit field
-                        ui.horizontal(|ui| {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(effects_width, 0.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| ui.horizontal(|ui| {
                             ui.label(self.app.tr("Search"));
                             let search_hint = self.app.tr("Search effects...");
                             let search_align = crate::ui::i18n::input_alignment(
@@ -11628,12 +11631,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 egui::TextEdit::singleline(&mut self.app.effects_search_query)
                                     .horizontal_align(search_align)
                                     .hint_text(search_hint)
+                                    .desired_width(ui.available_width())
                             );
                             if res.changed() {
                                 // Request repaint to filter instantly
                                 ui.ctx().request_repaint();
                             }
-                        });
+                            }),
+                        );
 
                         ui.add_space(8.0);
 
@@ -11679,8 +11684,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     // Keep a deliberate gutter between cards and the scrollbar /
                                     // right panel edge. The previous full-width inner frame caused
                                     // its stroke and action row to crowd or clip against that edge.
-                                    let effects_width =
-                                        effects_panel_content_width(ui.available_width());
                                     ui.set_width(effects_width);
                                     for (category, presets) in categorized {
                                         let group_id = ui.make_persistent_id(("effect-group", &category));

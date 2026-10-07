@@ -319,7 +319,7 @@ body {
 .status-light { width: 7px; height: 7px; border-radius: 50%; background: var(--red); box-shadow: 0 0 10px color-mix(in srgb, var(--red) 60%, transparent); }
 .status-light.is-online { background: var(--green); box-shadow: 0 0 10px color-mix(in srgb, var(--green) 60%, transparent); }
 
-.player-panel-web { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+.player-panel-web { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; container-type: inline-size; }
 .transport-state { padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--amber); background: var(--surface-2); font-size: 11px; font-weight: 650; }
 .transport-state.is-playing { color: var(--green); }
 .program-viewer { position: relative; min-width: 0; min-height: 0; margin: 12px; overflow: hidden; display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; border: 1px solid var(--line); border-radius: 8px; background: #05070a; }
@@ -397,6 +397,8 @@ body {
 .studio-scrubber, .studio-volume { margin: 0 5px !important; }
 .seek-thumbnail-host { position: relative; min-width: 0; width: 100%; }
 .seek-thumbnail-host > .ant-slider { width: 100%; margin: 0; }
+.studio-scrubber__chapter { position: absolute; z-index: 2; top: 50%; width: 2px; height: 14px; border-radius: 1px; background: #d8a238; transform: translate(-50%, -50%); pointer-events: none; }
+.studio-scrubber__chapter.is-active { background: #ffc14b; box-shadow: 0 0 7px color-mix(in srgb, #ffc14b 55%, transparent); }
 .seek-thumbnail-popover {
   position: fixed;
   z-index: 1000;
@@ -805,11 +807,6 @@ body {
 
 @media (max-width: 1100px) {
   .studio-suite { grid-template-columns: 300px minmax(430px, 1fr); }
-  .studio-transport { grid-template-columns: 30px 36px 30px minmax(0, 1fr) auto; }
-  .studio-timecode { grid-column: 4; grid-row: 1; }
-  .studio-timecode--muted { grid-column: 5; }
-  .studio-scrubber { grid-column: 1 / -1; grid-row: 2; }
-  .studio-volume, .volume-icon { display: none !important; }
 }
 
 @media (max-width: 820px) {
@@ -823,7 +820,8 @@ body {
   .timeline-content { --timeline-label-width: 144px; --timeline-end-width: 64px; }
   .timeline-row { grid-template-columns: var(--timeline-label-width) minmax(380px, 1fr) var(--timeline-end-width); }
   .preferences-layout { grid-template-columns: 1fr; }
-  .preferences-rail { position: static; display: flex; overflow-x: auto; }
+  .preferences-rail { position: static; display: flex; align-items: center; overflow-x: auto; scrollbar-width: none; }
+  .preferences-rail::-webkit-scrollbar { display: none; }
   .preferences-rail button { width: auto; flex: 0 0 auto; display: flex; white-space: nowrap; }
   .hardware-summary-grid { grid-template-columns: 1fr; }
   .strip-control__configuration, .strip-control__editor, .buzzer-control__melody, .buzzer-control__tone { grid-template-columns: 1fr; align-items: stretch; }
@@ -907,7 +905,6 @@ body {
   .workspace-profile-row > .ant-select { grid-column: 2 / -1; grid-row: 2; }
   .effect-editor__toolbar, .selection-bar { flex-wrap: wrap; }
   .sequence-step-row { grid-template-columns: 28px repeat(2, minmax(0, 1fr)); }
-  .studio-transport { grid-template-columns: 32px 38px 32px minmax(0, 1fr) auto; }
   .timeline-toolbar { align-items: flex-start; flex-direction: column; }
   .preference-control { grid-template-columns: 1fr; gap: 7px; }
   .preference-control--boolean { grid-template-columns: minmax(0, 1fr) auto; }
@@ -918,6 +915,15 @@ body {
   .app-statusbar { gap: 10px; }
   .app-statusbar__rgb, .app-statusbar__message, .app-statusbar__warning { display: none !important; }
   .media-osd { max-width: 88%; font-size: 15px; }
+}
+
+@container (max-width: 620px) {
+  .studio-transport { grid-template-columns: 32px 38px 32px minmax(0, 1fr) auto; row-gap: 9px; }
+  .studio-timecode { grid-column: 4; grid-row: 1; }
+  .studio-timecode--muted { grid-column: 5; grid-row: 1; }
+  .studio-scrubber { grid-column: 1 / -1; grid-row: 2; }
+  .volume-icon { grid-column: 1; grid-row: 3; justify-self: center; }
+  .studio-volume { grid-column: 2 / -1; grid-row: 3; min-width: 0; }
 }
 /* Short landscape screens need the same reachable dialog footer as phones. */
 @media (max-width: 560px), (max-height: 560px) {

@@ -100,6 +100,46 @@ pub(crate) fn paint_buffered_seekbar(
         .rect_filled(buffered_rect, buffered_rect.height() / 2.0, color);
 }
 
+/// Paint chapter landmarks over the slider's actual thumb travel range.
+pub(crate) fn paint_seekbar_chapters(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    duration: f64,
+    chapters: &[crate::media_info::MediaChapter],
+    active_index: Option<i64>,
+) {
+    if duration <= 0.0 || !duration.is_finite() || chapters.is_empty() {
+        return;
+    }
+    let rect = response.rect;
+    let handle_radius = rect.height() / 2.5;
+    let range = rect.left() + handle_radius..=rect.right() - handle_radius;
+    if range.end() <= range.start() {
+        return;
+    }
+    let half_height = (ui.spacing().slider_rail_height * 0.5 + 3.0)
+        .min(rect.height() * 0.5);
+    for chapter in chapters {
+        if !chapter.time_seconds.is_finite()
+            || !(0.0..=duration).contains(&chapter.time_seconds)
+        {
+            continue;
+        }
+        let x = egui::lerp(range.clone(), (chapter.time_seconds / duration) as f32);
+        let active = active_index == Some(chapter.index);
+        let color = if active {
+            egui::Color32::from_rgb(255, 193, 75)
+        } else {
+            egui::Color32::from_rgb(216, 162, 56)
+        };
+        ui.painter().line_segment(
+            [egui::pos2(x, rect.center().y - half_height),
+             egui::pos2(x, rect.center().y + half_height)],
+            egui::Stroke::new(if active { 2.0 } else { 1.5 }, color),
+        );
+    }
+}
+
 fn compact_number(value: f64) -> String {
     let mut rendered = format!("{value:.3}");
     while rendered.contains('.') && rendered.ends_with('0') {
@@ -744,6 +784,13 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 (buffered_until / app.duration).clamp(0.0, 1.0) as f32,
                             );
                         }
+                        paint_seekbar_chapters(
+                            ui,
+                            &response,
+                            app.duration,
+                            &app.media_chapters(),
+                            app.active_media_chapter().map(|chapter| chapter.index),
+                        );
                         let show_seek_preview = app.seekbar_hover_thumbnails;
                         crate::ui::seek_preview::draw(
                             app,
