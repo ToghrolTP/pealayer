@@ -269,7 +269,7 @@ fn draw_hardware_status(app: &mut PealayerApp, ui: &mut egui::Ui) {
         ));
         if led_response.clicked() {
             app.preferences_tab = 2;
-            app.show_preferences_dialog = true;
+            crate::ui::preferences::open(app, ui.ctx());
         }
         if hide_item_menu(app, led_response, app.tr("Physical status RGB")) {
             app.status_bar.status_rgb = false;
@@ -308,7 +308,7 @@ fn draw_hardware_status(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .on_hover_text(&warning.message);
         if response.clicked() {
             app.preferences_tab = 2;
-            app.show_preferences_dialog = true;
+            crate::ui::preferences::open(app, ui.ctx());
         }
         if hide_item_menu(app, response, app.tr("Hardware warnings")) {
             app.status_bar.warnings = false;

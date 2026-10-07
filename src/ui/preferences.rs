@@ -132,7 +132,7 @@ impl PreferencesDraft {
 }
 
 impl NativePreferencesController {
-    fn spawn(owner_hwnd: isize, tab: usize) -> Result<Self, String> {
+    fn spawn(owner_hwnd: isize, tab: usize, ctx: &egui::Context) -> Result<Self, String> {
         let executable = std::env::current_exe()
             .map_err(|error| format!("resolve Pealayer executable: {error}"))?;
         let child = std::process::Command::new(executable)
@@ -142,6 +142,30 @@ impl NativePreferencesController {
             .arg(tab.to_string())
             .spawn()
             .map_err(|error| format!("open native Preferences window: {error}"))?;
+        crate::diagnostics::record_shell_action("helper_spawned", "preferences");
+        #[cfg(target_os = "windows")]
+        {
+            use windows::Win32::{Foundation::CloseHandle, System::Threading::{
+                OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject, INFINITE,
+            }};
+            // A closed helper must cause a parent frame even when playback is
+            // paused. Wait on an independent OS handle, not a Child mutex that
+            // would block the GUI's try_wait(). No repaint polling is needed.
+            if let Ok(handle) = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, child.id()) } {
+                let process_handle = handle.0 as usize;
+                let repaint = ctx.clone();
+                let watcher = std::thread::Builder::new()
+                    .name("pealayer-preferences-exit".to_owned())
+                    .spawn(move || {
+                        let handle = windows::Win32::Foundation::HANDLE(process_handle as *mut _);
+                        unsafe { WaitForSingleObject(handle, INFINITE); let _ = CloseHandle(handle); }
+                        crate::platform::interop::wake_command_dispatcher(&repaint);
+                    });
+                if watcher.is_err() { unsafe { let _ = CloseHandle(handle); } }
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        let _ = ctx;
         Ok(Self { child })
     }
 
@@ -153,6 +177,24 @@ impl NativePreferencesController {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// All UI/IPC entry points share the same native/embedded lifecycle.
+pub(crate) fn open(app: &mut PealayerApp, ctx: &egui::Context) {
+    crate::diagnostics::record_shell_action("gui_open_requested", "preferences");
+    if reap_exited_controller(&mut app.native_preferences) {
+        if let Err(error) = app.cancel_preference_preview(ctx) { app.config_status = error; }
+    }
+    app.show_preferences_dialog = true;
+    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    ctx.request_repaint();
+}
+
+fn reap_exited_controller(controller: &mut Option<NativePreferencesController>) -> bool {
+    let exited = controller.as_mut().is_some_and(|controller| !controller.is_open());
+    if exited { *controller = None; }
+    exited
 }
 
 impl Drop for NativePreferencesController {
@@ -369,6 +411,7 @@ impl eframe::App for StandalonePreferencesApp {
                 crate::platform::windows::register_window_hwnd(hwnd);
                 let _ = crate::platform::windows::set_window_owner(hwnd, self.owner_hwnd);
                 self.native_window_initialized = true;
+                crate::diagnostics::record_shell_action("helper_window_ready", "preferences");
             }
         }
         #[cfg(not(target_os = "windows"))]
@@ -490,7 +533,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             let owner = app
                 .window_handle
                 .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
-            match NativePreferencesController::spawn(owner, app.preferences_tab) {
+            match NativePreferencesController::spawn(owner, app.preferences_tab, ui.ctx()) {
                 Ok(controller) => app.native_preferences = Some(controller),
                 Err(error) => {
                     app.config_status = error;
@@ -1777,6 +1820,25 @@ fn section_heading(section: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preferences_reopen_reaps_an_exited_helper_before_setting_open() {
+        #[cfg(windows)]
+        let mut command = {
+            use std::os::windows::process::CommandExt;
+            let mut command = std::process::Command::new("cmd.exe");
+            command.args(["/c", "exit", "0"]).creation_flags(0x08000000);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut command = std::process::Command::new("true");
+        let mut child = command.spawn().unwrap();
+        child.wait().unwrap();
+        let mut controller = Some(NativePreferencesController { child });
+        assert!(reap_exited_controller(&mut controller));
+        assert!(controller.is_none());
+        assert!(!reap_exited_controller(&mut controller));
+    }
 
     #[test]
     fn preferences_helper_bypasses_the_primary_single_instance_path() {

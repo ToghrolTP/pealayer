@@ -1869,7 +1869,7 @@ impl eframe::App for PealayerApp {
                                 ))
                                 .clicked()
                             {
-                                self.show_preferences_dialog = true;
+                                crate::ui::preferences::open(self, ui.ctx());
                                 ui.close();
                             }
                         });
@@ -3701,9 +3701,7 @@ impl PealayerApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
             InteropCommand::OpenPreferences => {
-                self.show_preferences_dialog = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                crate::ui::preferences::open(self, ctx);
             }
             InteropCommand::OpenMediaInformation => {
                 self.open_or_focus_tab(crate::ui::layout::PealayerTab::MediaInspector);

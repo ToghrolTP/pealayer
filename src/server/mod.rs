@@ -1411,7 +1411,7 @@ fn dispatch_ipc_payload(state: &ControlState, payload: &str) -> String {
             "application dispatcher is unavailable",
         );
     }
-    state.egui_ctx.request_repaint();
+    crate::platform::interop::wake_command_dispatcher(&state.egui_ctx);
     crate::platform::interop::format_interop_response(id, &serde_json::json!({"status":"accepted"}))
 }
 

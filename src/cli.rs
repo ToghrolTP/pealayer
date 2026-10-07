@@ -372,8 +372,14 @@ pub fn try_forward_launch_request(request: &LaunchRequest) -> bool {
         Ok(payload) => payload,
         Err(_) => return false,
     };
-    send_unified_request(&payload, Duration::from_millis(500))
-        .is_ok_and(|response| response.contains("\"status\":\"accepted\""))
+    let accepted = send_unified_request(&payload, Duration::from_millis(500))
+        .is_ok_and(|response| response.contains("\"status\":\"accepted\""));
+    if request.commands.iter().any(|command| matches!(command, InteropCommand::OpenPreferences)) {
+        crate::diagnostics::record_shell_action(
+            if accepted { "forward_accepted" } else { "forward_failed" }, "preferences",
+        );
+    }
+    accepted
 }
 
 fn send_unified_request(payload: &str, timeout: Duration) -> Result<String, String> {

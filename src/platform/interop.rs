@@ -2507,6 +2507,15 @@ pub fn format_interop_error(id: Option<serde_json::Value>, code: i32, message: &
     }
 }
 
+/// Commands from IPC/HTTP must wake an inactive Windows owner as well as egui.
+/// The native edge is scheduled on the shared shell worker, never under a
+/// context transaction or on the receiving window's message callback.
+pub(crate) fn wake_command_dispatcher(ctx: &eframe::egui::Context) {
+    ctx.request_repaint();
+    #[cfg(target_os = "windows")]
+    crate::platform::taskbar_preview::request_repaint();
+}
+
 #[cfg(any(unix, windows, test))]
 fn dispatch_local_payload(
     payload: &str,
@@ -2556,7 +2565,7 @@ fn dispatch_local_payload(
     } else if tx.send(command).is_err() {
         return format_interop_error(id, -32000, "application dispatcher is unavailable");
     }
-    egui_ctx.request_repaint();
+    wake_command_dispatcher(egui_ctx);
     format_interop_response(id, &serde_json::json!({"status":"accepted"}))
 }
 

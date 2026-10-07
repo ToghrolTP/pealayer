@@ -721,7 +721,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if configure_proxy_requested {
         app.show_open_url_dialog = false;
         app.preferences_tab = 1;
-        app.show_preferences_dialog = true;
+        crate::ui::preferences::open(app, ui.ctx());
         return;
     }
     let keyboard_open = ui.ctx().input(|input| {

@@ -54,6 +54,11 @@ fn subtitle_font_directory() -> Option<std::path::PathBuf> {
 fn main() -> eframe::Result {
     crate::diagnostics::install_panic_reporter();
     let startup_args: Vec<String> = std::env::args().collect();
+    for action in crate::platform::windows_quick_actions::WINDOWS_QUICK_ACTIONS {
+        if startup_args.iter().any(|argument| argument == action.arguments) {
+            crate::diagnostics::record_shell_action("launch_requested", action.arguments);
+        }
+    }
     if let Some(journal_path) = crate::update::helper_invocation(&startup_args) {
         if let Err(error) = crate::update::run_update_helper(journal_path) {
             eprintln!("Pealayer update helper failed: {error}");
@@ -77,7 +82,12 @@ fn main() -> eframe::Result {
     env_logger::init();
 
     if let Some(owner_hwnd) = crate::ui::preferences::preferences_helper_owner(&startup_args) {
-        return crate::ui::preferences::run_native_preferences(owner_hwnd);
+        crate::diagnostics::record_shell_action("helper_started", "preferences");
+        let result = crate::ui::preferences::run_native_preferences(owner_hwnd);
+        crate::diagnostics::record_shell_action(
+            if result.is_ok() { "helper_closed" } else { "helper_failed" }, "preferences",
+        );
+        return result;
     }
 
     #[cfg(target_os = "windows")]
