@@ -1,5 +1,6 @@
 pub mod app;
 pub mod application_shortcuts;
+pub mod branding;
 pub mod cli;
 pub mod config;
 pub mod diagnostics;

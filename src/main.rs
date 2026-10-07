@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod application_shortcuts;
+pub mod branding;
 pub mod cli;
 pub mod config;
 pub mod diagnostics;
@@ -258,9 +259,9 @@ fn main() -> eframe::Result {
         launch_config.compositor_paced_window_move,
     );
     let initial_window_title = app_name.clone();
-    let icon_data = (!crate::peer::active()).then(||crate::config::resolved_app_icon(&launch_config)).flatten()
+    let icon_data = (!crate::peer::active()).then(||crate::branding::resolved_icon_path(&launch_config, crate::branding::PlaybackIconState::Stopped)).flatten()
         .and_then(|path| std::fs::read(path).ok())
-        .and_then(|bytes| eframe::icon_data::from_png_bytes(&bytes).ok())
+        .and_then(|bytes| crate::branding::icon_data_from_bytes(&bytes))
         .or_else(|| {
             eframe::icon_data::from_png_bytes(include_bytes!("../assets/pealayer-icon.png")).ok()
         });

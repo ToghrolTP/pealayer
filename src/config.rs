@@ -482,6 +482,9 @@ pub struct AppConfig {
     pub playback_positions: Vec<PlaybackPositionEntry>,
     pub app_name: Option<String>,
     pub app_icon: Option<PathBuf>,
+    pub app_icon_playing: Option<PathBuf>,
+    pub app_icon_paused: Option<PathBuf>,
+    pub app_icon_stopped: Option<PathBuf>,
     pub app_publisher: Option<String>,
     pub app_copyright: Option<String>,
     pub theme: AppTheme,
@@ -649,6 +652,9 @@ impl Default for AppConfig {
             playback_positions: Vec::new(),
             app_name: None,
             app_icon: None,
+            app_icon_playing: None,
+            app_icon_paused: None,
+            app_icon_stopped: None,
             app_publisher: None,
             app_copyright: None,
             theme: AppTheme::System,
@@ -1034,6 +1040,7 @@ pub fn resolved_app_icon(config: &AppConfig) -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| config.app_icon.clone())
         .or_else(application_brand_app_icon)
+        .filter(|path| !path.as_os_str().is_empty())
 }
 
 fn application_brand() -> Option<(PathBuf, serde_json::Value)> {
@@ -1835,6 +1842,9 @@ mod tests {
         assert!(cfg.playback_positions.is_empty());
         assert!(cfg.app_name.is_none());
         assert!(cfg.app_icon.is_none());
+        assert!(cfg.app_icon_playing.is_none());
+        assert!(cfg.app_icon_paused.is_none());
+        assert!(cfg.app_icon_stopped.is_none());
         assert!(cfg.app_publisher.is_none());
         assert!(cfg.app_copyright.is_none());
         assert_eq!(cfg.theme, AppTheme::System);
