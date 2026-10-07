@@ -573,6 +573,10 @@ impl Default for WorkspaceProfile {
 pub struct AppConfig {
     pub volume: f64,
     pub is_muted: bool,
+    /// mpv audio-device name, including its backend prefix; `auto` uses OS default.
+    pub audio_device: String,
+    /// Empty means SFX follows the main player output selection.
+    pub sfx_audio_device: String,
     pub pin_controls: bool,
     pub show_remaining_time: bool,
     pub open_url_multiline: bool,
@@ -751,6 +755,8 @@ impl Default for AppConfig {
         Self {
             volume: 100.0,
             is_muted: false,
+            audio_device: "auto".to_string(),
+            sfx_audio_device: String::new(),
             pin_controls: false,
             show_remaining_time: false,
             open_url_multiline: true,
@@ -1582,6 +1588,14 @@ impl AppConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        for (key, device) in [
+            ("audio_device", &self.audio_device),
+            ("sfx_audio_device", &self.sfx_audio_device),
+        ] {
+            if device.len() > 256 || device.chars().any(char::is_control) {
+                return Err(format!("{key} must be a valid audio device identifier"));
+            }
+        }
         if !self.volume.is_finite() || !(0.0..=130.0).contains(&self.volume) {
             return Err("volume must be between 0 and 130".to_string());
         }

@@ -275,6 +275,41 @@ pub fn preference_sections() -> Vec<PreferenceSection> {
 }
 
 pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceControl> {
+    let audio_devices = crate::mpv::audio_output::available_audio_devices();
+    let audio_output_control = |key, label, selected: &str, follow_media: bool| {
+        let mut control = PreferenceControl::select(key, "playback", "Audio output", label, &[]);
+        control.description = Some(if follow_media {
+            "Select a separate output for sound effects, or follow the media output"
+        } else {
+            "Select a system audio device and backend; System default is recommended"
+        });
+        if follow_media {
+            control.options.push(PreferenceOption {
+                value: serde_json::json!(""),
+                label: "Same as media output",
+                color: None,
+                description: None,
+                icon: None,
+            });
+        }
+        control.options.extend(audio_devices.iter().map(|device| PreferenceOption {
+            value: serde_json::Value::String(device.name.clone()),
+            label: "Audio device",
+            color: None,
+            description: Some(device.description.clone()),
+            icon: None,
+        }));
+        if !selected.is_empty() && !control.options.iter().any(|option| option.value.as_str() == Some(selected)) {
+            control.options.push(PreferenceOption {
+                value: serde_json::Value::String(selected.to_string()),
+                label: "Unavailable audio device",
+                color: None,
+                description: Some(format!("Unavailable: {selected}")),
+                icon: None,
+            });
+        }
+        control
+    };
     let mut controls = vec![
         PreferenceControl::select(
             "theme",
@@ -380,6 +415,8 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Player controls",
             "Single-click the picture to play or pause",
         ),
+        audio_output_control("audio_device", "Media output device / backend", &config.audio_device, false),
+        audio_output_control("sfx_audio_device", "SFX output device / backend", &config.sfx_audio_device, true),
         {
             let mut control = PreferenceControl::number(
                 "playback_speed",

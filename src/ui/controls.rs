@@ -294,8 +294,94 @@ pub fn draw_contextual_transport_nudge(
 pub fn begin_elapsed_edit(app: &mut PealayerApp) {
     let elapsed = resolve_display_time(app.seek_pos, app.playback_time);
     app.elapsed_time_input = format_player_time(elapsed, app.duration >= 3600.0, true);
+    app.elapsed_time_original = app.elapsed_time_input.clone();
+    app.elapsed_time_group = 0;
+    app.elapsed_time_group_digits = 0;
     app.editing_elapsed_time = true;
     app.elapsed_edit_focus_requested = true;
+}
+
+fn timecode_groups(value: &str) -> Vec<std::ops::Range<usize>> {
+    let mut groups = Vec::new();
+    let mut start = None;
+    for (index, byte) in value.bytes().enumerate() {
+        if byte.is_ascii_digit() {
+            start.get_or_insert(index);
+        } else if let Some(start) = start.take() {
+            groups.push(start..index);
+        }
+    }
+    if let Some(start) = start {
+        groups.push(start..value.len());
+    }
+    groups
+}
+
+/// A segment editor never inserts or deletes punctuation: every edit replaces
+/// digits inside an existing group, and a completed group advances itself.
+fn edit_timecode_segment(value: &mut String, group: &mut usize, digits: &mut usize, event: &egui::Event) {
+    let groups = timecode_groups(value);
+    if groups.is_empty() {
+        return;
+    }
+    *group = (*group).min(groups.len() - 1);
+    match event {
+        egui::Event::Key { key: egui::Key::ArrowLeft, pressed: true, .. } => {
+            *group = group.saturating_sub(1);
+            *digits = 0;
+        }
+        egui::Event::Key { key: egui::Key::ArrowRight, pressed: true, .. } => {
+            *group = (*group + 1).min(groups.len() - 1);
+            *digits = 0;
+        }
+        egui::Event::Key { key: egui::Key::Home, pressed: true, .. } => {
+            *group = 0;
+            *digits = 0;
+        }
+        egui::Event::Key { key: egui::Key::End, pressed: true, .. } => {
+            *group = groups.len() - 1;
+            *digits = 0;
+        }
+        egui::Event::Key { key: egui::Key::Backspace | egui::Key::Delete, pressed: true, .. } => {
+            let range = groups[*group].clone();
+            value.replace_range(range.clone(), &"0".repeat(range.len()));
+            *digits = 0;
+        }
+        egui::Event::Text(text) => {
+            for character in text.chars() {
+                if character == ':' || character == '.' {
+                    *group = (*group + 1).min(groups.len() - 1);
+                    *digits = 0;
+                    continue;
+                }
+                let Some(digit) = character.to_digit(10).filter(|_| character.is_ascii_digit()) else {
+                    continue;
+                };
+                let range = groups[*group].clone();
+                let previous = if *digits == 0 { 0 } else { value[range.clone()].parse::<u32>().unwrap_or(0) };
+                let maximum = if *group == groups.len() - 1 { 999 } else if groups.len() == 4 && *group == 0 { 99 } else { 59 };
+                let next = (previous * 10 + digit).min(maximum);
+                value.replace_range(range.clone(), &format!("{next:0width$}", width = range.len()));
+                *digits += 1;
+                if *digits >= range.len() {
+                    *group = (*group + 1).min(groups.len() - 1);
+                    *digits = 0;
+                }
+            }
+        }
+        egui::Event::Paste(text) => {
+            if let Some(seconds) = parse_timecode(text) {
+                let has_hours = groups.len() == 4;
+                let limit = if has_hours { 360_000.0 } else { 3_600.0 };
+                if seconds < limit {
+                    *value = format_player_time(seconds, has_hours, true);
+                    *group = groups.len() - 1;
+                    *digits = 0;
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Draw the elapsed timestamp as an in-place editor. Clicking the timestamp
@@ -312,6 +398,35 @@ pub fn draw_elapsed_editor(
     let desired_width = if app.duration >= 3600.0 { 104.0 } else { 82.0 };
     let edit_id = ui.make_persistent_id(id_source);
     let editing = app.editing_elapsed_time && enabled;
+    // When this editor owns keyboard focus, intercept text actions before
+    // TextEdit can alter the fixed separators or length. Pointer events remain
+    // with egui so clicking still selects a segment naturally.
+    let mut timecode_events = Vec::new();
+    if editing && ui.memory(|memory| memory.has_focus(edit_id)) {
+        ui.input_mut(|input| input.events.retain(|event| {
+            let captured = match event {
+                egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut | egui::Event::Ime(_) => true,
+                egui::Event::Key { key, .. } => *key != egui::Key::Tab,
+                _ => false,
+            };
+            if captured { timecode_events.push(event.clone()); }
+            !captured
+        }));
+    }
+    let mut escape = false;
+    let mut enter = false;
+    for event in &timecode_events {
+        match event {
+            egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => escape = true,
+            egui::Event::Key { key: egui::Key::Enter, pressed: true, .. } => enter = true,
+            _ => edit_timecode_segment(
+                &mut app.elapsed_time_input,
+                &mut app.elapsed_time_group,
+                &mut app.elapsed_time_group_digits,
+                event,
+            ),
+        }
+    }
     let mut display_buffer = rendered;
     let buffer = if editing {
         &mut app.elapsed_time_input
@@ -345,16 +460,35 @@ pub fn draw_elapsed_editor(
     if editing {
         response =
             response.on_hover_text(app.tr(
-                "Enter seconds, MM:SS.mmm, or HH:MM:SS.mmm. Press Enter to seek; Escape cancels.",
+                "Type digits in each time group; Left/Right switches groups. Enter seeks; Escape cancels.",
             ));
         if app.elapsed_edit_focus_requested {
             response.request_focus();
             app.elapsed_edit_focus_requested = false;
         }
-
-        let escape = response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Escape));
-        let enter = response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+        if response.has_focus() {
+            if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), edit_id) {
+                let groups = timecode_groups(&app.elapsed_time_input);
+                if response.clicked() {
+                    if let Some(cursor) = state.cursor.char_range() {
+                        let index = cursor.primary.index;
+                        if let Some(selected) = groups.iter().position(|range| index <= range.end) {
+                            app.elapsed_time_group = selected;
+                            app.elapsed_time_group_digits = 0;
+                        }
+                    }
+                }
+                if let Some(range) = groups.get(app.elapsed_time_group) {
+                    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+                        egui::text::CCursor::new(range.start),
+                        egui::text::CCursor::new(range.end),
+                    )));
+                    state.store(ui.ctx(), edit_id);
+                }
+            }
+        }
         if escape {
+            app.elapsed_time_input = app.elapsed_time_original.clone();
             app.editing_elapsed_time = false;
         } else if enter {
             match parse_timecode(&app.elapsed_time_input) {
@@ -365,8 +499,10 @@ pub fn draw_elapsed_editor(
                 None => app.set_osd(app.tr("Enter a valid playback time")),
             }
         } else if response.lost_focus() {
-            if let Some(seconds) = parse_timecode(&app.elapsed_time_input) {
-                app.seek_absolute(seconds);
+            if app.elapsed_time_input != app.elapsed_time_original {
+                if let Some(seconds) = parse_timecode(&app.elapsed_time_input) {
+                    app.seek_absolute(seconds);
+                }
             }
             app.editing_elapsed_time = false;
         }
@@ -418,9 +554,6 @@ pub fn draw_elapsed_editor(
         {
             if !app.editing_elapsed_time {
                 begin_elapsed_edit(app);
-                // Pasting from display mode replaces the displayed timestamp
-                // instead of appending clipboard text to it.
-                app.elapsed_time_input.clear();
             }
             ui.ctx().memory_mut(|memory| memory.request_focus(edit_id));
             ui.ctx()
@@ -1165,6 +1298,23 @@ mod tests {
         assert_eq!(parse_timecode("01:75"), None);
         assert_eq!(parse_timecode("-00:01"), None);
         assert_eq!(parse_timecode("not a time"), None);
+    }
+
+    #[test]
+    fn elapsed_segment_editor_preserves_separators_and_advances_groups() {
+        let mut value = "01:02:03.004".to_string();
+        let mut group = 1;
+        let mut digits = 0;
+        edit_timecode_segment(&mut value, &mut group, &mut digits, &egui::Event::Text("45".into()));
+        assert_eq!(value, "01:45:03.004");
+        assert_eq!(group, 2);
+        edit_timecode_segment(&mut value, &mut group, &mut digits, &egui::Event::Text("x".into()));
+        assert_eq!(value, "01:45:03.004");
+        edit_timecode_segment(&mut value, &mut group, &mut digits, &egui::Event::Text("7".into()));
+        assert_eq!(value, "01:45:07.004");
+        edit_timecode_segment(&mut value, &mut group, &mut digits, &egui::Event::Paste("00:01:20.250".into()));
+        assert_eq!(value, "00:01:20.250");
+        assert_eq!(timecode_groups(&value), vec![0..2, 3..5, 6..8, 9..12]);
     }
 
     #[test]

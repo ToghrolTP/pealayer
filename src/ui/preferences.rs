@@ -922,7 +922,7 @@ fn render_contract_control(
                 .options
                 .iter()
                 .find(|option| option.value.as_str() == Some(selected))
-                .map(|option| tr(option.label))
+                .map(|option| option.description.clone().unwrap_or_else(|| tr(option.label)))
                 .unwrap_or_else(|| selected.to_string());
             preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
                 let control_width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
@@ -1023,7 +1023,10 @@ fn render_contract_control(
                     .show_ui(ui, |ui| {
                         for option in &control.options {
                             if ui
-                                .selectable_label(option.value == current, tr(option.label))
+                                .selectable_label(
+                                    option.value == current,
+                                    option.description.clone().unwrap_or_else(|| tr(option.label)),
+                                )
                                 .clicked()
                             {
                                 replacement = Some(option.value.clone());

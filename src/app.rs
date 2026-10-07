@@ -522,6 +522,9 @@ pub struct PealayerApp {
     pub(crate) show_remaining_time: bool,
     pub(crate) editing_elapsed_time: bool,
     pub(crate) elapsed_time_input: String,
+    pub(crate) elapsed_time_original: String,
+    pub(crate) elapsed_time_group: usize,
+    pub(crate) elapsed_time_group_digits: usize,
     pub(crate) elapsed_edit_focus_requested: bool,
     pub(crate) osd_message: Option<(String, std::time::Instant)>,
     pub(crate) osd_display_options: Option<crate::platform::interop::OsdOptions>,
@@ -6233,6 +6236,12 @@ impl PealayerApp {
 
         let _ = self.mpv.set_property("volume", self.volume);
         let _ = self.mpv.set_property("mute", self.is_muted);
+        let audio_device = if config.audio_device.trim().is_empty() { "auto" } else { config.audio_device.as_str() };
+        if let Err(error) = self.mpv.set_property("audio-device", audio_device) {
+            log::warn!("{error}; falling back to the system default audio output");
+            self.mpv.set_property("audio-device", "auto")
+                .map_err(|error| format!("Select default audio output: {error}"))?;
+        }
         let _ = self.mpv.set_property("sub-font-size", self.sub_font_size);
         let _ = self.mpv.set_property("sub-delay", self.sub_delay);
         let _ = self.mpv.set_property("sub-pos", self.sub_position_percent);
@@ -7845,6 +7854,9 @@ impl Default for PealayerApp {
             show_remaining_time: false,
             editing_elapsed_time: false,
             elapsed_time_input: String::new(),
+            elapsed_time_original: String::new(),
+            elapsed_time_group: 0,
+            elapsed_time_group_digits: 0,
             elapsed_edit_focus_requested: false,
             osd_message: None,
             osd_display_options: None,

@@ -2229,17 +2229,32 @@ fn paint_recording_swatch(ui: &egui::Ui, rect: egui::Rect, value: &str) {
         .circle_stroke(center, 5.0, egui::Stroke::new(1.0, egui::Color32::GRAY));
 }
 
+fn recording_color_label(ui: &egui::Ui, label: &str) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    // Match the painted swatch's fixed 24 px lane. Ordinary spaces vary with
+    // font and selected/hover formatting, making the label visibly jump.
+    job.append(
+        label,
+        28.0,
+        egui::TextFormat::simple(
+            egui::TextStyle::Button.resolve(ui.style()),
+            ui.visuals().text_color(),
+        ),
+    );
+    job
+}
+
 fn recording_color_picker(ui: &mut egui::Ui, value: &mut String) -> egui::Response {
     let selected = recording_colors()
         .iter()
         .find(|color| color.id == *value)
         .unwrap_or(&recording_colors()[0]);
     let response = egui::ComboBox::from_id_salt("effect_recording_color")
-        .selected_text(format!("     {}", selected.label))
+        .selected_text(recording_color_label(ui, selected.label))
         .show_ui(ui, |ui| {
             for color in recording_colors() {
-                let row =
-                    ui.selectable_value(value, color.id.clone(), format!("     {}", color.label));
+                let label = recording_color_label(ui, color.label);
+                let row = ui.selectable_value(value, color.id.clone(), label);
                 paint_recording_swatch(ui, row.rect, &color.id);
             }
         })

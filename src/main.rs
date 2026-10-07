@@ -359,6 +359,14 @@ fn main() -> eframe::Result {
             }
             let mpv = Mpv::with_initializer(|init| {
                 init.set_property("vo", "libmpv")?;
+                let audio_device = if loaded_config.audio_device.trim().is_empty() {
+                    "auto"
+                } else {
+                    loaded_config.audio_device.as_str()
+                };
+                if init.set_property("audio-device", audio_device).is_err() {
+                    init.set_property("audio-device", "auto")?;
+                }
                 init.set_property("keep-open", "always")?;
                 crate::mpv::proxy::apply_before_initialize(
                     &init,

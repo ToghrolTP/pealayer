@@ -365,7 +365,7 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
           {commonLabel}
           <Select
             value={value}
-            options={(control.options ?? []).map((option) => ({ value: option.value, label: tr(locale, option.label) }))}
+            options={(control.options ?? []).map((option) => ({ value: option.value, label: option.description || tr(locale, option.label) }))}
             onChange={(next) => void update(control, next)}
           />
         </label>
