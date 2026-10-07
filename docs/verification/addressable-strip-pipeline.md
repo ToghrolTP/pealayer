@@ -76,21 +76,38 @@ publishes the capability-gated `strip` descriptor that Pealayer requires and
 migrates the former pre-1.0 macro mode `auto` to `host` during configuration
 normalization.
 
+[PCController PR #599](https://github.com/atomicdeploy/PCController/pull/599)
+keeps a host-rendered strip stream alive across transient request deadline
+misses. A missed frame is deliberately discarded instead of queued: the next
+frame is rendered from monotonic elapsed time, so the animation remains current
+and no stale colors accumulate behind the serial link. Disconnects, protocol
+errors, cancellations, and all other non-timeout failures still terminate the
+stream and remain visible to clients.
+
 ## Live evidence
 
 On the production board, the deployed #601 Windows artifact first sustained a
 100-pixel rainbow at 20 FPS for 30 seconds while Pealayer's normal media/status
-traffic remained connected. The final acceptance run then originated from
-Pealayer through the deployed #602 host and sustained the same rainbow for 40
-seconds:
+traffic remained connected. After #602 established the capability contract,
+the final acceptance run originated from Pealayer through PCController #599
+commit `5ad4d7af` and sustained the same rainbow for 100 seconds:
 
 | Counter | Before | After |
 | --- | ---: | ---: |
-| Framing errors | 58 | 58 |
+| Framing errors | 233 | 283 |
 | CRC errors | 0 | 0 |
 | Reset count | 475 | 475 |
 
 Throughout the Pealayer-originated acceptance run, the strip status remained
 `running`, the active operation remained `rainbow 100 LEDs at 20 FPS`, Pealayer
 remained connected to both PCController and the board, and `/healthz` continued
-to return HTTP 200. The live framing, CRC, and reset counters did not increase.
+to return HTTP 200. Six clusters of request deadline misses were observed; each
+reported a dropped stale frame followed by recovery, without stopping the
+animation or resetting the board.
+
+The increase in framing errors is a real residual transport limitation at the
+maximum tested load, not a successful no-error result. CRC and reset counters
+remained stable, and request-wide serialization plus timeout recovery prevented
+it from becoming an application failure. A future transport optimization should
+reduce request overhead or further prioritize strip commits, but it must retain
+PCController as the sole driver and must not queue late animation frames.
