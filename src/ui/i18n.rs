@@ -800,6 +800,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Frame Step Backward (-1 frame)" => "یک قاب عقب",
         "Adjust Volume on player/bar" => "تنظیم صدا روی پخش‌کننده",
         "Seek forward / backward" => "پیمایش جلو یا عقب",
+        "Add cue to selected track" => "افزودن نشانه به ترک انتخاب‌شده",
         "Toggle Fullscreen / Open Video" => "تمام‌صفحه یا باز کردن ویدئو",
         "Open Player Context Menu" => "باز کردن منوی زمینه‌ای پخش‌کننده",
         "Drop media file onto window to play" => "رسانه را برای پخش روی پنجره رها کنید",
@@ -878,6 +879,10 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "No matching icons" => "نماد منطبقی پیدا نشد",
         "Name" => "نام",
         "Duration" => "مدت",
+        "Add cue" => "افزودن نشانه",
+        "Cue added" => "نشانه افزوده شد",
+        "On" => "روشن",
+        "Off" => "خاموش",
         "Actions" => "عملیات",
         "Selected cue" => "نشانهٔ انتخاب‌شده",
         "1 cue" => "۱ نشانه",
@@ -919,6 +924,9 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Create" => "ساختن",
         "Timeline instances" => "نمونه‌های خط زمانی",
         "Start time" => "زمان آغاز",
+        "Select a relay or PWM timeline track first" => {
+            "ابتدا یک ترک رله یا PWM را در خط زمانی انتخاب کنید"
+        }
         "Effect" => "جلوه",
         "Unavailable project effect" => "جلوهٔ پروژه در دسترس نیست",
         "Delete" => "حذف",

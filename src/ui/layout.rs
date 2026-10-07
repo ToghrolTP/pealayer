@@ -1950,6 +1950,33 @@ struct TimelineTrackRow {
     kind: TimelineTrackKind,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TimelineCueDraftAction {
+    Relay { enabled: bool },
+    Pwm { value_basis_points: u16 },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TimelineCueDraft {
+    track_name: String,
+    control_key: String,
+    start_time_ms: u64,
+    duration_ms: u64,
+    action: TimelineCueDraftAction,
+    error: Option<String>,
+}
+
+impl TimelineCueDraft {
+    fn value_basis_points(&self) -> u16 {
+        match self.action {
+            TimelineCueDraftAction::Relay { enabled } => {
+                if enabled { 10_000 } else { 0 }
+            }
+            TimelineCueDraftAction::Pwm { value_basis_points } => value_basis_points,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TimelineCuePlacement {
     track_index: usize,
@@ -2825,6 +2852,218 @@ fn relay_identifier_label(relay_id: u8) -> String {
 
 fn is_pwm_control(control: &crate::four_d::controller::HardwareControl) -> bool {
     matches!(control.kind.as_str(), "mosfet" | "pwm") || control.key.starts_with("pwm.")
+}
+
+fn timeline_cue_dialog_id() -> egui::Id {
+    egui::Id::new("timeline-add-cue-dialog")
+}
+
+fn timeline_cue_draft_for_row(
+    app: &PealayerApp,
+    row: &TimelineTrackRow,
+    start_time_ms: u64,
+) -> Result<TimelineCueDraft, String> {
+    if !row.linked || !row.visible {
+        return Err(format!("Track '{}' is not linked and visible", row.name));
+    }
+    if !row.enabled {
+        return Err(format!("Track '{}' is locked by PCController", row.name));
+    }
+    let control_key = row
+        .control_key
+        .as_deref()
+        .ok_or_else(|| format!("Track '{}' does not accept direct cues", row.name))?;
+    let control = app
+        .advertised_hardware()
+        .and_then(|capabilities| {
+            crate::ui::hardware_control::managed_controls(&capabilities)
+                .into_iter()
+                .find(|control| control.key == control_key)
+        })
+        .ok_or_else(|| format!("Channel '{control_key}' is not advertised by PCController"))?;
+
+    if row
+        .relay_ids
+        .iter()
+        .any(|relay| app.track_locked.contains(relay))
+    {
+        return Err(format!("Track '{}' is locked", row.name));
+    }
+    let analog_locked = control_key
+        .strip_prefix("pwm.")
+        .and_then(|channel| channel.parse::<u8>().ok())
+        .and_then(|channel| {
+            app.timeline
+                .analog_tracks
+                .iter()
+                .find(|track| track.channel == channel)
+        })
+        .is_some_and(|track| track.locked);
+    if analog_locked {
+        return Err(format!("Track '{}' is locked", row.name));
+    }
+
+    let action = if relay_id_from_control_key(control_key).is_some() {
+        TimelineCueDraftAction::Relay { enabled: true }
+    } else if is_pwm_control(&control) {
+        TimelineCueDraftAction::Pwm {
+            value_basis_points: 5_000,
+        }
+    } else {
+        return Err(format!(
+            "Track '{}' does not support directly-authored cues",
+            row.name
+        ));
+    };
+
+    Ok(TimelineCueDraft {
+        track_name: row.name.clone(),
+        control_key: control_key.to_string(),
+        start_time_ms,
+        duration_ms: 1_000,
+        action,
+        error: None,
+    })
+}
+
+fn request_timeline_cue_dialog(
+    app: &mut PealayerApp,
+    context: &egui::Context,
+    track_key: &str,
+    start_time_ms: u64,
+) {
+    let row = all_timeline_track_rows(app)
+        .into_iter()
+        .find(|row| row.key == track_key);
+    let Some(row) = row else {
+        let message = app.tr("Select a relay or PWM timeline track first");
+        app.set_osd(message);
+        return;
+    };
+    app.selected_timeline_track = Some(row.key.clone());
+    match timeline_cue_draft_for_row(app, &row, start_time_ms) {
+        Ok(draft) => {
+            context
+                .data_mut(|data| data.insert_temp(timeline_cue_dialog_id(), draft));
+            context.request_repaint();
+        }
+        Err(error) => app.set_osd(error),
+    }
+}
+
+fn draw_timeline_cue_dialog(app: &mut PealayerApp, context: &egui::Context) {
+    let Some(mut draft) =
+        context.data_mut(|data| data.get_temp::<TimelineCueDraft>(timeline_cue_dialog_id()))
+    else {
+        return;
+    };
+    let mut open = true;
+    let mut cancel = false;
+    let mut submit = false;
+    egui::Window::new(format!("{} — {}", app.tr("Add cue"), draft.track_name))
+        .id(timeline_cue_dialog_id().with("window"))
+        .collapsible(false)
+        .resizable(false)
+        .default_width(360.0)
+        .open(&mut open)
+        .show(context, |ui| {
+            ui.label(
+                egui::RichText::new(&draft.control_key)
+                    .monospace()
+                    .weak()
+                    .small(),
+            );
+            ui.add_space(6.0);
+            egui::Grid::new("timeline-add-cue-fields")
+                .num_columns(2)
+                .spacing([14.0, 10.0])
+                .show(ui, |ui| {
+                    ui.label(app.tr("Start time"));
+                    ui.add(crate::duration::time_value_drag(
+                        &mut draft.start_time_ms,
+                        0..=86_400_000,
+                        10.0,
+                        app.human_readable_time_units,
+                    ));
+                    ui.end_row();
+
+                    ui.label(app.tr("Duration"));
+                    ui.add(crate::duration::time_value_drag(
+                        &mut draft.duration_ms,
+                        100..=86_400_000,
+                        10.0,
+                        app.human_readable_time_units,
+                    ));
+                    ui.end_row();
+
+                    ui.label(app.tr("Action"));
+                    match &mut draft.action {
+                        TimelineCueDraftAction::Relay { enabled } => {
+                            egui::ComboBox::from_id_salt("timeline-add-cue-relay-action")
+                                .selected_text(if *enabled { app.tr("On") } else { app.tr("Off") })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(enabled, true, app.tr("On"));
+                                    ui.selectable_value(enabled, false, app.tr("Off"));
+                                });
+                        }
+                        TimelineCueDraftAction::Pwm { value_basis_points } => {
+                            ui.add(
+                                egui::Slider::new(value_basis_points, 0..=10_000)
+                                    .custom_formatter(|value, _| format!("{:.2}%", value / 100.0))
+                                    .custom_parser(|text| {
+                                        text.trim()
+                                            .trim_end_matches('%')
+                                            .trim()
+                                            .parse::<f64>()
+                                            .ok()
+                                            .map(|percent| (percent.clamp(0.0, 100.0) * 100.0).round())
+                                    }),
+                            );
+                        }
+                    }
+                    ui.end_row();
+                });
+
+            if let Some(error) = draft.error.as_deref() {
+                ui.add_space(6.0);
+                ui.colored_label(egui::Color32::from_rgb(224, 88, 88), error);
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button(app.tr("Cancel")).clicked() {
+                    cancel = true;
+                }
+                if ui
+                    .button(format!("{} {}", crate::ui::icons::PLUS, app.tr("Add cue")))
+                    .clicked()
+                {
+                    submit = true;
+                }
+            });
+        });
+
+    if submit {
+        match app.add_direct_control_cue(
+            &draft.control_key,
+            draft.value_basis_points(),
+            draft.start_time_ms,
+            draft.duration_ms,
+        ) {
+            Ok(_) => {
+                let cue_added = app.tr("Cue added");
+                app.set_osd(format!("{cue_added}: {}", draft.track_name));
+                open = false;
+            }
+            Err(error) => draft.error = Some(error),
+        }
+    }
+    if !open || cancel {
+        context.data_mut(|data| {
+            data.remove_temp::<TimelineCueDraft>(timeline_cue_dialog_id());
+        });
+    } else {
+        context.data_mut(|data| data.insert_temp(timeline_cue_dialog_id(), draft));
+    }
 }
 
 fn pwm_channel_for<'a>(
@@ -7389,6 +7628,71 @@ mod timeline_row_tests {
                 .iter()
                 .any(|row| row.key == "hardware:relay.1" && row.dimmed)
         );
+    }
+
+    #[test]
+    fn cue_dialog_drafts_valid_actions_for_relay_and_pwm_tracks() {
+        let mut app = PealayerApp::default();
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            board_connected: true,
+            controls: vec![
+                crate::four_d::controller::HardwareControl {
+                    key: "relay.5".to_string(),
+                    kind: "relay".to_string(),
+                    name: "Fog relay".to_string(),
+                    ..Default::default()
+                },
+                crate::four_d::controller::HardwareControl {
+                    key: "pwm.12".to_string(),
+                    kind: "pwm".to_string(),
+                    name: "House light".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }));
+        let rows = all_timeline_track_rows(&app);
+        let relay = rows
+            .iter()
+            .find(|row| row.key == "hardware:relay.5")
+            .expect("relay track should be advertised");
+        let pwm = rows
+            .iter()
+            .find(|row| row.key == "hardware:pwm.12")
+            .expect("PWM track should be advertised");
+
+        let relay_draft = timeline_cue_draft_for_row(&app, relay, 2_750)
+            .expect("relay track should accept a direct cue");
+        assert_eq!(relay_draft.start_time_ms, 2_750);
+        assert_eq!(relay_draft.duration_ms, 1_000);
+        assert_eq!(relay_draft.value_basis_points(), 10_000);
+
+        let pwm_draft = timeline_cue_draft_for_row(&app, pwm, 4_000)
+            .expect("PWM track should accept a direct cue");
+        assert_eq!(pwm_draft.start_time_ms, 4_000);
+        assert_eq!(pwm_draft.value_basis_points(), 5_000);
+    }
+
+    #[test]
+    fn cue_dialog_rejects_a_locked_track() {
+        let mut app = PealayerApp::default();
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            board_connected: true,
+            controls: vec![crate::four_d::controller::HardwareControl {
+                key: "relay.6".to_string(),
+                kind: "relay".to_string(),
+                name: "Locked relay".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+        app.track_locked.insert(6);
+        let row = all_timeline_track_rows(&app)
+            .into_iter()
+            .find(|row| row.key == "hardware:relay.6")
+            .expect("relay track should be advertised");
+
+        assert!(timeline_cue_draft_for_row(&app, &row, 0).is_err());
     }
 
     #[test]
@@ -14851,6 +15155,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let mut kf_interp_change = None;
                                         let mut kf_to_remove = None;
                                         let mut pending_add_keyframe = None;
+                                        let mut pending_cue_dialog = None;
 
                                         for (t_idx, track) in self
                                             .app
@@ -15131,18 +15436,30 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             {
                                                 if let Some(pos) = response.interact_pointer_pos() {
                                                     if row_rect.contains(pos) {
-                                                        self.app.selected_timeline_track = Some(
-                                                            crate::four_d::models::hardware_timeline_track_key(
-                                                                &format!("pwm.{}", track.channel),
-                                                            ),
+                                                        let track_key = crate::four_d::models::hardware_timeline_track_key(
+                                                            &format!("pwm.{}", track.channel),
                                                         );
+                                                        self.app.selected_timeline_track = Some(track_key.clone());
                                                         let new_t = (((pos.x - rect.min.x) / zoom) * 1000.0).max(0.0) as u64;
-                                                        let new_v = ((curve_bottom - pos.y) / curve_span).clamp(0.0, 1.0);
-                                                        pending_add_keyframe = Some((track.id, new_t, new_v));
+                                                        if ui.input(|input| input.modifiers.alt) {
+                                                            let new_v = ((curve_bottom - pos.y) / curve_span).clamp(0.0, 1.0);
+                                                            pending_add_keyframe = Some((track.id, new_t, new_v));
+                                                        } else {
+                                                            pending_cue_dialog = Some((track_key, new_t));
+                                                        }
                                                         clicked_any_keyframe = true;
                                                     }
                                                 }
                                             }
+                                        }
+
+                                        if let Some((track_key, start_time_ms)) = pending_cue_dialog {
+                                            request_timeline_cue_dialog(
+                                                self.app,
+                                                ui.ctx(),
+                                                &track_key,
+                                                start_time_ms,
+                                            );
                                         }
 
                                         if let Some((tid, new_t, new_v)) = pending_add_keyframe {
@@ -16519,6 +16836,44 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 self.app.lasso_initial_keyframes.clear();
                             }
 
+                            if response.double_clicked()
+                                && !clicked_any_clip
+                                && !clicked_any_keyframe
+                                && self.app.active_drag.is_none()
+                                && self.app.active_keyframe_drag.is_none()
+                                && !lasso_was_active
+                                && !popup_was_open
+                                && !egui::Popup::is_any_open(ui.ctx())
+                            {
+                                if let Some(mouse_pos) = response.interact_pointer_pos()
+                                    && mouse_pos.y >= tracks_top
+                                    && mouse_pos.y < tracks_top + track_area_height
+                                {
+                                    let row_index = ((mouse_pos.y - tracks_top)
+                                        / timeline_track_height)
+                                        .floor()
+                                        as usize;
+                                    if let Some(track_key) = timeline_rows
+                                        .get(row_index)
+                                        .map(|row| row.key.clone())
+                                    {
+                                        let start_time_ms = timeline_pointer_time_ms(
+                                            mouse_pos.x,
+                                            rect.min.x,
+                                            px_per_ms,
+                                            (total_seconds * 1_000.0).round() as u64,
+                                        );
+                                        request_timeline_cue_dialog(
+                                            self.app,
+                                            ui.ctx(),
+                                            &track_key,
+                                            start_time_ms,
+                                        );
+                                        clicked_any_clip = true;
+                                    }
+                                }
+                            }
+
                             if response.clicked_by(egui::PointerButton::Primary)
                                 && !clicked_any_clip
                                 && !clicked_any_keyframe
@@ -16692,6 +17047,16 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         && !i.modifiers.command
                                         && !i.modifiers.alt
                                 });
+                                let add_timeline_cue_pressed = ui.input(|i| {
+                                    i.key_pressed(egui::Key::A)
+                                        && !i.modifiers.ctrl
+                                        && !i.modifiers.command
+                                        && !i.modifiers.alt
+                                        && !i.modifiers.shift
+                                }) && ui.ctx().data(|data| {
+                                    data.get_temp::<TimelineCueDraft>(timeline_cue_dialog_id())
+                                        .is_none()
+                                });
                                 let previous_cue_pressed = ui.input(|i| {
                                     i.key_pressed(egui::Key::Tab) && i.modifiers.shift
                                 });
@@ -16744,7 +17109,27 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let key_2_pressed = ui.input(|i| i.key_pressed(egui::Key::Num2)) && num_modifier_free;
                                 let key_3_pressed = ui.input(|i| i.key_pressed(egui::Key::Num3)) && num_modifier_free;
 
-                                if add_timeline_keyframe_pressed {
+                                if add_timeline_cue_pressed {
+                                    let start_time_ms = (self.app.playback_time * 1_000.0)
+                                        .round()
+                                        .clamp(0.0, total_seconds * 1_000.0)
+                                        as u64;
+                                    if let Some(track_key) =
+                                        self.app.selected_timeline_track.clone()
+                                    {
+                                        request_timeline_cue_dialog(
+                                            self.app,
+                                            ui.ctx(),
+                                            &track_key,
+                                            start_time_ms,
+                                        );
+                                    } else {
+                                        let message = self.app.tr(
+                                            "Select a relay or PWM timeline track first",
+                                        );
+                                        self.app.set_osd(message);
+                                    }
+                                } else if add_timeline_keyframe_pressed {
                                     let time_ms = (self.app.playback_time * 1_000.0)
                                         .round()
                                         .clamp(0.0, total_seconds * 1_000.0)
@@ -16977,6 +17362,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                 }
               });
             });
+        if matches!(tab, PealayerTab::Timeline) {
+            draw_timeline_cue_dialog(self.app, ui.ctx());
+        }
     }
 }
 

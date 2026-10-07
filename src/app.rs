@@ -1942,6 +1942,7 @@ impl eframe::App for PealayerApp {
                                     (crate::ui::icons::ARROW_UP, ",  or  [", "Frame Step Backward (-1 frame)"),
                                     (crate::ui::icons::SLIDERS_HORIZONTAL, "Mouse Wheel", "Adjust Volume on player/bar"),
                                     (crate::ui::icons::CLOCK_COUNTER_CLOCKWISE, "Shift + Mouse Wheel", "Seek forward / backward"),
+                                    (crate::ui::icons::PLUS, "A (Timeline)", "Add cue to selected track"),
                                     (crate::ui::icons::ARROWS_OUT, "Double Click", "Toggle Fullscreen / Open Video"),
                                     (crate::ui::icons::LIST_CHECKS, "Right Click", "Open Player Context Menu"),
                                     (crate::ui::icons::FILE_VIDEO, "Drag & Drop", "Drop media file onto window to play"),
@@ -7148,7 +7149,7 @@ impl PealayerApp {
         self.selected_instance_ids.clear();
         self.selected_instance_ids.insert(instance_id);
         self.selected_timeline_track = Some(crate::four_d::models::hardware_timeline_track_key(control_key));
-        self.sync_timeline_engine();
+        self.commit_timeline_edit();
         Ok(instance_id)
     }
 
