@@ -6,6 +6,28 @@ use std::path::{Path, PathBuf};
 
 const MAX_REPORT_BYTES: usize = 256 * 1024;
 
+/// Bounded local evidence for short-lived Explorer launches. Do not record
+/// media URLs, command payloads, configuration contents or credentials.
+pub fn record_shell_action(phase: &str, action: &str) {
+    let path = crate::server::thumbnails::get_thumbnail_cache_dir()
+        .with_file_name("diagnostics").join("shell-actions.jsonl");
+    let event = serde_json::json!({
+        "unix_ms": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default().as_millis(),
+        "pid": std::process::id(), "phase": phase, "action": action,
+        "commit": env!("PEALAYER_GIT_COMMIT"),
+    });
+    let _ = append_shell_event(&path, &event);
+}
+
+fn append_shell_event(path: &Path, event: &serde_json::Value) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
+    let full = std::fs::metadata(path).is_ok_and(|metadata| metadata.len() >= 64 * 1024);
+    let mut file = std::fs::OpenOptions::new().create(true).write(true)
+        .append(!full).truncate(full).open(path)?;
+    writeln!(file, "{event}")
+}
+
 pub fn panic_report_path() -> PathBuf {
     crate::config::AppConfig::get_config_path()
         .with_file_name("diagnostics")
@@ -58,6 +80,21 @@ pub fn install_panic_reporter() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_action_evidence_is_bounded_and_valid_jsonl() {
+        let directory = std::env::temp_dir().join(format!("pealayer-shell-evidence-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("shell-actions.jsonl");
+        write_report(&path, &"x".repeat(64 * 1024)).unwrap();
+        let event = serde_json::json!({"phase":"forward_accepted","action":"preferences"});
+        append_shell_event(&path, &event).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(saved.trim()).unwrap(), event);
+        append_shell_event(&path, &event).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
 
     #[test]
     fn panic_report_is_bounded_utf8_and_replaces_previous_report() {

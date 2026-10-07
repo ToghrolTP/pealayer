@@ -1391,6 +1391,8 @@ fn build_windows_jump_list(include_quick_actions: bool) -> Result<(), String> {
     let executable = std::env::current_exe()
         .map_err(|error| format!("resolve executable for Windows quick actions: {error}"))?;
     let executable_wide = wide_null_path(&executable);
+    let working_directory_wide = wide_null_path(executable.parent().ok_or_else(||
+        "Windows quick-action executable has no containing directory".to_owned())?);
     const PKEY_TITLE: PROPERTYKEY = PROPERTYKEY {
         fmtid: GUID::from_u128(0xf29f85e0_4ff9_1068_ab91_08002b27b3d9),
         pid: 2,
@@ -1428,6 +1430,8 @@ fn build_windows_jump_list(include_quick_actions: bool) -> Result<(), String> {
                     .map_err(|error| format!("set Windows quick-action executable: {error}"))?;
                 link.SetArguments(PCWSTR(arguments.as_ptr()))
                     .map_err(|error| format!("set Windows quick-action arguments: {error}"))?;
+                link.SetWorkingDirectory(PCWSTR(working_directory_wide.as_ptr()))
+                    .map_err(|error| format!("set Windows quick-action working directory: {error}"))?;
                 link.SetDescription(PCWSTR(description.as_ptr()))
                     .map_err(|error| format!("set Windows quick-action description: {error}"))?;
                 link.SetIconLocation(PCWSTR(executable_wide.as_ptr()), action.icon_location_index())

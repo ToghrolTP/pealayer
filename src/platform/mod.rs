@@ -5,6 +5,6 @@ pub mod media_controls;
 pub mod registry;
 pub mod taskbar_preview;
 pub mod windows;
-mod windows_quick_actions;
+pub(crate) mod windows_quick_actions;
 #[cfg(test)]
 mod windows_shell_icons;

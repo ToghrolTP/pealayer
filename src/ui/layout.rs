@@ -774,6 +774,15 @@ struct TimelineNavigationTransition {
     duration_seconds: f32,
 }
 
+fn timeline_ruler_owns_pointer(
+    ruler: egui::Rect,
+    toolbar: egui::Rect,
+    pointer: egui::Pos2,
+    dragging_ruler: bool,
+) -> bool {
+    dragging_ruler || (ruler.contains(pointer) && !toolbar.contains(pointer))
+}
+
 fn start_timeline_navigation_transition(
     ui: &egui::Ui,
     id: egui::Id,
@@ -6425,6 +6434,17 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn timeline_ruler_does_not_steal_toolbar_cursor_or_seek() {
+        let ruler = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(900.0, 30.0));
+        let toolbar = egui::Rect::from_min_max(egui::pos2(650.0, 1.0), egui::pos2(897.0, 29.0));
+        assert!(!timeline_ruler_owns_pointer(ruler, toolbar, toolbar.center(), false));
+        assert!(timeline_ruler_owns_pointer(ruler, toolbar, egui::pos2(200.0, 15.0), false));
+        // A seek already started on the ruler may continue across the toolbar.
+        assert!(timeline_ruler_owns_pointer(ruler, toolbar, toolbar.center(), true));
+        assert!(!timeline_ruler_owns_pointer(ruler, toolbar, egui::pos2(200.0, 60.0), false));
+    }
+
+    #[test]
     fn timeline_navigation_transaction_does_not_reenter_egui_context() {
         let context = egui::Context::default();
         let id = egui::Id::new("navigation-lock-regression");
@@ -9714,7 +9734,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                     .clicked()
                 {
                     self.app.preferences_tab = 2;
-                    self.app.show_preferences_dialog = true;
+                    crate::ui::preferences::open(self.app, ui.ctx());
                     ui.close();
                 }
             }
@@ -9748,7 +9768,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
             ))
             .clicked()
         {
-            self.app.show_preferences_dialog = true;
+            crate::ui::preferences::open(self.app, ui.ctx());
             ui.close();
         }
     }
@@ -13604,7 +13624,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         ))
                                                         .clicked()
                                                     {
-                                                        self.app.show_preferences_dialog = true;
+                                                        crate::ui::preferences::open(self.app, ui.ctx());
                                                         ui.close();
                                                     }
                                                     if changed {
@@ -13614,6 +13634,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     }
                                                 })
                                                 .0
+                                                .on_hover_cursor(egui::CursorIcon::PointingHand)
                                                 .on_hover_text(self.app.tr("More timeline controls and preferences"));
 
                                                 for action in toolbar_order.into_iter().filter(|action| {
@@ -13648,6 +13669,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 .frame(selected)
                                                                 .selected(selected),
                                                         )
+                                                        .on_hover_cursor(egui::CursorIcon::PointingHand)
                                                         .on_hover_text(format!(
                                                             "{}\n{}",
                                                             self.app.tr(timeline_toolbar_action_label(action)),
@@ -13809,8 +13831,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
 
                                         if let Some(pos) = pointer_pos {
-                                            if (ruler_rect.contains(pos)
-                                                || ruler_response.dragged_by(egui::PointerButton::Primary))
+                                            if timeline_ruler_owns_pointer(
+                                                ruler_rect, toolbar_rect, pos,
+                                                ruler_response.dragged_by(egui::PointerButton::Primary),
+                                            )
                                                 && !clicked_any_keyframe
                                                 && self.app.active_drag.is_none()
                                                 && self.app.lasso_origin.is_none()
@@ -16384,7 +16408,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     self.app.save_config();
                                 }
                                 if ui.button(format!("{} {}", crate::ui::icons::GEAR, self.app.tr("Preferences..."))).clicked() {
-                                    self.app.show_preferences_dialog = true;
+                                    crate::ui::preferences::open(self.app, ui.ctx());
                                     ui.close();
                                 }
                             });

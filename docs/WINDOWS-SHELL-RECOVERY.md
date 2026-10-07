@@ -29,6 +29,25 @@ Preferences and other UI actions unprocessed. This was not an icon-resource erro
 
 ## Delivery gate
 
+The first replacement removed the timeline hang, and direct CLI Preferences
+dispatch opened a responsive helper. The user then verified that Preferences
+still failed from the actual Jump List, including on a second attempt, while
+the in-application Preferences action worked. The shell issue therefore remains
+an independent acceptance gate, not a completed fix.
+
+The follow-up patch gives shell links an explicit executable working directory,
+wakes the inactive native owner after IPC/HTTP command receipt, and shares one
+Preferences open path which reaps a closed helper before reopening it. A process
+exit waiter repaints the parent without idle polling. Bounded local JSONL evidence
+in the OS cache's `diagnostics/shell-actions.jsonl` distinguishes launch request,
+forward acceptance, GUI receipt and helper readiness; it contains no media URLs,
+command payloads or credentials. Use it to locate failures instead of treating
+IPC acceptance as proof that Explorer's action worked.
+
+Timeline toolbar buttons own their pointer area: the ruler cannot override their
+hand cursor or seek while a toolbar button is being pressed. A separate geometry
+regression test covers the toolbar, ruler background and continued ruler drags.
+
 Use the project Windows host resolver and retain a clean, pushed source checkpoint.
 Package separately for the actual David-PC and Cafe-PC libmpv runtime identities.
 Preserve Cafe-PC's independent timeline/effect changes before creating a release
