@@ -886,6 +886,27 @@ struct TimelineNavigationTransition {
     duration_seconds: f32,
 }
 
+fn start_timeline_navigation_transition(
+    ui: &egui::Ui,
+    id: egui::Id,
+    start: (egui::Vec2, f32),
+    target: (egui::Vec2, f32),
+    duration_ms: u32,
+) {
+    // All Context accessors use the same non-reentrant lock. Snapshot input
+    // before the data transaction; never read input or request repaint inside it.
+    let transition = TimelineNavigationTransition {
+        start_offset: start.0,
+        target_offset: target.0,
+        start_zoom: start.1,
+        target_zoom: target.1,
+        started_at_seconds: ui.input(|input| input.time),
+        duration_seconds: duration_ms as f32 / 1_000.0,
+    };
+    ui.data_mut(|data| data.insert_temp(id, transition));
+    ui.ctx().request_repaint();
+}
+
 fn sample_timeline_navigation_transition(
     transition: TimelineNavigationTransition,
     now_seconds: f64,
@@ -6943,6 +6964,32 @@ mod timeline_row_tests {
             timeline_follow_target_offset(0.0, 450.0, 400.0, 500.0),
             None
         );
+    }
+
+    #[test]
+    fn timeline_navigation_transaction_does_not_reenter_egui_context() {
+        let context = egui::Context::default();
+        let id = egui::Id::new("navigation-lock-regression");
+        let mut output = context.run_ui(
+            egui::RawInput { time: Some(10.0), ..Default::default() },
+            |ui| {
+                // Toolbar navigation, follow-playhead, wheel and reveal all
+                // use this path. It must return with the context unlocked.
+                for target_zoom in [120.0, 150.0, 100.0, 200.0] {
+                    start_timeline_navigation_transition(
+                        ui, id, (egui::vec2(10.0, 20.0), 100.0),
+                        (egui::vec2(300.0, 40.0), target_zoom), 220,
+                    );
+                    let transition = ui.data(|data| {
+                        data.get_temp::<TimelineNavigationTransition>(id).unwrap()
+                    });
+                    assert_eq!(transition.started_at_seconds, 10.0);
+                    assert_eq!(transition.target_zoom, target_zoom);
+                    assert_eq!(transition.duration_seconds, 0.22);
+                }
+            },
+        );
+        output.textures_delta.clear();
     }
 
     #[test]
@@ -16699,24 +16746,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         && ((target_offset - current_offset).length() > 0.5
                                             || (target_zoom - current_zoom).abs() > 0.01)
                                     {
-                                        ui.data_mut(|data| {
-                                            data.insert_temp(
-                                                navigation_transition_id,
-                                                TimelineNavigationTransition {
-                                                    start_offset: current_offset,
-                                                    target_offset,
-                                                    start_zoom: current_zoom,
-                                                    target_zoom,
-                                                    started_at_seconds: ui.input(|input| input.time),
-                                                    duration_seconds: self
-                                                        .app
-                                                        .timeline_navigation_transition_ms
-                                                        as f32
-                                                        / 1_000.0,
-                                                },
-                                            );
-                                        });
-                                        ui.ctx().request_repaint();
+                                        start_timeline_navigation_transition(
+                                            ui, navigation_transition_id,
+                                            (current_offset, current_zoom),
+                                            (target_offset, target_zoom),
+                                            self.app.timeline_navigation_transition_ms,
+                                        );
                                     } else {
                                         self.app.timeline_zoom = target_zoom;
                                         timeline_scroll_state.offset = target_offset;
@@ -16785,22 +16820,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             target_offset.y = (target_offset.y - translation.y).clamp(0.0, max_y);
                                         }
                                     }
-                                    let transition = TimelineNavigationTransition {
-                                        start_offset: current_offset,
-                                        target_offset,
-                                        start_zoom: current_zoom,
-                                        target_zoom,
-                                        started_at_seconds: ui.input(|input| input.time),
-                                        duration_seconds: self
-                                            .app
-                                            .timeline_navigation_transition_ms
-                                            as f32
-                                            / 1_000.0,
-                                    };
-                                    ui.data_mut(|data| {
-                                        data.insert_temp(navigation_transition_id, transition);
-                                    });
-                                    ui.ctx().request_repaint();
+                                    start_timeline_navigation_transition(
+                                        ui, navigation_transition_id,
+                                        (current_offset, current_zoom),
+                                        (target_offset, target_zoom),
+                                        self.app.timeline_navigation_transition_ms,
+                                    );
                                 } else {
                                     ui.data_mut(|data| {
                                         data.remove_temp::<TimelineNavigationTransition>(
@@ -16956,24 +16981,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         timeline_scroll_state.offset.y,
                                     );
                                     if self.app.timeline_animated_navigation {
-                                        ui.data_mut(|data| {
-                                            data.insert_temp(
-                                                navigation_transition_id,
-                                                TimelineNavigationTransition {
-                                                    start_offset: timeline_scroll_state.offset,
-                                                    target_offset,
-                                                    start_zoom: self.app.timeline_zoom,
-                                                    target_zoom: self.app.timeline_zoom,
-                                                    started_at_seconds: ui.input(|input| input.time),
-                                                    duration_seconds: self
-                                                        .app
-                                                        .timeline_navigation_transition_ms
-                                                        as f32
-                                                        / 1_000.0,
-                                                },
-                                            );
-                                        });
-                                        ui.ctx().request_repaint();
+                                        start_timeline_navigation_transition(
+                                            ui, navigation_transition_id,
+                                            (timeline_scroll_state.offset, self.app.timeline_zoom),
+                                            (target_offset, self.app.timeline_zoom),
+                                            self.app.timeline_navigation_transition_ms,
+                                        );
                                     } else {
                                         timeline_scroll_state.offset = target_offset;
                                         timeline_scroll_changed = true;
@@ -17278,28 +17291,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         && (target_offset_x - timeline_scroll_state.offset.x).abs()
                                             > 0.5
                                     {
-                                        let started_at_seconds = ui.input(|input| input.time);
-                                        ui.data_mut(|data| {
-                                            data.insert_temp(
-                                                navigation_transition_id,
-                                                TimelineNavigationTransition {
-                                                    start_offset: timeline_scroll_state.offset,
-                                                    target_offset: egui::vec2(
-                                                        target_offset_x,
-                                                        timeline_scroll_state.offset.y,
-                                                    ),
-                                                    start_zoom: self.app.timeline_zoom,
-                                                    target_zoom: self.app.timeline_zoom,
-                                                    started_at_seconds,
-                                                    duration_seconds: self
-                                                        .app
-                                                        .timeline_navigation_transition_ms
-                                                        as f32
-                                                        / 1_000.0,
-                                                },
-                                            );
-                                        });
-                                        ui.ctx().request_repaint();
+                                        start_timeline_navigation_transition(
+                                            ui, navigation_transition_id,
+                                            (timeline_scroll_state.offset, self.app.timeline_zoom),
+                                            (egui::vec2(target_offset_x, timeline_scroll_state.offset.y), self.app.timeline_zoom),
+                                            self.app.timeline_navigation_transition_ms,
+                                        );
                                     } else {
                                         ui.data_mut(|data| {
                                             data.remove_temp::<TimelineNavigationTransition>(

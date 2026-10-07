@@ -2161,6 +2161,7 @@ pub fn json_rpc_error(id: &Value, code: i32, message: &str) -> String {
 static LIVE_STATUS: std::sync::RwLock<Option<PlayerStatusResponse>> = std::sync::RwLock::new(None);
 static LIVE_CONFIG: std::sync::RwLock<Option<crate::config::AppConfig>> =
     std::sync::RwLock::new(None);
+static LIVE_CONFIG_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn set_live_status(status: PlayerStatusResponse) {
     if let Ok(mut lock) = LIVE_STATUS.write() {
@@ -2199,7 +2200,46 @@ pub fn get_live_status() -> PlayerStatusResponse {
 pub fn set_live_config(config: crate::config::AppConfig) {
     if let Ok(mut lock) = LIVE_CONFIG.write() {
         *lock = Some(config);
+        LIVE_CONFIG_REVISION.fetch_add(1, std::sync::atomic::Ordering::Release);
     }
+}
+
+/// Monotonic signal for consumers that only need to react when configuration
+/// changes. This avoids cloning the complete application configuration from a
+/// per-frame rendering path just to discover that it is unchanged.
+pub fn live_config_revision() -> u64 {
+    LIVE_CONFIG_REVISION.load(std::sync::atomic::Ordering::Acquire)
+}
+
+#[derive(Clone)]
+pub struct LiveFrameConfig {
+    pub web_sync_interval_ms: u32,
+    pub remote_folder_auto_next: bool,
+    pub remote_folder_thumbnails: bool,
+    pub appearance: AppearanceState,
+}
+
+impl LiveFrameConfig {
+    fn from_config(config: &crate::config::AppConfig, dark: bool) -> Self {
+        Self {
+            web_sync_interval_ms: config.web_sync_interval_ms,
+            remote_folder_auto_next: config.remote_folder_auto_next,
+            remote_folder_thumbnails: config.remote_folder_thumbnails,
+            appearance: AppearanceState::new(config, dark),
+        }
+    }
+}
+
+/// Return only the configuration needed by the per-frame publisher. Cloning
+/// the complete AppConfig here used to copy workspace, history and media state
+/// on every repaint even though the renderer reads only four small values.
+pub fn get_live_frame_config(dark: bool) -> LiveFrameConfig {
+    if let Ok(config) = LIVE_CONFIG.read()
+        && let Some(config) = config.as_ref()
+    {
+        return LiveFrameConfig::from_config(config, dark);
+    }
+    LiveFrameConfig::from_config(&crate::config::AppConfig::load(), dark)
 }
 
 pub fn get_live_config() -> crate::config::AppConfig {
@@ -3084,6 +3124,21 @@ pub fn spawn_pccontroller_action_bridge(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_frame_config_projects_only_render_loop_inputs() {
+        let config = crate::config::AppConfig {
+            web_sync_interval_ms: 321,
+            remote_folder_auto_next: false,
+            remote_folder_thumbnails: false,
+            ..Default::default()
+        };
+        let projected = LiveFrameConfig::from_config(&config, true);
+        assert_eq!(projected.web_sync_interval_ms, 321);
+        assert!(!projected.remote_folder_auto_next);
+        assert!(!projected.remote_folder_thumbnails);
+        assert_eq!(projected.appearance.resolved_theme, crate::config::AppTheme::Dark);
+    }
 
     #[test]
     fn controller_subscription_keeps_edges_immediate_and_bounds_continuous_frames() {

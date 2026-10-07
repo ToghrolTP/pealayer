@@ -1,4 +1,12 @@
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
+#[path = "src/platform/windows_quick_actions.rs"]
+mod windows_quick_actions;
+#[cfg(target_os = "windows")]
+#[path = "src/platform/windows_shell_icons.rs"]
+mod windows_shell_icons;
+
+#[cfg(target_os = "windows")]
 fn main() {
     emit_build_metadata();
     for name in [
@@ -110,6 +118,17 @@ fn main() {
     if std::path::Path::new(&icon).exists() {
         res.set_icon(&icon);
     }
+    let out_dir = std::path::PathBuf::from(
+        std::env::var_os("OUT_DIR").expect("Cargo did not provide OUT_DIR"),
+    );
+    for action in windows_quick_actions::WINDOWS_QUICK_ACTIONS {
+        let task_icon = out_dir.join(format!("quick-action-{}.ico", action.icon_resource_id));
+        std::fs::write(&task_icon, windows_shell_icons::shell_icon_ico(action.icon_glyph))
+            .expect("write generated Windows task icon");
+        res.set_icon_with_id(&task_icon.to_string_lossy(), &action.icon_resource_id.to_string());
+    }
+    println!("cargo:rerun-if-changed=src/platform/windows_quick_actions.rs");
+    println!("cargo:rerun-if-changed=src/platform/windows_shell_icons.rs");
     res.compile().expect("failed to compile Windows resources");
 
     // This package exposes both a library and a binary. Resource-only archives
