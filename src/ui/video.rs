@@ -737,6 +737,15 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let render_context = app.render_context.clone();
     let rtt_state = app.rtt_state.clone();
     let is_operating = app.is_window_operating;
+    #[cfg(target_os = "windows")]
+    let taskbar_media = app
+        .windows_video_taskbar_thumbnail
+        .then(|| {
+            app.current_video_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned())
+        })
+        .flatten();
     let callback = egui::PaintCallback {
         rect,
         callback: Arc::new(eframe::egui_glow::CallbackFn::new(move |_info, painter| {
@@ -803,6 +812,18 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 target_phys_h,
                                 false,
                             );
+
+                            #[cfg(target_os = "windows")]
+                            if let Some(media) = taskbar_media.as_deref() {
+                                crate::platform::taskbar_preview::capture(
+                                    gl,
+                                    hwnd,
+                                    video_fbo,
+                                    target_phys_w,
+                                    target_phys_h,
+                                    media,
+                                );
+                            }
 
                             // Restore original FBO binding
                             gl.bind_framebuffer(eframe::glow::FRAMEBUFFER, target_fbo);

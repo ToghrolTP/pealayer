@@ -1926,20 +1926,18 @@ pub fn configure_video_taskbar_thumbnail(hwnd_raw: isize) -> Result<(), String> 
     update_video_taskbar_thumbnail(hwnd_raw, None)
 }
 
-/// Selects the live video rectangle for the Windows taskbar thumbnail.
+/// Enables Pealayer's MPV-only iconic thumbnail while media is visible.
 ///
-/// `SetThumbnailClip` keeps the frame entirely inside DWM's compositor path,
-/// matching native media players: there is no GPU-to-CPU readback, bitmap
-/// resize, frame-rate throttle, or application-side thumbnail repaint loop.
-/// A `None` rectangle restores Windows' ordinary full-window thumbnail. The
-/// shell is only called when the effective rectangle changes, so publishing
-/// the video layout every frame does not add idle COM traffic.
+/// A compositor clip still samples the complete egui swapchain on Windows 11
+/// and regresses to an application-UI thumbnail. The explicit iconic bitmap is
+/// sourced from MPV's offscreen framebuffer instead, while the actual window
+/// and DWM Peek remain ordinary full-application surfaces.
 #[cfg(target_os = "windows")]
 pub fn update_video_taskbar_thumbnail(
     hwnd_raw: isize,
     video_rect: Option<[i32; 4]>,
 ) -> Result<(), String> {
-    use windows::Win32::Foundation::{HWND, RECT};
+    use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     };
@@ -1949,10 +1947,7 @@ pub fn update_video_taskbar_thumbnail(
         return Err("invalid window handle (HWND is 0)".to_string());
     }
     let normalized = video_rect.filter(|rect| rect[2] > rect[0] && rect[3] > rect[1]);
-    // Disable the legacy application-supplied iconic bitmap before applying a
-    // native clip. Leaving FORCE_ICONIC_REPRESENTATION enabled prevents DWM
-    // from continuously sampling the real window surface.
-    crate::platform::taskbar_preview::configure(hwnd_raw, false)?;
+    crate::platform::taskbar_preview::configure(hwnd_raw, normalized.is_some())?;
     if TASKBAR_THUMBNAIL_CLIP
         .lock()
         .is_ok_and(|cached| *cached == Some((hwnd_raw, normalized)))
@@ -1967,19 +1962,11 @@ pub fn update_video_taskbar_thumbnail(
         taskbar
             .HrInit()
             .map_err(|error| format!("initialize taskbar thumbnail service: {error}"))?;
-        let clip = normalized.map(|rect| RECT {
-            left: rect[0],
-            top: rect[1],
-            right: rect[2],
-            bottom: rect[3],
-        });
+        // Clear any clip left by an older build. The iconic bitmap already
+        // contains video only and must not be cropped a second time.
         taskbar
-            .SetThumbnailClip(
-                hwnd,
-                clip.as_ref()
-                    .map_or(std::ptr::null(), |rect| rect as *const RECT),
-            )
-            .map_err(|error| format!("set compositor taskbar thumbnail clip: {error}"))?;
+            .SetThumbnailClip(hwnd, std::ptr::null())
+            .map_err(|error| format!("clear legacy taskbar thumbnail clip: {error}"))?;
     }
     if let Ok(mut cached) = TASKBAR_THUMBNAIL_CLIP.lock() {
         *cached = Some((hwnd_raw, normalized));
@@ -2079,6 +2066,7 @@ unsafe extern "system" fn shell_window_proc(
     if taskbar_created != 0 && message == taskbar_created {
         crate::platform::taskbar_preview::reset_shell();
         SHELL_REINITIALIZE.store(true, Ordering::Release);
+        crate::platform::taskbar_preview::request_repaint();
     }
 
     if message == WM_MOVING_VALUE

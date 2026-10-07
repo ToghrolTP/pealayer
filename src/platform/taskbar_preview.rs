@@ -1,8 +1,7 @@
-//! Windows taskbar helpers shared by shell commands and toolbar icon rendering.
-//!
-//! The live taskbar preview now stays inside DWM through `SetThumbnailClip`.
-//! The iconic-bitmap implementation remains as a compatibility fallback, but
-//! the normal video path performs no GPU readback or image resizing here.
+//! DWM consumes an MPV-only bitmap, not a screenshot/crop of egui.
+//! Readback is demand-driven: one seed frame, then up to 30 Hz only while
+//! Windows is actively requesting previews. No decoding, disk I/O or GL runs
+//! in the window procedure, and the real Pealayer window remains untouched.
 
 use std::sync::{Mutex, OnceLock, mpsc::SyncSender};
 use std::time::{Duration, Instant};
@@ -34,6 +33,33 @@ static PREVIEW: Mutex<Preview> = Mutex::new(Preview {
 static REPAINT: OnceLock<eframe::egui::Context> = OnceLock::new();
 static REPAINT_WAKE: OnceLock<SyncSender<()>> = OnceLock::new();
 
+#[cfg(target_os = "windows")]
+fn wake_native_window() {
+    use windows::Win32::{
+        Foundation::HWND,
+        Graphics::Gdi::{RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow},
+    };
+
+    let hwnd = crate::platform::windows::get_registered_hwnd();
+    if hwnd != 0 {
+        // request_repaint is normally sufficient, but Windows can suppress
+        // the winit redraw while an inactive/minimized taskbar owner is being
+        // controlled. RedrawWindow from this worker gives the native queue a
+        // real paint edge without activating or focusing the application.
+        unsafe {
+            let _ = RedrawWindow(
+                Some(HWND(hwnd as *mut _)),
+                None,
+                None,
+                RDW_INVALIDATE | RDW_UPDATENOW,
+            );
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn wake_native_window() {}
+
 // Win32 message values are stable ABI constants. Keeping this decision pure
 // lets every CI host verify that video-only rendering is limited to the small
 // taskbar thumbnail and never leaks into the full-size Peek preview.
@@ -53,10 +79,12 @@ pub fn register_repaint(ctx: &eframe::egui::Context) {
             .spawn(move || {
                 while receiver.recv().is_ok() {
                     repaint.request_repaint();
+                    wake_native_window();
                     // A second edge publishes the state that results from the
                     // command (play/pause, mute, fullscreen) back to Explorer.
                     std::thread::sleep(Duration::from_millis(12));
                     repaint.request_repaint();
+                    wake_native_window();
                 }
             });
         let _ = REPAINT_WAKE.set(sender);
@@ -164,7 +192,7 @@ pub unsafe fn capture(
                 .is_some_and(|at| at.elapsed() < Duration::from_secs(1))
                 && state
                     .captured
-                    .is_none_or(|at| at.elapsed() >= Duration::from_millis(200)))
+                    .is_none_or(|at| at.elapsed() >= Duration::from_millis(33)))
     } else {
         false
     };
