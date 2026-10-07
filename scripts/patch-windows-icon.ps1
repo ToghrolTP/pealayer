@@ -27,7 +27,6 @@ function Resolve-ResourceTool([string]$Requested) {
     }
     throw 'Neither rcedit.exe nor ResourceHacker.exe was found. Pass -Tool with an installed resource editor.'
 }
-
 $resourceTool = Resolve-ResourceTool $Tool
 $before = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
 $backup = "$exe.before-icon-patch"
@@ -59,4 +58,3 @@ if ($PSCmdlet.ShouldProcess($exe, "replace Windows application icon using $resou
         Note = 'Patch before signing: any existing Authenticode signature is invalidated by resource changes.'
     }
 }
-
