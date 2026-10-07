@@ -4,7 +4,8 @@ param(
     [switch]$SkipTests,
     [switch]$Run,
     [string]$Branding,
-    [string]$LibmpvDirectory
+    [string]$LibmpvDirectory,
+    [string]$OutputDirectory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,7 +65,9 @@ $cargoTargetDirectory = if ($env:CARGO_TARGET_DIR) {
 $releaseDirectory = Join-Path $cargoTargetDirectory 'release'
 $stagingDirectory = Join-Path $cargoTargetDirectory 'package-windows'
 $sourceDirectory = Split-Path -Parent $repositoryRoot
-$outputDirectory = if ((Split-Path -Leaf $sourceDirectory) -ieq 'source') {
+$outputDirectory = if ($OutputDirectory) {
+    [System.IO.Path]::GetFullPath($OutputDirectory)
+} elseif ((Split-Path -Leaf $sourceDirectory) -ieq 'source') {
     Join-Path (Split-Path -Parent $sourceDirectory) 'bin'
 } else {
     Join-Path $repositoryRoot 'bin'
@@ -137,6 +140,7 @@ $expectedProductName = if ($env:APP_NAME) {
 if ($resource.ProductName -ne $expectedProductName -or $resource.OriginalFilename -ne $effectiveExecutableFile) {
     throw 'Packaged executable is missing the expected Win32 identity resources.'
 }
+& (Join-Path $PSScriptRoot 'verify-windows-quick-action-icons.ps1') -Executable $stagedExecutable
 
 $unpackedBytes = (Get-Item -LiteralPath $stagedExecutable).Length
 $upxVersion = $null
@@ -219,6 +223,7 @@ $manifest = [ordered]@{
     validation = [ordered]@{
         tests = if ($SkipTests) { 'skipped' } else { 'passed' }
         windows_resources = 'verified'
+        quick_action_icons = 'verified'
         libmpv_smoke = 'passed'
         web_ui = if ($webUiPackaged) { 'packaged' } else { 'embedded_fallback' }
         upx = if ($NoUpx) { [ordered]@{ enabled = $false; tested = $false } } else { [ordered]@{ enabled = $true; tested = $true; version = $upxVersion } }

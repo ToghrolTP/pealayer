@@ -127,3 +127,20 @@ there were zero DWM requests/deliveries. The enabled preference alone is not
 evidence that Explorer received a video-only bitmap. A real user-hover check with
 the video surface visible is still required; no Windows 10 versus Windows 11
 visual-equivalence claim is made.
+
+## Jump List quick-action icons
+
+Jump List tasks use their own bundled Phosphor icons: play/pause, previous and
+next chapter, mute, fullscreen, preferences and exit. The application entry
+retains the branded app icon. These multi-resolution resources (16–64 pixels)
+are generated from the existing icon font at build time, not shipped as extra
+loose assets or borrowed from OS DLLs. Each shell link selects its explicit
+negative resource ID, so branding changes and resource ordering cannot turn
+all actions back into the app logo. The action titles, CLI switches, glyphs and
+resource IDs are shared between the build and runtime publishers.
+
+Windows packaging verifies that the shell can extract the app icon and every
+task resource and rejects empty or duplicate task images. Run
+`scripts/verify-windows-quick-action-icons.ps1 -Executable <exe>` to repeat the
+check; optional `-OutputDirectory <directory>` writes a dark/light contact sheet
+of the icons actually extracted by Windows, rather than a mockup.
