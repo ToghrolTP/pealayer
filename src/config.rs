@@ -434,6 +434,37 @@ impl WindowGeometry {
     }
 }
 
+#[cfg(test)]
+mod window_geometry_tests {
+    use super::WindowGeometry;
+
+    #[test]
+    fn rejects_transient_minimized_and_zero_sized_geometry() {
+        for (width, height) in [(0.0, 0.0), (64.0, 64.0), (800.0, 0.0)] {
+            assert!(!WindowGeometry {
+                x: 0.0,
+                y: 0.0,
+                width,
+                height,
+                maximized: false,
+            }
+            .is_valid());
+        }
+    }
+
+    #[test]
+    fn accepts_a_real_window_at_the_primary_monitor_origin() {
+        assert!(WindowGeometry {
+            x: 0.0,
+            y: 0.0,
+            width: 1280.0,
+            height: 720.0,
+            maximized: false,
+        }
+        .is_valid());
+    }
+}
+
 /// User-facing workspace state that is meaningful independently of egui's
 /// internal widget memory. Window/dialog positions and scroll offsets live in
 /// the serialized egui memory; these fields restore which surfaces were open

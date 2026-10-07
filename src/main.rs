@@ -296,7 +296,14 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Glow,
-        persist_window: !crate::peer::active(),
+        // Pealayer already owns validated main-window geometry in AppConfig.
+        // Letting eframe independently persist the native window creates a
+        // second source of truth: Windows can report a transient 0x0/64x64
+        // rectangle at minimize or shutdown, which eframe then restores at
+        // (0, 0) before our valid geometry is applied. Keep storage enabled
+        // for egui widget/dialog memory, but never load or save eframe's native
+        // window placement record.
+        persist_window: false,
         persistence_path: (!crate::peer::active()).then(|| {
             crate::config::AppConfig::get_config_path().with_file_name("workspace-state.ron")
         }),
