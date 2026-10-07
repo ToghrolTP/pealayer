@@ -6656,7 +6656,7 @@ mod timeline_row_tests {
     fn timeline_track_state_button_always_reserves_the_same_square() {
         let context = egui::Context::default();
         let mut size = egui::Vec2::ZERO;
-        let _ = context.run_ui(egui::RawInput::default(), |ui| {
+        discard_ui_output(context.run_ui(egui::RawInput::default(), |ui| {
             size = timeline_track_state_button(
                 ui,
                 false,
@@ -6666,7 +6666,7 @@ mod timeline_row_tests {
             )
             .rect
             .size();
-        });
+        }));
         assert_eq!(size, egui::vec2(TIMELINE_TRACK_STATE_BUTTON_SIZE, TIMELINE_TRACK_STATE_BUTTON_SIZE));
     }
 
