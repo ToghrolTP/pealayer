@@ -61,7 +61,7 @@ fn main() -> eframe::Result {
     }
     if let Some(journal_path) = crate::update::helper_invocation(&startup_args) {
         if let Err(error) = crate::update::run_update_helper(journal_path) {
-            eprintln!("Pealayer update helper failed: {error}");
+            crate::cli_eprintln!("Pealayer update helper failed: {error}");
             std::process::exit(4);
         }
         return Ok(());
@@ -73,7 +73,7 @@ fn main() -> eframe::Result {
         match Mpv::new() {
             Ok(_) => std::process::exit(0),
             Err(error) => {
-                eprintln!("libmpv smoke test failed: {error}");
+                crate::cli_eprintln!("libmpv smoke test failed: {error}");
                 std::process::exit(2);
             }
         }
@@ -106,34 +106,34 @@ fn main() -> eframe::Result {
     let cli_options = match action {
         Ok(crate::cli::CliAction::RunClient {..}) => unreachable!(),
         Ok(crate::cli::CliAction::PrintHelp(msg)) => {
-            println!("{}", msg);
+            crate::cli_println!("{}", msg);
             return Ok(());
         }
         Ok(crate::cli::CliAction::PrintVersion(ver)) => {
-            println!("{}", ver);
+            crate::cli_println!("{}", ver);
             return Ok(());
         }
         Ok(crate::cli::CliAction::SendRemote(cmd)) => match crate::cli::send_remote_command(&cmd) {
             Ok(resp) => {
-                println!("{}", resp);
+                crate::cli_println!("{}", resp);
                 return Ok(());
             }
             Err(e) => {
-                eprintln!("{}", e);
+                crate::cli_eprintln!("{}", e);
                 std::process::exit(1);
             }
         },
         Ok(crate::cli::CliAction::PushUpdate(target)) => {
             match crate::update::push_current_to_peer(&target) {
                 Ok(status) => {
-                    println!(
+                    crate::cli_println!(
                         "{}",
                         serde_json::to_string_pretty(&status).unwrap_or_default()
                     );
                     return Ok(());
                 }
                 Err(error) => {
-                    eprintln!("Peer update failed: {error}");
+                    crate::cli_eprintln!("Peer update failed: {error}");
                     std::process::exit(4);
                 }
             }
@@ -142,14 +142,14 @@ fn main() -> eframe::Result {
             let target = format!("http://127.0.0.1:{}", crate::config::control_port());
             match crate::update::request_update_from_url(&target, &url, sha256.as_deref()) {
                 Ok(status) => {
-                    println!(
+                    crate::cli_println!(
                         "{}",
                         serde_json::to_string_pretty(&status).unwrap_or_default()
                     );
                     return Ok(());
                 }
                 Err(error) => {
-                    eprintln!("URL update request failed: {error}");
+                    crate::cli_eprintln!("URL update request failed: {error}");
                     std::process::exit(4);
                 }
             }
@@ -157,14 +157,14 @@ fn main() -> eframe::Result {
         Ok(crate::cli::CliAction::UpdateStatus(target)) => {
             match crate::update::peer_update_status(&target) {
                 Ok(status) => {
-                    println!(
+                    crate::cli_println!(
                         "{}",
                         serde_json::to_string_pretty(&status).unwrap_or_default()
                     );
                     return Ok(());
                 }
                 Err(error) => {
-                    eprintln!("Update status request failed: {error}");
+                    crate::cli_eprintln!("Update status request failed: {error}");
                     std::process::exit(4);
                 }
             }
@@ -172,14 +172,14 @@ fn main() -> eframe::Result {
         Ok(crate::cli::CliAction::RegisterAssociations) => {
             match crate::platform::associations::register_file_associations(None) {
                 Ok(count) => {
-                    println!(
+                    crate::cli_println!(
                         "Successfully registered Pealayer for {} media file types.",
                         count
                     );
                     return Ok(());
                 }
                 Err(e) => {
-                    eprintln!("Failed to register file associations: {}", e);
+                    crate::cli_eprintln!("Failed to register file associations: {}", e);
                     std::process::exit(1);
                 }
             }
@@ -187,14 +187,14 @@ fn main() -> eframe::Result {
         Ok(crate::cli::CliAction::UnregisterAssociations) => {
             match crate::platform::associations::unregister_file_associations() {
                 Ok(count) => {
-                    println!(
+                    crate::cli_println!(
                         "Successfully unregistered Pealayer media file associations ({} processed).",
                         count
                     );
                     return Ok(());
                 }
                 Err(e) => {
-                    eprintln!("Failed to unregister file associations: {}", e);
+                    crate::cli_eprintln!("Failed to unregister file associations: {}", e);
                     std::process::exit(1);
                 }
             }
@@ -203,7 +203,7 @@ fn main() -> eframe::Result {
             let config = crate::config::AppConfig::load();
             let launch_request = crate::cli::launch_request(&opts);
             if config.single_instance && crate::cli::try_forward_launch_request(&launch_request) {
-                println!("Forwarded launch request to active Pealayer instance.");
+                crate::cli_println!("Forwarded launch request to active Pealayer instance.");
                 return Ok(());
             }
             #[cfg(target_os = "windows")]
@@ -218,11 +218,11 @@ fn main() -> eframe::Result {
                         }
                         Ok(crate::platform::windows::GuiOwnership::Existing) => {
                             if crate::cli::try_forward_launch_request(&launch_request) {
-                                println!("Forwarded launch request to active Pealayer instance.");
+                                crate::cli_println!("Forwarded launch request to active Pealayer instance.");
                                 return Ok(());
                             }
                             if std::time::Instant::now() >= deadline {
-                                eprintln!(
+                                crate::cli_eprintln!(
                                     "The active Pealayer instance did not accept the launch request."
                                 );
                                 std::process::exit(3);
@@ -230,7 +230,7 @@ fn main() -> eframe::Result {
                             std::thread::sleep(std::time::Duration::from_millis(100));
                         }
                         Err(error) => {
-                            eprintln!("Could not establish Pealayer GUI ownership: {error}");
+                            crate::cli_eprintln!("Could not establish Pealayer GUI ownership: {error}");
                             std::process::exit(3);
                         }
                     }
@@ -239,7 +239,7 @@ fn main() -> eframe::Result {
             opts
         }
         Err(err) => {
-            eprintln!("Error: {}\nRun 'pealayer --help' for usage.", err);
+            crate::cli_eprintln!("Error: {}\nRun 'pealayer --help' for usage.", err);
             std::process::exit(1);
         }
     };
