@@ -2350,7 +2350,8 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Shell::{
-        NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NOTIFYICONDATAW, Shell_NotifyIconW,
+        NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_MODIFY, NOTIFYICONDATAW,
+        Shell_NotifyIconW,
     };
     use windows::Win32::UI::WindowsAndMessaging::{GCLP_HICON, GetClassLongPtrW, HICON, LoadIconW};
     use windows::core::PCWSTR;
@@ -2381,11 +2382,17 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
             ..Default::default()
         };
 
-        let res = Shell_NotifyIconW(NIM_ADD, &mut nid);
-        if res.as_bool() {
+        let added = Shell_NotifyIconW(NIM_ADD, &mut nid);
+        // Explorer broadcasts TaskbarButtonCreated after recreating its taskbar
+        // surfaces.  The thumbnail toolbar must be added again, but the tray
+        // icon commonly survives that event.  Treat an existing icon as an
+        // idempotent registration and refresh it in place; otherwise a failed
+        // duplicate NIM_ADD keeps the whole shell initializer retrying every
+        // frame and repeatedly tears down/re-adds the thumbnail toolbar.
+        if added.as_bool() || Shell_NotifyIconW(NIM_MODIFY, &mut nid).as_bool() {
             Ok(())
         } else {
-            Err("Shell_NotifyIconW NIM_ADD failed".to_string())
+            Err("Shell_NotifyIconW NIM_ADD and NIM_MODIFY failed".to_string())
         }
     }
 }
