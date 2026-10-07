@@ -167,6 +167,58 @@ enum CapturePlan {
     RetryAfter(Duration),
 }
 
+/// Reserve the next video-only thumbnail capture. Both OpenGL and D3D11 use
+/// this gate so DWM gets identical media-change invalidation, demand tracking,
+/// and 30 Hz throttling regardless of the selected Windows video renderer.
+pub(crate) fn begin_capture(media: &str, width: u32, height: u32) -> Option<(u32, u32)> {
+    let plan = if let Ok(mut state) = PREVIEW.lock() {
+        if !state.enabled || width == 0 || height == 0 {
+            return None;
+        }
+        if state.media != media {
+            state.media = media.to_owned();
+            state.frame = None;
+            state.captured = None;
+        }
+        capture_plan(
+            state.enabled,
+            state.frame.is_some(),
+            state.requested.map(|at| at.elapsed()),
+            state.captured.map(|at| at.elapsed()),
+        )
+    } else {
+        CapturePlan::Idle
+    };
+    match plan {
+        CapturePlan::Idle => None,
+        CapturePlan::RetryAfter(delay) => {
+            // DWM can ask for the invalidated thumbnail immediately. Without
+            // a future paint, a rate-limited renderer would freeze forever.
+            if let Some(ctx) = REPAINT.get() {
+                ctx.request_repaint_after(delay);
+            }
+            None
+        }
+        CapturePlan::Capture => Some(fit_size(width, height, 640, 360)),
+    }
+}
+
+/// Publish a top-down RGBA video frame to the common DWM thumbnail state.
+pub(crate) fn submit_capture(hwnd: isize, frame: image::RgbaImage) {
+    if let Ok(mut state) = PREVIEW.lock() {
+        state.frame = Some(frame);
+        state.captured = Some(Instant::now());
+    }
+    #[cfg(target_os = "windows")]
+    unsafe {
+        let _ = windows::Win32::Graphics::Dwm::DwmInvalidateIconicBitmaps(
+            windows::Win32::Foundation::HWND(hwnd as *mut _),
+        );
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = hwnd;
+}
+
 fn capture_plan(
     enabled: bool,
     has_frame: bool,
@@ -207,39 +259,9 @@ pub unsafe fn capture(
     media: &str,
 ) {
     use eframe::glow::{self, HasContext};
-    let plan = if let Ok(mut state) = PREVIEW.lock() {
-        if !state.enabled || width <= 0 || height <= 0 {
-            return;
-        }
-        if state.media != media {
-            state.media = media.to_owned();
-            state.frame = None;
-            state.captured = None;
-        }
-        capture_plan(
-            state.enabled,
-            state.frame.is_some(),
-            state.requested.map(|at| at.elapsed()),
-            state.captured.map(|at| at.elapsed()),
-        )
-    } else {
-        CapturePlan::Idle
+    let Some((w, h)) = begin_capture(media, width.max(0) as u32, height.max(0) as u32) else {
+        return;
     };
-    match plan {
-        CapturePlan::Idle => return,
-        CapturePlan::RetryAfter(delay) => {
-            // DWM can ask for the invalidated thumbnail immediately. If the
-            // 30 Hz limiter simply returns here, no later paint is guaranteed
-            // and the taskbar freezes on that frame. Schedule the exact next
-            // eligible capture to keep the preview live while it is visible.
-            if let Some(ctx) = REPAINT.get() {
-                ctx.request_repaint_after(delay);
-            }
-            return;
-        }
-        CapturePlan::Capture => {}
-    }
-    let (w, h) = fit_size(width as u32, height as u32, 640, 360);
     unsafe {
         // Preserve split FBO bindings and pixel packing. Never read the egui
         // framebuffer, which would include controls/OSD and leak through panels.
@@ -333,13 +355,9 @@ pub unsafe fn capture(
         for pixel in rgba.chunks_exact_mut(4) {
             pixel[3] = 255;
         }
-        if let Ok(mut state) = PREVIEW.lock() {
-            state.frame = image::RgbaImage::from_raw(w, h, rgba);
-            state.captured = Some(Instant::now());
+        if let Some(frame) = image::RgbaImage::from_raw(w, h, rgba) {
+            submit_capture(hwnd, frame);
         }
-        let _ = windows::Win32::Graphics::Dwm::DwmInvalidateIconicBitmaps(
-            windows::Win32::Foundation::HWND(hwnd as *mut _),
-        );
     }
 }
 

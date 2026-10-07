@@ -1,8 +1,6 @@
 use crate::app::PealayerApp;
-#[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
 use crate::mpv::render::GetProcAddress;
 use eframe::egui;
-#[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
 use std::sync::Arc;
 
 const DEFAULT_VIDEO_ASPECT_RATIO: f64 = 16.0 / 9.0;
@@ -632,6 +630,15 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let hwnd = app
         .window_handle
         .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
+    #[cfg(target_os = "windows")]
+    let taskbar_media = app
+        .windows_video_taskbar_thumbnail
+        .then(|| {
+            app.current_video_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned())
+        })
+        .flatten();
     if hwnd != 0
         && let Err(error) =
             crate::platform::windows::update_video_taskbar_thumbnail(hwnd, taskbar_video_rect)
@@ -640,19 +647,20 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 
     // 2. Calculate DPI-aware physical pixel dimensions
-    #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
     let ppi = pixels_per_point;
-    #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
     let (target_phys_w, target_phys_h) = calculate_physical_bounds(dest_rect, ppi);
 
     #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
-    let composition_active = crate::platform::d3d11_composition::update(
-        &app.mpv_client,
-        hwnd,
-        dest_rect,
-        pixels_per_point,
-        app.current_video_path.is_some(),
-    );
+    let composition_active = app.active_windows_video_renderer
+        == crate::config::WindowsVideoRenderer::D3D11
+        && crate::platform::d3d11_composition::update(
+            &app.mpv_client,
+            hwnd,
+            dest_rect,
+            pixels_per_point,
+            app.current_video_path.is_some(),
+            taskbar_media.as_deref(),
+        );
     #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
     let composition_active = false;
 
@@ -749,25 +757,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 
     // 3. Schedule PaintCallback to render current frame at exact physical pixel size
-    #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
     let render_context = app.render_context.clone();
-    #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
     let rtt_state = app.rtt_state.clone();
-    #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
     let is_operating = app.is_window_operating;
-    #[cfg(all(
-        target_os = "windows",
-        not(feature = "d3d11-composition-experiment")
-    ))]
-    let taskbar_media = app
-        .windows_video_taskbar_thumbnail
-        .then(|| {
-            app.current_video_path
-                .as_ref()
-                .map(|path| path.to_string_lossy().into_owned())
-        })
-        .flatten();
-    #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
     let callback = egui::PaintCallback {
         rect,
         callback: Arc::new(eframe::egui_glow::CallbackFn::new(move |_info, painter| {
@@ -864,7 +856,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         })),
     };
 
-    #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
     ui.painter().add(callback);
 
     let is_hovering_file = ui.input(|i| !i.raw.hovered_files.is_empty());

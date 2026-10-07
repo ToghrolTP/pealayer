@@ -2,6 +2,9 @@
 
 This branch contains an intentionally isolated Windows renderer experiment.
 The normal Pealayer build remains on the existing libmpv OpenGL render API.
+This experimental build exposes **Preferences → Advanced → Windows graphics
+and composition → Video renderer**, where OpenGL or D3D11 / DirectComposition
+can be selected. A renderer change takes effect after restarting Pealayer.
 
 ## What this path changes
 
@@ -46,19 +49,22 @@ The release build launched with the machine's packaged libmpv, restored a real
 A window-only capture showed the movie inside the expected Program Monitor
 rectangle with the surrounding egui workspace intact.
 
-## Important boundary: Windows taskbar thumbnails
+## Windows taskbar thumbnails
 
 This is zero-copy for Pealayer's on-screen video surface. It cannot make the
 custom video-only taskbar thumbnail zero-copy: the DWM iconic-thumbnail
-callback still requires Pealayer to submit an `HBITMAP`. That path must retain
-a bounded readback/fallback or use the ordinary whole-window DWM preview.
+callback requires Pealayer to submit an `HBITMAP`. The D3D11 implementation
+therefore copies the swapchain buffer into a reusable CPU-readable staging
+texture only when DWM is requesting thumbnails, converts/downscales it to a
+maximum 640×360 RGBA frame, and feeds the same 30 Hz publisher used by OpenGL.
+This bounded shell-preview readback does not alter the zero-copy on-screen
+presentation path.
 
 ## Experimental limitations
 
 - The composition visual sits above egui's opaque OpenGL surface. egui-drawn
   overlays inside the video rectangle (notably the OSD) require a later shared
   DirectComposition overlay visual or migration of those overlays into mpv.
-- Custom video-only taskbar thumbnail capture is not supplied by this path.
 - Hardware/driver coverage is limited to the current Windows 11 validation;
   adapter selection, HDR, device-loss recovery, Windows 10, and Cafe-PC still
   require explicit acceptance testing before this could replace the default.

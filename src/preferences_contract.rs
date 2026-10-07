@@ -916,6 +916,19 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Windows shell",
             "Show quick actions in the taskbar and Start menu",
         ),
+        {
+            let mut control = PreferenceControl::select(
+                "windows_video_renderer",
+                "advanced",
+                "Windows graphics and composition",
+                "Video renderer",
+                &[("open_gl", "OpenGL"), ("d3d11", "D3D11 / DirectComposition")],
+            );
+            control.description = Some(
+                "Selects libmpv's Windows video presentation path. Restart Pealayer after changing this setting.",
+            );
+            control
+        },
         PreferenceControl::boolean(
             "opengl_vsync",
             "advanced",

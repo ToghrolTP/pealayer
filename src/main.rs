@@ -25,9 +25,7 @@ pub mod update;
 use app::PealayerApp;
 use eframe::egui;
 use libmpv2::Mpv;
-#[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
 use libmpv2::render::{OpenGLInitParams, RenderParam, RenderParamApiType};
-#[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
 use mpv::render::{RenderContextWrapper, mpv_get_proc_address};
 use std::sync::{Arc, Mutex};
 
@@ -335,11 +333,16 @@ fn main() -> eframe::Result {
             crate::ui::configure_native_appearance(&cc.egui_ctx, &loaded_config);
             crate::ui::configure_main_window_style(&cc.egui_ctx);
 
-            #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
             let get_proc = cc
                 .get_proc_address
                 .clone()
                 .expect("Glow backend must provide get_proc_address");
+
+            #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
+            let use_d3d11 = loaded_config.windows_video_renderer
+                == crate::config::WindowsVideoRenderer::D3D11;
+            #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
+            let use_d3d11 = false;
 
             let subtitle_font_directory = subtitle_font_directory();
             if let Some(font_path) = subtitle_font_directory
@@ -359,10 +362,7 @@ fn main() -> eframe::Result {
                 }
             }
             let mpv = Mpv::with_initializer(|init| {
-                #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
-                init.set_property("vo", "libmpv")?;
-                #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
-                {
+                if use_d3d11 {
                     init.set_property("vo", "gpu-next")?;
                     init.set_property("gpu-api", "d3d11")?;
                     init.set_property("gpu-context", "d3d11")?;
@@ -370,6 +370,8 @@ fn main() -> eframe::Result {
                     init.set_property("d3d11-composition-size", "1280x720")?;
                     init.set_property("hwdec", "d3d11va")?;
                     init.set_property("d3d11va-zero-copy", true)?;
+                } else {
+                    init.set_property("vo", "libmpv")?;
                 }
                 init.set_property("keep-open", "always")?;
                 crate::mpv::proxy::apply_before_initialize(
@@ -407,21 +409,22 @@ fn main() -> eframe::Result {
 
             let mpv_static: &'static Mpv = Box::leak(Box::new(mpv));
 
-            #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
-            let mut render_context = mpv_static
-                .create_render_context(vec![
-                    RenderParam::ApiType(RenderParamApiType::OpenGl),
-                    RenderParam::InitParams(OpenGLInitParams {
-                        get_proc_address: mpv_get_proc_address,
-                        ctx: get_proc,
-                    }),
-                ])
-                .expect("Failed creating render context");
+            let mut render_context = (!use_d3d11).then(|| {
+                mpv_static
+                    .create_render_context(vec![
+                        RenderParam::ApiType(RenderParamApiType::OpenGl),
+                        RenderParam::InitParams(OpenGLInitParams {
+                            get_proc_address: mpv_get_proc_address,
+                            ctx: get_proc,
+                        }),
+                    ])
+                    .expect("Failed creating render context")
+            });
 
             let egui_ctx = cc.egui_ctx.clone();
             crate::remote_location::install_context(&egui_ctx);
-            #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
-            render_context.set_update_callback(move || {
+            if let Some(render_context) = render_context.as_mut() {
+                render_context.set_update_callback(move || {
                 // Outside a native move, the decoder remains the most efficient
                 // repaint clock. During WM_ENTERSIZEMOVE, the dedicated DWM
                 // pump presents the newest decoded frame at compositor cadence;
@@ -432,17 +435,17 @@ fn main() -> eframe::Result {
                 {
                     egui_ctx.request_repaint();
                 }
-            });
+                });
+            }
 
-            #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
-            let render_context = Some(RenderContextWrapper(render_context));
-            #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
-            let render_context = {
+            let render_context = render_context.map(RenderContextWrapper);
+            if use_d3d11 {
                 log::info!(
                     "starting experimental mpv D3D11 zero-copy DirectComposition presentation"
                 );
-                None
-            };
+            } else {
+                log::info!("starting libmpv OpenGL video presentation");
+            }
 
             let mut mpv_client = mpv_static.create_client(None).unwrap();
 
@@ -901,6 +904,8 @@ fn main() -> eframe::Result {
                 windows_video_taskbar_thumbnail: loaded_config.windows_video_taskbar_thumbnail,
                 windows_thumbnail_toolbar: loaded_config.windows_thumbnail_toolbar,
                 windows_jump_list_quick_actions: loaded_config.windows_jump_list_quick_actions,
+                windows_video_renderer: loaded_config.windows_video_renderer,
+                active_windows_video_renderer: loaded_config.windows_video_renderer,
                 opengl_vsync: loaded_config.opengl_vsync,
                 live_video_during_window_move: loaded_config.live_video_during_window_move,
                 compositor_paced_window_move: loaded_config.compositor_paced_window_move,

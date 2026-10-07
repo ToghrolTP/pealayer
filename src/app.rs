@@ -631,6 +631,10 @@ pub struct PealayerApp {
     pub(crate) windows_video_taskbar_thumbnail: bool,
     pub(crate) windows_thumbnail_toolbar: bool,
     pub(crate) windows_jump_list_quick_actions: bool,
+    pub(crate) windows_video_renderer: crate::config::WindowsVideoRenderer,
+    /// Renderer selected when libmpv was initialized. Preferences may update
+    /// `windows_video_renderer`, but presentation changes only after restart.
+    pub(crate) active_windows_video_renderer: crate::config::WindowsVideoRenderer,
     pub(crate) opengl_vsync: bool,
     pub(crate) live_video_during_window_move: bool,
     pub(crate) compositor_paced_window_move: bool,
@@ -5871,6 +5875,7 @@ impl PealayerApp {
         cfg.windows_video_taskbar_thumbnail = self.windows_video_taskbar_thumbnail;
         cfg.windows_thumbnail_toolbar = self.windows_thumbnail_toolbar;
         cfg.windows_jump_list_quick_actions = self.windows_jump_list_quick_actions;
+        cfg.windows_video_renderer = self.windows_video_renderer;
         cfg.opengl_vsync = self.opengl_vsync;
         cfg.live_video_during_window_move = self.live_video_during_window_move;
         cfg.compositor_paced_window_move = self.compositor_paced_window_move;
@@ -6088,6 +6093,7 @@ impl PealayerApp {
         let jump_list_changed =
             self.windows_jump_list_quick_actions != config.windows_jump_list_quick_actions;
         self.windows_jump_list_quick_actions = config.windows_jump_list_quick_actions;
+        self.windows_video_renderer = config.windows_video_renderer;
         self.opengl_vsync = config.opengl_vsync;
         self.live_video_during_window_move = config.live_video_during_window_move;
         self.compositor_paced_window_move = config.compositor_paced_window_move;
@@ -7843,6 +7849,8 @@ impl Default for PealayerApp {
             windows_video_taskbar_thumbnail: true,
             windows_thumbnail_toolbar: true,
             windows_jump_list_quick_actions: true,
+            windows_video_renderer: crate::config::WindowsVideoRenderer::OpenGl,
+            active_windows_video_renderer: crate::config::WindowsVideoRenderer::OpenGl,
             opengl_vsync: false,
             live_video_during_window_move: true,
             compositor_paced_window_move: true,

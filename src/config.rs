@@ -185,6 +185,17 @@ pub enum VideoBackground {
     Theme,
 }
 
+/// Video presentation backend on Windows. The application UI remains egui;
+/// this controls only how libmpv presents decoded video frames.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowsVideoRenderer {
+    #[default]
+    OpenGl,
+    #[serde(rename = "d3d11")]
+    D3D11,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MotionControlMode {
@@ -585,6 +596,10 @@ pub struct AppConfig {
     /// Publish persistent Windows Jump List tasks for the taskbar and Start
     /// menu.
     pub windows_jump_list_quick_actions: bool,
+    /// Select the Windows libmpv video path. Applying a different renderer
+    /// takes effect on the next application start because mpv's VO is created
+    /// during process initialization.
+    pub windows_video_renderer: WindowsVideoRenderer,
     pub opengl_vsync: bool,
     /// Keep libmpv frames repainting while Windows runs its modal title-bar
     /// move/resize loop. Disable this only as a compatibility fallback for a
@@ -734,6 +749,7 @@ impl Default for AppConfig {
             windows_video_taskbar_thumbnail: true,
             windows_thumbnail_toolbar: true,
             windows_jump_list_quick_actions: true,
+            windows_video_renderer: WindowsVideoRenderer::OpenGl,
             // Reactive egui rendering does not require a continuously synced
             // swap loop. Some Windows OpenGL drivers flicker with V-Sync, so
             // keep it opt-in while retaining the persisted preference.
