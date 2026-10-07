@@ -2046,6 +2046,12 @@ fn recording_color(value: &str) -> egui::Color32 {
     egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2])
 }
 
+fn record_action_color() -> egui::Color32 {
+    // Recording is a live-state affordance, not a preview of the effect's
+    // timeline color. Keep it unmistakably red in every palette.
+    egui::Color32::from_rgb(205, 42, 54)
+}
+
 fn paint_recording_swatch(ui: &egui::Ui, rect: egui::Rect, value: &str) {
     let center = egui::pos2(rect.left() + 12.0, rect.center().y);
     ui.painter()
@@ -2181,14 +2187,16 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
         });
         if active {
             ui.label(egui::RichText::new(format!("{} {} actions", crate::ui::icons::RECORD, recording.steps))
-                .color(recording_color(&app.effect_library_draft.color)));
+                .color(record_action_color()));
             finish = ui.add_enabled(!busy, egui::Button::new(format!("{} Finish", crate::ui::icons::STOP_CIRCLE))).clicked();
             discard = ui.add_enabled(!busy, egui::Button::new(format!("{} Discard take", crate::ui::icons::TRASH)))
                 .on_hover_text("Discard only this capture; existing sequence steps are retained").clicked();
         } else {
             start = ui.add_enabled(connected && !busy && !app.effect_library_draft.name.trim().is_empty(),
                 egui::Button::new(egui::RichText::new(format!("{} Record", crate::ui::icons::RECORD))
-                    .color(recording_color(&app.effect_library_draft.color))))
+                    .color(egui::Color32::WHITE))
+                    .fill(record_action_color())
+                    .stroke(egui::Stroke::new(1.0, record_action_color())))
                 .on_hover_text("Publish the current sequence and capture at its end. Delete existing steps first to replace them.").clicked();
         }
         if busy { ui.spinner(); }
@@ -2973,6 +2981,13 @@ mod tests {
             }
         }
         assert_eq!(recording_color("purple"), recording_color("violet"));
+    }
+
+    #[test]
+    fn record_action_is_always_solid_red_instead_of_the_effect_color() {
+        assert_eq!(record_action_color(), egui::Color32::from_rgb(205, 42, 54));
+        assert_ne!(record_action_color(), recording_color("blue"));
+        assert_ne!(record_action_color(), recording_color("green"));
     }
 
     #[test]

@@ -3960,9 +3960,13 @@ impl PealayerApp {
                     return;
                 }
             }
-            InteropCommand::CreateControllerEffectGroup { name, icon } => {
+            InteropCommand::SaveControllerEffectGroup {
+                original_name,
+                name,
+                icon,
+            } => {
                 if let Err(error) = self.save_controller_effect_group(ControllerEffectGroupDraft {
-                    original_name: String::new(),
+                    original_name,
                     name,
                     icon,
                 }) {
