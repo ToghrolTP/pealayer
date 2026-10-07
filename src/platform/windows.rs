@@ -155,6 +155,7 @@ static SHELL_COMMAND: AtomicU32 = AtomicU32::new(0);
 static SHELL_PAUSED: AtomicBool = AtomicBool::new(true);
 static SHELL_MUTED: AtomicBool = AtomicBool::new(false);
 static SHELL_HAS_MEDIA: AtomicBool = AtomicBool::new(false);
+static SHELL_MEDIA_KEYS_ENABLED: AtomicBool = AtomicBool::new(true);
 static SHELL_REINITIALIZE: AtomicBool = AtomicBool::new(false);
 static TASKBAR_BUTTON_CREATED_MESSAGE: AtomicU32 = AtomicU32::new(0);
 static TASKBAR_THUMBNAIL_CLIP: Mutex<Option<(isize, Option<[i32; 4]>)>> = Mutex::new(None);
@@ -1946,6 +1947,28 @@ pub const TRAY_CMD_MUTE: u32 = 2002;
 pub const TRAY_CMD_OPEN: u32 = 2003;
 pub const TRAY_CMD_EXIT: u32 = 2004;
 pub const TRAY_CMD_SHOW: u32 = 2005;
+pub const MEDIA_KEY_CMD_PLAY: u32 = 2101;
+pub const MEDIA_KEY_CMD_PAUSE: u32 = 2102;
+pub const MEDIA_KEY_CMD_STOP: u32 = 2103;
+pub const MEDIA_KEY_CMD_NEXT: u32 = 2104;
+pub const MEDIA_KEY_CMD_PREVIOUS: u32 = 2105;
+
+fn shell_command_for_appcommand(appcommand: u32, enabled: bool, has_media: bool) -> Option<u32> {
+    if !enabled || !has_media {
+        return None;
+    }
+    // Foreground-window fallback for keyboards that emit WM_APPCOMMAND.
+    // Souvlaki remains the single global SMTC/MPRIS/Now Playing registration.
+    Some(match appcommand {
+        11 => MEDIA_KEY_CMD_NEXT,
+        12 => MEDIA_KEY_CMD_PREVIOUS,
+        13 => MEDIA_KEY_CMD_STOP,
+        14 => THUMB_BUTTON_PLAYPAUSE,
+        46 => MEDIA_KEY_CMD_PLAY,
+        47 => MEDIA_KEY_CMD_PAUSE,
+        _ => return None,
+    })
+}
 
 pub fn tray_menu_label(cmd: u32, active: bool) -> &'static str {
     match cmd {
@@ -1979,7 +2002,8 @@ unsafe extern "system" fn shell_window_proc(
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Foundation::LRESULT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_RBUTTONUP, WNDPROC,
+        CallWindowProcW, WM_APPCOMMAND, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK,
+        WM_RBUTTONUP, WNDPROC,
     };
 
     observe_native_window_message(message);
@@ -2021,11 +2045,13 @@ unsafe extern "system" fn shell_window_proc(
                 SHELL_HAS_MEDIA.load(Ordering::Relaxed),
             ) {
                 SHELL_COMMAND.store(command, Ordering::Release);
+                crate::platform::taskbar_preview::request_repaint();
             }
             return LRESULT(0);
         }
         if mouse_message == WM_LBUTTONDBLCLK {
             SHELL_COMMAND.store(TRAY_CMD_SHOW, Ordering::Release);
+            crate::platform::taskbar_preview::request_repaint();
             return LRESULT(0);
         }
     } else if message == WM_COMMAND {
@@ -2044,7 +2070,20 @@ unsafe extern "system" fn shell_window_proc(
             )
         {
             SHELL_COMMAND.store(command, Ordering::Release);
+            crate::platform::taskbar_preview::request_repaint();
             return LRESULT(0);
+        }
+    } else if message == WM_APPCOMMAND {
+        // GET_APPCOMMAND_LPARAM: high word with device bits masked out.
+        let appcommand = ((lparam.0 as usize >> 16) & 0x07ff) as u32;
+        if let Some(command) = shell_command_for_appcommand(
+            appcommand,
+            SHELL_MEDIA_KEYS_ENABLED.load(Ordering::Relaxed),
+            SHELL_HAS_MEDIA.load(Ordering::Relaxed),
+        ) {
+            SHELL_COMMAND.store(command, Ordering::Release);
+            crate::platform::taskbar_preview::request_repaint();
+            return LRESULT(1);
         }
     }
 
@@ -2097,10 +2136,16 @@ pub fn install_shell_message_hook(_hwnd_raw: isize) -> Result<(), String> {
     Ok(())
 }
 
-pub fn update_shell_command_state(is_paused: bool, is_muted: bool, has_media: bool) {
+pub fn update_shell_command_state(
+    is_paused: bool,
+    is_muted: bool,
+    has_media: bool,
+    media_keys_enabled: bool,
+) {
     SHELL_PAUSED.store(is_paused, Ordering::Relaxed);
     SHELL_MUTED.store(is_muted, Ordering::Relaxed);
     SHELL_HAS_MEDIA.store(has_media, Ordering::Relaxed);
+    SHELL_MEDIA_KEYS_ENABLED.store(media_keys_enabled, Ordering::Relaxed);
 }
 
 pub fn take_shell_command() -> Option<u32> {
@@ -2711,6 +2756,19 @@ mod tests {
             thumbnail_button_tooltip(THUMB_BUTTON_FULLSCREEN, false, false, true),
             "Exit fullscreen"
         );
+    }
+
+    #[test]
+    fn appcommand_media_keys_respect_configuration_and_media_state() {
+        assert_eq!(shell_command_for_appcommand(14, true, true), Some(THUMB_BUTTON_PLAYPAUSE));
+        assert_eq!(shell_command_for_appcommand(46, true, true), Some(MEDIA_KEY_CMD_PLAY));
+        assert_eq!(shell_command_for_appcommand(47, true, true), Some(MEDIA_KEY_CMD_PAUSE));
+        assert_eq!(shell_command_for_appcommand(13, true, true), Some(MEDIA_KEY_CMD_STOP));
+        assert_eq!(shell_command_for_appcommand(11, true, true), Some(MEDIA_KEY_CMD_NEXT));
+        assert_eq!(shell_command_for_appcommand(12, true, true), Some(MEDIA_KEY_CMD_PREVIOUS));
+        assert_eq!(shell_command_for_appcommand(14, false, true), None);
+        assert_eq!(shell_command_for_appcommand(14, true, false), None);
+        assert_eq!(shell_command_for_appcommand(999, true, true), None);
     }
 
     #[test]

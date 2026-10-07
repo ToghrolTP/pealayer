@@ -496,6 +496,10 @@ enum TimelineWheelAction {
     Zoom(f32),
     HorizontalScroll(f32),
     VerticalScroll(f32),
+    MultiGesture {
+        zoom_factor: f32,
+        translation: egui::Vec2,
+    },
 }
 
 fn timeline_wheel_action(
@@ -532,12 +536,44 @@ fn timeline_wheel_modifiers(input: &egui::InputState) -> egui::Modifiers {
 fn timeline_wheel_over_surface(ui: &egui::Ui, surface: egui::Rect,
     behavior: crate::config::TimelineWheelBehavior) -> Option<(TimelineWheelAction, f32)> {
     if !ui.rect_contains_pointer(surface) { return None; }
+    // Surface-class touchscreens expose pan and pinch together. Preserve both
+    // axes and keep the content under the center of the fingers.
+    if let Some(touch) = ui.input(|input| input.multi_touch())
+        && surface.contains(touch.center_pos)
+        && ((touch.zoom_delta - 1.0).abs() > f32::EPSILON
+            || touch.translation_delta != egui::Vec2::ZERO)
+    {
+        ui.ctx().input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
+        return Some((TimelineWheelAction::MultiGesture {
+            zoom_factor: touch.zoom_delta.max(0.01),
+            translation: touch.translation_delta,
+        }, touch.center_pos.x));
+    }
+    // Precision-trackpad pinch is native Event::Zoom on Windows and macOS.
+    if let Some(zoom_factor) = ui.input(|input| timeline_pinch_factor(&input.events)) {
+        ui.ctx().input_mut(|input| {
+            input.smooth_scroll_delta = egui::Vec2::ZERO;
+            input.events.retain(|event| !matches!(event, egui::Event::Zoom(_)));
+        });
+        return Some((TimelineWheelAction::MultiGesture {
+            zoom_factor,
+            translation: egui::Vec2::ZERO,
+        }, ui.ctx().pointer_latest_pos().map_or(surface.center().x, |pos| pos.x)));
+    }
     let line_speed = ui.ctx().options(|options| options.input_options.line_scroll_speed);
     let delta = ui.input(|input| timeline_wheel_delta(&input.events, line_speed, surface.height()));
     // None also consumes the gesture, rather than falling through to ScrollArea.
     ui.ctx().input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
     timeline_wheel_action(delta, behavior).map(|action| (action,
         ui.ctx().pointer_latest_pos().map_or(surface.left(), |pos| pos.x)))
+}
+
+fn timeline_pinch_factor(events: &[egui::Event]) -> Option<f32> {
+    let factor = events.iter().filter_map(|event| match event {
+        egui::Event::Zoom(factor) if factor.is_finite() && *factor > 0.0 => Some(*factor),
+        _ => None,
+    }).product::<f32>();
+    ((factor - 1.0).abs() > f32::EPSILON).then_some(factor)
 }
 
 // Read the original axes for every modifier: egui otherwise converts Ctrl to zoom
@@ -5721,6 +5757,15 @@ mod timeline_row_tests {
         assert_eq!(timeline_wheel_delta(&events, 20.0, 200.0), egui::vec2(0.0, -172.0));
         assert_eq!(timeline_wheel_delta(&[wheel(egui::MouseWheelUnit::Page, egui::vec2(0.0, -1.0), egui::Modifiers::CTRL)], 20.0, 200.0), egui::vec2(0.0, -200.0));
         assert_eq!(timeline_wheel_delta(&[wheel(egui::MouseWheelUnit::Line, egui::vec2(2.0, 0.0), egui::Modifiers::ALT)], 20.0, 200.0), egui::vec2(40.0, 0.0));
+    }
+
+    #[test]
+    fn timeline_combines_native_precision_trackpad_pinch_factors() {
+        assert_eq!(timeline_pinch_factor(&[]), None);
+        assert_eq!(timeline_pinch_factor(&[
+            egui::Event::Zoom(1.1), egui::Event::Zoom(1.2)]), Some(1.32));
+        assert_eq!(timeline_pinch_factor(&[egui::Event::Zoom(f32::NAN)]), None);
+        assert_eq!(timeline_pinch_factor(&[egui::Event::Zoom(0.0)]), None);
     }
 
     #[test]
@@ -14575,6 +14620,20 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             target_offset.y =
                                                 (target_offset.y - delta).clamp(0.0, max_offset);
                                         }
+                                        TimelineWheelAction::MultiGesture { zoom_factor, translation } => {
+                                            let next_zoom = (target_zoom * zoom_factor).clamp(20.0, 500.0);
+                                            let pointer_x = pointer_screen_x - timeline_viewport.left();
+                                            target_offset.x = timeline_offset_for_pointer_zoom(
+                                                target_offset.x, pointer_x, target_zoom, next_zoom,
+                                                total_seconds, timeline_viewport.width());
+                                            target_zoom = next_zoom;
+                                            let max_x = (total_seconds as f32 * target_zoom
+                                                - timeline_viewport.width()).max(0.0);
+                                            let max_y = (timeline_content_size.y
+                                                - timeline_viewport.height()).max(0.0);
+                                            target_offset.x = (target_offset.x - translation.x).clamp(0.0, max_x);
+                                            target_offset.y = (target_offset.y - translation.y).clamp(0.0, max_y);
+                                        }
                                     }
                                     let transition = TimelineNavigationTransition {
                                         start_offset: current_offset,
@@ -14632,6 +14691,23 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             timeline_scroll_state.offset.y =
                                                 (timeline_scroll_state.offset.y - delta)
                                                     .clamp(0.0, max_offset);
+                                            timeline_scroll_changed = true;
+                                        }
+                                        TimelineWheelAction::MultiGesture { zoom_factor, translation } => {
+                                            let next_zoom = (zoom * zoom_factor).clamp(20.0, 500.0);
+                                            let pointer_x = pointer_screen_x - timeline_viewport.left();
+                                            timeline_scroll_state.offset.x = timeline_offset_for_pointer_zoom(
+                                                timeline_scroll_state.offset.x, pointer_x, zoom, next_zoom,
+                                                total_seconds, timeline_viewport.width());
+                                            self.app.timeline_zoom = next_zoom;
+                                            let max_x = (total_seconds as f32 * next_zoom
+                                                - timeline_viewport.width()).max(0.0);
+                                            let max_y = (timeline_content_size.y
+                                                - timeline_viewport.height()).max(0.0);
+                                            timeline_scroll_state.offset.x =
+                                                (timeline_scroll_state.offset.x - translation.x).clamp(0.0, max_x);
+                                            timeline_scroll_state.offset.y =
+                                                (timeline_scroll_state.offset.y - translation.y).clamp(0.0, max_y);
                                             timeline_scroll_changed = true;
                                         }
                                     }
