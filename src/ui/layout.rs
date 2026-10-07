@@ -7883,7 +7883,15 @@ mod timeline_row_tests {
         );
         assert!(contextual_stop_action(&capabilities, &control).is_none());
 
-        capabilities.active_relays.insert(2);
+        capabilities.motion = Some(crate::four_d::controller::HardwareMotionState {
+            left: crate::four_d::controller::HardwareMotionSide {
+                requested: "up".into(),
+                applied: "up".into(),
+                transitioning: false,
+                revision: 1,
+            },
+            ..Default::default()
+        });
         assert_eq!(
             card_control_actions(&control)
                 .into_iter()
@@ -9086,6 +9094,15 @@ mod timeline_row_tests {
     fn indicators_use_authoritative_output_state() {
         let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
         capabilities.active_relays.insert(2);
+        capabilities.motion = Some(crate::four_d::controller::HardwareMotionState {
+            left: crate::four_d::controller::HardwareMotionSide {
+                requested: "up".into(),
+                applied: "up".into(),
+                transitioning: false,
+                revision: 1,
+            },
+            ..Default::default()
+        });
         capabilities
             .pwm_channels
             .push(crate::four_d::controller::HardwareOutput {
