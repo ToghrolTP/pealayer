@@ -471,7 +471,7 @@ pub fn draw_elapsed_editor(
                 let groups = timecode_groups(&app.elapsed_time_input);
                 if response.clicked() {
                     if let Some(cursor) = state.cursor.char_range() {
-                        let index = cursor.primary.index;
+                        let index = cursor.primary.index.0;
                         if let Some(selected) = groups.iter().position(|range| index <= range.end) {
                             app.elapsed_time_group = selected;
                             app.elapsed_time_group_digits = 0;

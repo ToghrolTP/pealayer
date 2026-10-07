@@ -2250,10 +2250,10 @@ fn recording_color_picker(ui: &mut egui::Ui, value: &mut String) -> egui::Respon
         .find(|color| color.id == *value)
         .unwrap_or(&recording_colors()[0]);
     let response = egui::ComboBox::from_id_salt("effect_recording_color")
-        .selected_text(recording_color_label(ui, selected.label))
+        .selected_text(recording_color_label(ui, &selected.label))
         .show_ui(ui, |ui| {
             for color in recording_colors() {
-                let label = recording_color_label(ui, color.label);
+                let label = recording_color_label(ui, &color.label);
                 let row = ui.selectable_value(value, color.id.clone(), label);
                 paint_recording_swatch(ui, row.rect, &color.id);
             }
