@@ -4142,11 +4142,10 @@ impl PealayerApp {
                 }
             }
             InteropCommand::SetHardwarePwm { channel, percent } => {
-                let value = (percent.clamp(0.0, 100.0) * 4095.0 / 100.0).round() as u16;
                 let _ = self.engine_handle.queue_controller_intent(
                     format!("pwm.{channel}"),
                     "controller.pwm.set",
-                    serde_json::json!({"channel": channel, "value": value}),
+                    serde_json::json!({"channel": channel, "percent": percent.clamp(0.0, 100.0)}),
                     false,
                 );
             }
