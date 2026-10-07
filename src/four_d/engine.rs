@@ -462,7 +462,25 @@ impl EngineHandle {
     pub fn attach_playback_clock(&self, mpv:&'static libmpv2::Mpv) {super::media_timeline::observe_mpv(self,mpv);}
     pub fn request_prepared_play(&self)->bool {
         if !self.serial_port.lock().is_ok_and(|endpoint| super::controller::is_controller_endpoint(&endpoint)) {return false}
-        if let Ok(mut plan)=self.prepared_timeline.lock() && plan.has_items() {plan.play_requested=true;return true}
+        if let Ok(mut plan)=self.prepared_timeline.lock() && plan.has_items() {
+            // A clock/transport fault deliberately pauses playback. An explicit
+            // Play is the user's retry: invalidate the old arm and require the
+            // normal paused -> prepare -> clock-ack handshake before unpausing.
+            // Compilation failures remain fail-closed and cannot be retried here.
+            if plan.requires_reprepare && plan.compilation_error.is_none() {
+                let previous_error = plan.error.take();
+                plan.revision = plan.revision.saturating_add(1);
+                plan.last_ack = None;
+                plan.requires_reprepare = false;
+                if let Ok(mut connection_error) = self.connection_error.lock()
+                    && connection_error.as_ref() == previous_error.as_ref()
+                {
+                    *connection_error = None;
+                }
+            }
+            plan.play_requested=true;
+            return true
+        }
         false
     }
     pub fn controller_push_target(&self) -> ControllerPushTarget {
