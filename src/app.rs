@@ -612,6 +612,7 @@ pub struct PealayerApp {
     pub(crate) held_motion_action: Option<(String, String, String)>,
     pub(crate) compact_hardware_controls: bool,
     pub(crate) compact_timeline_tracks: bool,
+    pub(crate) timeline_hide_cue_text_overflow: bool,
     pub(crate) timeline_header_wheel_vertical_scroll: bool,
     pub(crate) timeline_plain_wheel_action: crate::config::TimelineWheelBehavior,
     pub(crate) timeline_ctrl_wheel_action: crate::config::TimelineWheelBehavior,
@@ -5937,6 +5938,7 @@ impl PealayerApp {
         cfg.motion_control_mode = self.motion_control_mode;
         cfg.compact_hardware_controls = self.compact_hardware_controls;
         cfg.compact_timeline_tracks = self.compact_timeline_tracks;
+        cfg.timeline_hide_cue_text_overflow = self.timeline_hide_cue_text_overflow;
         cfg.timeline_header_wheel_vertical_scroll = self.timeline_header_wheel_vertical_scroll;
         cfg.timeline_plain_wheel_action = self.timeline_plain_wheel_action;
         cfg.timeline_ctrl_wheel_action = self.timeline_ctrl_wheel_action;
@@ -6145,6 +6147,7 @@ impl PealayerApp {
         self.motion_control_mode = config.motion_control_mode;
         self.compact_hardware_controls = config.compact_hardware_controls;
         self.compact_timeline_tracks = config.compact_timeline_tracks;
+        self.timeline_hide_cue_text_overflow = config.timeline_hide_cue_text_overflow;
         self.timeline_header_wheel_vertical_scroll = config.timeline_header_wheel_vertical_scroll;
         self.timeline_plain_wheel_action = config.timeline_plain_wheel_action;
         self.timeline_ctrl_wheel_action = config.timeline_ctrl_wheel_action;
@@ -7932,6 +7935,7 @@ impl Default for PealayerApp {
             held_motion_action: None,
             compact_hardware_controls: false,
             compact_timeline_tracks: true,
+            timeline_hide_cue_text_overflow: true,
             timeline_header_wheel_vertical_scroll: true,
             timeline_plain_wheel_action: crate::config::TimelineWheelBehavior::Zoom,
             timeline_ctrl_wheel_action: crate::config::TimelineWheelBehavior::VerticalScroll,
