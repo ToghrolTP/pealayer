@@ -857,6 +857,11 @@ fn main() -> eframe::Result {
                     .timeline_middle_axis_lock_modifiers,
                 timeline_animated_navigation: loaded_config.timeline_animated_navigation,
                 timeline_navigation_transition_ms: loaded_config.timeline_navigation_transition_ms,
+                timeline_follow_playhead: loaded_config.timeline_follow_playhead,
+                timeline_toolbar_order: crate::config::normalize_timeline_toolbar_order(
+                    &loaded_config.timeline_toolbar_order,
+                ),
+                timeline_toolbar_hidden: loaded_config.timeline_toolbar_hidden.clone(),
                 non_user_control_visibility: loaded_config.non_user_control_visibility,
                 prefix_relay_identifiers: loaded_config.prefix_relay_identifiers,
                 live_pwm_updates: loaded_config.live_pwm_updates,
