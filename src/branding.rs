@@ -148,6 +148,13 @@ pub fn sync_native_window_icon(ctx: &egui::Context, state: PlaybackIconState) {
             true
         }
     });
+    // A configuration revision does not necessarily change the resolved icon
+    // (for example, changing the web sync cadence). Remember that revision
+    // before returning so an unrelated config update cannot turn this back
+    // into a per-frame configuration clone.
+    ctx.data_mut(|data| {
+        data.insert_temp(egui::Id::new("pealayer-playback-window-icon-stamp"), stamp);
+    });
     if !changed {
         return;
     }
@@ -163,14 +170,31 @@ pub fn sync_native_window_icon(ctx: &egui::Context, state: PlaybackIconState) {
             egui::ViewportCommand::Icon(Some(std::sync::Arc::new(icon))),
         );
     }
-    ctx.data_mut(|data| {
-        data.insert_temp(egui::Id::new("pealayer-playback-window-icon-stamp"), stamp);
-    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icon_sync_records_unrelated_config_revisions() {
+        let ctx = egui::Context::default();
+        let mut config = crate::config::AppConfig::default();
+        crate::platform::interop::set_live_config(config.clone());
+        sync_native_window_icon(&ctx, PlaybackIconState::Stopped);
+
+        config.web_sync_interval_ms = config.web_sync_interval_ms.saturating_add(1);
+        crate::platform::interop::set_live_config(config);
+        let revision = crate::platform::interop::live_config_revision();
+        sync_native_window_icon(&ctx, PlaybackIconState::Stopped);
+
+        let stamp = ctx.data_mut(|data| {
+            data.get_temp::<(PlaybackIconState, u64)>(egui::Id::new(
+                "pealayer-playback-window-icon-stamp",
+            ))
+        });
+        assert_eq!(stamp, Some((PlaybackIconState::Stopped, revision)));
+    }
 
     #[test]
     fn playback_state_is_unambiguous() {
