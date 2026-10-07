@@ -6,6 +6,13 @@ description = "Hardware-accelerated 4D cinema player and physical-effect authori
 repository = "https://github.com/ToghrolTP/pealayer"
 license = "MIT"
 
+[features]
+default = []
+# Experimental Windows presentation path. mpv decodes into and presents from a
+# native D3D11 composition swapchain that DirectComposition places over the
+# egui video viewport. The normal OpenGL/libmpv renderer remains the default.
+d3d11-composition-experiment = []
+
 [dependencies]
 eframe = { version = "0.36.2", features = ["glow", "persistence"] }
 env_logger = "0.11.11"
@@ -67,6 +74,8 @@ windows = { version = "0.62", features = [
     "Win32_System_Threading",
     "Win32_Storage_FileSystem",
     "Win32_Graphics_Dwm",
+    "Win32_Graphics_DirectComposition",
+    "Win32_Graphics_Dxgi",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
 ] }

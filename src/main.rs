@@ -24,12 +24,11 @@ pub mod update;
 
 use app::PealayerApp;
 use eframe::egui;
-use libmpv2::{
-    Mpv,
-    render::{OpenGLInitParams, RenderParam, RenderParamApiType},
-};
-use mpv::render::RenderContextWrapper;
-use mpv::render::mpv_get_proc_address;
+use libmpv2::Mpv;
+#[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
+use libmpv2::render::{OpenGLInitParams, RenderParam, RenderParamApiType};
+#[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
+use mpv::render::{RenderContextWrapper, mpv_get_proc_address};
 use std::sync::{Arc, Mutex};
 
 fn subtitle_font_directory() -> Option<std::path::PathBuf> {
@@ -239,6 +238,8 @@ fn main() -> eframe::Result {
     let launch_config = crate::config::AppConfig::load();
     crate::platform::interop::set_live_config(launch_config.clone());
     let app_name = crate::config::resolved_app_name(&launch_config);
+    #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
+    let app_name = format!("{app_name} — D3D11 Composition Preview");
     let language_preference = crate::config::resolved_language_preference(&launch_config);
     let language = crate::config::resolve_language(language_preference);
     let direction_preference = crate::config::resolved_direction_preference(&launch_config);
@@ -334,6 +335,7 @@ fn main() -> eframe::Result {
             crate::ui::configure_native_appearance(&cc.egui_ctx, &loaded_config);
             crate::ui::configure_main_window_style(&cc.egui_ctx);
 
+            #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
             let get_proc = cc
                 .get_proc_address
                 .clone()
@@ -357,7 +359,18 @@ fn main() -> eframe::Result {
                 }
             }
             let mpv = Mpv::with_initializer(|init| {
+                #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
                 init.set_property("vo", "libmpv")?;
+                #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
+                {
+                    init.set_property("vo", "gpu-next")?;
+                    init.set_property("gpu-api", "d3d11")?;
+                    init.set_property("gpu-context", "d3d11")?;
+                    init.set_property("d3d11-output-mode", "composition")?;
+                    init.set_property("d3d11-composition-size", "1280x720")?;
+                    init.set_property("hwdec", "d3d11va")?;
+                    init.set_property("d3d11va-zero-copy", true)?;
+                }
                 init.set_property("keep-open", "always")?;
                 crate::mpv::proxy::apply_before_initialize(
                     &init,
@@ -394,6 +407,7 @@ fn main() -> eframe::Result {
 
             let mpv_static: &'static Mpv = Box::leak(Box::new(mpv));
 
+            #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
             let mut render_context = mpv_static
                 .create_render_context(vec![
                     RenderParam::ApiType(RenderParamApiType::OpenGl),
@@ -406,6 +420,7 @@ fn main() -> eframe::Result {
 
             let egui_ctx = cc.egui_ctx.clone();
             crate::remote_location::install_context(&egui_ctx);
+            #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
             render_context.set_update_callback(move || {
                 // Outside a native move, the decoder remains the most efficient
                 // repaint clock. During WM_ENTERSIZEMOVE, the dedicated DWM
@@ -418,6 +433,16 @@ fn main() -> eframe::Result {
                     egui_ctx.request_repaint();
                 }
             });
+
+            #[cfg(not(all(target_os = "windows", feature = "d3d11-composition-experiment")))]
+            let render_context = Some(RenderContextWrapper(render_context));
+            #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
+            let render_context = {
+                log::info!(
+                    "starting experimental mpv D3D11 zero-copy DirectComposition presentation"
+                );
+                None
+            };
 
             let mut mpv_client = mpv_static.create_client(None).unwrap();
 
@@ -568,6 +593,14 @@ fn main() -> eframe::Result {
             );
             let mut listener_config=loaded_config.clone();
             if let Some(client)=crate::peer::client() {listener_config.web_enabled=true;listener_config.web_port=client.local_port;listener_config.web_listen_addresses=vec!["127.0.0.1".into()];}
+            #[cfg(all(target_os = "windows", feature = "d3d11-composition-experiment"))]
+            {
+                // This standalone renderer experiment intentionally does not
+                // claim network-server identity. A different executable path
+                // would otherwise trigger a Windows Firewall consent dialog
+                // even though the test only exercises local video composition.
+                listener_config.web_enabled = false;
+            }
             let web_state_tx = crate::server::spawn_control_server_for_config(
                 &listener_config,
                 cc.egui_ctx.clone(),
@@ -630,7 +663,7 @@ fn main() -> eframe::Result {
                 rtl,
                 mpv: crate::mpv::player::Player(mpv_static),
                 mpv_client,
-                render_context: Arc::new(Mutex::new(Some(RenderContextWrapper(render_context)))),
+                render_context: Arc::new(Mutex::new(render_context)),
                 playback_time: 0.0,
                 duration: 0.0,
                 is_seekable: false,
