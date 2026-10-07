@@ -156,6 +156,13 @@ pub enum InteropCommand {
     SetRate {
         rate: f64,
     },
+    SelectMediaTrack {
+        kind: String,
+        id: i64,
+    },
+    DisableMediaTrack {
+        kind: String,
+    },
     #[serde(alias = "open_video")]
     Open {
         #[serde(alias = "path")]
@@ -501,6 +508,16 @@ impl InteropCommand {
             }
             Self::SetRate { rate } if !rate.is_finite() || !(0.05..=16.0).contains(rate) => {
                 Err("playback rate must be a finite value from 0.05 to 16".to_string())
+            }
+            Self::SelectMediaTrack { kind, id }
+                if !matches!(kind.as_str(), "video" | "audio" | "subtitle") || *id < 0 =>
+            {
+                Err("media track selection requires video, audio, or subtitle and a non-negative ID".to_string())
+            }
+            Self::DisableMediaTrack { kind }
+                if !matches!(kind.as_str(), "video" | "audio" | "subtitle") =>
+            {
+                Err("media track kind must be video, audio, or subtitle".to_string())
             }
             Self::SetHardwarePwm { percent, .. }
                 if !percent.is_finite() || !(0.0..=100.0).contains(percent) =>
@@ -1118,6 +1135,8 @@ pub struct PlayerStatusResponse {
     pub media_fps: f64,
     pub current_video: Option<String>,
     #[serde(default)]
+    pub media_tracks: Vec<WebMediaTrack>,
+    #[serde(default)]
     pub chapters: Vec<WebMediaChapter>,
     #[serde(default)]
     pub current_chapter_index: Option<i64>,
@@ -1191,6 +1210,26 @@ pub struct WebMediaChapter {
     pub index: i64,
     pub title: String,
     pub time_seconds: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebMediaTrack {
+    pub id: i64,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
+    #[serde(default)]
+    pub selected: bool,
+    #[serde(default)]
+    pub is_default: bool,
+    #[serde(default)]
+    pub forced: bool,
+    #[serde(default)]
+    pub external: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1410,6 +1449,7 @@ impl Default for PlayerStatusResponse {
             duration: 0.0,
             media_fps: 0.0,
             current_video: None,
+            media_tracks: Vec::new(),
             chapters: Vec::new(),
             current_chapter_index: None,
             seekable: false,
@@ -1551,6 +1591,21 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "rate" | "set_rate" | "pealayer.rate.set" | "pealayer.player.rate.set" => {
             Some(InteropCommand::SetRate {
                 rate: number(&["rate", "value"])?,
+            })
+        }
+        "media.track.select" | "pealayer.media.track.select" => {
+            Some(InteropCommand::SelectMediaTrack {
+                kind: string(&["kind", "type"])?.trim().to_ascii_lowercase(),
+                id: request
+                    .params
+                    .get("id")
+                    .and_then(Value::as_i64)
+                    .ok_or_else(|| "missing media track id".to_string())?,
+            })
+        }
+        "media.track.disable" | "pealayer.media.track.disable" => {
+            Some(InteropCommand::DisableMediaTrack {
+                kind: string(&["kind", "type"])?.trim().to_ascii_lowercase(),
             })
         }
         "open" | "open_video" | "pealayer.open" | "pealayer.player.open" => {
@@ -3554,6 +3609,38 @@ mod tests {
         )
         .unwrap();
         assert!(command_from_json_rpc(&empty).is_err());
+    }
+
+    #[test]
+    fn media_track_rpc_uses_one_validated_cross_surface_contract() {
+        let select: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"track","method":"pealayer.media.track.select","params":{"kind":"audio","id":5}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&select).unwrap(),
+            Some(InteropCommand::SelectMediaTrack {
+                kind: "audio".into(),
+                id: 5,
+            })
+        );
+
+        let disable: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"track","method":"media.track.disable","params":{"kind":"subtitle"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&disable).unwrap(),
+            Some(InteropCommand::DisableMediaTrack {
+                kind: "subtitle".into(),
+            })
+        );
+
+        let invalid: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"track","method":"media.track.select","params":{"kind":"telemetry","id":1}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&invalid).is_err());
     }
 
     #[test]

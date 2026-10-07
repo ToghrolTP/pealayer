@@ -43,6 +43,7 @@ import type { MediaGesturePreferences } from './MediaSurface';
 import { defaultTimelineWheelPreferences, timelineWheelAction, timelineZoomAtPointer } from '../timelineWheel';
 import type { TimelineWheelPreferences } from '../timelineWheel';
 import { appendMelodySteps, sequenceDurationMs } from '../melodyCatalog';
+import { MediaTrackSelectors } from './MediaTrackSelectors';
 
 interface StudioTabProps {
   state: PlayerState;
@@ -787,6 +788,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             onChange={(value) => sendCmd('set_volume', { value })}
           />
         </div>
+        <MediaTrackSelectors state={state} sendCmd={sendCmd} locale={locale} compact />
       </section>
 
       <section className="studio-panel timeline-panel-web">

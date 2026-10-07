@@ -20,7 +20,7 @@ widths, and has been exercised against live state rather than sample data.
 | --- | --- | --- | --- |
 | Application shell | In progress | Installable SPA/PWA, responsive navigation, shared appearance and connection state; footer now consumes the native persisted visibility contract and exposes right-click hide/show actions | Finish application-style command header and compact/mobile command access |
 | Playback surface | In progress | Browser-native video now uses Pealayer's seekable byte-range endpoint and follows the Rust/mpv clock; unsupported browser codecs fall back to the backend frame surface | Add negotiated low-latency transcoded canvas stream over WebSocket, browser capability reporting and stream diagnostics |
-| Transport | Mostly complete | Play/pause, seek, volume, mute, rate, chapters, thumbnail preview and remote-folder previous/next use shared commands; the primary timeline action now has a fixed circular hit target | Complete track selectors, frame-step state, contextual shortcuts and exact buffer visualization |
+| Transport | Mostly complete | Play/pause, seek, volume, mute, rate, chapters, thumbnail preview and remote-folder previous/next use shared commands; video, audio and subtitle selectors now consume live libmpv track metadata and invoke the same validated selection commands in Simple and NLE layouts; the primary timeline action has a fixed circular hit target | Complete frame-step state, contextual shortcuts and exact buffer visualization |
 | Hardware monitor | In progress | Live advertised controls, pointer-down relay actions with immediate optimistic feedback and authoritative reconciliation, clickable indicators, PWM, motion hold/release, drag ordering, custom channel icons and complete card context menu | Complete bulk management, bindings, channel timeline actions and every advertised board setting |
 | Emergency stop | Complete for Web interaction | Filled red danger control, immediate pointer-down dispatch and shared interlock state | Continue physical-board acceptance whenever hardware is attached |
 | Front panel | In progress | Live PCController masks now render as four illuminated seven-segment glyphs, with brightness/activity/blink state plus K1–K4 commands and LCD text | Match the complete egui board-information tabs, settings and contextual commands |
@@ -49,6 +49,11 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Completed acceptance checkpoints
 
+- **Shared media-track selection:** Rust publishes the current libmpv video,
+  audio and subtitle inventory with selected/default/forced/external metadata.
+  Simple and NLE Web layouts reuse one selector component and the validated
+  `pealayer.media.track.select` / `pealayer.media.track.disable` commands, so
+  the browser does not infer or locally override track state.
 - **Shared timeline track controls:** The Rust snapshot now publishes track
   selection and M/S/L capability/state, and both Web pointer actions and context
   menus use `pealayer.timeline.track.update` or

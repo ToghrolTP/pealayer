@@ -20,6 +20,7 @@ import { SeekThumbnailPreview } from './SeekThumbnailPreview';
 import type { AppearanceState } from '../appearance';
 import type { TimelineWheelPreferences } from '../timelineWheel';
 import type { HardwareMelody } from '../melodyCatalog';
+import { MediaTrackSelectors } from './MediaTrackSelectors';
 
 export interface PlayerState {
   rf?: RfSnapshot;
@@ -34,6 +35,17 @@ export interface PlayerState {
   duration?: number;
   media_fps?: number;
   current_video?: string | null;
+  media_tracks?: Array<{
+    id: number;
+    kind: 'video' | 'audio' | 'subtitle';
+    title?: string | null;
+    language?: string | null;
+    codec?: string | null;
+    selected: boolean;
+    is_default: boolean;
+    forced: boolean;
+    external: boolean;
+  }>;
   chapters?: Array<{ index: number; title: string; time_seconds: number }>;
   current_chapter_index?: number | null;
   seekable?: boolean;
@@ -332,6 +344,8 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
           </Tooltip>
         </div>
       )}
+
+      <MediaTrackSelectors state={state} sendCmd={sendCmd} locale={locale} />
 
       <div className="remote-player__volume">
         <Button

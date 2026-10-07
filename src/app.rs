@@ -1144,6 +1144,29 @@ impl eframe::App for PealayerApp {
                     .current_video_path
                     .as_ref()
                     .map(|p| crate::media::redact_media_target(&p.to_string_lossy())),
+                media_tracks: self
+                    .media_tracks
+                    .iter()
+                    .map(|track| crate::platform::interop::WebMediaTrack {
+                        id: track.id,
+                        kind: match track.kind {
+                            MediaTrackType::Video => "video",
+                            MediaTrackType::Audio => "audio",
+                            MediaTrackType::Subtitle => "subtitle",
+                        }
+                        .to_string(),
+                        title: track.title.clone(),
+                        language: track.language.clone(),
+                        codec: track
+                            .codec_description
+                            .clone()
+                            .or_else(|| track.codec.clone()),
+                        selected: track.selected.unwrap_or(false),
+                        is_default: track.is_default.unwrap_or(false),
+                        forced: track.forced.unwrap_or(false),
+                        external: track.external.unwrap_or(false),
+                    })
+                    .collect(),
                 chapters: chapters
                     .into_iter()
                     .map(|chapter| crate::platform::interop::WebMediaChapter {
@@ -3550,6 +3573,32 @@ impl PealayerApp {
             }
             InteropCommand::SetRate { rate } => {
                 self.set_playback_speed(rate, true);
+            }
+            InteropCommand::SelectMediaTrack { kind, id } => {
+                let kind = match kind.as_str() {
+                    "video" => MediaTrackType::Video,
+                    "audio" => MediaTrackType::Audio,
+                    "subtitle" => MediaTrackType::Subtitle,
+                    _ => return,
+                };
+                if self
+                    .media_tracks
+                    .iter()
+                    .any(|track| track.kind == kind && track.id == id)
+                {
+                    self.select_media_track(MediaTrackKey { kind, id });
+                } else {
+                    self.set_osd(self.tr("Media track is no longer available"));
+                }
+            }
+            InteropCommand::DisableMediaTrack { kind } => {
+                let kind = match kind.as_str() {
+                    "video" => MediaTrackType::Video,
+                    "audio" => MediaTrackType::Audio,
+                    "subtitle" => MediaTrackType::Subtitle,
+                    _ => return,
+                };
+                self.disable_media_track(kind);
             }
             InteropCommand::Open { target } => self.load_media_target(&target),
             InteropCommand::BrowseRemote { target, use_proxy } => { if let Err(error) = crate::remote_location::request(&target, use_proxy, false, ctx) { self.set_osd(error); } },
