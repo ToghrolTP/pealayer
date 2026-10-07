@@ -2345,6 +2345,7 @@ impl PealayerApp {
             self.is_paused,
             self.is_muted,
             self.current_video_path.is_some(),
+            self.media_keys_enabled,
         );
         while let Some(command) = crate::platform::windows::take_shell_command() {
             match command {
@@ -2358,6 +2359,16 @@ impl PealayerApp {
                 crate::platform::windows::THUMB_BUTTON_FULLSCREEN => {
                     self.toggle_fullscreen(ctx);
                 }
+                crate::platform::windows::MEDIA_KEY_CMD_PLAY => self.apply_interop_command(
+                    ctx, crate::platform::interop::InteropCommand::Play, "Media key"),
+                crate::platform::windows::MEDIA_KEY_CMD_PAUSE => self.apply_interop_command(
+                    ctx, crate::platform::interop::InteropCommand::Pause, "Media key"),
+                crate::platform::windows::MEDIA_KEY_CMD_STOP => self.apply_interop_command(
+                    ctx, crate::platform::interop::InteropCommand::Stop, "Media key"),
+                crate::platform::windows::MEDIA_KEY_CMD_NEXT => self.apply_interop_command(
+                    ctx, crate::platform::interop::InteropCommand::Next, "Media key"),
+                crate::platform::windows::MEDIA_KEY_CMD_PREVIOUS => self.apply_interop_command(
+                    ctx, crate::platform::interop::InteropCommand::Previous, "Media key"),
                 crate::platform::windows::TRAY_CMD_MUTE => {
                     self.toggle_audio_muted();
                 }

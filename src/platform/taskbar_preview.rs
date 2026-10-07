@@ -31,8 +31,22 @@ static PREVIEW: Mutex<Preview> = Mutex::new(Preview {
 });
 static REPAINT: OnceLock<eframe::egui::Context> = OnceLock::new();
 
+// Win32 message values are stable ABI constants. Keeping this decision pure
+// lets every CI host verify that video-only rendering is limited to the small
+// taskbar thumbnail and never leaks into the full-size Peek preview.
+fn is_static_thumbnail_request(message: u32) -> bool {
+    message == 0x0323 // WM_DWMSENDICONICTHUMBNAIL
+}
+
 pub fn register_repaint(ctx: &eframe::egui::Context) {
     let _ = REPAINT.set(ctx.clone());
+}
+
+/// Wake the GUI after a shell callback queues an action without activating it.
+pub fn request_repaint() {
+    if let Some(ctx) = REPAINT.get() {
+        ctx.request_repaint();
+    }
 }
 
 pub fn fit_size(width: u32, height: u32, max_width: u32, max_height: u32) -> (u32, u32) {
@@ -275,19 +289,21 @@ pub fn bitmap(
 #[cfg(target_os = "windows")]
 pub fn handle_request(hwnd: isize, message: u32, lparam: isize) -> bool {
     use windows::Win32::{
-        Foundation::{HWND, RECT},
+        Foundation::HWND,
         Graphics::{
-            Dwm::{DwmSetIconicLivePreviewBitmap, DwmSetIconicThumbnail},
+            Dwm::DwmSetIconicThumbnail,
             Gdi::DeleteObject,
         },
-        UI::WindowsAndMessaging::{
-            GetClientRect, WM_DWMSENDICONICLIVEPREVIEWBITMAP, WM_DWMSENDICONICTHUMBNAIL,
-        },
+        UI::WindowsAndMessaging::WM_DWMSENDICONICLIVEPREVIEWBITMAP,
     };
-    if !matches!(
-        message,
-        WM_DWMSENDICONICTHUMBNAIL | WM_DWMSENDICONICLIVEPREVIEWBITMAP
-    ) {
+
+    // Video-only is correct for the small taskbar thumbnail, but a Peek/live
+    // preview is projected over the real desktop window. Leave that full-size
+    // preview to DWM so Pealayer keeps its complete UI while being hovered.
+    if message == WM_DWMSENDICONICLIVEPREVIEWBITMAP {
+        return false;
+    }
+    if !is_static_thumbnail_request(message) {
         return false;
     }
     let frame = {
@@ -308,26 +324,14 @@ pub fn handle_request(hwnd: isize, message: u32, lparam: isize) -> bool {
         return true;
     };
     let hwnd = HWND(hwnd as *mut _);
-    let (max_w, max_h) = if message == WM_DWMSENDICONICTHUMBNAIL {
-        (
-            ((lparam as u32 >> 16) & 0xffff).max(1),
-            (lparam as u32 & 0xffff).max(1),
-        )
-    } else {
-        let mut rect = RECT::default();
-        if unsafe { GetClientRect(hwnd, &mut rect) }.is_err() {
-            return true;
-        }
-        (rect.right.max(1) as u32, rect.bottom.max(1) as u32)
-    };
+    let (max_w, max_h) = (
+        ((lparam as u32 >> 16) & 0xffff).max(1),
+        (lparam as u32 & 0xffff).max(1),
+    );
     let (w, h) = fit_size(frame.width(), frame.height(), max_w, max_h);
     let resized = image::imageops::resize(&frame, w, h, image::imageops::FilterType::Triangle);
     let result = bitmap(&resized).and_then(|bitmap| unsafe {
-        let result = if message == WM_DWMSENDICONICTHUMBNAIL {
-            DwmSetIconicThumbnail(hwnd, bitmap, 0)
-        } else {
-            DwmSetIconicLivePreviewBitmap(hwnd, bitmap, None, 0)
-        };
+        let result = DwmSetIconicThumbnail(hwnd, bitmap, 0);
         let _ = DeleteObject(bitmap.into());
         result
     });
@@ -368,6 +372,12 @@ pub fn frame_png() -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn video_only_bitmap_is_never_used_for_full_size_peek() {
+        assert!(super::is_static_thumbnail_request(0x0323));
+        assert!(!super::is_static_thumbnail_request(0x0326));
+    }
+
     #[test]
     fn thumbnail_fits_without_aspect_distortion() {
         assert_eq!(super::fit_size(1920, 1080, 320, 240), (320, 180));
