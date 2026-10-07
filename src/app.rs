@@ -515,6 +515,8 @@ pub struct PealayerApp {
     pub(crate) is_connected: bool,
     pub(crate) lasso_origin: Option<egui::Pos2>,
     pub(crate) lasso_rect: Option<egui::Rect>,
+    pub(crate) lasso_initial_instance_ids: std::collections::HashSet<uuid::Uuid>,
+    pub(crate) lasso_initial_keyframes: std::collections::HashSet<(uuid::Uuid, usize)>,
     pub(crate) rtt_state: Arc<Mutex<RttState>>,
     pub(crate) current_video_path: Option<std::path::PathBuf>,
     pub(crate) show_remaining_time: bool,
@@ -7827,6 +7829,8 @@ impl Default for PealayerApp {
             is_connected: false,
             lasso_origin: None,
             lasso_rect: None,
+            lasso_initial_instance_ids: std::collections::HashSet::new(),
+            lasso_initial_keyframes: std::collections::HashSet::new(),
             rtt_state: Arc::new(Mutex::new(RttState {
                 video_texture: None,
                 video_fbo: None,

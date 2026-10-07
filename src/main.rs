@@ -736,6 +736,8 @@ fn main() -> eframe::Result {
                 is_connected: false,
                 lasso_origin: None,
                 lasso_rect: None,
+                lasso_initial_instance_ids: std::collections::HashSet::new(),
+                lasso_initial_keyframes: std::collections::HashSet::new(),
                 current_video_path: None,
                 show_remaining_time: loaded_config.show_remaining_time,
                 editing_elapsed_time: false,
