@@ -39,6 +39,7 @@ import { mediaBasename } from '../mediaLabel';
 import { formatTimelineTime } from '../timelineTime';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
 import { MediaSurface } from './MediaSurface';
+import type { MediaGesturePreferences } from './MediaSurface';
 import { defaultTimelineWheelPreferences, timelineWheelAction, timelineZoomAtPointer } from '../timelineWheel';
 import type { TimelineWheelPreferences } from '../timelineWheel';
 import { appendMelodySteps, sequenceDurationMs } from '../melodyCatalog';
@@ -53,6 +54,7 @@ interface StudioTabProps {
   seekbarHoverThumbnails: boolean;
   surface?: 'studio' | 'timeline';
   timelineWheelPreferences?: TimelineWheelPreferences;
+  mediaGestures: MediaGesturePreferences;
 }
 
 const formatTime = (seconds = 0, showMilliseconds = true) => {
@@ -92,8 +94,15 @@ const workspaceGlyph = (icon?: string) => {
   }
 };
 
-export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl, seekbarHoverThumbnails, surface = 'studio', timelineWheelPreferences = defaultTimelineWheelPreferences }) => {
+export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl, seekbarHoverThumbnails, surface = 'studio', timelineWheelPreferences = defaultTimelineWheelPreferences, mediaGestures }) => {
   const timelineGridRef = useRef<HTMLDivElement | null>(null);
+  const timelinePointersRef = useRef(new Map<number, { x: number; y: number; pointerType: string }>());
+  const timelineGestureRef = useRef<null | {
+    kind: 'pan' | 'pinch';
+    startX: number; startY: number; startScrollLeft: number; startScrollTop: number;
+    startZoom: number; startDistance: number; startCenterX: number; startCenterY: number;
+    axis: 'both' | 'horizontal' | 'vertical';
+  }>(null);
   const [timelineZoom, setTimelineZoom] = useState(1);
   const timelineZoomRef = useRef(1);
   useEffect(() => {
@@ -103,7 +112,15 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       // The listener covers labels, cues, ruler, and empty space, not just a child.
       event.preventDefault(); // Suppress browser zoom and duplicate native scrolling.
       const scale = event.deltaMode === 1 ? 20 : event.deltaMode === 2 ? grid.clientHeight : 1;
-      const { action, delta } = timelineWheelAction(event, timelineWheelPreferences);
+      // Chromium reports precision-trackpad pinch as a small pixel wheel with
+      // Ctrl/Meta synthesized by the browser. Keep it distinct from a real
+      // Ctrl+mouse-wheel notch so preference-driven vertical scrolling remains.
+      const precisionPinch = event.deltaMode === 0
+        && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey
+        && Math.abs(event.deltaY) < 80 && Math.abs(event.deltaX) < 4;
+      const { action, delta } = precisionPinch
+        ? { action: 'zoom' as const, delta: event.deltaY }
+        : timelineWheelAction(event, timelineWheelPreferences);
       if (action === 'horizontal_scroll') grid.scrollLeft += delta * scale;
       else if (action === 'vertical_scroll') grid.scrollTop += delta * scale;
       else if (action === 'zoom' && delta !== 0) {
@@ -120,6 +137,102 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
     grid.addEventListener('wheel', onWheel, { passive: false });
     return () => grid.removeEventListener('wheel', onWheel);
   }, [timelineWheelPreferences]);
+  useEffect(() => {
+    const grid = timelineGridRef.current;
+    if (!grid) return;
+    const pointers = timelinePointersRef.current;
+    const content = () => grid.firstElementChild as HTMLElement | null;
+    const centerOf = (values: Array<{ x: number; y: number }>) => ({
+      x: values.reduce((sum, point) => sum + point.x, 0) / values.length,
+      y: values.reduce((sum, point) => sum + point.y, 0) / values.length,
+    });
+    const beginPinch = () => {
+      const points = [...pointers.values()].slice(0, 2);
+      if (points.length < 2) return;
+      const center = centerOf(points);
+      timelineGestureRef.current = {
+        kind: 'pinch', startX: center.x, startY: center.y,
+        startScrollLeft: grid.scrollLeft, startScrollTop: grid.scrollTop,
+        startZoom: timelineZoomRef.current,
+        startDistance: Math.max(1, Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y)),
+        startCenterX: center.x, startCenterY: center.y, axis: 'both',
+      };
+    };
+    const beginPan = (point: { x: number; y: number }, axis: 'both' | 'horizontal' | 'vertical') => {
+      timelineGestureRef.current = {
+        kind: 'pan', startX: point.x, startY: point.y,
+        startScrollLeft: grid.scrollLeft, startScrollTop: grid.scrollTop,
+        startZoom: timelineZoomRef.current, startDistance: 1,
+        startCenterX: point.x, startCenterY: point.y, axis,
+      };
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const element = event.target as HTMLElement;
+      if (element.closest('button,input,textarea,select,.timeline-cue,[role="menuitem"]')) return;
+      const isTouch = event.pointerType === 'touch' || event.pointerType === 'pen';
+      if (!isTouch && event.button !== 1) return;
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, pointerType: event.pointerType });
+      try { grid.setPointerCapture(event.pointerId); } catch { /* capture can be unavailable during teardown */ }
+      if (isTouch && pointers.size >= 2) beginPinch();
+      else beginPan({ x: event.clientX, y: event.clientY }, event.shiftKey ? 'horizontal' : event.ctrlKey ? 'vertical' : 'both');
+      grid.classList.add('is-panning');
+      event.preventDefault();
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (!pointers.has(event.pointerId)) return;
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, pointerType: event.pointerType });
+      const gesture = timelineGestureRef.current;
+      if (!gesture) return;
+      if (pointers.size >= 2) {
+        if (gesture.kind !== 'pinch') beginPinch();
+        const pinch = timelineGestureRef.current;
+        if (!pinch || pinch.kind !== 'pinch') return;
+        const points = [...pointers.values()].slice(0, 2);
+        const center = centerOf(points);
+        const distance = Math.max(1, Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y));
+        const nextZoom = Math.max(1, Math.min(25, pinch.startZoom * distance / pinch.startDistance));
+        const rect = grid.getBoundingClientRect();
+        const anchorX = pinch.startCenterX - rect.left;
+        const currentX = center.x - rect.left;
+        const worldX = (pinch.startScrollLeft + anchorX) / pinch.startZoom;
+        timelineZoomRef.current = nextZoom;
+        if (content()) content()!.style.width = `${nextZoom * 100}%`;
+        grid.scrollLeft = Math.max(0, worldX * nextZoom - currentX);
+        grid.scrollTop = Math.max(0, pinch.startScrollTop + pinch.startCenterY - center.y);
+        setTimelineZoom(nextZoom);
+      } else if (gesture.kind === 'pan') {
+        if (gesture.axis !== 'vertical') grid.scrollLeft = gesture.startScrollLeft - (event.clientX - gesture.startX);
+        if (gesture.axis !== 'horizontal') grid.scrollTop = gesture.startScrollTop - (event.clientY - gesture.startY);
+      }
+      event.preventDefault();
+    };
+    const finishPointer = (event: PointerEvent) => {
+      if (!pointers.has(event.pointerId)) return;
+      pointers.delete(event.pointerId);
+      try { if (grid.hasPointerCapture(event.pointerId)) grid.releasePointerCapture(event.pointerId); } catch { /* already released */ }
+      if (pointers.size >= 2) beginPinch();
+      else if (pointers.size === 1) {
+        const point = [...pointers.values()][0];
+        beginPan(point, 'both');
+      } else {
+        timelineGestureRef.current = null;
+        grid.classList.remove('is-panning');
+      }
+    };
+    grid.addEventListener('pointerdown', onPointerDown);
+    grid.addEventListener('pointermove', onPointerMove);
+    grid.addEventListener('pointerup', finishPointer);
+    grid.addEventListener('pointercancel', finishPointer);
+    return () => {
+      grid.removeEventListener('pointerdown', onPointerDown);
+      grid.removeEventListener('pointermove', onPointerMove);
+      grid.removeEventListener('pointerup', finishPointer);
+      grid.removeEventListener('pointercancel', finishPointer);
+      pointers.clear();
+      timelineGestureRef.current = null;
+      grid.classList.remove('is-panning');
+    };
+  }, []);
   const [selectedEffect, setSelectedEffect] = useState<string | null>(null);
   const [effectEditorOpen, setEffectEditorOpen] = useState(false);
   const [savingEffect, setSavingEffect] = useState(false);
@@ -615,7 +728,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
 
         <div className="program-viewer">
           {state.current_video ? (
-            <MediaSurface state={state} apiBaseUrl={apiBaseUrl} emptyLabel={tr(locale, 'Video Preview')} />
+            <MediaSurface state={state} apiBaseUrl={apiBaseUrl} emptyLabel={tr(locale, 'Video Preview')} sendCmd={sendCmd} gestures={mediaGestures} locale={locale} />
           ) : (
             <div className="program-viewer__empty">
               <VideoCameraOutlined />

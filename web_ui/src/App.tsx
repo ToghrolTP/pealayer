@@ -18,6 +18,7 @@ import { WebViewBoundary } from './components/WebViewBoundary';
 import { RemoteLocationDialog } from './components/RemoteLocationDialog';
 import './remote-location.css';
 import type { PlayerState } from './components/RemoteControlTab';
+import type { MediaGesturePreferences } from './components/MediaSurface';
 import { tr } from './i18n';
 import { useWebPlatform } from './webPlatform';
 import './styles.css';
@@ -184,6 +185,17 @@ const App: React.FC = () => {
   const accentTextColor = accentForeground(accentColor);
   const paletteName = resolvePaletteName(appConfig);
   const palette = palettes[paletteName][resolvedTheme];
+  const mediaGestures: MediaGesturePreferences = {
+    clickPlayerToToggle: appConfig?.click_player_to_toggle ?? true,
+    pausedDragAction: appConfig?.paused_drag_action ?? 'move_window',
+    playingDragAction: appConfig?.playing_drag_action ?? 'temporary_fast_forward',
+    middleClickAction: appConfig?.middle_click_action ?? 'none',
+    middleHoldAction: appConfig?.middle_hold_action ?? 'none',
+    rightClickAction: appConfig?.right_click_action ?? 'context_menu',
+    rightHoldAction: appConfig?.right_hold_action ?? 'none',
+    temporaryFastForwardSpeed: Number(appConfig?.temporary_fast_forward_speed ?? 2),
+    playbackSpeed: Number(appConfig?.playback_speed ?? state.playback_rate ?? 1),
+  };
 
   useLayoutEffect(() => {
     document.documentElement.dataset.palette = paletteName;
@@ -602,6 +614,7 @@ const App: React.FC = () => {
                   shift: appConfig?.timeline_shift_wheel_action ?? 'horizontal_scroll',
                   alt: appConfig?.timeline_alt_wheel_action ?? 'zoom',
                 }}
+                mediaGestures={mediaGestures}
               />
             )}
             {activeTab === 'player' && (
@@ -613,6 +626,7 @@ const App: React.FC = () => {
                 quickSeekSeconds={quickSeekSeconds}
                 apiBaseUrl={apiBaseUrl}
                 seekbarHoverThumbnails={Boolean(appConfig?.seekbar_hover_thumbnails)}
+                mediaGestures={mediaGestures}
               />
             )}
             {activeTab === 'library' && (

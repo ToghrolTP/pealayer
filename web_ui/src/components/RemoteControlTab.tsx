@@ -15,6 +15,7 @@ import {
 import { tr, UiLocale } from '../i18n';
 import { mediaBasename } from '../mediaLabel';
 import { MediaSurface } from './MediaSurface';
+import type { MediaGesturePreferences } from './MediaSurface';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
 import type { AppearanceState } from '../appearance';
 import type { TimelineWheelPreferences } from '../timelineWheel';
@@ -203,12 +204,13 @@ export interface PlayerState {
 
 interface RemoteControlTabProps {
   state: PlayerState;
-  sendCmd: (command: string, payload?: Record<string, any>) => void;
+  sendCmd: (command: string, payload?: Record<string, any>) => Promise<boolean>;
   onOpenLibraryTab?: () => void;
   locale: UiLocale;
   quickSeekSeconds: number;
   apiBaseUrl: string;
   seekbarHoverThumbnails: boolean;
+  mediaGestures: MediaGesturePreferences;
 }
 
 const formatTime = (seconds?: number) => {
@@ -227,6 +229,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
   quickSeekSeconds,
   apiBaseUrl,
   seekbarHoverThumbnails,
+  mediaGestures,
 }) => {
   const [seekDraft, setSeekDraft] = useState<number | null>(null);
 
@@ -241,7 +244,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
     <section className="remote-player">
       <div className="remote-player__preview">
         {state.current_video ? (
-          <MediaSurface state={state} apiBaseUrl={apiBaseUrl} emptyLabel={tr(locale, 'Video Preview')} />
+          <MediaSurface state={state} apiBaseUrl={apiBaseUrl} emptyLabel={tr(locale, 'Video Preview')} sendCmd={sendCmd} gestures={mediaGestures} locale={locale} />
         ) : (
           <div className="remote-player__empty">
             <VideoCameraOutlined />
