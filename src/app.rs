@@ -3114,6 +3114,51 @@ impl PealayerApp {
         Ok(())
     }
 
+    pub(crate) fn play_buzzer_melody(
+        &mut self,
+        name: &str,
+        repeats: u8,
+    ) -> Result<(), String> {
+        if repeats > 20 {
+            return Err("Melody repeats must be 0–20; zero loops until stopped".to_string());
+        }
+        let name = Self::controller_command_argument(name)
+            .ok_or_else(|| "Select a valid configured melody".to_string())?;
+        self.request_board_operation(
+            "board-buzzer-melody",
+            "controller.command.execute",
+            serde_json::json!({"command": format!("melody play {name} {repeats}")}),
+        )
+    }
+
+    pub(crate) fn play_buzzer_tone(
+        &mut self,
+        frequency_hz: u16,
+        duration_ms: u16,
+    ) -> Result<(), String> {
+        if !(20..=20_000).contains(&frequency_hz) {
+            return Err("Tone frequency must be 20–20000 Hz".to_string());
+        }
+        if duration_ms == 0 {
+            return Err("Tone duration must be at least 1 ms".to_string());
+        }
+        self.request_board_operation(
+            "board-buzzer-tone",
+            "controller.command.execute",
+            serde_json::json!({"command": format!("buzzer {frequency_hz} {duration_ms}")}),
+        )
+    }
+
+    pub(crate) fn stop_buzzer(&mut self) -> Result<(), String> {
+        // Frequency zero is PCController's immediate all-buzzer stop: it
+        // cancels the host-streamed melody before sending the board stop opcode.
+        self.request_board_operation(
+            "board-buzzer-stop",
+            "controller.command.execute",
+            serde_json::json!({"command": "buzzer 0 1"}),
+        )
+    }
+
     pub(crate) fn rename_board(&mut self) -> Result<(), String> {
         let name = self.board_name_draft.trim();
         if name.is_empty()
@@ -3322,7 +3367,10 @@ impl PealayerApp {
                         | "board-settings"
                         | "board-status-led-override"
                         | "board-status-led-release"
-                        | "board-reboot" => {
+                        | "board-reboot"
+                        | "board-buzzer-melody"
+                        | "board-buzzer-tone"
+                        | "board-buzzer-stop" => {
                             if result.operation == "board-settings" {
                                 self.board_settings_dirty = false;
                             }
@@ -7503,6 +7551,12 @@ fn web_hardware_details(
             "duration_ms": melody.duration_ms(),
             "notes": melody.notes,
         })).collect::<Vec<_>>(),
+        "buzzer": {
+            "playing": capabilities.buzzer.is_playing(),
+            "melody_id": capabilities.buzzer.melody_id,
+            "melody_name": capabilities.buzzer.melody_name,
+            "board_silent": capabilities.settings.as_ref().map(|settings| settings.silent),
+        },
         "settings": settings,
         "front_panel": front_panel,
         "strip": strip,
@@ -8766,6 +8820,10 @@ mod tests {
                 gap_ms: 25,
             }],
         }];
+        capabilities.buzzer = crate::four_d::controller::HardwareBuzzerState {
+            melody_id: 42,
+            melody_name: "attention".to_string(),
+        };
         capabilities.controls = vec![crate::four_d::controller::HardwareControl {
             key: "pwm.3".to_string(),
             kind: "pwm".to_string(),
@@ -8787,6 +8845,9 @@ mod tests {
         assert!((percent - (2048.0 * 100.0 / 4095.0)).abs() < f64::EPSILON);
         assert_eq!(details["melodies"][0]["name"], "attention");
         assert_eq!(details["melodies"][0]["duration_ms"], 125);
+        assert_eq!(details["buzzer"]["playing"], true);
+        assert_eq!(details["buzzer"]["melody_id"], 42);
+        assert_eq!(details["buzzer"]["melody_name"], "attention");
 
         capabilities.controls[0].key = "pwm.15".to_string();
         capabilities.pwm_channels[0] = crate::four_d::controller::HardwareOutput {

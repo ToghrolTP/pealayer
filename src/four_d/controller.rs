@@ -107,6 +107,18 @@ impl HardwareMelody {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HardwareBuzzerState {
+    pub melody_id: u64,
+    pub melody_name: String,
+}
+
+impl HardwareBuzzerState {
+    pub fn is_playing(&self) -> bool {
+        self.melody_id != 0
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareCapabilities {
     pub board_connected: bool,
     pub board_name: String,
@@ -139,6 +151,7 @@ pub struct HardwareCapabilities {
     pub warnings: Vec<HardwareWarning>,
     pub strip_control: Option<HardwareStripControl>,
     pub strip_effects: Vec<HardwareStripEffect>,
+    pub buzzer: HardwareBuzzerState,
     pub melodies: Vec<HardwareMelody>,
     pub macros: Vec<HardwareMacro>,
     pub effect_groups: Vec<HardwareEffectGroup>,
@@ -2435,6 +2448,18 @@ fn parse_hardware_capabilities_with_front_panel(
     };
 
     let active_relays = active_relays_from_mask(&relays, active_relay_bits);
+    let buzzer = HardwareBuzzerState {
+        melody_id: snapshot
+            .pointer("/outputs/melody_id")
+            .and_then(value_as_u64)
+            .unwrap_or(0),
+        melody_name: snapshot
+            .pointer("/outputs/melody_name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string(),
+    };
 
     HardwareCapabilities {
         board_connected,
@@ -2473,6 +2498,7 @@ fn parse_hardware_capabilities_with_front_panel(
         warnings,
         strip_control,
         strip_effects,
+        buzzer,
         melodies: Vec::new(),
         macros,
         effect_groups: snapshot
@@ -2963,7 +2989,8 @@ mod tests {
                         "front_panel": {
                             "raw_segments": [63, 6, 91, 79],
                             "segments_active": true
-                        }
+                        },
+                        "outputs": {"melody_id": 17, "melody_name": "attention"}
                     }}),
                     2 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"peripherals":[]}}),
                     3 => json!({"jsonrpc":"2.0","id":request["id"],"result":[{
@@ -2986,6 +3013,9 @@ mod tests {
         );
         assert_eq!(capabilities.melodies.len(), 1);
         assert_eq!(capabilities.melodies[0].name, "attention");
+        assert!(capabilities.buzzer.is_playing());
+        assert_eq!(capabilities.buzzer.melody_id, 17);
+        assert_eq!(capabilities.buzzer.melody_name, "attention");
         server.join().unwrap();
     }
 

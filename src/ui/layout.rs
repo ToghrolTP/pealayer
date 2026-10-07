@@ -3980,6 +3980,247 @@ fn board_tool_card(ui: &mut egui::Ui, icon: &str, title: &str, body: impl FnOnce
         });
 }
 
+fn draw_buzzer_tool(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+) {
+    let melody_id = ui.make_persistent_id("hardware_buzzer_melody");
+    let repeats_id = ui.make_persistent_id("hardware_buzzer_repeats");
+    let frequency_id = ui.make_persistent_id("hardware_buzzer_frequency");
+    let duration_id = ui.make_persistent_id("hardware_buzzer_duration");
+    let mut melody = ui.data_mut(|data| {
+        data.get_persisted::<String>(melody_id)
+            .filter(|name| capabilities.melodies.iter().any(|item| item.name == *name))
+            .or_else(|| capabilities.melodies.first().map(|item| item.name.clone()))
+            .unwrap_or_default()
+    });
+    let mut repeats = ui.data_mut(|data| {
+        data.get_persisted::<u8>(repeats_id)
+            .unwrap_or(1)
+            .min(20)
+    });
+    let mut frequency_hz = ui.data_mut(|data| {
+        data.get_persisted::<u16>(frequency_id)
+            .unwrap_or(880)
+            .clamp(20, 20_000)
+    });
+    let mut duration_ms = ui.data_mut(|data| {
+        data.get_persisted::<u16>(duration_id)
+            .unwrap_or(180)
+            .clamp(1, 60_000)
+    });
+    let pending = app.board_operation.is_some();
+    let can_start = !pending && !app.estop_active;
+    let can_stop = !pending;
+    let playing = capabilities.buzzer.is_playing();
+    let board_silent = capabilities
+        .settings
+        .as_ref()
+        .is_some_and(|settings| settings.silent);
+    let mut refresh_catalog = false;
+    let mut play_melody = false;
+    let mut play_tone = false;
+    let mut stop = false;
+
+    board_tool_card(
+        ui,
+        crate::ui::icons::SPEAKER_HIGH,
+        &app.tr("Buzzer & melodies"),
+        |ui| {
+            ui.horizontal_wrapped(|ui| {
+                let state_color = if playing {
+                    egui::Color32::from_rgb(34, 197, 94)
+                } else {
+                    ui.visuals().weak_text_color()
+                };
+                ui.colored_label(state_color, crate::ui::icons::DOT_OUTLINE);
+                if playing {
+                    let name = capabilities.buzzer.melody_name.trim();
+                    ui.strong(if name.is_empty() {
+                        app.tr("Playing melody")
+                    } else {
+                        format!("{}: {name}", app.tr("Playing"))
+                    });
+                } else {
+                    ui.label(app.tr("Idle"));
+                }
+                ui.separator();
+                let route_icon = if board_silent {
+                    crate::ui::icons::SPEAKER_SLASH
+                } else {
+                    crate::ui::icons::SPEAKER_HIGH
+                };
+                let route_color = if board_silent {
+                    ui.visuals().warn_fg_color
+                } else {
+                    ui.visuals().weak_text_color()
+                };
+                ui.colored_label(
+                    route_color,
+                    format!(
+                        "{route_icon} {}",
+                        app.tr(if board_silent { "Board muted" } else { "Board audible" })
+                    ),
+                );
+                if pending {
+                    ui.spinner();
+                }
+            });
+
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(app.tr("Configured melody")).strong());
+            ui.horizontal_wrapped(|ui| {
+                let selected_text = if melody.is_empty() {
+                    app.tr("No configured melodies")
+                } else {
+                    melody.clone()
+                };
+                let response = egui::ComboBox::from_id_salt("hardware_buzzer_melody_combo")
+                    .width(210.0)
+                    .selected_text(selected_text)
+                    .show_ui(ui, |ui| {
+                        if capabilities.melodies.is_empty() {
+                            ui.weak(app.tr("No configured melodies"));
+                        }
+                        for item in &capabilities.melodies {
+                            let duration = crate::duration::format_effect_duration_for_language(
+                                app.language,
+                                item.duration_ms(),
+                            );
+                            let detail = format!(
+                                "{} · {} {}",
+                                duration,
+                                item.notes.len(),
+                                app.tr("notes")
+                            );
+                            ui.selectable_value(
+                                &mut melody,
+                                item.name.clone(),
+                                format!("{}  {}  ·  {detail}", crate::ui::icons::MUSIC_NOTE, item.name),
+                            );
+                        }
+                    })
+                    .response;
+                refresh_catalog |= response.clicked();
+                if ui
+                    .small_button(crate::ui::icons::ARROW_CLOCKWISE)
+                    .on_hover_text(app.tr("Refresh melody catalog"))
+                    .clicked()
+                {
+                    refresh_catalog = true;
+                }
+            });
+
+            ui.horizontal_wrapped(|ui| {
+                let mut loop_until_stopped = repeats == 0;
+                if ui
+                    .toggle_value(&mut loop_until_stopped, app.tr("Loop until stopped"))
+                    .changed()
+                {
+                    repeats = if loop_until_stopped { 0 } else { 1 };
+                }
+                if !loop_until_stopped {
+                    ui.label(app.tr("Repeats"));
+                    ui.add(egui::DragValue::new(&mut repeats).range(1..=20));
+                }
+            });
+
+            ui.horizontal_wrapped(|ui| {
+                play_melody = ui
+                    .add_enabled(
+                        can_start && !melody.is_empty(),
+                        egui::Button::new(format!(
+                            "{} {}",
+                            crate::ui::icons::PLAY,
+                            app.tr("Play melody")
+                        )),
+                    )
+                    .clicked();
+                stop = ui
+                    .add_enabled(
+                        can_stop,
+                        egui::Button::new(format!(
+                            "{} {}",
+                            crate::ui::icons::STOP_CIRCLE,
+                            app.tr("Stop buzzer")
+                        )),
+                    )
+                    .clicked();
+            });
+
+            ui.add_space(4.0);
+            ui.separator();
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(app.tr("Tone test")).strong());
+            egui::Grid::new("hardware_buzzer_tone_grid")
+                .num_columns(2)
+                .spacing([10.0, 6.0])
+                .show(ui, |ui| {
+                    ui.label(app.tr("Frequency"));
+                    ui.add(
+                        egui::DragValue::new(&mut frequency_hz)
+                            .range(20..=20_000)
+                            .suffix(" Hz"),
+                    );
+                    ui.end_row();
+                    ui.label(app.tr("Duration"));
+                    ui.add(
+                        egui::DragValue::new(&mut duration_ms)
+                            .range(1..=60_000)
+                            .suffix(" ms"),
+                    );
+                    ui.end_row();
+                });
+            play_tone = ui
+                .add_enabled(
+                    can_start,
+                    egui::Button::new(format!(
+                        "{} {}",
+                        crate::ui::icons::PLAY,
+                        app.tr("Play tone")
+                    )),
+                )
+                .clicked();
+            if board_silent {
+                ui.add_space(4.0);
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    format!(
+                        "{} {}",
+                        crate::ui::icons::WARNING,
+                        app.tr("The physical board is muted; host routing may still be audible.")
+                    ),
+                );
+            }
+        },
+    );
+
+    ui.data_mut(|data| {
+        data.insert_persisted(melody_id, melody.clone());
+        data.insert_persisted(repeats_id, repeats);
+        data.insert_persisted(frequency_id, frequency_hz);
+        data.insert_persisted(duration_id, duration_ms);
+    });
+    if refresh_catalog {
+        // Push events keep this catalog current; opening or explicitly
+        // refreshing the picker is also a user-visible freshness boundary.
+        app.engine_handle.request_catalog_refresh();
+    }
+    let result = if stop {
+        app.stop_buzzer()
+    } else if play_melody {
+        app.play_buzzer_melody(&melody, repeats)
+    } else if play_tone {
+        app.play_buzzer_tone(frequency_hz, duration_ms)
+    } else {
+        Ok(())
+    };
+    if let Err(error) = result {
+        app.set_osd(error);
+    }
+}
+
 fn addressable_strip_gradient(
     pixels: u16,
     start: egui::Color32,
@@ -6424,6 +6665,61 @@ mod timeline_row_tests {
         assert_eq!(&frame[0..3], &[100, 0, 0]);
         assert_eq!(&frame[3..6], &[50, 0, 25]);
         assert_eq!(&frame[6..9], &[0, 0, 50]);
+    }
+
+    #[test]
+    fn hardware_buzzer_card_exposes_live_state_catalog_and_tone_controls() {
+        let context = egui::Context::default();
+        let mut app = PealayerApp::default();
+        let capabilities = crate::four_d::controller::HardwareCapabilities {
+            board_connected: true,
+            buzzer: crate::four_d::controller::HardwareBuzzerState {
+                melody_id: 9,
+                melody_name: "attention".to_string(),
+            },
+            melodies: vec![crate::four_d::controller::HardwareMelody {
+                name: "attention".to_string(),
+                notes: vec![crate::four_d::controller::HardwareMelodyNote {
+                    frequency_hz: 880,
+                    duration_ms: 125,
+                    gap_ms: 25,
+                }],
+            }],
+            settings: Some(crate::four_d::controller::HardwareBoardSettings {
+                silent: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(520.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                ui.set_width(440.0);
+                draw_buzzer_tool(&mut app, ui, &capabilities);
+            },
+        );
+        let text = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(text.contains("Buzzer & melodies"));
+        assert!(text.contains("Playing: attention"));
+        assert!(text.contains("Board muted"));
+        assert!(text.contains("Play melody"));
+        assert!(text.contains("Stop buzzer"));
+        assert!(text.contains("Tone test"));
+        output.textures_delta.clear();
     }
 
     #[test]
@@ -11158,6 +11454,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     },
                                 );
                             }
+
+                            hardware_section(
+                                ui,
+                                "hardware_buzzer_section",
+                                crate::ui::icons::SPEAKER_HIGH,
+                                &self.app.tr("Buzzer & melodies"),
+                                true,
+                                |ui| {
+                                    draw_buzzer_tool(self.app, ui, &capabilities);
+                                },
+                            );
 
                             if capabilities.strip_control.is_some() {
                                 hardware_section(

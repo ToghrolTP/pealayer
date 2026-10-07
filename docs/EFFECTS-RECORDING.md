@@ -35,6 +35,14 @@ melody expands its validated notes and silent gaps into ordinary editable
 buzzer steps; the saved effect therefore stays portable across host-clock and
 device-clock execution without copying a private melody catalog into Pealayer.
 
+The native **Hardware Monitor** has a dedicated **Buzzer & melodies** section
+for live operation. It shows the active melody and physical-board mute state,
+refreshes the PCController-owned catalog whenever its picker opens, supports
+bounded repeats or explicit until-stopped looping, and provides a validated
+20–20,000 Hz tone tester. **Stop buzzer** cancels a streamed melody and sends
+the board's immediate stop opcode; it remains available during an emergency
+stop because it can only de-energize the output.
+
 ## Terms
 
 | Term | Meaning |
