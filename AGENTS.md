@@ -6,3 +6,10 @@
 - Reject malformed required current-contract fields with a clear error. Never silently publish a false empty/default hardware state after a failed catalog read.
 - Capability-driven behavior, OS/runtime safety checks, transport retries, and renderer fallbacks are operational fault tolerance. They are not version-compatibility shims and must not be removed merely because the project is in alpha.
 - Use stable semantic IDs and typed machine-readable errors. Do not infer semantic state from labels, human error text, relay numbering, or other incidental presentation data.
+
+## Verification and deployment
+
+- Every feature/fix pass includes a host-compatible Cafe-PC deployment and live verification, or an explicit deployment blocker. Do not call a local build delivered to Cafe-PC.
+- Preserve and coordinate unpushed or separate host work before replacement. Package against the host's actual libmpv runtime and validate the manifest and runtime smoke test.
+- Use application IPC/RPC to request graceful quit before replacement; use the peer updater rather than manually replacing a running executable. The user permits terminating an already-confirmed hung Pealayer process after graceful exit fails; preserve diagnostics first. This is not permission to terminate healthy unrelated processes.
+- Never invoke egui Context accessors, widgets, or repaint callbacks from inside input/data/memory/output transactions; the context lock is non-reentrant. Snapshot inputs first, then perform the narrow transaction.

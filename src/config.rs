@@ -70,10 +70,10 @@ impl TimelineToolbarAction {
     pub const ALL: [Self; 14] = [
         Self::ZoomIn,
         Self::ZoomOut,
-        Self::PanLeft,
         Self::PanRight,
-        Self::BringPlayheadIntoView,
+        Self::PanLeft,
         Self::FollowPlayhead,
+        Self::BringPlayheadIntoView,
         Self::AddKeyframe,
         Self::PreviousCue,
         Self::NextCue,
@@ -126,6 +126,18 @@ pub fn normalize_timeline_toolbar_order(
 #[cfg(test)]
 mod timeline_toolbar_tests {
     use super::*;
+
+    #[test]
+    fn timeline_navigation_default_order_matches_visual_pairs() {
+        assert_eq!(&default_timeline_toolbar_order()[..6], &[
+            TimelineToolbarAction::ZoomIn,
+            TimelineToolbarAction::ZoomOut,
+            TimelineToolbarAction::PanRight,
+            TimelineToolbarAction::PanLeft,
+            TimelineToolbarAction::FollowPlayhead,
+            TimelineToolbarAction::BringPlayheadIntoView,
+        ]);
+    }
 
     #[test]
     fn timeline_toolbar_order_self_heals_duplicates_and_missing_actions() {
