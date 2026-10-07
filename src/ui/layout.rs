@@ -1361,6 +1361,166 @@ fn effect_controls_frame_content_width(outer_width: f32) -> f32 {
     (outer_width - f32::from(EFFECT_CONTROLS_CARD_MARGIN) * 2.0 - 2.0).max(1.0)
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct EffectControlsHeaderResponse {
+    previous: bool,
+    next: bool,
+}
+
+fn effect_controls_panel_header(
+    ui: &mut egui::Ui,
+    outer_width: f32,
+    selected_count: usize,
+    cue_count: usize,
+    title: &str,
+    subtitle: &str,
+    selection_label: &str,
+) -> EffectControlsHeaderResponse {
+    let mut response = EffectControlsHeaderResponse::default();
+    let can_navigate = cue_count > 1 || (cue_count == 1 && selected_count == 0);
+    egui::Frame::new()
+        .fill(ui.visuals().widgets.noninteractive.weak_bg_fill)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(10.0)
+        .inner_margin(egui::Margin::symmetric(11, 9))
+        .show(ui, |ui| {
+            ui.set_width(effect_controls_frame_content_width(outer_width));
+            ui.horizontal(|ui| {
+                egui::Frame::new()
+                    .fill(ui.visuals().selection.bg_fill.gamma_multiply(0.16))
+                    .corner_radius(7.0)
+                    .inner_margin(egui::Margin::same(7))
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(crate::ui::icons::SLIDERS_HORIZONTAL)
+                                .size(18.0)
+                                .color(ui.visuals().selection.bg_fill),
+                        );
+                    });
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(title).strong().size(15.0));
+                    ui.label(egui::RichText::new(subtitle).small().weak());
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    effect_controls_badge(
+                        ui,
+                        crate::ui::icons::SELECTION_ALL,
+                        selection_label,
+                    );
+                    response.next = ui
+                        .add_enabled(
+                            can_navigate,
+                            egui::Button::new(crate::ui::icons::SKIP_FORWARD)
+                                .frame(false)
+                                .min_size(egui::vec2(28.0, 28.0)),
+                        )
+                        .on_hover_text("Select next cue (Tab)")
+                        .clicked();
+                    response.previous = ui
+                        .add_enabled(
+                            can_navigate,
+                            egui::Button::new(crate::ui::icons::SKIP_BACK)
+                                .frame(false)
+                                .min_size(egui::vec2(28.0, 28.0)),
+                        )
+                        .on_hover_text("Select previous cue (Shift+Tab)")
+                        .clicked();
+                });
+            });
+        });
+    response
+}
+
+fn effect_controls_timing_overview(
+    ui: &mut egui::Ui,
+    start_time_ms: u64,
+    duration_ms: u64,
+    total_time_ms: u64,
+    playhead_time_ms: u64,
+) -> egui::Response {
+    let total_time_ms = total_time_ms.max(start_time_ms.saturating_add(duration_ms)).max(1);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), 30.0),
+        egui::Sense::hover(),
+    );
+    let track = egui::Rect::from_min_max(
+        egui::pos2(rect.left(), rect.center().y - 4.0),
+        egui::pos2(rect.right(), rect.center().y + 4.0),
+    );
+    ui.painter().rect_filled(track, 4.0, ui.visuals().widgets.inactive.bg_fill);
+    let x_for_time = |time_ms: u64| {
+        egui::lerp(
+            track.left()..=track.right(),
+            (time_ms.min(total_time_ms) as f32 / total_time_ms as f32).clamp(0.0, 1.0),
+        )
+    };
+    let cue_start = x_for_time(start_time_ms);
+    let cue_end = x_for_time(start_time_ms.saturating_add(duration_ms));
+    let cue_rect = egui::Rect::from_min_max(
+        egui::pos2(cue_start, track.top() - 3.0),
+        egui::pos2((cue_end.max(cue_start + 3.0)).min(track.right()), track.bottom() + 3.0),
+    );
+    ui.painter().rect_filled(
+        cue_rect,
+        5.0,
+        ui.visuals().selection.bg_fill.gamma_multiply(0.82),
+    );
+    let playhead_x = x_for_time(playhead_time_ms);
+    ui.painter().line_segment(
+        [egui::pos2(playhead_x, rect.top() + 2.0), egui::pos2(playhead_x, rect.bottom() - 2.0)],
+        egui::Stroke::new(1.5, egui::Color32::from_rgb(231, 76, 60)),
+    );
+    response.on_hover_text(format!(
+        "{} → {} · {}",
+        crate::duration::format_time_value_ms(start_time_ms),
+        crate::duration::format_time_value_ms(start_time_ms.saturating_add(duration_ms)),
+        crate::duration::format_time_value_ms(duration_ms),
+    ))
+}
+
+fn effect_controls_relay_state(
+    ui: &mut egui::Ui,
+    value: &mut u16,
+    on_label: &str,
+    off_label: &str,
+) {
+    let gap = ui.spacing().item_spacing.x;
+    let button_width = ((ui.available_width() - gap) / 2.0).max(70.0);
+    ui.horizontal(|ui| {
+        let on = *value >= 5_000;
+        let on_color = egui::Color32::from_rgb(38, 166, 91);
+        let off_color = egui::Color32::from_rgb(125, 146, 160);
+        if ui
+            .add_sized(
+                [button_width, 30.0],
+                egui::Button::new(
+                    egui::RichText::new(format!("{}  {on_label}", crate::ui::icons::POWER))
+                        .color(if on { egui::Color32::WHITE } else { ui.visuals().text_color() }),
+                )
+                .fill(if on { on_color } else { ui.visuals().widgets.inactive.weak_bg_fill })
+                .stroke(egui::Stroke::new(1.0, if on { on_color } else { ui.visuals().widgets.inactive.bg_stroke.color })),
+            )
+            .clicked()
+        {
+            *value = 10_000;
+        }
+        if ui
+            .add_sized(
+                [button_width, 30.0],
+                egui::Button::new(
+                    egui::RichText::new(format!("{}  {off_label}", crate::ui::icons::STOP_CIRCLE))
+                        .color(if !on { egui::Color32::WHITE } else { ui.visuals().text_color() }),
+                )
+                .fill(if !on { off_color } else { ui.visuals().widgets.inactive.weak_bg_fill })
+                .stroke(egui::Stroke::new(1.0, if !on { off_color } else { ui.visuals().widgets.inactive.bg_stroke.color })),
+            )
+            .clicked()
+        {
+            *value = 0;
+        }
+    });
+}
+
 fn effect_controls_card<R>(
     ui: &mut egui::Ui,
     outer_width: f32,
@@ -1385,11 +1545,11 @@ fn effect_controls_card<R>(
     } else {
         visuals.widgets.noninteractive.bg_stroke
     };
-    egui::Frame::new()
+    let card = egui::Frame::new()
         .fill(fill)
         .stroke(stroke)
-        .corner_radius(9.0)
-        .inner_margin(egui::Margin::symmetric(EFFECT_CONTROLS_CARD_MARGIN, 9))
+        .corner_radius(10.0)
+        .inner_margin(egui::Margin::symmetric(EFFECT_CONTROLS_CARD_MARGIN, 11))
         .show(ui, |ui| {
             ui.set_width(effect_controls_frame_content_width(outer_width));
             ui.horizontal(|ui| {
@@ -1398,17 +1558,33 @@ fn effect_controls_card<R>(
                 } else {
                     ui.visuals().strong_text_color()
                 };
-                ui.label(egui::RichText::new(icon).size(17.0).color(icon_color));
+                egui::Frame::new()
+                    .fill(icon_color.gamma_multiply(if emphasized { 0.18 } else { 0.10 }))
+                    .corner_radius(6.0)
+                    .inner_margin(egui::Margin::same(6))
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(icon).size(17.0).color(icon_color));
+                    });
                 ui.vertical(|ui| {
-                    ui.label(egui::RichText::new(title).strong());
+                    ui.label(egui::RichText::new(title).strong().size(14.0));
                     if let Some(subtitle) = subtitle.filter(|value| !value.trim().is_empty()) {
                         ui.label(egui::RichText::new(subtitle).small().weak());
                     }
                 });
             });
+            ui.add_space(8.0);
+            ui.separator();
             ui.add_space(7.0);
             add_contents(ui)
-        })
+        });
+    if emphasized {
+        let stripe = egui::Rect::from_min_max(
+            card.response.rect.min,
+            egui::pos2(card.response.rect.min.x + 3.0, card.response.rect.max.y),
+        );
+        ui.painter().rect_filled(stripe, 10.0, ui.visuals().selection.bg_fill);
+    }
+    card
 }
 
 fn effect_controls_badge(ui: &mut egui::Ui, icon: &str, text: impl Into<String>) {
@@ -1426,7 +1602,17 @@ fn effect_controls_badge(ui: &mut egui::Ui, icon: &str, text: impl Into<String>)
 fn effect_controls_kind(
     effect: &crate::four_d::models::Effect,
 ) -> (&'static str, &'static str, &'static str) {
-    if effect.controller_strip_effect.is_some() {
+    if let Some(direct) = effect.direct_control.as_ref() {
+        (
+            if direct.control_key.starts_with("relay.") {
+                crate::ui::icons::PLUG
+            } else {
+                crate::ui::icons::SLIDERS_HORIZONTAL
+            },
+            "Direct channel cue",
+            "Timeline effect",
+        )
+    } else if effect.controller_strip_effect.is_some() {
         (
             crate::ui::icons::SPARKLE,
             "Addressable lighting",
@@ -9189,10 +9375,19 @@ mod timeline_row_tests {
             2_000,
             "thunder".to_string(),
         );
+        let direct = crate::four_d::models::Effect::direct_control(
+            "House light".to_string(),
+            String::new(),
+            1_000,
+            "pwm.12".to_string(),
+            5_000,
+            None,
+        );
 
         assert_eq!(effect_controls_kind(&relay).1, "Relay sequence");
         assert_eq!(effect_controls_kind(&macro_effect).1, "Hardware macro");
         assert_eq!(effect_controls_kind(&strip).1, "Addressable lighting");
+        assert_eq!(effect_controls_kind(&direct).1, "Direct channel cue");
     }
 
     #[test]
@@ -10536,25 +10731,35 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         let selected_count = self.app.selected_instance_ids.len();
                         let panel_width = effect_controls_content_width(ui.available_width());
                         ui.set_width(panel_width);
+                        let panel_subtitle = if selected_count == 0 {
+                            self.app.tr("Select a cue to inspect and edit")
+                        } else if selected_count == 1 {
+                            self.app.tr("Timing, routing, and output")
+                        } else {
+                            self.app.tr("Batch-edit selected cues")
+                        };
+                        let panel_header = effect_controls_panel_header(
+                            ui,
+                            panel_width,
+                            selected_count,
+                            self.app.timeline.instances.len(),
+                            &self.app.tr("Effect Controls"),
+                            &panel_subtitle,
+                            &if selected_count == 1 {
+                                self.app.tr("1 cue")
+                            } else {
+                                format!("{selected_count} {}", self.app.tr("cues"))
+                            },
+                        );
+                        ui.add_space(9.0);
 
                         if selected_count == 1 {
                             let id = *self.app.selected_instance_ids.iter().next().unwrap();
                             let mut timeline_dirty = false;
                             let mut delete_cue = false;
                             let mut jump_to_cue = false;
+                            let mut duplicate_cue = false;
                             let mut relocate_effect_id = None;
-
-                            ui.horizontal(|ui| {
-                                ui.heading(self.app.tr("Effect Controls"));
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    effect_controls_badge(
-                                        ui,
-                                        crate::ui::icons::SELECTION_ALL,
-                                        self.app.tr("1 cue"),
-                                    );
-                                });
-                            });
-                            ui.add_space(6.0);
 
                             let instance_idx = self
                                 .app
@@ -10563,6 +10768,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 .iter()
                                 .position(|instance| instance.id == id);
 
+                            let timeline_before_edit = self.app.snapshot_timeline();
                             let mut push_undo = false;
                             let mut isolate_instance = false;
                             let mut update_start_to = None;
@@ -10582,6 +10788,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let state_label = self.app.tr("State");
                                 let on_label = self.app.tr("On");
                                 let off_label = self.app.tr("Off");
+                                let live_output_on_label = self.app.tr("Live output on");
+                                let live_output_off_label = self.app.tr("Live output off");
                                 let hardware_target_label = self.app.tr("Hardware target");
                                 let source_label = self.app.tr("Source");
                                 let unavailable_output_label = self.app.tr("Unavailable output");
@@ -10591,6 +10799,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let target_output_label = self.app.tr("Output");
                                 let delete_cue_label = self.app.tr("Delete Cue");
                                 let jump_label = self.app.tr("Go to cue");
+                                let duplicate_label = self.app.tr("Duplicate cue");
                                 let details_label = self.app.tr("Technical details");
                                 let target_mismatch_label = self.app.tr("Target mismatch");
                                 let configured_output_label = self.app.tr("Configured output");
@@ -10661,6 +10870,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 egui::TextEdit::singleline(&mut template.name)
                                                     .horizontal_align(name_align),
                                             );
+                                            if name_editor.gained_focus() {
+                                                push_undo = true;
+                                            }
                                             if name_editor.changed() {
                                                 timeline_dirty = true;
                                             }
@@ -10679,6 +10891,34 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         |ui| {
                                             let max_start_ms = (max_secs * 1_000.0).round() as u64;
                                             let mut start_ms = instance_start_ms;
+                                            effect_controls_timing_overview(
+                                                ui,
+                                                start_ms,
+                                                template.duration_ms,
+                                                max_start_ms,
+                                                (self.app.playback_time.max(0.0) * 1_000.0)
+                                                    .round() as u64,
+                                            );
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new(crate::duration::format_time_value_ms(start_ms))
+                                                        .small()
+                                                        .weak(),
+                                                );
+                                                ui.with_layout(
+                                                    egui::Layout::right_to_left(egui::Align::Center),
+                                                    |ui| {
+                                                        ui.label(
+                                                            egui::RichText::new(crate::duration::format_time_value_ms(
+                                                                start_ms.saturating_add(template.duration_ms),
+                                                            ))
+                                                            .small()
+                                                            .weak(),
+                                                        );
+                                                    },
+                                                );
+                                            });
+                                            ui.add_space(6.0);
                                             ui.horizontal(|ui| {
                                                 ui.label(egui::RichText::new(&start_time_label).weak());
                                                 ui.with_layout(
@@ -10704,23 +10944,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     },
                                                 );
                                             });
-                                            let mut start_secs = start_ms as f64 / 1_000.0;
-                                            let slider = ui.add_sized(
-                                                [ui.available_width(), 18.0],
-                                                egui::Slider::new(&mut start_secs, 0.0..=max_secs)
-                                                    .show_value(false),
-                                            );
-                                            if slider.drag_started()
-                                                || (slider.changed() && !slider.dragged())
-                                            {
-                                                push_undo = true;
-                                            }
-                                            if slider.changed() {
-                                                update_start_to = Some((start_secs * 1000.0) as u64);
-                                                timeline_dirty = true;
-                                            }
-
-                                            ui.add_space(5.0);
+                                            ui.add_space(7.0);
                                             ui.horizontal(|ui| {
                                                 ui.label(egui::RichText::new(&duration_label).weak());
                                                 ui.with_layout(
@@ -10780,10 +11004,33 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     ui.horizontal(|ui| {
                                                         ui.label(egui::RichText::new(&state_label).weak());
                                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                            ui.selectable_value(&mut value, 0, format!("{}  {}", crate::ui::icons::STOP_CIRCLE, off_label));
-                                                            ui.selectable_value(&mut value, 10_000, format!("{}  {}", crate::ui::icons::POWER, on_label));
+                                                            let relay_id = direct
+                                                                .control_key
+                                                                .strip_prefix("relay.")
+                                                                .and_then(|value| value.parse::<u8>().ok());
+                                                            let live = relay_id
+                                                                .is_some_and(|relay_id| active_relays.contains(&relay_id));
+                                                            ui.colored_label(
+                                                                if live {
+                                                                    egui::Color32::from_rgb(38, 166, 91)
+                                                                } else {
+                                                                    ui.visuals().weak_text_color()
+                                                                },
+                                                                if live {
+                                                                    format!("{} {live_output_on_label}", crate::ui::icons::DOT_OUTLINE)
+                                                                } else {
+                                                                    format!("{} {live_output_off_label}", crate::ui::icons::DOT_OUTLINE)
+                                                                },
+                                                            );
                                                         });
                                                     });
+                                                    ui.add_space(5.0);
+                                                    effect_controls_relay_state(
+                                                        ui,
+                                                        &mut value,
+                                                        &on_label,
+                                                        &off_label,
+                                                    );
                                                 } else {
                                                     let mut percent = f64::from(value) / 100.0;
                                                     draw_pwm_editor_row(ui, &mut percent, true);
@@ -10920,52 +11167,85 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     }
 
                                     ui.add_space(8.0);
-                                    let details_open = crate::ui::icons::disclosure_header(
+                                    effect_controls_card(
                                         ui,
-                                        ("effect-control-details", id),
-                                        &format!("{}  {details_label}", crate::ui::icons::INFO),
+                                        panel_width,
+                                        crate::ui::icons::INFO,
+                                        &details_label,
+                                        Some(&displayed_ownership),
                                         false,
-                                    );
-                                    if details_open {
+                                        |ui| {
+                                        let identifier_width = (ui.available_width() - 112.0).max(80.0);
                                         egui::Grid::new(("effect-control-identifiers", id))
-                                            .num_columns(2)
-                                            .spacing([8.0, 4.0])
+                                            .num_columns(3)
+                                            .spacing([8.0, 6.0])
                                             .show(ui, |ui| {
                                                 ui.label(egui::RichText::new("Cue ID").small().weak());
-                                                ui.add(egui::Label::new(egui::RichText::new(id.to_string()).monospace().small()).selectable(true));
+                                                ui.add_sized(
+                                                    [identifier_width, 20.0],
+                                                    egui::Label::new(egui::RichText::new(id.to_string()).monospace().small())
+                                                        .selectable(true)
+                                                        .truncate(),
+                                                );
+                                                if ui.button(crate::ui::icons::COPY).on_hover_text("Copy cue ID").clicked() {
+                                                    ui.ctx().copy_text(id.to_string());
+                                                }
                                                 ui.end_row();
                                                 ui.label(egui::RichText::new("Effect ID").small().weak());
-                                                ui.add(egui::Label::new(egui::RichText::new(template.id.to_string()).monospace().small()).selectable(true));
+                                                ui.add_sized(
+                                                    [identifier_width, 20.0],
+                                                    egui::Label::new(egui::RichText::new(template.id.to_string()).monospace().small())
+                                                        .selectable(true)
+                                                        .truncate(),
+                                                );
+                                                if ui.button(crate::ui::icons::COPY).on_hover_text("Copy effect ID").clicked() {
+                                                    ui.ctx().copy_text(template.id.to_string());
+                                                }
                                                 ui.end_row();
                                             });
-                                    }
+                                        },
+                                    );
 
                                     ui.add_space(8.0);
-                                    ui.horizontal(|ui| {
-                                        if ui
-                                            .button(format!("{}  {jump_label}", crate::ui::icons::SKIP_BACK))
-                                            .clicked()
-                                        {
-                                            jump_to_cue = true;
-                                        }
-                                        ui.with_layout(
-                                            egui::Layout::right_to_left(egui::Align::Center),
-                                            |ui| {
+                                    egui::Frame::new()
+                                        .fill(ui.visuals().widgets.noninteractive.weak_bg_fill)
+                                        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                                        .corner_radius(9.0)
+                                        .inner_margin(egui::Margin::same(8))
+                                        .show(ui, |ui| {
+                                            ui.set_width(effect_controls_frame_content_width(panel_width));
+                                            ui.horizontal_wrapped(|ui| {
                                                 if ui
-                                                    .button(
-                                                        egui::RichText::new(format!(
-                                                            "{}  {delete_cue_label}",
-                                                            crate::ui::icons::TRASH
-                                                        ))
-                                                        .color(egui::Color32::from_rgb(220, 74, 74)),
+                                                    .button(format!("{}  {jump_label}", crate::ui::icons::SKIP_BACK))
+                                                    .clicked()
+                                                {
+                                                    jump_to_cue = true;
+                                                }
+                                                if ui
+                                                    .button(format!("{}  {duplicate_label}", crate::ui::icons::COPY))
+                                                    .clicked()
+                                                {
+                                                    duplicate_cue = true;
+                                                }
+                                                let destructive = egui::Color32::from_rgb(220, 74, 74);
+                                                if ui
+                                                    .add(
+                                                        egui::Button::new(
+                                                            egui::RichText::new(format!(
+                                                                "{}  {delete_cue_label}",
+                                                                crate::ui::icons::TRASH
+                                                            ))
+                                                            .color(destructive),
+                                                        )
+                                                        .fill(destructive.gamma_multiply(0.08))
+                                                        .stroke(egui::Stroke::new(1.0, destructive.gamma_multiply(0.55))),
                                                     )
                                                     .clicked()
                                                 {
                                                     delete_cue = true;
                                                 }
-                                            },
-                                        );
-                                    });
+                                            });
+                                        });
                                 }
                             } else {
                                 effect_controls_card(
@@ -10980,7 +11260,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                             if push_undo {
-                                self.app.undo_stack.push(self.app.snapshot_timeline());
+                                self.app.undo_stack.push(timeline_before_edit);
                             }
 
                             if isolate_instance {
@@ -11030,6 +11310,36 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 ui.ctx().request_repaint();
                             }
 
+                            if duplicate_cue {
+                                if let Some(instance) = self
+                                    .app
+                                    .timeline
+                                    .instances
+                                    .iter()
+                                    .find(|instance| instance.id == id)
+                                    .cloned()
+                                {
+                                    let duration_ms = self
+                                        .app
+                                        .timeline
+                                        .templates
+                                        .iter()
+                                        .find(|template| template.id == instance.effect_id)
+                                        .map(|template| template.duration_ms)
+                                        .unwrap_or(0);
+                                    self.app.undo_stack.push(self.app.snapshot_timeline());
+                                    let duplicate = crate::four_d::models::EffectInstance::new(
+                                        instance.effect_id,
+                                        instance.start_time_ms.saturating_add(duration_ms),
+                                    );
+                                    let duplicate_id = duplicate.id;
+                                    self.app.timeline.instances.push(duplicate);
+                                    self.app.selected_instance_ids.clear();
+                                    self.app.selected_instance_ids.insert(duplicate_id);
+                                    timeline_dirty = true;
+                                }
+                            }
+
                             if jump_to_cue {
                                 if let Some(instance) = self
                                     .app
@@ -11050,22 +11360,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                             if timeline_dirty {
-                                self.app.sync_timeline_engine();
+                                self.app.commit_timeline_edit();
                                 ui.ctx().request_repaint();
                             }
                         } else if selected_count > 1 {
-                            ui.horizontal(|ui| {
-                                ui.heading(self.app.tr("Effect Controls"));
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    effect_controls_badge(
-                                        ui,
-                                        crate::ui::icons::SELECTION_ALL,
-                                        format!("{selected_count} {}", self.app.tr("cues")),
-                                    );
-                                });
-                            });
-                            ui.add_space(6.0);
-
                             let mut timeline_dirty = false;
                             let mut delete_all = false;
                             let mut bulk_relay = None;
@@ -11232,11 +11530,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                             if timeline_dirty {
-                                self.app.sync_timeline_engine();
+                                self.app.commit_timeline_edit();
                             }
                         } else {
-                            ui.heading(self.app.tr("Effect Controls"));
-                            ui.add_space(6.0);
                             effect_controls_card(
                                 ui,
                                 panel_width,
@@ -11244,8 +11540,46 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 &self.app.tr("No cue selected"),
                                 Some(&self.app.tr("Select a cue on the timeline to manage it")),
                                 false,
-                                |_| {},
+                                |ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        effect_controls_badge(
+                                            ui,
+                                            crate::ui::icons::KEYBOARD,
+                                            "A",
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(self.app.tr(
+                                                "Select a hardware track and press A, or double-click its lane, to add a cue.",
+                                            ))
+                                            .small()
+                                            .weak(),
+                                        );
+                                    });
+                                },
                             );
+                        }
+                        if panel_header.previous || panel_header.next {
+                            let cue_ids = sorted_cue_ids(&self.app.timeline);
+                            if !cue_ids.is_empty() {
+                                let selected_index = cue_ids.iter().position(|cue_id| {
+                                    self.app.selected_instance_ids.contains(cue_id)
+                                });
+                                let next_index = if panel_header.previous {
+                                    selected_index
+                                        .unwrap_or(0)
+                                        .checked_sub(1)
+                                        .unwrap_or(cue_ids.len() - 1)
+                                } else {
+                                    selected_index
+                                        .map(|index| (index + 1) % cue_ids.len())
+                                        .unwrap_or(0)
+                                };
+                                self.app.selected_instance_ids.clear();
+                                self.app.selected_instance_ids.insert(cue_ids[next_index]);
+                                self.app.selected_keyframes.clear();
+                                self.app.selected_timeline_keyframe = None;
+                                ui.ctx().request_repaint();
+                            }
                         }
                     }
                     PealayerTab::EffectsLibrary => {
@@ -17880,15 +18214,7 @@ impl PealayerApp {
             }
         }
 
-        let compiled = crate::four_d::engine::compile_timeline(
-            &self.timeline,
-            &self.track_muted,
-            &self.track_soloed,
-        );
-        let _ = self
-            .engine_handle
-            .sender
-            .send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+        self.commit_timeline_edit();
 
         self.set_osd(format!("Relocated '{}' to {}", effect_name, display_name));
         true

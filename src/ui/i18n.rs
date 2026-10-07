@@ -871,6 +871,9 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "4D Cinema Editor" => "ویرایشگر سینمای چهاربعدی",
         "Active output status" => "وضعیت خروجی‌های فعال",
         "Effect templates" => "الگوهای جلوه",
+        "Select a cue to inspect and edit" => "برای بررسی و ویرایش، یک نشانه را انتخاب کنید",
+        "Timing, routing, and output" => "زمان‌بندی، مسیریابی و خروجی",
+        "Batch-edit selected cues" => "ویرایش گروهی نشانه‌های انتخاب‌شده",
         "Icon" => "نماد",
         "Search icons..." => "جست‌وجوی نمادها…",
         "List view" => "نمای فهرست",
@@ -895,10 +898,14 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Exact timeline placement and length" => "جای‌گذاری و مدت دقیق در خط زمانی",
         "Starts" => "آغاز",
         "Go to cue" => "رفتن به نشانه",
+        "Duplicate cue" => "تکثیر نشانه",
         "Untitled effect" => "جلوهٔ بی‌نام",
         "No cue selected" => "هیچ نشانه‌ای انتخاب نشده است",
         "Select a cue on the timeline to manage it" => {
             "برای مدیریت، نشانه‌ای را در خط زمانی انتخاب کنید"
+        }
+        "Select a hardware track and press A, or double-click its lane, to add a cue." => {
+            "برای افزودن نشانه، یک ترک سخت‌افزاری را انتخاب و A را فشار دهید، یا روی مسیر آن دوبار کلیک کنید."
         }
         "Cue unavailable" => "نشانه در دسترس نیست",
         "The selected cue is no longer on the timeline" => "نشانهٔ انتخاب‌شده دیگر در خط زمانی نیست",
@@ -907,7 +914,10 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Hardware macro" => "ماکروی سخت‌افزاری",
         "PCController effect" => "جلوهٔ PCController",
         "Relay sequence" => "توالی رله",
+        "Direct channel cue" => "نشانهٔ مستقیم کانال",
         "Timeline effect" => "جلوهٔ خط زمانی",
+        "Live output on" => "خروجی زنده روشن است",
+        "Live output off" => "خروجی زنده خاموش است",
         "No live hardware outputs" => "هیچ خروجی سخت‌افزاری زنده‌ای در دسترس نیست",
         "Output" => "خروجی",
         "Set hardware target" => "تعیین مقصد سخت‌افزاری",
