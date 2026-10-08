@@ -90,7 +90,9 @@ impl AutomaticClaim {
 }
 
 fn invalidate_coordinator_session(plan: &mut super::media_timeline::PreparedTimeline) {
-    if plan.has_items() { plan.revision = plan.revision.saturating_add(1); }
+    // Even an acknowledged empty plan has a coordinator revision; do not
+    // reuse it after losing that coordinator session.
+    if plan.revision != 0 { plan.revision = plan.revision.saturating_add(1); }
     plan.acknowledged_revision = 0;
     plan.clock_ack_revision = 0;
     plan.clock_ack_epoch = 0;
