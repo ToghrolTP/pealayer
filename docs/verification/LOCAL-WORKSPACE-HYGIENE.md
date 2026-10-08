@@ -50,7 +50,17 @@ directory, and the next candidate package uses canonical staging.
 6. Audit/push useful changes before handoff. No new worktree is needed just to
    render Preferences or run a focused test. Refresh historical hashes/health.
 
-On this pass Cafe was reachable and healthy, but obtaining its exact runtime for
-destination-compatible packaging stalled. Partial DLL downloads are invalid;
-their hash and byte count did not match the installed Cafe runtime. Do not reuse
-them as a successful transfer.
+Cafe's first runtime download stalled, then a bounded HTTP range resume completed
+it without re-downloading the entire DLL. Its final size/hash matched the live
+peer. Partial downloads are invalid until independently checked. The identical
+import-library hash allowed the David-built executable to be smoke-tested with
+Cafe's actual runtime in separate canonical staging. Hardlinks avoided copying
+that executable/DLL again. This does not imply the workstation's default runtime
+profile was changed; it was not.
+
+The peer updater received and verified that candidate, but the old Cafe build
+stayed in `restarting` without consuming Quit, including an explicit native IPC
+quit request. No healthy process was force-killed and no live executable was
+manually overwritten. A human was asked to exit the old application normally.
+Recheck the live manifest before reporting deployment complete; upload/verification
+is not restart/acceptance. This checkpoint remains pending until that happens.
