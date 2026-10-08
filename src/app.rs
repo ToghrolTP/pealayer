@@ -3735,7 +3735,7 @@ impl PealayerApp {
         // Dialogs and physical client-window placement remain local. Everything
         // that operates the session goes through the authority's unified engine.
         if let Some(client)=crate::peer::client() && !crate::peer::mirroring()
-            && !matches!(&command,InteropCommand::OpenPreferences|InteropCommand::OpenMediaInformation|InteropCommand::OpenBoardInformation{..}|InteropCommand::OpenRfManager|InteropCommand::Activate|InteropCommand::Minimize|InteropCommand::Maximize|InteropCommand::Restore|InteropCommand::SetFullscreen{..}|InteropCommand::ToggleFullscreen|InteropCommand::GetStatus) {
+            && !matches!(&command,InteropCommand::QuitLocal|InteropCommand::OpenPreferences|InteropCommand::OpenMediaInformation|InteropCommand::OpenBoardInformation{..}|InteropCommand::OpenRfManager|InteropCommand::Activate|InteropCommand::Minimize|InteropCommand::Maximize|InteropCommand::Restore|InteropCommand::SetFullscreen{..}|InteropCommand::ToggleFullscreen|InteropCommand::GetStatus) {
             if matches!(&command,InteropCommand::OpenMediaFolder){crate::ui::peer_browser::open(ctx,crate::ui::peer_browser::Purpose::Media,None);return;}
             if let Err(error)=serde_json::to_value(&command).map_err(|error|error.to_string()).and_then(|value|client.queue("/api/player/command",value)){self.show_error=Some(error);}
             return;
@@ -3940,7 +3940,7 @@ impl PealayerApp {
             InteropCommand::DismissToast { id } => {
                 crate::messaging::dismiss(&id); ctx.request_repaint(); return;
             }
-            InteropCommand::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            InteropCommand::Quit | InteropCommand::QuitLocal => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             InteropCommand::SetWorkspace { profile } => {
                 self.restore_workspace_profile(ctx, &profile);
             }

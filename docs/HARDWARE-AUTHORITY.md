@@ -27,6 +27,8 @@ failed**, and **Hardware command rejected**. They carry the actual transport or
 controller error and shared warning icons. A stale peer link pauses only its
 local preview; it never forwards Pause to the server. Reconnecting a monitor no
 longer issues an implicit effect-stop command.
+The updater uses a process-local shutdown command rather than forwarding Quit
+to the authority. Session Quit still deliberately targets the remote server.
 
 Verification and deployment results belong in the dated deployment checkpoint.
 Do not infer that a source build, test, or staged package is installed.

@@ -177,7 +177,7 @@ impl UpdateManager {
         command_tx: &std::sync::mpsc::Sender<crate::platform::interop::InteropCommand>,
     ) {
         if command_tx
-            .send(crate::platform::interop::InteropCommand::Quit)
+            .send(crate::platform::interop::InteropCommand::QuitLocal)
             .is_ok()
         {
             // An idle/paused eframe window may have no more frames scheduled.
@@ -1896,7 +1896,7 @@ mod tests {
         manager.dispatch_quit(&sender);
         assert!(matches!(
             receiver.try_recv(),
-            Ok(crate::platform::interop::InteropCommand::Quit)
+            Ok(crate::platform::interop::InteropCommand::QuitLocal)
         ));
         assert!(
             wakeups.load(Ordering::Relaxed) > previous,

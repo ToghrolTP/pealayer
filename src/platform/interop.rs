@@ -198,6 +198,9 @@ pub enum InteropCommand {
     },
     HideOsd,
     Quit,
+    /// Internal updater lifecycle: close this process, never its remote authority.
+    #[serde(skip)]
+    QuitLocal,
     SetWorkspace {
         profile: String,
     },
