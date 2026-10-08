@@ -2,6 +2,12 @@
 
 Owning tracker: [issue #80](https://github.com/ToghrolTP/pealayer/issues/80). Post subsequent checkpoints and child-issue links there.
 
+Current continuation: [production deployment and consolidation checkpoint](DEPLOYMENT-AND-MERGE-CHECKPOINT.md).
+It reconciles the latest Preferences requests, Cafe's installed candidate and
+controller-contract playback blocker, Erfan's staged update, merged PRs #82/#83,
+and remaining CI/branch gates. Older observations below are historical and must
+not replace that checkpoint or a fresh live check.
+
 ## Scope and evidence (2026-10-08)
 
 This is a checkpoint, not a claim that every requested feature is finished or that an entire Windows machine can be erased. GitHub owns source/history; private settings, artwork, media references, and host runtimes must be backed up separately. Never upload credentials, private media URLs, machine configuration, logs, caches, or generated binaries to source control.

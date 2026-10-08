@@ -58,9 +58,12 @@ Cafe's actual runtime in separate canonical staging. Hardlinks avoided copying
 that executable/DLL again. This does not imply the workstation's default runtime
 profile was changed; it was not.
 
-The peer updater received and verified that candidate, but the old Cafe build
-stayed in `restarting` without consuming Quit, including an explicit native IPC
-quit request. No healthy process was force-killed and no live executable was
-manually overwritten. A human was asked to exit the old application normally.
-Recheck the live manifest before reporting deployment complete; upload/verification
-is not restart/acceptance. This checkpoint remains pending until that happens.
+The first peer update stalled at graceful shutdown. The subsequent pass preserved
+a private hang dump, used the user's standing permission for the exact hung
+process after IPC/HTTP Quit failed, and resumed the already verified native
+update helper in the signed-in desktop session. The candidate is now installed;
+its live manifest and saved paused position were verified. Playback acceptance
+still fails because the running PCController lacks the media-clock RPC. See
+[deployment and merge checkpoint](DEPLOYMENT-AND-MERGE-CHECKPOINT.md) for current
+evidence and Erfan-Gaming's separately staged, policy-blocked update. Installation
+and smoke tests must not be substituted for successful playback acceptance.
