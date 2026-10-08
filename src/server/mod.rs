@@ -408,7 +408,7 @@ fn handle_connection(mut stream: TcpStream, state: ControlState) {
             Ok(request) if !browser_origin_allowed(&request.headers, stream.local_addr().ok()) => {
                 HttpResponse::text(403, "Forbidden", "Browser origin is not permitted")
             }
-            Ok(request) if crate::peer::active() && request.target.starts_with("/api/") && request.target.split('?').next()!=Some("/api/client/status") => {
+            Ok(request) if crate::peer::active() && peer_relay_route(&request.target) => {
                 let _ = proxy_http(&request, &mut stream);
                 return;
             }
@@ -430,6 +430,14 @@ fn handle_connection(mut stream: TcpStream, state: ControlState) {
         };
         let _ = write_http_response(&mut stream, response);
     }
+}
+
+fn peer_relay_route(target: &str) -> bool {
+    let path = target.split('?').next().unwrap_or(target);
+    // Session commands operate the authority. Updating this executable and
+    // inspecting this consumer are process-local, never updates of its server.
+    path.starts_with("/api/") && path != "/api/client/status"
+        && !path.starts_with("/api/update/")
 }
 
 fn handle_websocket(stream: TcpStream, state: ControlState) {
@@ -1642,6 +1650,15 @@ fn mime_for_path(path: &std::path::Path) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn remote_consumer_updates_stay_local_while_session_commands_relay() {
+        for target in ["/api/update/manifest", "/api/update/begin", "/api/update/chunk?id=one", "/api/update/finish", "/api/update/status", "/api/update/from-url", "/api/client/status"] {
+            assert!(!super::peer_relay_route(target), "{target}");
+        }
+        for target in ["/api/config", "/api/player/command", "/api/rpc", "/api/peer/session", "/api/fs/file?path=media"] {
+            assert!(super::peer_relay_route(target), "{target}");
+        }
+    }
     use super::*;
 
     #[test]

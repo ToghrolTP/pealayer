@@ -57,6 +57,9 @@ local preview; it never forwards Pause to the server. Reconnecting a monitor no
 longer issues an implicit effect-stop command.
 The updater uses a process-local shutdown command rather than forwarding Quit
 to the authority. Session Quit still deliberately targets the remote server.
+The consumer's `/api/update/*` endpoints likewise stay local; session APIs,
+Preferences and hardware controls still relay to the authority. Inspect the
+destination's actual runtime manifest before submitting an update.
 
 Verification and deployment results belong in the dated deployment checkpoint.
 Do not infer that a source build, test, or staged package is installed.
