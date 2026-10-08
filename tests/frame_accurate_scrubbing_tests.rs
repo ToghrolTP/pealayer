@@ -2,7 +2,7 @@ use pealayer::mpv::frame_cache::{CachedFrame, FrameCache};
 use pealayer::mpv::seek::{ScrubResult, SeekBackend, SeekController, SeekMode};
 use pealayer::ui::controls::resolve_display_time;
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Default)]
 struct MockSeekBackend {
@@ -97,12 +97,20 @@ fn test_rapid_scrub_stress_across_cache_boundaries() {
     let commit_id = controller.request_commit(40.0);
     assert!(commit_id > 0);
 
-    // Allow background worker to process dispatched seeks
-    std::thread::sleep(Duration::from_millis(50));
-    let completed = controller.take_completed();
+    // Allow background worker to process dispatched seeks deterministically
+    let start = Instant::now();
+    let timeout = Duration::from_secs(2);
+    let mut completed = Vec::new();
+    while start.elapsed() < timeout {
+        completed.extend(controller.take_completed());
+        if !completed.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
     assert!(
         !completed.is_empty(),
-        "Backend worker should have processed seeks"
+        "Backend worker should have processed seeks within timeout"
     );
 }
 
@@ -256,9 +264,21 @@ fn test_edge_cases_non_finite_and_negative_seek_times() {
         assert!(commit_id > 0);
     }
 
-    std::thread::sleep(Duration::from_millis(50));
-    let completed = controller.take_completed();
-    assert!(!completed.is_empty());
+    // Poll deterministically for backend worker completion
+    let start = Instant::now();
+    let timeout = Duration::from_secs(2);
+    let mut completed = Vec::new();
+    while start.elapsed() < timeout {
+        completed.extend(controller.take_completed());
+        if !completed.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        !completed.is_empty(),
+        "Backend worker should have processed edge case seeks within timeout"
+    );
 
     // 5. Display time resolution with edge values
     assert_eq!(resolve_display_time(Some(0.0), 10.0), 0.0);

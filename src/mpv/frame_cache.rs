@@ -90,11 +90,10 @@ impl FrameCache {
                 .saturating_sub(self.frames[pos].byte_size);
             self.current_bytes += frame.byte_size;
             self.frames[pos] = frame;
-            return;
+        } else {
+            self.current_bytes += frame.byte_size;
+            self.frames.push(frame);
         }
-
-        self.current_bytes += frame.byte_size;
-        self.frames.push(frame);
 
         while self.current_bytes > self.max_bytes && self.frames.len() > 1 {
             let furthest_idx = self

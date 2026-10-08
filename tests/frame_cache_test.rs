@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use pealayer::mpv::frame_cache::{CachedFrame, FrameCache};
+use std::sync::Arc;
 
 #[test]
 fn test_frame_cache_exact_and_nearest_queries() {
@@ -100,4 +100,60 @@ fn test_app_initializes_and_clears_frame_cache() {
 
     cache.write().unwrap().clear();
     assert_eq!(cache.read().unwrap().len(), 0);
+}
+
+#[test]
+fn test_frame_cache_replacement_enforces_eviction() {
+    // Budget: 100 KB
+    let max_bytes = 100 * 1024;
+    let mut cache = FrameCache::new(max_bytes);
+
+    // Two frames of ~40 KB each (total ~80 KB < 100 KB)
+    let f1 = CachedFrame::new(10.0, 100, 100, vec![1u8; 40 * 1024]);
+    let f2 = CachedFrame::new(20.0, 100, 100, vec![2u8; 40 * 1024]);
+
+    let playhead = 10.0;
+    cache.insert(f1, playhead);
+    cache.insert(f2, playhead);
+    assert_eq!(cache.len(), 2);
+    assert!(cache.current_bytes() <= max_bytes);
+
+    // Replace f1 with a larger frame (~70 KB)
+    // New total before eviction: 70 KB + 40 KB = 110 KB > 100 KB budget
+    let f1_larger = CachedFrame::new(10.0001, 100, 100, vec![3u8; 70 * 1024]);
+    cache.insert(f1_larger, playhead);
+
+    // Eviction must trigger: f2 (at 20.0, furthest from playhead 10.0) is evicted
+    assert!(
+        cache.current_bytes() <= cache.max_bytes(),
+        "Cache byte size {} must not exceed max {}",
+        cache.current_bytes(),
+        cache.max_bytes()
+    );
+    assert_eq!(cache.len(), 1);
+    assert!(
+        cache.query_exact(10.0, 0.01).is_some(),
+        "Replaced frame near playhead must be retained"
+    );
+    assert!(
+        cache.query_exact(20.0, 0.01).is_none(),
+        "Furthest frame must have been evicted"
+    );
+
+    // Also verify replacement where the replaced frame itself is furthest from playhead
+    let mut cache2 = FrameCache::new(max_bytes);
+    let f_near = CachedFrame::new(20.0, 100, 100, vec![1u8; 40 * 1024]);
+    let f_far = CachedFrame::new(5.0, 100, 100, vec![2u8; 40 * 1024]);
+    let playhead2 = 20.0;
+    cache2.insert(f_near, playhead2);
+    cache2.insert(f_far, playhead2);
+    assert_eq!(cache2.len(), 2);
+
+    // Replace f_far with larger frame when playhead is at 20.0
+    let f_far_larger = CachedFrame::new(5.0001, 100, 100, vec![3u8; 70 * 1024]);
+    cache2.insert(f_far_larger, playhead2);
+    assert!(cache2.current_bytes() <= cache2.max_bytes());
+    assert_eq!(cache2.len(), 1);
+    assert!(cache2.query_exact(20.0, 0.01).is_some());
+    assert!(cache2.query_exact(5.0, 0.01).is_none());
 }
