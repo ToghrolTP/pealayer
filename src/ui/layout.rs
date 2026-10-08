@@ -1,4 +1,5 @@
 use crate::app::{EffectDragPayload, PealayerApp};
+use crate::config::TimelineToolbarAction;
 use eframe::egui;
 use egui_dock::TabViewer;
 
@@ -498,6 +499,10 @@ enum TimelineWheelAction {
     Zoom(f32),
     HorizontalScroll(f32),
     VerticalScroll(f32),
+    MultiGesture {
+        zoom_factor: f32,
+        translation: egui::Vec2,
+    },
 }
 
 fn timeline_wheel_action(
@@ -534,12 +539,44 @@ fn timeline_wheel_modifiers(input: &egui::InputState) -> egui::Modifiers {
 fn timeline_wheel_over_surface(ui: &egui::Ui, surface: egui::Rect,
     behavior: crate::config::TimelineWheelBehavior) -> Option<(TimelineWheelAction, f32)> {
     if !ui.rect_contains_pointer(surface) { return None; }
+    // Surface-class touchscreens expose pan and pinch together. Preserve both
+    // axes and keep the content under the center of the fingers.
+    if let Some(touch) = ui.input(|input| input.multi_touch())
+        && surface.contains(touch.center_pos)
+        && ((touch.zoom_delta - 1.0).abs() > f32::EPSILON
+            || touch.translation_delta != egui::Vec2::ZERO)
+    {
+        ui.ctx().input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
+        return Some((TimelineWheelAction::MultiGesture {
+            zoom_factor: touch.zoom_delta.max(0.01),
+            translation: touch.translation_delta,
+        }, touch.center_pos.x));
+    }
+    // Precision-trackpad pinch is native Event::Zoom on Windows and macOS.
+    if let Some(zoom_factor) = ui.input(|input| timeline_pinch_factor(&input.events)) {
+        ui.ctx().input_mut(|input| {
+            input.smooth_scroll_delta = egui::Vec2::ZERO;
+            input.events.retain(|event| !matches!(event, egui::Event::Zoom(_)));
+        });
+        return Some((TimelineWheelAction::MultiGesture {
+            zoom_factor,
+            translation: egui::Vec2::ZERO,
+        }, ui.ctx().pointer_latest_pos().map_or(surface.center().x, |pos| pos.x)));
+    }
     let line_speed = ui.ctx().options(|options| options.input_options.line_scroll_speed);
     let delta = ui.input(|input| timeline_wheel_delta(&input.events, line_speed, surface.height()));
     // None also consumes the gesture, rather than falling through to ScrollArea.
     ui.ctx().input_mut(|input| input.smooth_scroll_delta = egui::Vec2::ZERO);
     timeline_wheel_action(delta, behavior).map(|action| (action,
         ui.ctx().pointer_latest_pos().map_or(surface.left(), |pos| pos.x)))
+}
+
+fn timeline_pinch_factor(events: &[egui::Event]) -> Option<f32> {
+    let factor = events.iter().filter_map(|event| match event {
+        egui::Event::Zoom(factor) if factor.is_finite() && *factor > 0.0 => Some(*factor),
+        _ => None,
+    }).product::<f32>();
+    ((factor - 1.0).abs() > f32::EPSILON).then_some(factor)
 }
 
 // Read the original axes for every modifier: egui otherwise converts Ctrl to zoom
@@ -628,6 +665,113 @@ pub struct TimelineZoomAnchor {
     pub media_time_seconds: f64,
     pub duration_seconds: f64,
     pub viewport_width: f32,
+}
+
+fn timeline_follow_target_offset(
+    current_offset: f32,
+    playhead_x: f32,
+    content_width: f32,
+    viewport_width: f32,
+) -> Option<f32> {
+    if viewport_width <= 1.0 || content_width <= viewport_width {
+        return None;
+    }
+    let position_in_view = playhead_x - current_offset;
+    // Preserve useful look-ahead instead of waiting for the playhead to touch
+    // the edge. A backward seek outside the viewport is recovered as well.
+    let target = if position_in_view >= viewport_width * 0.82 {
+        playhead_x - viewport_width * 0.62
+    } else if position_in_view < 0.0 {
+        playhead_x - viewport_width * 0.20
+    } else {
+        return None;
+    };
+    Some(target.clamp(0.0, (content_width - viewport_width).max(0.0)))
+}
+
+fn timeline_toolbar_action_label(action: TimelineToolbarAction) -> &'static str {
+    match action {
+        TimelineToolbarAction::ZoomIn => "Zoom in",
+        TimelineToolbarAction::ZoomOut => "Zoom out",
+        TimelineToolbarAction::PanLeft => "Pan left",
+        TimelineToolbarAction::PanRight => "Pan right",
+        TimelineToolbarAction::BringPlayheadIntoView => "Bring playhead into view",
+        TimelineToolbarAction::FollowPlayhead => "Keep playhead in view",
+        TimelineToolbarAction::AddKeyframe => "Add keyframe at playhead",
+        TimelineToolbarAction::PreviousCue => "Select previous cue",
+        TimelineToolbarAction::NextCue => "Select next cue",
+        TimelineToolbarAction::NudgeCueLeft => "Nudge selected cues left",
+        TimelineToolbarAction::NudgeCueRight => "Nudge selected cues right",
+        TimelineToolbarAction::SelectAll => "Select all cues",
+        TimelineToolbarAction::ClearSelection => "Clear selection",
+        TimelineToolbarAction::DeleteSelection => "Delete selection",
+    }
+}
+
+fn timeline_toolbar_action_icon(action: TimelineToolbarAction) -> &'static str {
+    match action {
+        TimelineToolbarAction::ZoomIn => crate::ui::icons::PLUS,
+        TimelineToolbarAction::ZoomOut => crate::ui::icons::MINUS,
+        TimelineToolbarAction::PanLeft => crate::ui::icons::CARET_LEFT,
+        TimelineToolbarAction::PanRight => crate::ui::icons::CARET_RIGHT,
+        TimelineToolbarAction::BringPlayheadIntoView => crate::ui::icons::TARGET,
+        TimelineToolbarAction::FollowPlayhead => crate::ui::icons::LOCK,
+        TimelineToolbarAction::AddKeyframe => crate::ui::icons::DIAMOND,
+        TimelineToolbarAction::PreviousCue => crate::ui::icons::SKIP_BACK,
+        TimelineToolbarAction::NextCue => crate::ui::icons::SKIP_FORWARD,
+        TimelineToolbarAction::NudgeCueLeft => crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+        TimelineToolbarAction::NudgeCueRight => crate::ui::icons::ARROW_CLOCKWISE,
+        TimelineToolbarAction::SelectAll => crate::ui::icons::SELECTION_ALL,
+        TimelineToolbarAction::ClearSelection => crate::ui::icons::ERASER,
+        TimelineToolbarAction::DeleteSelection => crate::ui::icons::TRASH,
+    }
+}
+
+fn timeline_toolbar_action_shortcut(action: TimelineToolbarAction) -> &'static str {
+    match action {
+        TimelineToolbarAction::ZoomIn => "+ / =",
+        TimelineToolbarAction::ZoomOut => "-",
+        TimelineToolbarAction::PanLeft => "Shift+Left",
+        TimelineToolbarAction::PanRight => "Shift+Right",
+        TimelineToolbarAction::BringPlayheadIntoView => "C",
+        TimelineToolbarAction::FollowPlayhead => "Ctrl+Shift+L",
+        TimelineToolbarAction::AddKeyframe => "K",
+        TimelineToolbarAction::PreviousCue => "Shift+Tab",
+        TimelineToolbarAction::NextCue => "Tab",
+        TimelineToolbarAction::NudgeCueLeft => "Alt+Left",
+        TimelineToolbarAction::NudgeCueRight => "Alt+Right",
+        TimelineToolbarAction::SelectAll => "Ctrl+A",
+        TimelineToolbarAction::ClearSelection => "Esc",
+        TimelineToolbarAction::DeleteSelection => "Delete",
+    }
+}
+
+fn timeline_two_line_menu_label(
+    ui: &egui::Ui,
+    icon: &str,
+    label: &str,
+    detail: &str,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        &format!("{icon} {label}"),
+        0.0,
+        egui::TextFormat {
+            font_id: egui::TextStyle::Button.resolve(ui.style()),
+            color: ui.visuals().text_color(),
+            ..Default::default()
+        },
+    );
+    job.append(
+        &format!("\n   {detail}"),
+        0.0,
+        egui::TextFormat {
+            font_id: egui::TextStyle::Small.resolve(ui.style()),
+            color: ui.visuals().weak_text_color(),
+            ..Default::default()
+        },
+    );
+    job
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -852,6 +996,8 @@ fn effect_library_card_header(
     id: egui::Id,
     icon: &str,
     title: &str,
+    primary_action_icon: &str,
+    primary_action_enabled: bool,
     tooltips: [&str; 7],
 ) -> EffectCardHeaderResponse {
     ui.horizontal(|ui| {
@@ -933,10 +1079,13 @@ fn effect_library_card_header(
                         )
                         .on_hover_text(tooltips[4]);
                     let run = ui
-                        .add_sized(
-                            [action_button_width, 24.0],
-                            egui::Button::new(crate::ui::icons::PLAY).frame(false),
-                        )
+                        .add_enabled_ui(primary_action_enabled, |ui| {
+                            ui.add_sized(
+                                [action_button_width, 24.0],
+                                egui::Button::new(primary_action_icon).frame(false),
+                            )
+                        })
+                        .inner
                         .on_hover_text(tooltips[3]);
                     let rename = ui
                         .add_sized(
@@ -1003,7 +1152,15 @@ fn effect_group_header<R>(
             let content_width = effects_frame_content_width(outer_width);
             ui.set_width(content_width);
             add_contents(ui)
-        })
+    })
+}
+
+fn effect_group_disclosure_icon(open: bool, count: usize) -> Option<&'static str> {
+    (count > 0).then_some(if open {
+        crate::ui::icons::CARET_DOWN
+    } else {
+        crate::ui::icons::CARET_RIGHT
+    })
 }
 
 fn effect_group_action_header(
@@ -1015,6 +1172,7 @@ fn effect_group_action_header(
     count: usize,
     add_tooltip: &str,
 ) -> (egui::Response, egui::Response) {
+    let empty = count == 0;
     effect_group_header(ui, outer_width, |ui| {
         ui.horizontal(|ui| {
             let spacing = ui.spacing().item_spacing.x;
@@ -1037,17 +1195,28 @@ fn effect_group_action_header(
                     |ui| {
                         ui.style_mut().interaction.selectable_labels = false;
                         ui.set_width(title_width);
-                        ui.label(if open {
-                            crate::ui::icons::CARET_DOWN
-                        } else {
-                            crate::ui::icons::CARET_RIGHT
-                        });
-                        ui.label(icon);
-                        ui.add(egui::Label::new(egui::RichText::new(title).strong()).truncate());
+                        if let Some(disclosure) = effect_group_disclosure_icon(open, count) {
+                            ui.label(disclosure);
+                        }
+                        let icon_text = egui::RichText::new(icon);
+                        ui.label(if empty { icon_text.weak() } else { icon_text });
+                        let title_text = egui::RichText::new(title).strong();
+                        ui.add(
+                            egui::Label::new(if empty {
+                                title_text.weak()
+                            } else {
+                                title_text
+                            })
+                            .truncate(),
+                        );
                     },
                 )
                 .response
-                .interact(egui::Sense::click());
+                .interact(if empty {
+                    egui::Sense::hover()
+                } else {
+                    egui::Sense::click()
+                });
             let add_response = ui
                 .add_sized([24.0, 24.0], egui::Button::new(crate::ui::icons::PLUS))
                 .on_hover_text(add_tooltip);
@@ -1057,7 +1226,8 @@ fn effect_group_action_header(
                 .corner_radius(9.0)
                 .inner_margin(egui::Margin::symmetric(7, 2))
                 .show(ui, |ui| {
-                    ui.label(egui::RichText::new(count_text).small().strong());
+                    let count_text = egui::RichText::new(count_text).small().strong();
+                    ui.label(if empty { count_text.weak() } else { count_text });
                 });
             (title_response, add_response)
         })
@@ -1457,11 +1627,12 @@ fn send_pwm_raw_with(
     channel: u8,
     raw: u16,
 ) {
+    let percent = f64::from(raw.min(4095)) * 100.0 / 4095.0;
     let _ = sender.send(crate::four_d::engine::EngineMessage::CoalescedControllerIntent {
         created:std::time::Instant::now(),
         control_key: format!("pwm.{channel}"),
         method: "controller.pwm.set".to_string(),
-        params: serde_json::json!({"channel": channel, "value": raw}),
+        params: serde_json::json!({"channel": channel, "percent": percent}),
         refresh_catalog: false,
     });
 }
@@ -1567,7 +1738,11 @@ fn draw_pwm_card_editor(
     } else {
         telemetry_raw
     };
-    let mut percent = pwm_percent(displayed_raw);
+    let mut percent = if awaiting_readback {
+        pwm_percent(displayed_raw)
+    } else {
+        capabilities.pwm_percent(channel.id, displayed_raw)
+    };
     let response = draw_pwm_editor_row_sized(ui, &mut percent, !control.locked, row_width);
     let raw = pwm_raw(percent);
     ui.data_mut(|data| data.insert_temp(value_id, raw));
@@ -1604,7 +1779,7 @@ fn effect_preset_reference(preset: &crate::app::EffectPreset) -> Option<String> 
             .as_ref()
             .map(|effect| effect.id.trim())
             .filter(|id| !id.is_empty())
-            .map(|id| format!("strip:{id}")),
+            .map(|id| format!("effect:{id}")),
     }
 }
 
@@ -1748,6 +1923,53 @@ struct TimelineTrackRow {
     kind: TimelineTrackKind,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TimelineCuePlacement {
+    track_index: usize,
+    relay_id: Option<u8>,
+    analog_index: Option<usize>,
+    selected_track_key: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TimelineMarqueeMode {
+    /// CAD-style window selection: the cue must be completely enclosed.
+    Window,
+    /// CAD-style crossing selection: touching any part of the cue is enough.
+    Crossing,
+}
+
+fn timeline_marquee_mode(origin: egui::Pos2, current: egui::Pos2) -> TimelineMarqueeMode {
+    if current.x >= origin.x {
+        TimelineMarqueeMode::Window
+    } else {
+        TimelineMarqueeMode::Crossing
+    }
+}
+
+fn timeline_marquee_selects_rect(
+    marquee: egui::Rect,
+    candidate: egui::Rect,
+    mode: TimelineMarqueeMode,
+) -> bool {
+    match mode {
+        TimelineMarqueeMode::Window => {
+            marquee.contains(candidate.min) && marquee.contains(candidate.max)
+        }
+        TimelineMarqueeMode::Crossing => marquee.intersects(candidate),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TimelineTrackPatch {
+    pub linked: Option<bool>,
+    pub visible: Option<bool>,
+    pub muted: Option<bool>,
+    pub soloed: Option<bool>,
+    pub locked: Option<bool>,
+    pub selected: Option<bool>,
+}
+
 fn timeline_track_row_id(key: &str) -> egui::Id {
     egui::Id::new(("timeline_track_row", key))
 }
@@ -1829,6 +2051,129 @@ fn manage_timeline_track(app: &mut PealayerApp, row: &TimelineTrackRow) {
         TimelineTrackKind::Video(_) => app.open_or_focus_tab(PealayerTab::ProgramMonitor),
         TimelineTrackKind::Relay(_) | TimelineTrackKind::Hardware(_) => {}
     }
+}
+
+pub(crate) fn manage_timeline_track_by_key(
+    app: &mut PealayerApp,
+    key: &str,
+) -> Result<(), String> {
+    let row = all_timeline_track_rows(app)
+        .into_iter()
+        .find(|row| row.key == key)
+        .ok_or_else(|| format!("Timeline track '{key}' is no longer available"))?;
+    manage_timeline_track(app, &row);
+    Ok(())
+}
+
+pub(crate) fn update_timeline_track(
+    app: &mut PealayerApp,
+    key: &str,
+    patch: TimelineTrackPatch,
+) -> Result<(), String> {
+    let row = all_timeline_track_rows(app)
+        .into_iter()
+        .find(|row| row.key == key)
+        .ok_or_else(|| format!("Timeline track '{key}' is no longer available"))?;
+
+    let analog_channel = row
+        .control_key
+        .as_deref()
+        .and_then(|control_key| control_key.strip_prefix("pwm."))
+        .and_then(|channel| channel.parse::<u8>().ok());
+    let supports_audio_mute = matches!(row.kind, TimelineTrackKind::Audio(_));
+    let supports_channel_state = !row.relay_ids.is_empty() || analog_channel.is_some();
+
+    if patch.muted.is_some() && !supports_channel_state && !supports_audio_mute {
+        return Err(format!("'{}' does not support mute", row.name));
+    }
+    if (patch.soloed.is_some() || patch.locked.is_some()) && !supports_channel_state {
+        return Err(format!("'{}' does not support solo or lock", row.name));
+    }
+
+    if let Some(linked) = patch.linked {
+        app.set_timeline_track_linked(key, linked);
+    }
+    if let Some(visible) = patch.visible {
+        app.set_timeline_track_visible(key, visible);
+    }
+    if patch.selected == Some(true) {
+        app.selected_timeline_track = Some(key.to_string());
+    } else if patch.selected == Some(false)
+        && app.selected_timeline_track.as_deref() == Some(key)
+    {
+        app.selected_timeline_track = None;
+    }
+
+    let mut engine_changed = false;
+    if let Some(muted) = patch.muted {
+        if supports_audio_mute {
+            app.set_audio_muted(muted);
+        }
+        for relay in &row.relay_ids {
+            if muted {
+                app.track_muted.insert(*relay);
+            } else {
+                app.track_muted.remove(relay);
+            }
+            engine_changed = true;
+        }
+        if let Some(channel) = analog_channel
+            && let Some(track) = app
+                .timeline
+                .analog_tracks
+                .iter_mut()
+                .find(|track| track.channel == channel)
+        {
+            track.muted = muted;
+            engine_changed = true;
+        }
+    }
+    if let Some(soloed) = patch.soloed {
+        for relay in &row.relay_ids {
+            if soloed {
+                app.track_soloed.insert(*relay);
+            } else {
+                app.track_soloed.remove(relay);
+            }
+            engine_changed = true;
+        }
+        if let Some(channel) = analog_channel
+            && let Some(track) = app
+                .timeline
+                .analog_tracks
+                .iter_mut()
+                .find(|track| track.channel == channel)
+        {
+            track.soloed = soloed;
+            engine_changed = true;
+        }
+    }
+    if let Some(locked) = patch.locked {
+        for relay in &row.relay_ids {
+            if locked {
+                app.track_locked.insert(*relay);
+            } else {
+                app.track_locked.remove(relay);
+            }
+        }
+        if let Some(channel) = analog_channel
+            && let Some(track) = app
+                .timeline
+                .analog_tracks
+                .iter_mut()
+                .find(|track| track.channel == channel)
+        {
+            track.locked = locked;
+            if locked {
+                track.armed = false;
+            }
+            engine_changed = true;
+        }
+    }
+    if engine_changed {
+        app.sync_timeline_engine();
+    }
+    Ok(())
 }
 
 fn media_track_key(row: &TimelineTrackRow) -> Option<crate::app::MediaTrackKey> {
@@ -2239,6 +2584,107 @@ fn all_timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
     rows
 }
 
+/// Project the native timeline's authoritative row model into the shared Web
+/// status contract. Keeping this beside `all_timeline_track_rows` prevents the
+/// two surfaces from independently inventing track visibility or ordering.
+pub(crate) fn web_timeline_tracks(
+    app: &PealayerApp,
+) -> Vec<crate::platform::interop::WebTimelineTrack> {
+    all_timeline_track_rows(app)
+        .into_iter()
+        .map(|row| {
+            let analog_track = row
+                .control_key
+                .as_deref()
+                .and_then(|control_key| control_key.strip_prefix("pwm."))
+                .and_then(|channel| channel.parse::<u8>().ok())
+                .and_then(|channel| {
+                    app.timeline
+                        .analog_tracks
+                        .iter()
+                        .find(|track| track.channel == channel)
+                });
+            let is_audio = matches!(&row.kind, TimelineTrackKind::Audio(_));
+            let supports_channel_state = !row.relay_ids.is_empty() || analog_track.is_some();
+            let muted = if is_audio {
+                app.is_muted
+            } else if !row.relay_ids.is_empty() {
+                row.relay_ids
+                    .iter()
+                    .all(|relay| app.track_muted.contains(relay))
+            } else {
+                analog_track.is_some_and(|track| track.muted)
+            };
+            let soloed = if !row.relay_ids.is_empty() {
+                row.relay_ids
+                    .iter()
+                    .all(|relay| app.track_soloed.contains(relay))
+            } else {
+                analog_track.is_some_and(|track| track.soloed)
+            };
+            let locked = if !row.relay_ids.is_empty() {
+                row.relay_ids
+                    .iter()
+                    .all(|relay| app.track_locked.contains(relay))
+            } else {
+                analog_track.is_some_and(|track| track.locked)
+            };
+            let manageable = row.control_key.is_some()
+                || matches!(
+                    &row.kind,
+                    TimelineTrackKind::Video(_)
+                        | TimelineTrackKind::Audio(_)
+                        | TimelineTrackKind::Subtitle(_)
+                        | TimelineTrackKind::ControllerEffect(_)
+                );
+            let selected = app.selected_timeline_track.as_deref() == Some(row.key.as_str());
+            let (kind, lane) = match &row.kind {
+                TimelineTrackKind::Video(_) => ("video".to_string(), None),
+                TimelineTrackKind::Audio(_) => ("audio".to_string(), None),
+                TimelineTrackKind::Subtitle(_) => ("subtitle".to_string(), None),
+                TimelineTrackKind::ControllerEffect(lane) => (
+                    "effect".to_string(),
+                    Some(match *lane {
+                        crate::four_d::models::ControllerEffectLane::Motion => "motion",
+                        crate::four_d::models::ControllerEffectLane::Relay => "relay",
+                        crate::four_d::models::ControllerEffectLane::Pwm => "pwm",
+                        crate::four_d::models::ControllerEffectLane::Lighting => "lighting",
+                        crate::four_d::models::ControllerEffectLane::Display => "display",
+                        crate::four_d::models::ControllerEffectLane::Rf => "rf",
+                        crate::four_d::models::ControllerEffectLane::Audio => "audio",
+                        crate::four_d::models::ControllerEffectLane::Sequence => "sequence",
+                        crate::four_d::models::ControllerEffectLane::Composite => "composite",
+                    }.to_string()),
+                ),
+                TimelineTrackKind::Relay(_) | TimelineTrackKind::Hardware(_) => {
+                    ("hardware".to_string(), None)
+                }
+            };
+            crate::platform::interop::WebTimelineTrack {
+                key: row.key,
+                name: row.name,
+                detail: row.detail,
+                kind,
+                lane,
+                control_key: row.control_key,
+                active: row.active,
+                enabled: row.enabled,
+                linked: row.linked,
+                visible: row.visible,
+                dimmed: row.dimmed,
+                selected,
+                muted,
+                soloed,
+                locked,
+                supports_mute: supports_channel_state || is_audio,
+                supports_solo: supports_channel_state,
+                supports_lock: supports_channel_state,
+                manageable,
+            }
+        })
+        .collect()
+}
+
 fn controller_effect_lane_label(
     app: &PealayerApp,
     lane: crate::four_d::models::ControllerEffectLane,
@@ -2283,6 +2729,63 @@ fn relay_for_timeline_row(rows: &[TimelineTrackRow], row: i32) -> Option<u8> {
 fn timeline_row_for_relay(rows: &[TimelineTrackRow], relay_id: u8) -> Option<usize> {
     rows.iter()
         .position(|track| track.kind == TimelineTrackKind::Relay(relay_id))
+}
+
+fn timeline_cue_placement(
+    app: &PealayerApp,
+    effect: &crate::four_d::models::Effect,
+    rows: &[TimelineTrackRow],
+    visible_analog_track_ids: &std::collections::BTreeSet<uuid::Uuid>,
+) -> Option<TimelineCuePlacement> {
+    if effect.controller_macro.is_some() || effect.controller_strip_effect.is_some() {
+        let lane = effect
+            .controller_lane
+            .unwrap_or(crate::four_d::models::ControllerEffectLane::Sequence);
+        return rows.iter()
+            .position(|row| row.kind == TimelineTrackKind::ControllerEffect(lane))
+            .map(|track_index| TimelineCuePlacement {
+                track_index,
+                relay_id: None,
+                analog_index: None,
+                selected_track_key: None,
+            });
+    }
+
+    if let Some(direct) = effect.direct_control.as_ref()
+        && let Some(channel) = direct.control_key.strip_prefix("pwm.")
+            .and_then(|value| value.parse::<u8>().ok())
+    {
+        if let Some(analog_index) = app.timeline.analog_tracks.iter()
+            .filter(|track| visible_analog_track_ids.contains(&track.id))
+            .position(|track| track.channel == channel)
+        {
+            return Some(TimelineCuePlacement {
+                track_index: usize::MAX,
+                relay_id: None,
+                analog_index: Some(analog_index),
+                selected_track_key: Some(
+                    crate::four_d::models::hardware_timeline_track_key(&direct.control_key),
+                ),
+            });
+        }
+
+        return rows.iter()
+            .position(|row| row.kind == TimelineTrackKind::Hardware(direct.control_key.clone()))
+            .map(|track_index| TimelineCuePlacement {
+                track_index,
+                relay_id: None,
+                analog_index: None,
+                selected_track_key: None,
+            });
+    }
+
+    let relay_id = effect.actions.first().map(|action| action.relay_id)?;
+    timeline_row_for_relay(rows, relay_id).map(|track_index| TimelineCuePlacement {
+        track_index,
+        relay_id: Some(relay_id),
+        analog_index: None,
+        selected_track_key: None,
+    })
 }
 
 fn relay_id_from_control_key(key: &str) -> Option<u8> {
@@ -2477,7 +2980,12 @@ fn pwm_control_intensity(
     } else {
         authoritative.or(local)
     }?;
-    Some(f32::from(raw.min(4095)) / 4095.0)
+    let percent = if awaiting_readback {
+        pwm_percent(raw)
+    } else {
+        capabilities.pwm_percent(channel.id, raw)
+    };
+    Some((percent / 100.0) as f32)
 }
 
 fn control_indicator_color(control: &crate::four_d::controller::HardwareControl) -> egui::Color32 {
@@ -2509,14 +3017,15 @@ pub(crate) fn motion_control_direction(
     } else {
         None
     };
-    let Some((direction_relay, enable_relay, aliases, is_left)) = side else {
+    let Some((_, _, _, is_left)) = side else {
         return MotionDirectionState::Unknown;
     };
 
     // PCController owns semantic intent and reconciles it with every physical
     // relay edge. During the board's mandatory break-before-make interval,
-    // display the requested direction while retaining raw relay feedback for
-    // diagnostics, recording, and compatibility with older coordinators.
+    // display the requested direction. Raw relay feedback remains available
+    // for diagnostics and recording, but it is not a second API contract for
+    // reconstructing semantic state.
     if let Some(motion) = &capabilities.motion {
         let state = if is_left { &motion.left } else { &motion.right };
         let presented = if state.transitioning {
@@ -2532,34 +3041,7 @@ pub(crate) fn motion_control_direction(
         }
     }
 
-    let mut up = false;
-    let mut down = false;
-    for relay in &capabilities.relays {
-        if !capabilities.active_relays.contains(&relay.id) {
-            continue;
-        }
-        let role = relay.role.to_ascii_lowercase();
-        if !aliases.iter().any(|alias| role.contains(alias)) {
-            continue;
-        }
-        up |= role.contains("up");
-        down |= role.contains("down");
-    }
-    match (up, down) {
-        (true, false) => return MotionDirectionState::Up,
-        (false, true) => return MotionDirectionState::Down,
-        (true, true) => return MotionDirectionState::Unknown,
-        (false, false) => {}
-    }
-    if capabilities.active_relays.contains(&enable_relay) {
-        if capabilities.active_relays.contains(&direction_relay) {
-            MotionDirectionState::Down
-        } else {
-            MotionDirectionState::Up
-        }
-    } else {
-        MotionDirectionState::Stopped
-    }
+    MotionDirectionState::Unknown
 }
 
 pub(crate) fn motion_direction_color(
@@ -3479,7 +3961,14 @@ fn open_control_dialog(
             (capabilities.telemetry.pwm_channel == Some(channel.id))
                 .then_some(capabilities.telemetry.pwm_value.unwrap_or(0))
         })
-        .map(pwm_percent)
+        .map(|raw| {
+            let channel = control
+                .key
+                .strip_prefix("pwm.")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or_default();
+            capabilities.pwm_percent(channel, raw)
+        })
         .unwrap_or(0.0);
 }
 
@@ -3716,10 +4205,6 @@ fn responsive_action_label(
     }
 }
 
-fn should_show_stop_preview(preview_active: bool, pending_operation: Option<&str>) -> bool {
-    preview_active || pending_operation == Some("effect-stop")
-}
-
 fn hardware_section(
     ui: &mut egui::Ui,
     id_salt: impl std::hash::Hash + std::fmt::Debug,
@@ -3792,6 +4277,247 @@ fn board_tool_card(ui: &mut egui::Ui, icon: &str, title: &str, body: impl FnOnce
             ui.add_space(7.0);
             body(ui);
         });
+}
+
+fn draw_buzzer_tool(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+) {
+    let melody_id = ui.make_persistent_id("hardware_buzzer_melody");
+    let repeats_id = ui.make_persistent_id("hardware_buzzer_repeats");
+    let frequency_id = ui.make_persistent_id("hardware_buzzer_frequency");
+    let duration_id = ui.make_persistent_id("hardware_buzzer_duration");
+    let mut melody = ui.data_mut(|data| {
+        data.get_persisted::<String>(melody_id)
+            .filter(|name| capabilities.melodies.iter().any(|item| item.name == *name))
+            .or_else(|| capabilities.melodies.first().map(|item| item.name.clone()))
+            .unwrap_or_default()
+    });
+    let mut repeats = ui.data_mut(|data| {
+        data.get_persisted::<u8>(repeats_id)
+            .unwrap_or(1)
+            .min(20)
+    });
+    let mut frequency_hz = ui.data_mut(|data| {
+        data.get_persisted::<u16>(frequency_id)
+            .unwrap_or(880)
+            .clamp(20, 20_000)
+    });
+    let mut duration_ms = ui.data_mut(|data| {
+        data.get_persisted::<u16>(duration_id)
+            .unwrap_or(180)
+            .clamp(1, 60_000)
+    });
+    let pending = app.board_operation.is_some();
+    let can_start = !pending && !app.estop_active;
+    let can_stop = !pending;
+    let playing = capabilities.buzzer.is_playing();
+    let board_silent = capabilities
+        .settings
+        .as_ref()
+        .is_some_and(|settings| settings.silent);
+    let mut refresh_catalog = false;
+    let mut play_melody = false;
+    let mut play_tone = false;
+    let mut stop = false;
+
+    board_tool_card(
+        ui,
+        crate::ui::icons::SPEAKER_HIGH,
+        &app.tr("Buzzer & melodies"),
+        |ui| {
+            ui.horizontal_wrapped(|ui| {
+                let state_color = if playing {
+                    egui::Color32::from_rgb(34, 197, 94)
+                } else {
+                    ui.visuals().weak_text_color()
+                };
+                ui.colored_label(state_color, crate::ui::icons::DOT_OUTLINE);
+                if playing {
+                    let name = capabilities.buzzer.melody_name.trim();
+                    ui.strong(if name.is_empty() {
+                        app.tr("Playing melody")
+                    } else {
+                        format!("{}: {name}", app.tr("Playing"))
+                    });
+                } else {
+                    ui.label(app.tr("Idle"));
+                }
+                ui.separator();
+                let route_icon = if board_silent {
+                    crate::ui::icons::SPEAKER_SLASH
+                } else {
+                    crate::ui::icons::SPEAKER_HIGH
+                };
+                let route_color = if board_silent {
+                    ui.visuals().warn_fg_color
+                } else {
+                    ui.visuals().weak_text_color()
+                };
+                ui.colored_label(
+                    route_color,
+                    format!(
+                        "{route_icon} {}",
+                        app.tr(if board_silent { "Board muted" } else { "Board audible" })
+                    ),
+                );
+                if pending {
+                    ui.spinner();
+                }
+            });
+
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(app.tr("Configured melody")).strong());
+            ui.horizontal_wrapped(|ui| {
+                let selected_text = if melody.is_empty() {
+                    app.tr("No configured melodies")
+                } else {
+                    melody.clone()
+                };
+                let response = egui::ComboBox::from_id_salt("hardware_buzzer_melody_combo")
+                    .width(210.0)
+                    .selected_text(selected_text)
+                    .show_ui(ui, |ui| {
+                        if capabilities.melodies.is_empty() {
+                            ui.weak(app.tr("No configured melodies"));
+                        }
+                        for item in &capabilities.melodies {
+                            let duration = crate::duration::format_effect_duration_for_language(
+                                app.language,
+                                item.duration_ms(),
+                            );
+                            let detail = format!(
+                                "{} · {} {}",
+                                duration,
+                                item.notes.len(),
+                                app.tr("notes")
+                            );
+                            ui.selectable_value(
+                                &mut melody,
+                                item.name.clone(),
+                                format!("{}  {}  ·  {detail}", crate::ui::icons::MUSIC_NOTE, item.name),
+                            );
+                        }
+                    })
+                    .response;
+                refresh_catalog |= response.clicked();
+                if ui
+                    .small_button(crate::ui::icons::ARROW_CLOCKWISE)
+                    .on_hover_text(app.tr("Refresh melody catalog"))
+                    .clicked()
+                {
+                    refresh_catalog = true;
+                }
+            });
+
+            ui.horizontal_wrapped(|ui| {
+                let mut loop_until_stopped = repeats == 0;
+                if ui
+                    .toggle_value(&mut loop_until_stopped, app.tr("Loop until stopped"))
+                    .changed()
+                {
+                    repeats = if loop_until_stopped { 0 } else { 1 };
+                }
+                if !loop_until_stopped {
+                    ui.label(app.tr("Repeats"));
+                    ui.add(egui::DragValue::new(&mut repeats).range(1..=20));
+                }
+            });
+
+            ui.horizontal_wrapped(|ui| {
+                play_melody = ui
+                    .add_enabled(
+                        can_start && !melody.is_empty(),
+                        egui::Button::new(format!(
+                            "{} {}",
+                            crate::ui::icons::PLAY,
+                            app.tr("Play melody")
+                        )),
+                    )
+                    .clicked();
+                stop = ui
+                    .add_enabled(
+                        can_stop,
+                        egui::Button::new(format!(
+                            "{} {}",
+                            crate::ui::icons::STOP_CIRCLE,
+                            app.tr("Stop buzzer")
+                        )),
+                    )
+                    .clicked();
+            });
+
+            ui.add_space(4.0);
+            ui.separator();
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(app.tr("Tone test")).strong());
+            egui::Grid::new("hardware_buzzer_tone_grid")
+                .num_columns(2)
+                .spacing([10.0, 6.0])
+                .show(ui, |ui| {
+                    ui.label(app.tr("Frequency"));
+                    ui.add(
+                        egui::DragValue::new(&mut frequency_hz)
+                            .range(20..=20_000)
+                            .suffix(" Hz"),
+                    );
+                    ui.end_row();
+                    ui.label(app.tr("Duration"));
+                    ui.add(
+                        egui::DragValue::new(&mut duration_ms)
+                            .range(1..=60_000)
+                            .suffix(" ms"),
+                    );
+                    ui.end_row();
+                });
+            play_tone = ui
+                .add_enabled(
+                    can_start,
+                    egui::Button::new(format!(
+                        "{} {}",
+                        crate::ui::icons::PLAY,
+                        app.tr("Play tone")
+                    )),
+                )
+                .clicked();
+            if board_silent {
+                ui.add_space(4.0);
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    format!(
+                        "{} {}",
+                        crate::ui::icons::WARNING,
+                        app.tr("The physical board is muted; host routing may still be audible.")
+                    ),
+                );
+            }
+        },
+    );
+
+    ui.data_mut(|data| {
+        data.insert_persisted(melody_id, melody.clone());
+        data.insert_persisted(repeats_id, repeats);
+        data.insert_persisted(frequency_id, frequency_hz);
+        data.insert_persisted(duration_id, duration_ms);
+    });
+    if refresh_catalog {
+        // Push events keep this catalog current; opening or explicitly
+        // refreshing the picker is also a user-visible freshness boundary.
+        app.engine_handle.request_catalog_refresh();
+    }
+    let result = if stop {
+        app.stop_buzzer()
+    } else if play_melody {
+        app.play_buzzer_melody(&melody, repeats)
+    } else if play_tone {
+        app.play_buzzer_tone(frequency_hz, duration_ms)
+    } else {
+        Ok(())
+    };
+    if let Err(error) = result {
+        app.set_osd(error);
+    }
 }
 
 fn addressable_strip_gradient(
@@ -5475,6 +6201,87 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn timeline_marquee_direction_matches_cad_window_and_crossing_conventions() {
+        let origin = egui::pos2(100.0, 50.0);
+
+        assert_eq!(
+            timeline_marquee_mode(origin, egui::pos2(180.0, 80.0)),
+            TimelineMarqueeMode::Window
+        );
+        assert_eq!(
+            timeline_marquee_mode(origin, egui::pos2(20.0, 80.0)),
+            TimelineMarqueeMode::Crossing
+        );
+    }
+
+    #[test]
+    fn timeline_window_requires_full_enclosure_while_crossing_accepts_an_overlap() {
+        let marquee = egui::Rect::from_min_max(egui::pos2(10.0, 10.0), egui::pos2(50.0, 50.0));
+        let enclosed = egui::Rect::from_min_max(
+            egui::pos2(20.0, 20.0),
+            egui::pos2(40.0, 40.0),
+        );
+        let crossing = egui::Rect::from_min_max(
+            egui::pos2(40.0, 20.0),
+            egui::pos2(70.0, 40.0),
+        );
+
+        assert!(timeline_marquee_selects_rect(
+            marquee,
+            enclosed,
+            TimelineMarqueeMode::Window
+        ));
+        assert!(!timeline_marquee_selects_rect(
+            marquee,
+            crossing,
+            TimelineMarqueeMode::Window
+        ));
+        assert!(timeline_marquee_selects_rect(
+            marquee,
+            crossing,
+            TimelineMarqueeMode::Crossing
+        ));
+    }
+
+    #[test]
+    fn controller_macro_cues_resolve_to_the_same_lane_used_for_rendering() {
+        let app = PealayerApp::default();
+        let lane = crate::four_d::models::ControllerEffectLane::Sequence;
+        let rows = vec![TimelineTrackRow {
+            key: crate::four_d::models::controller_effect_timeline_track_key(lane),
+            name: "General sequences".to_string(),
+            detail: Some("Effects".to_string()),
+            active: true,
+            enabled: true,
+            linked: true,
+            visible: true,
+            icon: crate::ui::icons::WAVEFORM.to_string(),
+            control_key: None,
+            relay_ids: Vec::new(),
+            dimmed: false,
+            kind: TimelineTrackKind::ControllerEffect(lane),
+        }];
+        let effect = crate::four_d::models::Effect::controller_macro(
+            "Motion".to_string(),
+            crate::ui::icons::SEAT.to_string(),
+            1_000,
+            7,
+            "mcu".to_string(),
+        );
+
+        let placement = timeline_cue_placement(
+            &app,
+            &effect,
+            &rows,
+            &std::collections::BTreeSet::new(),
+        )
+        .expect("controller cue should resolve to its visible timeline lane");
+        assert_eq!(placement.track_index, 0);
+        assert_eq!(placement.analog_index, None);
+        assert_eq!(placement.relay_id, None);
+    }
+
+    #[test]
     fn middle_button_timeline_pan_clamps_to_scrollable_content() {
         assert_eq!(
             pan_timeline_offset(
@@ -5574,6 +6381,15 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn timeline_combines_native_precision_trackpad_pinch_factors() {
+        assert_eq!(timeline_pinch_factor(&[]), None);
+        assert_eq!(timeline_pinch_factor(&[
+            egui::Event::Zoom(1.1), egui::Event::Zoom(1.2)]), Some(1.32));
+        assert_eq!(timeline_pinch_factor(&[egui::Event::Zoom(f32::NAN)]), None);
+        assert_eq!(timeline_pinch_factor(&[egui::Event::Zoom(0.0)]), None);
+    }
+
+    #[test]
     fn timeline_ruler_is_frozen_while_tracks_and_horizontal_origin_scroll() {
         for offset in [egui::Vec2::ZERO, egui::vec2(140.0, 90.0), egui::vec2(400.0, 600.0)] {
             let content = egui::Rect::from_min_size(egui::pos2(300.0, 80.0) - offset, egui::vec2(1800.0, 2000.0));
@@ -5649,6 +6465,26 @@ mod timeline_row_tests {
         assert_eq!(
             timeline_offset_to_reveal_x(400.0, 50.0, 1_000.0, 400.0),
             26.0
+        );
+    }
+
+    #[test]
+    fn playhead_follow_waits_near_the_edge_and_preserves_look_ahead() {
+        assert_eq!(
+            timeline_follow_target_offset(200.0, 450.0, 2_000.0, 500.0),
+            None
+        );
+        assert_eq!(
+            timeline_follow_target_offset(200.0, 620.0, 2_000.0, 500.0),
+            Some(310.0)
+        );
+        assert_eq!(
+            timeline_follow_target_offset(700.0, 500.0, 2_000.0, 500.0),
+            Some(400.0)
+        );
+        assert_eq!(
+            timeline_follow_target_offset(0.0, 450.0, 400.0, 500.0),
+            None
         );
     }
 
@@ -6322,6 +7158,61 @@ mod timeline_row_tests {
         assert_eq!(&frame[0..3], &[100, 0, 0]);
         assert_eq!(&frame[3..6], &[50, 0, 25]);
         assert_eq!(&frame[6..9], &[0, 0, 50]);
+    }
+
+    #[test]
+    fn hardware_buzzer_card_exposes_live_state_catalog_and_tone_controls() {
+        let context = egui::Context::default();
+        let mut app = PealayerApp::default();
+        let capabilities = crate::four_d::controller::HardwareCapabilities {
+            board_connected: true,
+            buzzer: crate::four_d::controller::HardwareBuzzerState {
+                melody_id: 9,
+                melody_name: "attention".to_string(),
+            },
+            melodies: vec![crate::four_d::controller::HardwareMelody {
+                name: "attention".to_string(),
+                notes: vec![crate::four_d::controller::HardwareMelodyNote {
+                    frequency_hz: 880,
+                    duration_ms: 125,
+                    gap_ms: 25,
+                }],
+            }],
+            settings: Some(crate::four_d::controller::HardwareBoardSettings {
+                silent: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(520.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                ui.set_width(440.0);
+                draw_buzzer_tool(&mut app, ui, &capabilities);
+            },
+        );
+        let text = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(text.contains("Buzzer & melodies"));
+        assert!(text.contains("Playing: attention"));
+        assert!(text.contains("Board muted"));
+        assert!(text.contains("Play melody"));
+        assert!(text.contains("Stop buzzer"));
+        assert!(text.contains("Tone test"));
+        output.textures_delta.clear();
     }
 
     #[test]
@@ -7057,14 +7948,6 @@ mod timeline_row_tests {
     }
 
     #[test]
-    fn stop_preview_is_only_visible_for_an_active_or_stopping_preview() {
-        assert!(!should_show_stop_preview(false, None));
-        assert!(!should_show_stop_preview(false, Some("effect-preview")));
-        assert!(should_show_stop_preview(true, None));
-        assert!(should_show_stop_preview(false, Some("effect-stop")));
-    }
-
-    #[test]
     fn rf_codes_accept_hex_and_decimal_without_guessing_invalid_input() {
         assert_eq!(parse_rf_code("0x12AB34"), Some(0x12AB34));
         assert_eq!(parse_rf_code("1223476"), Some(1_223_476));
@@ -7238,7 +8121,7 @@ mod timeline_row_tests {
     }
 
     #[test]
-    fn seat_stop_visibility_ignores_other_sides_and_unrelated_relays() {
+    fn seat_stop_visibility_requires_semantic_motion_state() {
         let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
         capabilities.relays = vec![
             crate::four_d::controller::HardwareOutput {
@@ -7274,11 +8157,21 @@ mod timeline_row_tests {
         capabilities.active_relays.insert(5);
         assert!(!motion_control_is_active(&capabilities, &left));
         capabilities.active_relays.insert(1);
+        assert!(!motion_control_is_active(&capabilities, &left));
+        capabilities.motion = Some(crate::four_d::controller::HardwareMotionState {
+            left: crate::four_d::controller::HardwareMotionSide {
+                requested: "up".into(),
+                applied: "up".into(),
+                transitioning: false,
+                revision: 1,
+            },
+            ..Default::default()
+        });
         assert!(motion_control_is_active(&capabilities, &left));
     }
 
     #[test]
-    fn seat_indicator_reports_up_or_down_from_live_interlocked_relays() {
+    fn seat_indicator_does_not_infer_semantics_from_raw_relays() {
         let control = crate::four_d::controller::HardwareControl {
             key: "seat.a".into(),
             kind: "seat".into(),
@@ -7289,25 +8182,17 @@ mod timeline_row_tests {
         let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
         assert_eq!(
             motion_control_direction(&capabilities, &control),
-            MotionDirectionState::Stopped
+            MotionDirectionState::Unknown
         );
         capabilities.active_relays.insert(2);
         assert_eq!(
             motion_control_direction(&capabilities, &control),
-            MotionDirectionState::Up
-        );
-        assert_eq!(
-            motion_direction_color(&control, MotionDirectionState::Up),
-            egui::Color32::from_rgb(255, 136, 0)
+            MotionDirectionState::Unknown
         );
         capabilities.active_relays.insert(1);
         assert_eq!(
             motion_control_direction(&capabilities, &control),
-            MotionDirectionState::Down
-        );
-        assert_eq!(
-            motion_direction_color(&control, MotionDirectionState::Down),
-            egui::Color32::from_rgb(0, 136, 255)
+            MotionDirectionState::Unknown
         );
     }
 
@@ -7517,7 +8402,15 @@ mod timeline_row_tests {
         );
         assert!(contextual_stop_action(&capabilities, &control).is_none());
 
-        capabilities.active_relays.insert(2);
+        capabilities.motion = Some(crate::four_d::controller::HardwareMotionState {
+            left: crate::four_d::controller::HardwareMotionSide {
+                requested: "up".into(),
+                applied: "up".into(),
+                transitioning: false,
+                revision: 1,
+            },
+            ..Default::default()
+        });
         assert_eq!(
             card_control_actions(&control)
                 .into_iter()
@@ -7736,6 +8629,20 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn empty_effect_group_has_no_disclosure_chevron() {
+        assert_eq!(effect_group_disclosure_icon(true, 0), None);
+        assert_eq!(effect_group_disclosure_icon(false, 0), None);
+        assert_eq!(
+            effect_group_disclosure_icon(true, 1),
+            Some(crate::ui::icons::CARET_DOWN)
+        );
+        assert_eq!(
+            effect_group_disclosure_icon(false, 1),
+            Some(crate::ui::icons::CARET_RIGHT)
+        );
+    }
+
+    #[test]
     fn effect_group_add_button_click_does_not_collapse_the_group() {
         for dark in [false, true] {
             let context = egui::Context::default();
@@ -7835,6 +8742,8 @@ mod timeline_row_tests {
                                     egui::Id::new("header-anchor"),
                                     crate::ui::icons::SPARKLE,
                                     title,
+                                    crate::ui::icons::PLAY,
+                                    true,
                                     ["Drag", "Icon", "Rename", "Run", "Place", "More", "Rename"],
                                 );
                                 geometry.set((
@@ -8044,6 +8953,8 @@ mod timeline_row_tests {
                                         egui::Id::new("effect-card-with-action"),
                                         crate::ui::icons::SPARKLE,
                                         "Seat rise",
+                                        crate::ui::icons::PLAY,
+                                        true,
                                         ["Drag", "Icon", "Rename", "Run", "Place", "More", "Rename"],
                                     );
                                     let button = match action {
@@ -8153,6 +9064,8 @@ mod timeline_row_tests {
                                     id,
                                     crate::ui::icons::SPARKLE,
                                     "Grip fixture",
+                                    crate::ui::icons::PLAY,
+                                    true,
                                     ["Drag", "Icon", "Rename", "Run", "Place", "More", "Rename"],
                                 )
                             })
@@ -8375,6 +9288,21 @@ mod timeline_row_tests {
         assert_eq!(
             effect_preset_reference(&first).as_deref(),
             Some("effect:7")
+        );
+
+        let strip = crate::app::EffectPreset {
+            category: "Lighting".to_string(),
+            group_icon: String::new(),
+            source: crate::app::EffectPresetSource::ControllerStrip,
+            effect: crate::four_d::models::Effect::controller_strip_effect(
+                "Aurora".to_string(),
+                5_000,
+                "aurora".to_string(),
+            ),
+        };
+        assert_eq!(
+            effect_preset_reference(&strip).as_deref(),
+            Some("effect:aurora")
         );
     }
 
@@ -8699,6 +9627,15 @@ mod timeline_row_tests {
     fn indicators_use_authoritative_output_state() {
         let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
         capabilities.active_relays.insert(2);
+        capabilities.motion = Some(crate::four_d::controller::HardwareMotionState {
+            left: crate::four_d::controller::HardwareMotionSide {
+                requested: "up".into(),
+                applied: "up".into(),
+                transitioning: false,
+                revision: 1,
+            },
+            ..Default::default()
+        });
         capabilities
             .pwm_channels
             .push(crate::four_d::controller::HardwareOutput {
@@ -10232,6 +11169,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         if force_open {
                                             open = true;
                                         }
+                                        if presets.is_empty() {
+                                            open = false;
+                                        }
                                         let displayed_category = crate::ui::i18n::visual_text(
                                             display_language,
                                             &category,
@@ -10261,7 +11201,27 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 self.app, Some(category.clone()),
                                             );
                                         }
-                                        if group_response.clicked() {
+                                        let dragging_effect = egui::DragAndDrop::payload::<EffectDragPayload>(
+                                            ui.ctx(),
+                                        )
+                                        .is_some();
+                                        if dragging_effect && group_response.contains_pointer() {
+                                            group_response.clone().highlight();
+                                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                                        }
+                                        if let Some(payload) = take_effect_drop_on_rect(
+                                            ui.ctx(),
+                                            group_response.rect,
+                                        ) && let Err(error) =
+                                            crate::ui::effects_library::move_dragged_effect_to_group(
+                                                self.app,
+                                                payload.as_ref(),
+                                                category.clone(),
+                                            )
+                                        {
+                                            self.app.set_osd(error);
+                                        }
+                                        if !presets.is_empty() && group_response.clicked() {
                                             open = !open;
                                         }
                                         group_response.context_menu(|ui| {
@@ -10317,15 +11277,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 self.app.show_effect_library_editor = true;
                                                 ui.close();
                                             }
-                                            ui.separator();
-                                            let collapse_label = if open {
-                                                self.app.tr("Collapse group")
-                                            } else {
-                                                self.app.tr("Expand group")
-                                            };
-                                            if ui.button(collapse_label).clicked() {
-                                                open = !open;
-                                                ui.close();
+                                            if !presets.is_empty() {
+                                                ui.separator();
+                                                let collapse_label = if open {
+                                                    self.app.tr("Collapse group")
+                                                } else {
+                                                    self.app.tr("Expand group")
+                                                };
+                                                if ui.button(collapse_label).clicked() {
+                                                    open = !open;
+                                                    ui.close();
+                                                }
                                             }
                                         });
                                         ui.data_mut(|data| data.insert_persisted(group_id, open));
@@ -10378,6 +11340,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         &preset.effect.name,
                                                     );
                                                 let source = preset.source;
+                                                let (_, primary_action_icon, primary_action_label, primary_action_enabled) =
+                                                    crate::ui::effects_library::saved_effect_preview_action_presentation(
+                                                        self.app,
+                                                        &reference,
+                                                    );
                                                 let mut run_now = false;
                                                 let mut place_at_playhead = false;
                                                 let mut more_response = None;
@@ -10490,11 +11457,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                     item_id,
                                                                     &preset.effect.icon,
                                                                     &displayed_effect_name,
+                                                                    primary_action_icon,
+                                                                    primary_action_enabled,
                                                                     [
                                                                         &self.app.tr("Drag effect to timeline"),
                                                                         &self.app.tr("Change icon"),
                                                                         &self.app.tr("Rename"),
-                                                                        &self.app.tr("Run now"),
+                                                                        &primary_action_label,
                                                                         &self.app.tr("Place at playhead"),
                                                                         &self.app.tr("More actions"),
                                                                         &self.app.tr("Rename"),
@@ -10572,7 +11541,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 if run_now
                                                     && let Err(error) = self
                                                         .app
-                                                        .play_controller_effect(&reference)
+                                                        .invoke_controller_effect_preview_action(&reference)
                                                 {
                                                     self.app.set_osd(error);
                                                 }
@@ -10597,10 +11566,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     ui.strong(&displayed_effect_name);
                                                     ui.label(egui::RichText::new(&reference).monospace().weak().small());
                                                     ui.separator();
-                                                    if ui.button(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, self.app.tr("Rename"))).clicked() {
-                                                        request_effect_card_rename(ui.ctx(), item_id);
-                                                        ui.close();
-                                                    }
                                                     if ui.button(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, self.app.tr("Manage"))).clicked() {
                                                         if crate::ui::effects_library::select_advertised_effect(
                                                             self.app,
@@ -10611,18 +11576,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         }
                                                         ui.close();
                                                     }
-                                                    if ui.button(format!("{} {}", crate::ui::icons::PLAY, self.app.tr("Run now"))).clicked() {
-                                                        if let Err(error) = self.app.play_controller_effect(&reference) {
-                                                            self.app.set_osd(error);
-                                                        }
-                                                        ui.close();
-                                                    }
-                                                    if ui.button(format!("{} {}", crate::ui::icons::STOP_CIRCLE, self.app.tr("Stop"))).clicked() {
-                                                        if let Err(error) = self.app.stop_controller_effect(&reference) {
-                                                            self.app.set_osd(error);
-                                                        }
-                                                        ui.close();
-                                                    }
+                                                    crate::ui::effects_library::draw_saved_effect_preview_action(
+                                                        self.app,
+                                                        ui,
+                                                        &reference,
+                                                    );
                                                     if ui.button(format!("{} {}", crate::ui::icons::PLUS, self.app.tr("Place at playhead"))).clicked() {
                                                         self.app.place_controller_effect_at_playhead(&payload);
                                                         ui.close();
@@ -11141,6 +12099,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 );
                             }
 
+                            hardware_section(
+                                ui,
+                                "hardware_buzzer_section",
+                                crate::ui::icons::SPEAKER_HIGH,
+                                &self.app.tr("Buzzer & melodies"),
+                                true,
+                                |ui| {
+                                    draw_buzzer_tool(self.app, ui, &capabilities);
+                                },
+                            );
+
                             if capabilities.strip_control.is_some() {
                                 hardware_section(
                                     ui,
@@ -11301,6 +12270,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         let mut timeline_header_scroll_id = None;
                         let mut timeline_header_offset_y = synced_vertical_offset;
                         let mut pending_timeline_wheel = None;
+                        let mut pending_timeline_toolbar_action = None;
                         ui.horizontal_top(|ui| {
                             // 1. Left column: Fixed Track Headers
                             ui.vertical(|ui| {
@@ -12418,7 +13388,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     .unwrap_or(0);
                                                 let mut percent = ui
                                                     .data_mut(|data| data.get_temp::<f64>(value_id))
-                                                    .unwrap_or_else(|| pwm_percent(telemetry_raw));
+                                                    .unwrap_or_else(|| {
+                                                        capabilities.pwm_percent(
+                                                            channel.id,
+                                                            telemetry_raw,
+                                                        )
+                                                    });
                                                 let pwm_response = draw_pwm_editor_row(
                                                     ui,
                                                     &mut percent,
@@ -12686,11 +13661,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 if ui
                                                     .add_enabled(
                                                         can_add_keyframe,
-                                                        egui::Button::new(format!(
-                                                        "{} {} ({})",
-                                                        crate::ui::icons::PUSH_PIN,
-                                                        self.app.tr("Add exact keyframe here"),
-                                                        crate::duration::format_time_value_ms(pointer_ms)
+                                                        egui::Button::new(timeline_two_line_menu_label(
+                                                            ui,
+                                                            crate::ui::icons::PUSH_PIN,
+                                                            &self.app.tr("Add exact keyframe here"),
+                                                            &crate::duration::format_time_value_ms(pointer_ms),
                                                         )),
                                                     )
                                                     .clicked()
@@ -12700,7 +13675,212 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     ui.close();
                                                 }
                                             }
+                                            ui.separator();
+                                            if ui
+                                                .button(format!(
+                                                    "{} {}",
+                                                    crate::ui::icons::TARGET,
+                                                    self.app.tr("Bring playhead into view")
+                                                ))
+                                                .clicked()
+                                            {
+                                                pending_timeline_toolbar_action = Some(
+                                                    TimelineToolbarAction::BringPlayheadIntoView,
+                                                );
+                                                ui.close();
+                                            }
                                         }); }
+
+                                        // Keep navigation controls anchored to the visible end of
+                                        // the frozen ruler rather than letting them scroll with
+                                        // timeline content.
+                                        let toolbar_order =
+                                            crate::config::normalize_timeline_toolbar_order(
+                                                &self.app.timeline_toolbar_order,
+                                            );
+                                        let visible_toolbar_buttons = toolbar_order
+                                            .iter()
+                                            .filter(|action| {
+                                                !self.app.timeline_toolbar_hidden.contains(action)
+                                            })
+                                            .count();
+                                        let visible_ruler = ruler_rect.intersect(viewport_clip);
+                                        let toolbar_width = ((visible_toolbar_buttons + 1) as f32
+                                            * 26.0
+                                            + 8.0)
+                                            .min(visible_ruler.width());
+                                        let toolbar_rect = egui::Rect::from_min_max(
+                                            egui::pos2(
+                                                visible_ruler.right() - toolbar_width,
+                                                visible_ruler.top() + 1.0,
+                                            ),
+                                            egui::pos2(
+                                                visible_ruler.right() - 3.0,
+                                                visible_ruler.bottom() - 1.0,
+                                            ),
+                                        );
+                                        let mut toolbar_ui = ui.new_child(
+                                            egui::UiBuilder::new()
+                                                .layer_id(egui::LayerId::new(
+                                                    egui::Order::Foreground,
+                                                    egui::Id::new("timeline-ruler-toolbar-layer"),
+                                                ))
+                                                .max_rect(toolbar_rect)
+                                                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                                        );
+                                        egui::Frame::NONE
+                                            .fill(ui.visuals().panel_fill.gamma_multiply(0.96))
+                                            .corner_radius(4.0)
+                                            .inner_margin(egui::Margin::symmetric(2, 0))
+                                            .show(&mut toolbar_ui, |ui| {
+                                                egui::containers::menu::MenuButton::from_button(
+                                                    egui::Button::new(crate::ui::icons::DOTS_THREE)
+                                                        .frame(false),
+                                                )
+                                                .ui(ui, |ui| {
+                                                    ui.set_min_width(310.0);
+                                                    ui.strong(self.app.tr("Timeline toolbar"));
+                                                    ui.label(
+                                                        egui::RichText::new(self.app.tr(
+                                                            "Choose visible controls and their order.",
+                                                        ))
+                                                        .small()
+                                                        .weak(),
+                                                    );
+                                                    ui.separator();
+
+                                                    let mut order = crate::config::normalize_timeline_toolbar_order(
+                                                        &self.app.timeline_toolbar_order,
+                                                    );
+                                                    let mut hidden = self.app.timeline_toolbar_hidden.clone();
+                                                    let snapshot = order.clone();
+                                                    let mut changed = false;
+                                                    for (index, action) in snapshot.into_iter().enumerate() {
+                                                        ui.horizontal(|ui| {
+                                                            let mut visible = !hidden.contains(&action);
+                                                            if ui
+                                                                .checkbox(
+                                                                    &mut visible,
+                                                                    format!(
+                                                                        "{}  {}",
+                                                                        timeline_toolbar_action_icon(action),
+                                                                        self.app.tr(timeline_toolbar_action_label(action))
+                                                                    ),
+                                                                )
+                                                                .changed()
+                                                            {
+                                                                hidden.retain(|candidate| *candidate != action);
+                                                                if !visible {
+                                                                    hidden.push(action);
+                                                                }
+                                                                changed = true;
+                                                            }
+                                                            ui.with_layout(
+                                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                                |ui| {
+                                                                    if ui
+                                                                        .add_enabled(
+                                                                            index + 1 < order.len(),
+                                                                            egui::Button::new(crate::ui::icons::ARROW_DOWN)
+                                                                                .small(),
+                                                                        )
+                                                                        .on_hover_text(self.app.tr("Move down"))
+                                                                        .clicked()
+                                                                    {
+                                                                        order.swap(index, index + 1);
+                                                                        changed = true;
+                                                                    }
+                                                                    if ui
+                                                                        .add_enabled(
+                                                                            index > 0,
+                                                                            egui::Button::new(crate::ui::icons::ARROW_UP)
+                                                                                .small(),
+                                                                        )
+                                                                        .on_hover_text(self.app.tr("Move up"))
+                                                                        .clicked()
+                                                                    {
+                                                                        order.swap(index, index - 1);
+                                                                        changed = true;
+                                                                    }
+                                                                },
+                                                            );
+                                                        });
+                                                    }
+                                                    ui.separator();
+                                                    if ui
+                                                        .button(format!(
+                                                            "{} {}",
+                                                            crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                                                            self.app.tr("Reset toolbar")
+                                                        ))
+                                                        .clicked()
+                                                    {
+                                                        order = crate::config::default_timeline_toolbar_order();
+                                                        hidden = crate::config::default_timeline_toolbar_hidden();
+                                                        changed = true;
+                                                    }
+                                                    if ui
+                                                        .button(format!(
+                                                            "{} {}",
+                                                            crate::ui::icons::GEAR,
+                                                            self.app.tr("Preferences...")
+                                                        ))
+                                                        .clicked()
+                                                    {
+                                                        self.app.show_preferences_dialog = true;
+                                                        ui.close();
+                                                    }
+                                                    if changed {
+                                                        self.app.timeline_toolbar_order = order;
+                                                        self.app.timeline_toolbar_hidden = hidden;
+                                                        self.app.save_config();
+                                                    }
+                                                })
+                                                .0
+                                                .on_hover_text(self.app.tr("More timeline controls and preferences"));
+
+                                                for action in toolbar_order.into_iter().filter(|action| {
+                                                    !self.app.timeline_toolbar_hidden.contains(action)
+                                                }) {
+                                                    let enabled = match action {
+                                                        TimelineToolbarAction::AddKeyframe => can_add_keyframe,
+                                                        TimelineToolbarAction::PreviousCue
+                                                        | TimelineToolbarAction::NextCue => {
+                                                            !self.app.timeline.instances.is_empty()
+                                                        }
+                                                        TimelineToolbarAction::NudgeCueLeft
+                                                        | TimelineToolbarAction::NudgeCueRight
+                                                        | TimelineToolbarAction::DeleteSelection => {
+                                                            !self.app.selected_instance_ids.is_empty()
+                                                                || !self.app.selected_keyframes.is_empty()
+                                                                || self.app.selected_timeline_keyframe.is_some()
+                                                        }
+                                                        TimelineToolbarAction::ClearSelection => {
+                                                            !self.app.selected_instance_ids.is_empty()
+                                                                || !self.app.selected_keyframes.is_empty()
+                                                                || self.app.selected_timeline_keyframe.is_some()
+                                                        }
+                                                        _ => true,
+                                                    };
+                                                    let selected = action == TimelineToolbarAction::FollowPlayhead
+                                                        && self.app.timeline_follow_playhead;
+                                                    let response = ui
+                                                        .add_enabled(
+                                                            enabled,
+                                                            egui::Button::new(timeline_toolbar_action_icon(action))
+                                                                .frame(selected)
+                                                                .selected(selected),
+                                                        )
+                                                        .on_hover_text(format!(
+                                                            "{}\n{}",
+                                                            self.app.tr(timeline_toolbar_action_label(action)),
+                                                            timeline_toolbar_action_shortcut(action),
+                                                        ));
+                                                    if response.clicked() {
+                                                        pending_timeline_toolbar_action = Some(action);
+                                                    }
+                                                }
+                                            });
 
                                         let mut clicked_any_keyframe = keyframe_context_owned && ui.input(|input|
                                             input.pointer.any_down() || input.pointer.any_released());
@@ -13037,49 +14217,23 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         for instance in &self.app.timeline.instances {
                                             if let Some(effect) = self.app.timeline.templates.iter().find(|t| t.id == instance.effect_id) {
-                                                let is_controller_owned = effect.controller_macro.is_some()
-                                                    || effect.controller_strip_effect.is_some();
                                                 let duration_resizable = effect.duration_resizable();
-                                                let (track_index, relay_id, analog_y, selected_track_key) = if is_controller_owned {
-                                                    let lane = effect
-                                                        .controller_lane
-                                                        .unwrap_or(crate::four_d::models::ControllerEffectLane::Sequence);
-                                                    let Some(index) = timeline_rows
-                                                        .iter()
-                                                        .position(|row| row.kind == TimelineTrackKind::ControllerEffect(lane))
-                                                    else {
-                                                        continue;
-                                                    };
-                                                    (index, None, None, None)
-                                                } else if let Some(direct) = effect.direct_control.as_ref()
-                                                    && let Some(channel) = direct.control_key.strip_prefix("pwm.").and_then(|value| value.parse::<u8>().ok())
-                                                {
-                                                    if let Some(analog_index) = self.app.timeline.analog_tracks.iter()
-                                                        .filter(|track| visible_analog_track_ids.contains(&track.id))
-                                                        .position(|track| track.channel == channel)
-                                                    {
-                                                        (
-                                                            usize::MAX,
-                                                            None,
-                                                            Some(tracks_top + track_area_height + analog_index as f32 * timeline_analog_height),
-                                                            Some(crate::four_d::models::hardware_timeline_track_key(&direct.control_key)),
-                                                        )
-                                                    } else if let Some(index) = timeline_rows.iter().position(|row| {
-                                                        row.kind == TimelineTrackKind::Hardware(direct.control_key.clone())
-                                                    }) {
-                                                        (index, None, None, None)
-                                                    } else {
-                                                        continue;
-                                                    }
-                                                } else {
-                                                    let Some(relay_id) = effect.actions.first().map(|a| a.relay_id) else {
-                                                        continue;
-                                                    };
-                                                    let Some(index) = timeline_row_for_relay(&timeline_rows, relay_id) else {
-                                                        continue;
-                                                    };
-                                                    (index, Some(relay_id), None, None)
+                                                let Some(placement) = timeline_cue_placement(
+                                                    self.app,
+                                                    effect,
+                                                    &timeline_rows,
+                                                    &visible_analog_track_ids,
+                                                ) else {
+                                                    continue;
                                                 };
+                                                let track_index = placement.track_index;
+                                                let relay_id = placement.relay_id;
+                                                let selected_track_key = placement.selected_track_key;
+                                                let analog_y = placement.analog_index.map(|analog_index| {
+                                                    tracks_top
+                                                        + track_area_height
+                                                        + analog_index as f32 * timeline_analog_height
+                                                });
                                                 let is_mismatched = relay_id
                                                     .is_some_and(|relay_id| !effect.target.is_compatible_with_relay(relay_id));
                                                 let track_y = analog_y.unwrap_or_else(|| timeline_track_row_top(
@@ -13095,11 +14249,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                                 let start_x = rect.min.x + (instance.start_time_ms as f32 * px_per_ms);
                                                 let end_x = start_x + (effect.duration_ms.max(1) as f32 * px_per_ms);
+                                                let minimum_clip_width = if duration_resizable { 8.0 } else { 18.0 };
 
                                                 let clip_rect = egui::Rect::from_min_max(
                                                     egui::pos2(start_x, track_y + 4.0),
                                                     egui::pos2(
-                                                        end_x.max(start_x + 8.0),
+                                                        end_x.max(start_x + minimum_clip_width),
                                                         track_y + cue_row_height - 4.0,
                                                     ),
                                                 );
@@ -13114,6 +14269,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     ui.interact(clip_rect, clip_id, egui::Sense::click_and_drag())
                                                 };
 
+                                                let duration = crate::duration::format_effect_duration_for_language(
+                                                    self.app.language,
+                                                    effect.duration_ms,
+                                                );
+                                                let mut cue_tooltip = format!(
+                                                    "{}\n{}: {}",
+                                                    effect.name,
+                                                    self.app.tr("Duration"),
+                                                    duration,
+                                                );
+                                                if !duration_resizable {
+                                                    cue_tooltip.push_str(&format!(
+                                                        "\n{}",
+                                                        self.app.tr("Intrinsic duration — drag to move"),
+                                                    ));
+                                                }
                                                 if is_mismatched {
                                                     let required_name = effect
                                                         .target
@@ -13125,8 +14296,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         "Hardware target mismatch\nEffect: {}\nRequired output: {}\nRight-click to relocate when that output is available.",
                                                         effect.name, required_name
                                                     );
-                                                    clip_response = clip_response.on_hover_text(warn_msg);
+                                                    cue_tooltip.push_str("\n\n");
+                                                    cue_tooltip.push_str(&warn_msg);
                                                 }
+                                                clip_response = clip_response.on_hover_text(cue_tooltip);
 
                                                 clip_response.context_menu(|ui| {
                                                     if ui
@@ -13286,6 +14459,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let right_active = hovered_handle == Some(crate::app::DragMode::ResizeRight);
                                                 if duration_resizable {
                                                     render_clip_handles(&painter, clip_rect, left_active, right_active, alpha);
+                                                } else {
+                                                    render_clip_move_grip(&painter, clip_rect, alpha);
                                                 }
 
                                                 // Clip name label
@@ -13295,12 +14470,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 } else {
                                                     format!("{} {}", crate::ui::icons::SPARKLE, displayed_effect_name)
                                                 };
-                                                painter.text(
-                                                    clip_rect.left_center() + egui::vec2(12.0, 0.0),
-                                                    egui::Align2::LEFT_CENTER,
+                                                render_timeline_cue_label(
+                                                    &painter,
+                                                    clip_rect,
                                                     title,
                                                     egui::FontId::proportional(10.0),
                                                     egui::Color32::from_rgba_unmultiplied(255, 255, 255, alpha),
+                                                    self.app.timeline_hide_cue_text_overflow,
+                                                    duration_resizable,
                                                 );
                                             }
                                         }
@@ -13330,6 +14507,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             let right_active = self.app.active_drag.as_ref().map(|d| d.mode) == Some(crate::app::DragMode::ResizeRight);
                                             if effect.duration_resizable() {
                                                 render_clip_handles(&painter, clip_rect, left_active, right_active, 255);
+                                            } else {
+                                                render_clip_move_grip(&painter, clip_rect, 255);
                                             }
 
                                             // Clip name label
@@ -13339,12 +14518,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             } else {
                                                 format!("{} {}", crate::ui::icons::SPARKLE, displayed_effect_name)
                                             };
-                                            painter.text(
-                                                clip_rect.left_center() + egui::vec2(12.0, 0.0),
-                                                egui::Align2::LEFT_CENTER,
+                                            render_timeline_cue_label(
+                                                &painter,
+                                                clip_rect,
                                                 title,
                                                 egui::FontId::proportional(10.0),
                                                 egui::Color32::WHITE,
+                                                self.app.timeline_hide_cue_text_overflow,
+                                                effect.duration_resizable(),
                                             );
                                         }
 
@@ -14487,13 +15668,36 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
 
                                         // Lasso selection drawing
-                                        if let Some(lasso_rect) = self.app.lasso_rect {
+                                        if let (Some(origin), Some(lasso_rect)) =
+                                            (self.app.lasso_origin, self.app.lasso_rect)
+                                        {
+                                            let current = ui.ctx().pointer_latest_pos().unwrap_or(lasso_rect.max);
+                                            let mode = timeline_marquee_mode(origin, current);
+                                            let (fill, stroke, label) = match mode {
+                                                TimelineMarqueeMode::Window => (
+                                                    egui::Color32::from_rgba_unmultiplied(52, 152, 219, 34),
+                                                    egui::Color32::from_rgb(52, 152, 219),
+                                                    self.app.tr("Window · fully enclosed"),
+                                                ),
+                                                TimelineMarqueeMode::Crossing => (
+                                                    egui::Color32::from_rgba_unmultiplied(46, 204, 113, 34),
+                                                    egui::Color32::from_rgb(46, 204, 113),
+                                                    self.app.tr("Crossing · touched"),
+                                                ),
+                                            };
                                             painter.rect(
                                                 lasso_rect,
                                                 2.0,
-                                                egui::Color32::from_rgba_unmultiplied(52, 152, 219, 30),
-                                                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(52, 152, 219)),
+                                                fill,
+                                                egui::Stroke::new(1.5_f32, stroke),
                                                 egui::StrokeKind::Inside,
+                                            );
+                                            painter.text(
+                                                lasso_rect.left_top() + egui::vec2(4.0, -4.0),
+                                                egui::Align2::LEFT_BOTTOM,
+                                                label,
+                                                egui::FontId::proportional(11.0),
+                                                stroke,
                                             );
                                         }
 
@@ -14555,6 +15759,309 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         navigation_transition_id,
                                     );
                                 });
+                            }
+
+                            // Timeline-local shortcuts mirror the visible toolbar. They only
+                            // fire while the canvas owns keyboard focus, so text fields and the
+                            // rest of the application retain their normal keys.
+                            if ui.ctx().memory(|memory| {
+                                memory.has_focus(timeline_keyboard_focus_id())
+                            }) {
+                                let shortcut_action = ui.input(|input| {
+                                    if input.modifiers.is_none()
+                                        && (input.key_pressed(egui::Key::Plus)
+                                            || input.key_pressed(egui::Key::Equals))
+                                    {
+                                        Some(TimelineToolbarAction::ZoomIn)
+                                    } else if input.modifiers.is_none()
+                                        && input.key_pressed(egui::Key::Minus)
+                                    {
+                                        Some(TimelineToolbarAction::ZoomOut)
+                                    } else if input.modifiers.shift
+                                        && !input.modifiers.ctrl
+                                        && !input.modifiers.command
+                                        && !input.modifiers.alt
+                                        && input.key_pressed(egui::Key::ArrowLeft)
+                                    {
+                                        Some(TimelineToolbarAction::PanLeft)
+                                    } else if input.modifiers.shift
+                                        && !input.modifiers.ctrl
+                                        && !input.modifiers.command
+                                        && !input.modifiers.alt
+                                        && input.key_pressed(egui::Key::ArrowRight)
+                                    {
+                                        Some(TimelineToolbarAction::PanRight)
+                                    } else if input.modifiers.is_none()
+                                        && input.key_pressed(egui::Key::C)
+                                    {
+                                        Some(TimelineToolbarAction::BringPlayheadIntoView)
+                                    } else if (input.modifiers.ctrl || input.modifiers.command)
+                                        && input.modifiers.shift
+                                        && !input.modifiers.alt
+                                        && input.key_pressed(egui::Key::L)
+                                    {
+                                        Some(TimelineToolbarAction::FollowPlayhead)
+                                    } else {
+                                        None
+                                    }
+                                });
+                                if shortcut_action.is_some() {
+                                    pending_timeline_toolbar_action = shortcut_action;
+                                }
+                            }
+
+                            if let Some(action) = pending_timeline_toolbar_action.take() {
+                                let current_offset = timeline_scroll_state.offset;
+                                let current_zoom = self.app.timeline_zoom;
+                                let mut navigation_target = None;
+                                match action {
+                                    TimelineToolbarAction::ZoomIn
+                                    | TimelineToolbarAction::ZoomOut => {
+                                        let factor = if action == TimelineToolbarAction::ZoomIn {
+                                            1.25
+                                        } else {
+                                            0.8
+                                        };
+                                        let target_zoom = (current_zoom * factor).clamp(20.0, 500.0);
+                                        let center = timeline_viewport.width() * 0.5;
+                                        let target_x = timeline_offset_for_pointer_zoom(
+                                            current_offset.x,
+                                            center,
+                                            current_zoom,
+                                            target_zoom,
+                                            total_seconds,
+                                            timeline_viewport.width(),
+                                        );
+                                        navigation_target = Some((
+                                            egui::vec2(target_x, current_offset.y),
+                                            target_zoom,
+                                        ));
+                                    }
+                                    TimelineToolbarAction::PanLeft
+                                    | TimelineToolbarAction::PanRight => {
+                                        let direction = if action == TimelineToolbarAction::PanLeft {
+                                            -1.0
+                                        } else {
+                                            1.0
+                                        };
+                                        let max_x = (timeline_content_size.x
+                                            - timeline_viewport.width())
+                                            .max(0.0);
+                                        let target_x = (current_offset.x
+                                            + direction
+                                                * (timeline_viewport.width() * 0.15).max(40.0))
+                                            .clamp(0.0, max_x);
+                                        navigation_target = Some((
+                                            egui::vec2(target_x, current_offset.y),
+                                            current_zoom,
+                                        ));
+                                    }
+                                    TimelineToolbarAction::BringPlayheadIntoView => {
+                                        let playhead_x =
+                                            (self.app.playback_time.max(0.0) as f32 * current_zoom)
+                                                .min(timeline_content_size.x);
+                                        let target_x = timeline_offset_to_reveal_x(
+                                            current_offset.x,
+                                            playhead_x,
+                                            timeline_content_size.x,
+                                            timeline_viewport.width(),
+                                        );
+                                        navigation_target = Some((
+                                            egui::vec2(target_x, current_offset.y),
+                                            current_zoom,
+                                        ));
+                                    }
+                                    TimelineToolbarAction::FollowPlayhead => {
+                                        self.app.timeline_follow_playhead =
+                                            !self.app.timeline_follow_playhead;
+                                        self.app.save_config();
+                                        if self.app.timeline_follow_playhead {
+                                            let playhead_x = (self.app.playback_time.max(0.0) as f32
+                                                * current_zoom)
+                                                .min(timeline_content_size.x);
+                                            let target_x = timeline_offset_to_reveal_x(
+                                                current_offset.x,
+                                                playhead_x,
+                                                timeline_content_size.x,
+                                                timeline_viewport.width(),
+                                            );
+                                            navigation_target = Some((
+                                                egui::vec2(target_x, current_offset.y),
+                                                current_zoom,
+                                            ));
+                                        }
+                                    }
+                                    TimelineToolbarAction::AddKeyframe => {
+                                        let time_ms = (self.app.playback_time * 1_000.0)
+                                            .round()
+                                            .clamp(0.0, total_seconds * 1_000.0)
+                                            as u64;
+                                        self.app.insert_timeline_keyframe(time_ms);
+                                    }
+                                    TimelineToolbarAction::PreviousCue
+                                    | TimelineToolbarAction::NextCue => {
+                                        let cue_ids = sorted_cue_ids(&self.app.timeline);
+                                        if !cue_ids.is_empty() {
+                                            let selected_index = cue_ids.iter().position(|id| {
+                                                self.app.selected_instance_ids.contains(id)
+                                            });
+                                            let next_index = if action
+                                                == TimelineToolbarAction::PreviousCue
+                                            {
+                                                selected_index
+                                                    .unwrap_or(0)
+                                                    .checked_sub(1)
+                                                    .unwrap_or(cue_ids.len() - 1)
+                                            } else {
+                                                selected_index
+                                                    .map(|index| (index + 1) % cue_ids.len())
+                                                    .unwrap_or(0)
+                                            };
+                                            let cue_id = cue_ids[next_index];
+                                            self.app.selected_instance_ids.clear();
+                                            self.app.selected_instance_ids.insert(cue_id);
+                                            self.app.selected_keyframes.clear();
+                                            self.app.selected_timeline_keyframe = None;
+                                            if let Some(instance) = self
+                                                .app
+                                                .timeline
+                                                .instances
+                                                .iter()
+                                                .find(|instance| instance.id == cue_id)
+                                            {
+                                                let target_x = (instance.start_time_ms as f32
+                                                    * px_per_ms
+                                                    - timeline_viewport.width() * 0.35)
+                                                    .clamp(
+                                                        0.0,
+                                                        (timeline_content_size.x
+                                                            - timeline_viewport.width())
+                                                            .max(0.0),
+                                                    );
+                                                navigation_target = Some((
+                                                    egui::vec2(target_x, current_offset.y),
+                                                    current_zoom,
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    TimelineToolbarAction::NudgeCueLeft
+                                    | TimelineToolbarAction::NudgeCueRight => {
+                                        let direction = if action
+                                            == TimelineToolbarAction::NudgeCueLeft
+                                        {
+                                            -1
+                                        } else {
+                                            1
+                                        };
+                                        let delta = timeline_frame_step_ms(
+                                            self.app.media_fps,
+                                            self.app.frame_step_count,
+                                        ) as i64
+                                            * direction;
+                                        let snapshot = self.app.snapshot_timeline();
+                                        if move_selected_cues(
+                                            &mut self.app.timeline,
+                                            &self.app.selected_instance_ids,
+                                            delta,
+                                        ) {
+                                            self.app.undo_stack.push(snapshot);
+                                            self.app.sync_timeline_engine();
+                                        }
+                                    }
+                                    TimelineToolbarAction::SelectAll => {
+                                        self.app.selected_instance_ids = self
+                                            .app
+                                            .timeline
+                                            .instances
+                                            .iter()
+                                            .map(|instance| instance.id)
+                                            .collect();
+                                        self.app.selected_keyframes.clear();
+                                        for track in self.app.timeline.analog_tracks.iter().filter(
+                                            |track| visible_analog_track_ids.contains(&track.id),
+                                        ) {
+                                            for (index, _) in track.keyframes.iter().enumerate() {
+                                                self.app.selected_keyframes.insert((track.id, index));
+                                            }
+                                        }
+                                    }
+                                    TimelineToolbarAction::ClearSelection => {
+                                        self.app.selected_instance_ids.clear();
+                                        self.app.selected_keyframes.clear();
+                                        self.app.selected_timeline_keyframe = None;
+                                    }
+                                    TimelineToolbarAction::DeleteSelection => {
+                                        if !self.app.selected_instance_ids.is_empty()
+                                            && self.app.selected_keyframes.is_empty()
+                                            && self.app.selected_timeline_keyframe.is_none()
+                                        {
+                                            self.app.delete_selected_timeline_cues();
+                                        } else if !self.app.selected_instance_ids.is_empty()
+                                            || !self.app.selected_keyframes.is_empty()
+                                            || self.app.selected_timeline_keyframe.is_some()
+                                        {
+                                            self.app.undo_stack.push(self.app.snapshot_timeline());
+                                            self.app.timeline.instances.retain(|instance| {
+                                                !self.app.selected_instance_ids.contains(&instance.id)
+                                            });
+                                            for track in &mut self.app.timeline.analog_tracks {
+                                                let mut indices = self
+                                                    .app
+                                                    .selected_keyframes
+                                                    .iter()
+                                                    .filter(|(track_id, _)| *track_id == track.id)
+                                                    .map(|(_, index)| *index)
+                                                    .collect::<Vec<_>>();
+                                                indices.sort_unstable();
+                                                for index in indices.into_iter().rev() {
+                                                    if index < track.keyframes.len() {
+                                                        track.keyframes.remove(index);
+                                                    }
+                                                }
+                                            }
+                                            if let Some(id) =
+                                                self.app.selected_timeline_keyframe.take()
+                                            {
+                                                self.app.timeline.remove_keyframe(id);
+                                            }
+                                            self.app.selected_instance_ids.clear();
+                                            self.app.selected_keyframes.clear();
+                                            self.app.commit_timeline_edit();
+                                        }
+                                    }
+                                }
+
+                                if let Some((target_offset, target_zoom)) = navigation_target {
+                                    if self.app.timeline_animated_navigation
+                                        && ((target_offset - current_offset).length() > 0.5
+                                            || (target_zoom - current_zoom).abs() > 0.01)
+                                    {
+                                        ui.data_mut(|data| {
+                                            data.insert_temp(
+                                                navigation_transition_id,
+                                                TimelineNavigationTransition {
+                                                    start_offset: current_offset,
+                                                    target_offset,
+                                                    start_zoom: current_zoom,
+                                                    target_zoom,
+                                                    started_at_seconds: ui.input(|input| input.time),
+                                                    duration_seconds: self
+                                                        .app
+                                                        .timeline_navigation_transition_ms
+                                                        as f32
+                                                        / 1_000.0,
+                                                    anchor: None,
+                                                },
+                                            );
+                                        });
+                                        ui.ctx().request_repaint();
+                                    } else {
+                                        self.app.timeline_zoom = target_zoom;
+                                        timeline_scroll_state.offset = target_offset;
+                                        timeline_scroll_changed = true;
+                                    }
+                                }
                             }
                             if let Some((wheel_action, pointer_screen_x)) =
                                 pending_timeline_wheel
@@ -14623,6 +16130,20 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 .max(0.0);
                                             target_offset.y =
                                                 (target_offset.y - delta).clamp(0.0, max_offset);
+                                        }
+                                        TimelineWheelAction::MultiGesture { zoom_factor, translation } => {
+                                            let next_zoom = (target_zoom * zoom_factor).clamp(20.0, 500.0);
+                                            let pointer_x = pointer_screen_x - timeline_viewport.left();
+                                            target_offset.x = timeline_offset_for_pointer_zoom(
+                                                target_offset.x, pointer_x, target_zoom, next_zoom,
+                                                total_seconds, timeline_viewport.width());
+                                            target_zoom = next_zoom;
+                                            let max_x = (total_seconds as f32 * target_zoom
+                                                - timeline_viewport.width()).max(0.0);
+                                            let max_y = (timeline_content_size.y
+                                                - timeline_viewport.height()).max(0.0);
+                                            target_offset.x = (target_offset.x - translation.x).clamp(0.0, max_x);
+                                            target_offset.y = (target_offset.y - translation.y).clamp(0.0, max_y);
                                         }
                                     }
                                     let transition = TimelineNavigationTransition {
@@ -14694,6 +16215,23 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     .clamp(0.0, max_offset);
                                             timeline_scroll_changed = true;
                                         }
+                                        TimelineWheelAction::MultiGesture { zoom_factor, translation } => {
+                                            let next_zoom = (zoom * zoom_factor).clamp(20.0, 500.0);
+                                            let pointer_x = pointer_screen_x - timeline_viewport.left();
+                                            timeline_scroll_state.offset.x = timeline_offset_for_pointer_zoom(
+                                                timeline_scroll_state.offset.x, pointer_x, zoom, next_zoom,
+                                                total_seconds, timeline_viewport.width());
+                                            self.app.timeline_zoom = next_zoom;
+                                            let max_x = (total_seconds as f32 * next_zoom
+                                                - timeline_viewport.width()).max(0.0);
+                                            let max_y = (timeline_content_size.y
+                                                - timeline_viewport.height()).max(0.0);
+                                            timeline_scroll_state.offset.x =
+                                                (timeline_scroll_state.offset.x - translation.x).clamp(0.0, max_x);
+                                            timeline_scroll_state.offset.y =
+                                                (timeline_scroll_state.offset.y - translation.y).clamp(0.0, max_y);
+                                            timeline_scroll_changed = true;
+                                        }
                                     }
                                 }
                             }
@@ -14763,6 +16301,58 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 data.insert_temp(middle_pan_id, middle_pan_active);
                             });
                             timeline_scroll_changed |= middle_pan_changed;
+
+                            if self.app.timeline_follow_playhead
+                                && !self.app.is_paused
+                                && !middle_pan_active
+                                && ui.data(|data| {
+                                    data.get_temp::<TimelineNavigationTransition>(
+                                        navigation_transition_id,
+                                    )
+                                    .is_none()
+                                })
+                            {
+                                let content_width =
+                                    (total_seconds as f32 * self.app.timeline_zoom).max(0.0);
+                                let playhead_x = (self.app.playback_time.max(0.0) as f32
+                                    * self.app.timeline_zoom)
+                                    .min(content_width);
+                                if let Some(target_x) = timeline_follow_target_offset(
+                                    timeline_scroll_state.offset.x,
+                                    playhead_x,
+                                    content_width,
+                                    timeline_viewport.width(),
+                                ) {
+                                    let target_offset = egui::vec2(
+                                        target_x,
+                                        timeline_scroll_state.offset.y,
+                                    );
+                                    if self.app.timeline_animated_navigation {
+                                        ui.data_mut(|data| {
+                                            data.insert_temp(
+                                                navigation_transition_id,
+                                                TimelineNavigationTransition {
+                                                    start_offset: timeline_scroll_state.offset,
+                                                    target_offset,
+                                                    start_zoom: self.app.timeline_zoom,
+                                                    target_zoom: self.app.timeline_zoom,
+                                                    started_at_seconds: ui.input(|input| input.time),
+                                                    duration_seconds: self
+                                                        .app
+                                                        .timeline_navigation_transition_ms
+                                                        as f32
+                                                        / 1_000.0,
+                                                    anchor: None,
+                                                },
+                                            );
+                                        });
+                                        ui.ctx().request_repaint();
+                                    } else {
+                                        timeline_scroll_state.offset = target_offset;
+                                        timeline_scroll_changed = true;
+                                    }
+                                }
+                            }
                             if timeline_scroll_changed {
                                 timeline_scroll_state.store(ui.ctx(), timeline_scroll_id);
                             }
@@ -14831,6 +16421,19 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                     if mouse_pos.y >= ruler_bottom {
                                         self.app.lasso_origin = Some(mouse_pos);
+                                        let multi_select = ui.ctx().input(|input| {
+                                            input.modifiers.ctrl || input.modifiers.command
+                                        });
+                                        self.app.lasso_initial_instance_ids = if multi_select {
+                                            self.app.selected_instance_ids.clone()
+                                        } else {
+                                            std::collections::HashSet::new()
+                                        };
+                                        self.app.lasso_initial_keyframes = if multi_select {
+                                            self.app.selected_keyframes.clone()
+                                        } else {
+                                            std::collections::HashSet::new()
+                                        };
                                     }
                                 }
                             }
@@ -14841,35 +16444,56 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                     let origin = self.app.lasso_origin.unwrap();
                                     let lasso_rect = egui::Rect::from_two_pos(origin, mouse_pos);
+                                    let marquee_mode = timeline_marquee_mode(origin, mouse_pos);
                                     self.app.lasso_rect = Some(lasso_rect);
 
-                                    let multi_select = ui.ctx().input(|i| {
-                                        i.modifiers.ctrl || i.modifiers.command
-                                    });
-                                    let mut new_instance_selection = if multi_select { self.app.selected_instance_ids.clone() } else { std::collections::HashSet::new() };
-                                    let mut new_keyframe_selection = if multi_select { self.app.selected_keyframes.clone() } else { std::collections::HashSet::new() };
+                                    let mut new_instance_selection =
+                                        self.app.lasso_initial_instance_ids.clone();
+                                    let mut new_keyframe_selection =
+                                        self.app.lasso_initial_keyframes.clone();
 
                                     // Instances
                                     for instance in &self.app.timeline.instances {
                                         if let Some(effect) = self.app.timeline.templates.iter().find(|t| t.id == instance.effect_id) {
-                                            let Some(relay_id) = effect.actions.first().map(|a| a.relay_id) else {
+                                            let Some(placement) = timeline_cue_placement(
+                                                self.app,
+                                                effect,
+                                                &timeline_rows,
+                                                &visible_analog_track_ids,
+                                            ) else {
                                                 continue;
                                             };
-                                            let Some(track_index) = timeline_row_for_relay(&timeline_rows, relay_id) else {
-                                                continue;
+                                            let (track_y, cue_row_height) = if let Some(analog_index) = placement.analog_index {
+                                                (
+                                                    tracks_top
+                                                        + track_area_height
+                                                        + analog_index as f32 * timeline_analog_height,
+                                                    timeline_analog_height,
+                                                )
+                                            } else {
+                                                (
+                                                    timeline_track_row_top(
+                                                        rect.min.y,
+                                                        placement.track_index,
+                                                        timeline_track_height,
+                                                    ),
+                                                    timeline_track_height,
+                                                )
                                             };
-                                            let track_y = tracks_top
-                                                + track_index as f32 * timeline_track_height;
                                             let start_x = rect.min.x + (instance.start_time_ms as f32 * px_per_ms);
-                                            let end_x = start_x + (effect.duration_ms as f32 * px_per_ms);
+                                            let end_x = start_x + (effect.duration_ms.max(1) as f32 * px_per_ms);
                                             let clip_rect = egui::Rect::from_min_max(
                                                 egui::pos2(start_x, track_y + 4.0),
                                                 egui::pos2(
-                                                    end_x,
-                                                    track_y + timeline_track_height - 4.0,
+                                                    end_x.max(start_x + 8.0),
+                                                    track_y + cue_row_height - 4.0,
                                                 ),
                                             );
-                                            if lasso_rect.intersects(clip_rect) {
+                                            if timeline_marquee_selects_rect(
+                                                lasso_rect,
+                                                clip_rect,
+                                                marquee_mode,
+                                            ) {
                                                 new_instance_selection.insert(instance.id);
                                             }
                                         }
@@ -14912,9 +16536,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 lasso_ended = true;
                             }
 
+                            let lasso_was_active = self.app.lasso_origin.is_some();
                             if lasso_ended {
                                 self.app.lasso_origin = None;
                                 self.app.lasso_rect = None;
+                                self.app.lasso_initial_instance_ids.clear();
+                                self.app.lasso_initial_keyframes.clear();
                             }
 
                             if response.clicked_by(egui::PointerButton::Primary)
@@ -14922,6 +16549,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 && !clicked_any_keyframe
                                 && self.app.active_drag.is_none()
                                 && self.app.active_keyframe_drag.is_none()
+                                && !lasso_was_active
                             {
                                 if let Some(mouse_pos) = response.interact_pointer_pos() {
                                     if mouse_pos.y >= tracks_top && mouse_pos.y < tracks_top + track_area_height {
@@ -15132,20 +16760,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         && i.modifiers.shift
                                         && !i.modifiers.alt
                                 });
-                                let scroll_left_pressed = ui.input(|i| {
-                                    i.key_pressed(egui::Key::ArrowLeft)
-                                        && i.modifiers.shift
-                                        && !i.modifiers.ctrl
-                                        && !i.modifiers.command
-                                        && !i.modifiers.alt
-                                });
-                                let scroll_right_pressed = ui.input(|i| {
-                                    i.key_pressed(egui::Key::ArrowRight)
-                                        && i.modifiers.shift
-                                        && !i.modifiers.ctrl
-                                        && !i.modifiers.command
-                                        && !i.modifiers.alt
-                                });
                                 let playhead_left_pressed = ui.input(|i| {
                                     i.key_pressed(egui::Key::ArrowLeft) && i.modifiers.is_none()
                                 });
@@ -15268,16 +16882,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     );
                                         }
                                     }
-                                } else if scroll_left_pressed || scroll_right_pressed {
-                                    let direction = if scroll_left_pressed { -1.0 } else { 1.0 };
-                                    timeline_scroll_state.offset.x =
-                                        (timeline_scroll_state.offset.x
-                                            + direction * (timeline_viewport.width() * 0.12).max(40.0))
-                                            .clamp(
-                                                0.0,
-                                                (timeline_content_size.x - timeline_viewport.width())
-                                                    .max(0.0),
-                                            );
                                 } else if scroll_up_pressed || scroll_down_pressed {
                                     let direction = if scroll_up_pressed { -1.0 } else { 1.0 };
                                     timeline_scroll_state.offset.y =
@@ -16082,4 +17686,91 @@ fn render_clip_handles(
             egui::Stroke::new(1.0_f32, right_notch_color),
         );
     }
+}
+
+/// Paints a centered move affordance on intrinsic-duration cues. Unlike the
+/// edge handles on resizable cues, this grip deliberately sits inside the
+/// clip so it cannot be mistaken for a duration control.
+fn render_clip_move_grip(painter: &egui::Painter, clip_rect: egui::Rect, alpha: u8) {
+    if clip_rect.width() < 12.0 || clip_rect.height() < 12.0 {
+        return;
+    }
+
+    let compact = clip_rect.width() < 30.0;
+    let center_x = if compact {
+        clip_rect.center().x
+    } else {
+        clip_rect.left() + 11.0
+    };
+    let grip_height = (clip_rect.height() - 10.0).clamp(6.0, 12.0);
+    let grip_rect = egui::Rect::from_center_size(
+        egui::pos2(center_x, clip_rect.center().y),
+        egui::vec2(12.0, grip_height + 6.0),
+    );
+    let alpha_scale = alpha as f32 / 255.0;
+    painter.rect_filled(
+        grip_rect,
+        3.0,
+        egui::Color32::from_rgba_unmultiplied(0, 0, 0, (42.0 * alpha_scale) as u8),
+    );
+
+    let bar_color =
+        egui::Color32::from_rgba_unmultiplied(255, 255, 255, (175.0 * alpha_scale) as u8);
+    for offset in [-3.0_f32, 0.0, 3.0] {
+        painter.line_segment(
+            [
+                egui::pos2(center_x + offset, clip_rect.center().y - grip_height / 2.0),
+                egui::pos2(center_x + offset, clip_rect.center().y + grip_height / 2.0),
+            ],
+            egui::Stroke::new(1.25, bar_color),
+        );
+    }
+}
+
+/// Renders a cue label with native egui elision while preserving the opt-in
+/// legacy overflow mode. The painter is constrained to the cue interior so
+/// glyphs never leak through rounded borders in ellipsis mode.
+fn render_timeline_cue_label(
+    painter: &egui::Painter,
+    clip_rect: egui::Rect,
+    title: String,
+    font_id: egui::FontId,
+    color: egui::Color32,
+    hide_overflow: bool,
+    duration_resizable: bool,
+) {
+    let left_padding = if duration_resizable { 12.0 } else { 22.0 };
+    if !hide_overflow {
+        painter.text(
+            clip_rect.left_center() + egui::vec2(left_padding, 0.0),
+            egui::Align2::LEFT_CENTER,
+            title,
+            font_id,
+            color,
+        );
+        return;
+    }
+
+    let right_padding = if duration_resizable { 12.0 } else { 6.0 };
+    let content_rect = egui::Rect::from_min_max(
+        egui::pos2(clip_rect.left() + left_padding, clip_rect.top() + 2.0),
+        egui::pos2(clip_rect.right() - right_padding, clip_rect.bottom() - 2.0),
+    );
+    if content_rect.width() < 2.0 || content_rect.height() < 2.0 {
+        return;
+    }
+
+    let mut job = egui::text::LayoutJob {
+        wrap: egui::text::TextWrapping::truncate_at_width(content_rect.width()),
+        ..Default::default()
+    };
+    job.append(&title, 0.0, egui::TextFormat::simple(font_id, color));
+    let galley = painter.layout_job(job);
+    let position = egui::pos2(
+        content_rect.left(),
+        content_rect.center().y - galley.size().y / 2.0,
+    );
+    painter
+        .with_clip_rect(content_rect)
+        .galley(position, galley, color);
 }

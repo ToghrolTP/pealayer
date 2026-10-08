@@ -10,12 +10,14 @@ import {
   SettingOutlined,
 } from '@ant-design/icons';
 import { HeaderBar } from './components/HeaderBar';
+import { ApplicationStatusBar, StatusBarVisibility } from './components/ApplicationStatusBar';
 import { SharedToasts } from './components/SharedToasts';
 import { FujiLoader } from './components/FujiLoader';
 import { WebViewBoundary } from './components/WebViewBoundary';
 import { RemoteLocationDialog } from './components/RemoteLocationDialog';
 import './remote-location.css';
 import type { PlayerState } from './components/RemoteControlTab';
+import type { MediaGesturePreferences } from './components/MediaSurface';
 import { tr } from './i18n';
 import { useWebPlatform } from './webPlatform';
 import './styles.css';
@@ -182,6 +184,17 @@ const App: React.FC = () => {
   const accentTextColor = accentForeground(accentColor);
   const paletteName = resolvePaletteName(appConfig);
   const palette = palettes[paletteName][resolvedTheme];
+  const mediaGestures: MediaGesturePreferences = {
+    clickPlayerToToggle: appConfig?.click_player_to_toggle ?? true,
+    pausedDragAction: appConfig?.paused_drag_action ?? 'move_window',
+    playingDragAction: appConfig?.playing_drag_action ?? 'temporary_fast_forward',
+    middleClickAction: appConfig?.middle_click_action ?? 'none',
+    middleHoldAction: appConfig?.middle_hold_action ?? 'none',
+    rightClickAction: appConfig?.right_click_action ?? 'context_menu',
+    rightHoldAction: appConfig?.right_hold_action ?? 'none',
+    temporaryFastForwardSpeed: Number(appConfig?.temporary_fast_forward_speed ?? 2),
+    playbackSpeed: Number(appConfig?.playback_speed ?? state.playback_rate ?? 1),
+  };
 
   useLayoutEffect(() => {
     document.documentElement.dataset.palette = paletteName;
@@ -219,13 +232,8 @@ const App: React.FC = () => {
     pending.finish(!error);
   }, []);
   const rawSendCmd = useCallback((command: string, payload: Record<string, any> = {}): Promise<boolean> => {
-    const methodAliases: Record<string, string> = {
-      add_effect_cue: 'pealayer.timeline.effect.add',
-      remove_effect_cue: 'pealayer.timeline.effect.remove',
-      set_recording: 'pealayer.recording.set',
-    };
     const id = nextRequestId.current++;
-    const request = { jsonrpc: '2.0', id, method: methodAliases[command] || command, params: payload };
+    const request = { jsonrpc: '2.0', id, method: command, params: payload };
     return new Promise((finish) => {
       const timer = window.setTimeout(() => {
         completeRequest({ id, error: { message: 'Command acknowledgement timed out; check the current state before retrying.' } });
@@ -250,11 +258,13 @@ const App: React.FC = () => {
     });
   }, [apiEndpoint, completeRequest]);
 
+  const playbackIconState = !state.current_video ? 'stopped' : state.playing ? 'playing' : 'paused';
+  const stateAppIconPath = `${runtime?.appIconPath || '/api/runtime/app-icon'}?state=${playbackIconState}`;
   const platform = useWebPlatform(
     state,
     rawSendCmd,
     runtime?.appName || 'Pealayer',
-    runtime?.appIconPath || '/api/runtime/app-icon-192.png',
+    stateAppIconPath,
   );
 
   const signalInteraction = platform.signalInteraction;
@@ -267,6 +277,24 @@ const App: React.FC = () => {
     signalInteraction();
     return rawSendCmd(command, payload);
   }, [connected, platform.online, rawSendCmd, signalInteraction, runtime?.locale]);
+
+  const updateStatusBarVisibility = useCallback((visibility: StatusBarVisibility) => {
+    setAppConfig((previous) => {
+      const next = { ...(previous ?? {}), status_bar: visibility };
+      persistJson(STORAGE.config, next);
+      return next;
+    });
+    void fetch(apiEndpoint('/api/config'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status_bar: visibility }),
+    }).then(async (response) => {
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || `Status bar update failed (${response.status})`);
+      }
+    }).catch((error) => void message.error(String(error)));
+  }, [apiEndpoint]);
 
   const resolveWebSocketUrl = useCallback(() => {
     const fallbackProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -531,7 +559,7 @@ const App: React.FC = () => {
           connected={connected}
           connectionMode={connectionMode}
           appName={runtime?.appName}
-          appIconPath={runtime?.appIconPath}
+          appIconPath={stateAppIconPath}
           locale={runtime?.locale || 'en'}
           connectionTarget={connectionTarget}
           onConnectionTargetChange={changeConnectionTarget}
@@ -600,6 +628,7 @@ const App: React.FC = () => {
                   shift: appConfig?.timeline_shift_wheel_action ?? 'horizontal_scroll',
                   alt: appConfig?.timeline_alt_wheel_action ?? 'zoom',
                 }}
+                mediaGestures={mediaGestures}
               />
             )}
             {activeTab === 'player' && (
@@ -611,6 +640,7 @@ const App: React.FC = () => {
                 quickSeekSeconds={quickSeekSeconds}
                 apiBaseUrl={apiBaseUrl}
                 seekbarHoverThumbnails={Boolean(appConfig?.seekbar_hover_thumbnails)}
+                mediaGestures={mediaGestures}
               />
             )}
             {activeTab === 'library' && (
@@ -644,6 +674,15 @@ const App: React.FC = () => {
             </WebViewBoundary>
           </Content>
         </Layout>
+        <ApplicationStatusBar
+          state={state}
+          connected={connected}
+          connectionMode={connectionMode}
+          activeSurface={activeTab === 'timeline' ? tr(runtime?.locale || 'en', 'Timeline') : tr(runtime?.locale || 'en', menuItems.find(item => item?.key === activeTab)?.label as string || activeTab)}
+          locale={runtime?.locale || 'en'}
+          visibility={appConfig?.status_bar}
+          onVisibilityChange={updateStatusBarVisibility}
+        />
       </Layout>
     </ConfigProvider>
   );

@@ -47,10 +47,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 {
                     ui.separator();
                     let state=if plan.error.is_some(){"Hardware timing fault"}
+                        else if plan.deferred_reason.is_some(){"Hardware waiting"}
                         else if plan.acknowledged_revision!=plan.revision{"Preparing hardware"}
                         else {"Hardware timeline"};
                     let color=if plan.error.is_some(){ui.visuals().error_fg_color}else{ui.visuals().text_color()};
-                    ui.colored_label(color,state).on_hover_text(plan.error.clone()
+                    ui.colored_label(color,state).on_hover_text(plan.error.clone().or_else(||plan.deferred_reason.clone())
                         .unwrap_or_else(||format!("Revision {} · {} acknowledged commands · maximum ACK lateness {} ms",plan.revision,
                             plan.feedback["acknowledged"],plan.feedback["max_ack_lateness_ms"])));
                 }

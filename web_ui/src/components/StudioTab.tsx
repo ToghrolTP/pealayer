@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AimOutlined,
   AppstoreOutlined,
   ArrowDownOutlined,
   ArrowUpOutlined,
@@ -8,15 +9,24 @@ import {
   ClockCircleOutlined,
   DeleteOutlined,
   DesktopOutlined,
+  DisconnectOutlined,
   EditOutlined,
   FastBackwardOutlined,
   FastForwardOutlined,
+  FileTextOutlined,
+  EyeInvisibleOutlined,
+  EyeOutlined,
+  LinkOutlined,
+  LockOutlined,
+  MoreOutlined,
   PauseOutlined,
   PlusOutlined,
   RadarChartOutlined,
   SaveOutlined,
   SettingOutlined,
   SoundOutlined,
+  StopOutlined,
+  UnlockOutlined,
   VideoCameraOutlined,
 } from '@ant-design/icons';
 import { Button, ConfigProvider, Divider, Dropdown, Empty, Input, InputNumber, message, Modal, Popconfirm, Select, Slider, Space, Tooltip } from 'antd';
@@ -28,8 +38,12 @@ import recordingColors from '../../../assets/themes/recording-colors.json';
 import { mediaBasename } from '../mediaLabel';
 import { formatTimelineTime } from '../timelineTime';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
+import { MediaSurface } from './MediaSurface';
+import type { MediaGesturePreferences } from './MediaSurface';
 import { defaultTimelineWheelPreferences, timelineWheelAction, timelineZoomAtPointer } from '../timelineWheel';
 import type { TimelineWheelPreferences } from '../timelineWheel';
+import { appendMelodySteps, sequenceDurationMs } from '../melodyCatalog';
+import { MediaTrackSelectors } from './MediaTrackSelectors';
 
 interface StudioTabProps {
   state: PlayerState;
@@ -41,6 +55,7 @@ interface StudioTabProps {
   seekbarHoverThumbnails: boolean;
   surface?: 'studio' | 'timeline';
   timelineWheelPreferences?: TimelineWheelPreferences;
+  mediaGestures: MediaGesturePreferences;
 }
 
 const formatTime = (seconds = 0, showMilliseconds = true) => {
@@ -80,8 +95,15 @@ const workspaceGlyph = (icon?: string) => {
   }
 };
 
-export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl, seekbarHoverThumbnails, surface = 'studio', timelineWheelPreferences = defaultTimelineWheelPreferences }) => {
+export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl, seekbarHoverThumbnails, surface = 'studio', timelineWheelPreferences = defaultTimelineWheelPreferences, mediaGestures }) => {
   const timelineGridRef = useRef<HTMLDivElement | null>(null);
+  const timelinePointersRef = useRef(new Map<number, { x: number; y: number; pointerType: string }>());
+  const timelineGestureRef = useRef<null | {
+    kind: 'pan' | 'pinch';
+    startX: number; startY: number; startScrollLeft: number; startScrollTop: number;
+    startZoom: number; startDistance: number; startCenterX: number; startCenterY: number;
+    axis: 'both' | 'horizontal' | 'vertical';
+  }>(null);
   const [timelineZoom, setTimelineZoom] = useState(1);
   const timelineZoomRef = useRef(1);
   useEffect(() => {
@@ -91,7 +113,15 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       // The listener covers labels, cues, ruler, and empty space, not just a child.
       event.preventDefault(); // Suppress browser zoom and duplicate native scrolling.
       const scale = event.deltaMode === 1 ? 20 : event.deltaMode === 2 ? grid.clientHeight : 1;
-      const { action, delta } = timelineWheelAction(event, timelineWheelPreferences);
+      // Chromium reports precision-trackpad pinch as a small pixel wheel with
+      // Ctrl/Meta synthesized by the browser. Keep it distinct from a real
+      // Ctrl+mouse-wheel notch so preference-driven vertical scrolling remains.
+      const precisionPinch = event.deltaMode === 0
+        && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey
+        && Math.abs(event.deltaY) < 80 && Math.abs(event.deltaX) < 4;
+      const { action, delta } = precisionPinch
+        ? { action: 'zoom' as const, delta: event.deltaY }
+        : timelineWheelAction(event, timelineWheelPreferences);
       if (action === 'horizontal_scroll') grid.scrollLeft += delta * scale;
       else if (action === 'vertical_scroll') grid.scrollTop += delta * scale;
       else if (action === 'zoom' && delta !== 0) {
@@ -108,6 +138,102 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
     grid.addEventListener('wheel', onWheel, { passive: false });
     return () => grid.removeEventListener('wheel', onWheel);
   }, [timelineWheelPreferences]);
+  useEffect(() => {
+    const grid = timelineGridRef.current;
+    if (!grid) return;
+    const pointers = timelinePointersRef.current;
+    const content = () => grid.firstElementChild as HTMLElement | null;
+    const centerOf = (values: Array<{ x: number; y: number }>) => ({
+      x: values.reduce((sum, point) => sum + point.x, 0) / values.length,
+      y: values.reduce((sum, point) => sum + point.y, 0) / values.length,
+    });
+    const beginPinch = () => {
+      const points = [...pointers.values()].slice(0, 2);
+      if (points.length < 2) return;
+      const center = centerOf(points);
+      timelineGestureRef.current = {
+        kind: 'pinch', startX: center.x, startY: center.y,
+        startScrollLeft: grid.scrollLeft, startScrollTop: grid.scrollTop,
+        startZoom: timelineZoomRef.current,
+        startDistance: Math.max(1, Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y)),
+        startCenterX: center.x, startCenterY: center.y, axis: 'both',
+      };
+    };
+    const beginPan = (point: { x: number; y: number }, axis: 'both' | 'horizontal' | 'vertical') => {
+      timelineGestureRef.current = {
+        kind: 'pan', startX: point.x, startY: point.y,
+        startScrollLeft: grid.scrollLeft, startScrollTop: grid.scrollTop,
+        startZoom: timelineZoomRef.current, startDistance: 1,
+        startCenterX: point.x, startCenterY: point.y, axis,
+      };
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const element = event.target as HTMLElement;
+      if (element.closest('button,input,textarea,select,.timeline-cue,[role="menuitem"]')) return;
+      const isTouch = event.pointerType === 'touch' || event.pointerType === 'pen';
+      if (!isTouch && event.button !== 1) return;
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, pointerType: event.pointerType });
+      try { grid.setPointerCapture(event.pointerId); } catch { /* capture can be unavailable during teardown */ }
+      if (isTouch && pointers.size >= 2) beginPinch();
+      else beginPan({ x: event.clientX, y: event.clientY }, event.shiftKey ? 'horizontal' : event.ctrlKey ? 'vertical' : 'both');
+      grid.classList.add('is-panning');
+      event.preventDefault();
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (!pointers.has(event.pointerId)) return;
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, pointerType: event.pointerType });
+      const gesture = timelineGestureRef.current;
+      if (!gesture) return;
+      if (pointers.size >= 2) {
+        if (gesture.kind !== 'pinch') beginPinch();
+        const pinch = timelineGestureRef.current;
+        if (!pinch || pinch.kind !== 'pinch') return;
+        const points = [...pointers.values()].slice(0, 2);
+        const center = centerOf(points);
+        const distance = Math.max(1, Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y));
+        const nextZoom = Math.max(1, Math.min(25, pinch.startZoom * distance / pinch.startDistance));
+        const rect = grid.getBoundingClientRect();
+        const anchorX = pinch.startCenterX - rect.left;
+        const currentX = center.x - rect.left;
+        const worldX = (pinch.startScrollLeft + anchorX) / pinch.startZoom;
+        timelineZoomRef.current = nextZoom;
+        if (content()) content()!.style.width = `${nextZoom * 100}%`;
+        grid.scrollLeft = Math.max(0, worldX * nextZoom - currentX);
+        grid.scrollTop = Math.max(0, pinch.startScrollTop + pinch.startCenterY - center.y);
+        setTimelineZoom(nextZoom);
+      } else if (gesture.kind === 'pan') {
+        if (gesture.axis !== 'vertical') grid.scrollLeft = gesture.startScrollLeft - (event.clientX - gesture.startX);
+        if (gesture.axis !== 'horizontal') grid.scrollTop = gesture.startScrollTop - (event.clientY - gesture.startY);
+      }
+      event.preventDefault();
+    };
+    const finishPointer = (event: PointerEvent) => {
+      if (!pointers.has(event.pointerId)) return;
+      pointers.delete(event.pointerId);
+      try { if (grid.hasPointerCapture(event.pointerId)) grid.releasePointerCapture(event.pointerId); } catch { /* already released */ }
+      if (pointers.size >= 2) beginPinch();
+      else if (pointers.size === 1) {
+        const point = [...pointers.values()][0];
+        beginPan(point, 'both');
+      } else {
+        timelineGestureRef.current = null;
+        grid.classList.remove('is-panning');
+      }
+    };
+    grid.addEventListener('pointerdown', onPointerDown);
+    grid.addEventListener('pointermove', onPointerMove);
+    grid.addEventListener('pointerup', finishPointer);
+    grid.addEventListener('pointercancel', finishPointer);
+    return () => {
+      grid.removeEventListener('pointerdown', onPointerDown);
+      grid.removeEventListener('pointermove', onPointerMove);
+      grid.removeEventListener('pointerup', finishPointer);
+      grid.removeEventListener('pointercancel', finishPointer);
+      pointers.clear();
+      timelineGestureRef.current = null;
+      grid.classList.remove('is-panning');
+    };
+  }, []);
   const [selectedEffect, setSelectedEffect] = useState<string | null>(null);
   const [effectEditorOpen, setEffectEditorOpen] = useState(false);
   const [savingEffect, setSavingEffect] = useState(false);
@@ -166,6 +292,21 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
     });
     return lanes;
   }, [directControls, effects]);
+  const timelineRows = useMemo(() => {
+    const shared = (state.timeline_tracks ?? []).filter((track) => track.linked && track.visible);
+    if (shared.length > 0) return shared;
+    return timelineLanes.map((lane) => ({
+      key: lane,
+      name: directControls.find((control) => control.key === lane)?.name ?? (lane.charAt(0).toUpperCase() + lane.slice(1)),
+      detail: null,
+      kind: directControls.some((control) => control.key === lane) ? 'hardware' as const : 'effect' as const,
+      lane: directControls.some((control) => control.key === lane) ? null : lane,
+      control_key: directControls.some((control) => control.key === lane) ? lane : null,
+      active: true, enabled: true, linked: true, visible: true, dimmed: false,
+      selected: false, muted: false, soloed: false, locked: false,
+      supports_mute: false, supports_solo: false, supports_lock: false, manageable: false,
+    }));
+  }, [directControls, state.timeline_tracks, timelineLanes]);
   const workspaceProfiles = useMemo(
     () => [...(state.workspace_profiles ?? [])].sort((left, right) => left.order - right.order || left.name.localeCompare(right.name)),
     [state.workspace_profiles],
@@ -272,6 +413,13 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         kind: 'relay', target: 4, value: 1,
       }],
     });
+  };
+  const addMelody = (name: string) => {
+    if (!effectDraft) return;
+    const melody = state.hardware_details?.melodies?.find((item) => item.name === name);
+    if (!melody) return;
+    const steps = appendMelodySteps(effectDraft.steps ?? [], melody);
+    setEffectDraft({ ...effectDraft, steps, duration_ms: sequenceDurationMs(steps) });
   };
 
   return (
@@ -409,6 +557,19 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                 <div className="sequence-editor-web__toolbar">
                   <ConfigProvider componentDisabled={false}><EffectRecorder state={state} sendCmd={sendCmd} locale={locale} effect={effectPayload(effectDraft)} onSequenceChange={(steps, id) => setEffectDraft((current) => current ? { ...current, steps, id: String(id), reference: `effect:${id}`, is_new: false } : current)} /></ConfigProvider>
                   <Button icon={<PlusOutlined />} onClick={addSequenceStep}>{tr(locale, 'Add step')}</Button>
+                  <Select
+                    className="effect-melody-picker"
+                    disabled={captureBusy || !state.controller_connected}
+                    placeholder={<><SoundOutlined /> {tr(locale, 'Add melody')}</>}
+                    value={undefined}
+                    options={(state.hardware_details?.melodies ?? []).map((melody) => ({
+                      value: melody.name,
+                      label: `${melody.name} · ${melody.duration_ms} ms`,
+                    }))}
+                    notFoundContent={tr(locale, 'No configured melodies')}
+                    onOpenChange={(open) => { if (open) void sendCmd('hardware.catalog.refresh'); }}
+                    onChange={addMelody}
+                  />
                   <span>{(effectDraft.steps ?? []).length} {tr(locale, 'actions')}</span>
                 </div>
                 <div className="sequence-step-list">
@@ -568,10 +729,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
 
         <div className="program-viewer">
           {state.current_video ? (
-            <img
-              src={`${apiBaseUrl}/api/player/frame?media=${encodeURIComponent(state.current_video)}`}
-              alt={tr(locale, 'Video Preview')}
-            />
+            <MediaSurface state={state} apiBaseUrl={apiBaseUrl} emptyLabel={tr(locale, 'Video Preview')} sendCmd={sendCmd} gestures={mediaGestures} locale={locale} />
           ) : (
             <div className="program-viewer__empty">
               <VideoCameraOutlined />
@@ -630,6 +788,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             onChange={(value) => sendCmd('set_volume', { value })}
           />
         </div>
+        <MediaTrackSelectors state={state} sendCmd={sendCmd} locale={locale} compact />
       </section>
 
       <section className="studio-panel timeline-panel-web">
@@ -721,18 +880,52 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             />
           ))}
           </div>
-          {timelineLanes.length === 0 ? (
+          {timelineRows.length === 0 ? (
             <div className="timeline-empty">{tr(locale, 'No effects')}</div>
-          ) : timelineLanes.map((lane) => {
+          ) : timelineRows.map((track) => {
+            const lane = track.lane ?? track.control_key ?? track.key;
             const laneEffects = effects.filter((effect) => (effect.lane || 'sequence') === lane);
             const laneEffectIds = new Set(laneEffects.map((effect) => effect.id));
-            const effectCues = cues.filter((cue) => laneEffectIds.has(cue.effect_id));
-            const directControl = directControls.find((control) => control.key === lane);
+            const effectCues = cues.filter((cue) => laneEffectIds.has(cue.effect_id)
+              || Boolean(track.control_key && cue.control_key === track.control_key));
+            const directControl = directControls.find((control) => control.key === track.control_key);
+            const trackIcon = track.kind === 'video' ? <VideoCameraOutlined />
+              : track.kind === 'audio' ? <SoundOutlined />
+                : track.kind === 'subtitle' ? <FileTextOutlined />
+                  : effectGlyph(lane === 'relay' || lane === 'motion' ? 'relay:lane' : lane === 'sequence' ? 'controller' : lane);
+            const updateTrack = (values: Record<string, boolean>) => sendCmd('timeline.track.update', {
+              key: track.key,
+              ...values,
+            });
+            const trackMenu = {
+              items: [
+                ...(track.manageable ? [{ key: 'manage', icon: <SettingOutlined />, label: tr(locale, 'Manage...') }] : []),
+                ...(track.manageable ? [{ type: 'divider' as const }] : []),
+                { key: 'linked', icon: track.linked ? <DisconnectOutlined /> : <LinkOutlined />, label: tr(locale, track.linked ? 'Unlink from timeline' : 'Link to timeline') },
+                { key: 'visible', icon: track.visible ? <EyeInvisibleOutlined /> : <EyeOutlined />, label: tr(locale, track.visible ? 'Hide timeline track' : 'Show timeline track') },
+                ...(track.supports_mute ? [{ key: 'muted', icon: <StopOutlined />, label: tr(locale, track.muted ? 'Unmute' : 'Mute') }] : []),
+                ...(track.supports_solo ? [{ key: 'soloed', icon: <AimOutlined />, label: tr(locale, track.soloed ? 'Unsolo' : 'Solo') }] : []),
+                ...(track.supports_lock ? [{ key: 'locked', icon: track.locked ? <UnlockOutlined /> : <LockOutlined />, label: tr(locale, track.locked ? 'Unlock' : 'Lock') }] : []),
+              ],
+              onClick: ({ key }: { key: string }) => {
+                if (key === 'manage') void sendCmd('timeline.track.manage', { key: track.key });
+                else if (key === 'linked') void updateTrack({ linked: !track.linked });
+                else if (key === 'visible') void updateTrack({ visible: !track.visible });
+                else if (key === 'muted') void updateTrack({ muted: !track.muted });
+                else if (key === 'soloed') void updateTrack({ soloed: !track.soloed });
+                else if (key === 'locked') void updateTrack({ locked: !track.locked });
+              },
+            };
             return (
-              <div className="timeline-row" key={lane}>
-                <div className="timeline-row__label">
-                  <span>{effectGlyph(lane === 'relay' || lane === 'motion' ? 'relay:lane' : lane === 'sequence' ? 'controller' : lane)}</span>
-                  <strong>{directControl?.name ?? (lane.charAt(0).toUpperCase() + lane.slice(1))}</strong>
+              <div className={`timeline-row ${track.dimmed ? 'is-dimmed' : ''} ${track.active ? 'is-active' : ''} ${track.selected ? 'is-selected' : ''}`} key={track.key}>
+                <Dropdown trigger={['contextMenu']} menu={trackMenu}>
+                <div
+                  className="timeline-row__label"
+                  onClick={() => updateTrack({ selected: true })}
+                  title={track.detail ? `${track.name} — ${track.detail}` : track.name}
+                >
+                  <span>{trackIcon}</span>
+                  <span className="timeline-row__identity"><strong>{track.name}</strong>{track.detail && <small title={track.detail}>{track.detail}</small>}</span>
                   {directControl && (
                     <Dropdown
                       trigger={['click']}
@@ -762,7 +955,18 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                       <Button type="text" size="small" icon={<PlusOutlined />} aria-label={tr(locale, 'Add cue at playhead')} />
                     </Dropdown>
                   )}
+                  <Dropdown trigger={['click']} menu={trackMenu}>
+                    <Button
+                      className="timeline-row__menu"
+                      type="text"
+                      size="small"
+                      icon={<MoreOutlined />}
+                      aria-label={tr(locale, 'Track actions')}
+                      onClick={(event) => event.stopPropagation()}
+                    />
+                  </Dropdown>
                 </div>
+                </Dropdown>
                 <div className="timeline-lane">
                   {effectCues.map((cue) => (
                     (() => {
@@ -823,7 +1027,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                         icon={<DeleteOutlined />}
                         onClick={(event) => {
                           event.stopPropagation();
-                          sendCmd('remove_effect_cue', { instance_id: cue.id });
+                          sendCmd('pealayer.timeline.effect.remove', { instance_id: cue.id });
                         }}
                       />
                       {cue.resizable && <span className="timeline-cue__resize timeline-cue__resize--right" aria-hidden="true" />}

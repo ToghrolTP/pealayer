@@ -30,7 +30,7 @@ flate2 = "1.1.9"
 tar = "0.4.46"
 zip = { version = "8.1.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 url = "2.5.8"
-image = { version = "0.25.9", default-features = false, features = ["jpeg", "png"] }
+image = { version = "0.25.9", default-features = false, features = ["ico", "jpeg", "png", "webp"] }
 include_dir = "0.7.4"
 raw-window-handle = "0.6.2"
 souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"] }

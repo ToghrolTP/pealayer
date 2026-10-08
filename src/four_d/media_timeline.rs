@@ -11,6 +11,7 @@ pub struct PreparedTimeline {
     pub clock_ack_epoch: u64,
     pub feedback: Value,
     pub error: Option<String>,
+    pub deferred_reason: Option<String>,
     pub compilation_error: Option<String>,
     pub last_ack: Option<Instant>,
     pub play_requested: bool,
@@ -25,6 +26,7 @@ impl Default for PreparedTimeline {
             clock_ack_epoch: 0,
             feedback: Value::Null,
             error: None,
+            deferred_reason: None,
             compilation_error: None,
             last_ack: None,
             play_requested: false,
@@ -48,6 +50,7 @@ impl PreparedTimeline {
                 self.revision = self.revision.saturating_add(1);
                 self.compilation_error = None;
                 self.error = None;
+                self.deferred_reason = None;
                 self.last_ack = None;
             }
             Err(error) => {
@@ -56,6 +59,7 @@ impl PreparedTimeline {
                 }
                 self.compilation_error = Some(error.clone());
                 self.error = Some(error);
+                self.deferred_reason = None;
                 self.last_ack = None;
             }
             _ => {}
@@ -66,6 +70,7 @@ impl PreparedTimeline {
             && self.revision == self.clock_ack_revision
             && self.clock_ack_epoch == epoch
             && self.error.is_none()
+            && self.deferred_reason.is_none()
             && self.compilation_error.is_none()
             && self.feedback["armed_epoch"].as_u64() == Some(epoch)
             && matches!(self.feedback["state"].as_str(), Some("paused" | "playing"))
@@ -261,6 +266,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                     {
                         prepared.revision = prepared.revision.saturating_add(1);
                         prepared.error = prepared.compilation_error.clone();
+                        prepared.deferred_reason = None;
                         prepared.last_ack = None;
                         prepared.play_requested |= playing;
                     }
@@ -342,6 +348,16 @@ mod tests {
         plan.replace(Err("too many actions".into()));
         assert!(plan.has_items());
         assert!(!plan.ready_for(1));
+    }
+    #[test]
+    fn retryable_resource_wait_is_distinct_from_a_timing_fault() {
+        let mut plan = PreparedTimeline::default();
+        plan.replace(Ok(json!({"cues":[],"actions":[{"id":"a"}]})));
+        plan.deferred_reason = Some("addressable strip is busy".into());
+        assert!(plan.error.is_none());
+        assert!(!plan.ready_for(1));
+        plan.replace(Ok(json!({"cues":[],"actions":[{"id":"b"}]})));
+        assert!(plan.deferred_reason.is_none());
     }
 
     #[test]

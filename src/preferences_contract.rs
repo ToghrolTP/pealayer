@@ -291,6 +291,27 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Color palette",
             &[("native", "Neutral (default)"), ("studio", "Studio")],
         ),
+        {
+            let mut control = PreferenceControl::text(
+                "app_icon_playing", "appearance", "Application icons", "Playing icon", "PNG, JPEG, WebP, or ICO path",
+            );
+            control.description = Some("Shown by the native window, taskbar, Web UI, favicon, and media session while media is playing.");
+            control
+        },
+        {
+            let mut control = PreferenceControl::text(
+                "app_icon_paused", "appearance", "Application icons", "Paused icon", "PNG, JPEG, WebP, or ICO path",
+            );
+            control.description = Some("Shown while loaded media is paused. Leave empty to use the base application icon.");
+            control
+        },
+        {
+            let mut control = PreferenceControl::text(
+                "app_icon_stopped", "appearance", "Application icons", "Stopped icon", "PNG, JPEG, WebP, or ICO path",
+            );
+            control.description = Some("Shown when no media is loaded or playback has ended. This is also the best shortcut and executable icon.");
+            control
+        },
         PreferenceControl::select(
             "language",
             "appearance",
@@ -572,6 +593,18 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Timeline",
             "Use compact timeline track rows",
         ),
+        {
+            let mut control = PreferenceControl::boolean(
+                "timeline_hide_cue_text_overflow",
+                "hardware",
+                "Timeline",
+                "Keep cue labels inside clips",
+            );
+            control.description = Some(
+                "Truncate long cue labels with an ellipsis. Hover a cue to see its full details; disable this to allow labels to overflow.",
+            );
+            control
+        },
         PreferenceControl::boolean(
             "timeline_header_wheel_vertical_scroll",
             "input",
@@ -599,6 +632,12 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "input",
             "Timeline navigation",
             "Animate timeline navigation",
+        ),
+        PreferenceControl::boolean(
+            "timeline_follow_playhead",
+            "input",
+            "Timeline navigation",
+            "Keep the playhead in view during playback",
         ),
         PreferenceControl::number(
             "timeline_navigation_transition_ms",
@@ -1239,6 +1278,7 @@ mod tests {
     fn timeline_density_is_a_shared_persistent_preference() {
         let config = crate::config::AppConfig::default();
         assert!(config.compact_timeline_tracks);
+        assert!(config.timeline_hide_cue_text_overflow);
         let controls = preference_controls(&config);
         let control = controls
             .iter()
@@ -1247,6 +1287,14 @@ mod tests {
         assert!(matches!(control.kind, PreferenceControlKind::Boolean));
         assert_eq!(control.section, "hardware");
         assert_eq!(control.group, "Timeline");
+
+        let overflow_control = controls
+            .iter()
+            .find(|control| control.key == "timeline_hide_cue_text_overflow")
+            .expect("timeline cue text overflow preference");
+        assert!(matches!(overflow_control.kind, PreferenceControlKind::Boolean));
+        assert_eq!(overflow_control.section, "hardware");
+        assert_eq!(overflow_control.group, "Timeline");
     }
 
     #[test]

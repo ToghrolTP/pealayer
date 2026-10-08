@@ -144,9 +144,7 @@ pub enum InteropCommand {
     SeekAbs {
         percentage: f64,
     },
-    #[serde(alias = "volume")]
     SetVolume {
-        #[serde(alias = "level")]
         value: f64,
     },
     SetMute {
@@ -156,9 +154,14 @@ pub enum InteropCommand {
     SetRate {
         rate: f64,
     },
-    #[serde(alias = "open_video")]
+    SelectMediaTrack {
+        kind: String,
+        id: i64,
+    },
+    DisableMediaTrack {
+        kind: String,
+    },
     Open {
-        #[serde(alias = "path")]
         target: String,
     },
     BrowseRemote { #[serde(default)] target: String, #[serde(default)] use_proxy: Option<bool> },
@@ -215,6 +218,24 @@ pub enum InteropCommand {
         id: String,
         direction: i32,
     },
+    UpdateTimelineTrack {
+        key: String,
+        #[serde(default)]
+        linked: Option<bool>,
+        #[serde(default)]
+        visible: Option<bool>,
+        #[serde(default)]
+        muted: Option<bool>,
+        #[serde(default)]
+        soloed: Option<bool>,
+        #[serde(default)]
+        locked: Option<bool>,
+        #[serde(default)]
+        selected: Option<bool>,
+    },
+    ManageTimelineTrack {
+        key: String,
+    },
     AddEffectCue {
         effect_id: String,
         start_time_ms: u64,
@@ -245,7 +266,8 @@ pub enum InteropCommand {
         reference: String,
     },
     StopControllerEffect,
-    CreateControllerEffectGroup {
+    SaveControllerEffectGroup {
+        original_name: String,
         name: String,
         icon: String,
     },
@@ -279,6 +301,16 @@ pub enum InteropCommand {
         channel: u8,
         percent: f64,
     },
+    RefreshHardwareCatalog,
+    PlayHardwareMelody {
+        name: String,
+        repeats: u8,
+    },
+    PlayHardwareTone {
+        frequency_hz: u16,
+        duration_ms: u16,
+    },
+    StopHardwareBuzzer,
     UpdateHardwarePresentation {
         key: String,
         fields: Value,
@@ -292,6 +324,29 @@ pub enum InteropCommand {
         blue: u8,
         brightness: u8,
     },
+    SetAddressableStripPixel {
+        pixel: u16,
+        pixels: u16,
+        red: u8,
+        green: u8,
+        blue: u8,
+        brightness: u8,
+    },
+    SendAddressableStripFrame {
+        pixels: u16,
+        rgb: Vec<u8>,
+    },
+    StartAddressableStripRainbow {
+        pixels: u16,
+        fps: u8,
+    },
+    StartAddressableStripEffect {
+        id: String,
+        pixels: u16,
+        fps: u8,
+    },
+    StopAddressableStrip,
+    RefreshAddressableStripStatus,
     ClearAddressableStrip,
     PressFrontPanelKey {
         key: String,
@@ -422,6 +477,15 @@ fn valid_workspace_profile_icon(value: &str) -> bool {
     valid_workspace_profile_id(value)
 }
 
+fn valid_timeline_track_key(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 192
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, ':' | '.' | '-' | '_')
+        })
+}
+
 impl InteropCommand {
     pub fn validate(&self) -> Result<(), String> {
         match self {
@@ -451,13 +515,63 @@ impl InteropCommand {
             Self::SetRate { rate } if !rate.is_finite() || !(0.05..=16.0).contains(rate) => {
                 Err("playback rate must be a finite value from 0.05 to 16".to_string())
             }
+            Self::SelectMediaTrack { kind, id }
+                if !matches!(kind.as_str(), "video" | "audio" | "subtitle") || *id < 0 =>
+            {
+                Err("media track selection requires video, audio, or subtitle and a non-negative ID".to_string())
+            }
+            Self::DisableMediaTrack { kind }
+                if !matches!(kind.as_str(), "video" | "audio" | "subtitle") =>
+            {
+                Err("media track kind must be video, audio, or subtitle".to_string())
+            }
             Self::SetHardwarePwm { percent, .. }
                 if !percent.is_finite() || !(0.0..=100.0).contains(percent) =>
             {
                 Err("PWM percent must be a finite value from 0 to 100".to_string())
             }
+            Self::PlayHardwareMelody { name, repeats }
+                if name.trim().is_empty() || name.len() > 64 || *repeats > 20 =>
+            {
+                Err("melody playback requires a configured name and 0–20 repeats".to_string())
+            }
+            Self::PlayHardwareTone {
+                frequency_hz,
+                duration_ms,
+            } if !(20..=20_000).contains(frequency_hz) || *duration_ms == 0 =>
+            {
+                Err("buzzer tone requires 20–20000 Hz and a positive duration".to_string())
+            }
             Self::ConfigureAddressableStrip { pixels } if *pixels == 0 => {
                 Err("addressable strip pixel count must be greater than zero".to_string())
+            }
+            Self::SetAddressableStripPixel { pixel, pixels, .. }
+                if *pixels == 0 || *pixel >= *pixels =>
+            {
+                Err("addressable strip pixel must be inside the configured pixel count".to_string())
+            }
+            Self::SendAddressableStripFrame { pixels, rgb }
+                if *pixels == 0 || rgb.len() != usize::from(*pixels) * 3 =>
+            {
+                Err("addressable strip frame must contain exactly three bytes per pixel".to_string())
+            }
+            Self::StartAddressableStripRainbow { pixels, fps }
+                if *pixels == 0 || *fps == 0 =>
+            {
+                Err("addressable strip rainbow requires a pixel count and frame rate".to_string())
+            }
+            Self::StartAddressableStripEffect { id, pixels, fps }
+                if *pixels == 0
+                    || *fps == 0
+                    || id.is_empty()
+                    || id.len() > 64
+                    || !id.chars().all(|character| {
+                        character.is_ascii_lowercase()
+                            || character.is_ascii_digit()
+                            || matches!(character, '.' | '-' | '_')
+                    }) =>
+            {
+                Err("addressable strip effect request is invalid".to_string())
             }
             Self::InvokeHardwareAction { action_id }
                 if action_id.trim().is_empty()
@@ -485,6 +599,24 @@ impl InteropCommand {
             }
             Self::OpenBoardInformation { tab } if *tab > 3 => {
                 Err("board information tab must be between 0 and 3".to_string())
+            }
+            Self::UpdateTimelineTrack {
+                key,
+                linked,
+                visible,
+                muted,
+                soloed,
+                locked,
+                selected,
+            } if !valid_timeline_track_key(key)
+                || [linked, visible, muted, soloed, locked, selected]
+                    .iter()
+                    .all(|value| value.is_none()) =>
+            {
+                Err("timeline track update requires a valid key and at least one field".to_string())
+            }
+            Self::ManageTimelineTrack { key } if !valid_timeline_track_key(key) => {
+                Err("timeline track key is invalid".to_string())
             }
             Self::Open { target } if target.trim().is_empty() || target.len() > 32_768 => {
                 Err("media target must contain 1 to 32768 bytes".to_string())
@@ -541,11 +673,17 @@ impl InteropCommand {
                 Err("controller effect reference is invalid".to_string())
             }
             Self::SaveControllerEffect { effect } => effect.validate(),
-            Self::CreateControllerEffectGroup { name, icon }
+            Self::SaveControllerEffectGroup {
+                original_name,
+                name,
+                icon,
+            }
                 if name.trim().is_empty()
                     || name.len() > 64
+                    || original_name.len() > 64
                     || icon.len() > 64
                     || name.chars().any(char::is_control)
+                    || original_name.chars().any(char::is_control)
                     || icon.chars().any(char::is_control) =>
             {
                 Err("Group name and icon must be bounded printable values".to_owned())
@@ -636,15 +774,18 @@ pub fn command_catalog() -> Value {
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
             "maximize", "restore", "open_preferences", "open_media_information", "open_media_folder", "edit_configuration", "open_board_information", "show_message", "show_osd", "hide_osd", "set_workspace",
             "create_workspace_profile", "update_workspace_profile", "delete_workspace_profile",
-            "move_workspace_profile", "update_config",
+            "move_workspace_profile", "timeline.track.update", "timeline.track.manage", "update_config",
             "reload_config", "add_effect_cue", "update_effect_cue", "remove_effect_cue", "set_recording",
             "get_status", "publish_toast", "dismiss_toast", "quit", "controller_effect_cue.add", "controller_effect.play",
             "controller_effect.stop", "controller_effect.save", "controller_effect.delete",
-            "controller_effect.group.create",
+            "controller_effect.group.save",
             "controller_effect.record.start", "controller_effect.record.status",
             "controller_effect.record.save", "controller_effect.record.discard",
-            "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm",
-            "configure_addressable_strip", "fill_addressable_strip", "clear_addressable_strip",
+            "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm", "refresh_hardware_catalog",
+            "configure_addressable_strip", "fill_addressable_strip", "set_addressable_strip_pixel",
+            "send_addressable_strip_frame", "start_addressable_strip_rainbow",
+            "start_addressable_strip_effect", "stop_addressable_strip",
+            "refresh_addressable_strip_status", "clear_addressable_strip",
             "press_front_panel_key", "board_information", "rf_control", "open_rf_manager"
         ],
         "json_rpc_prefix": "pealayer",
@@ -816,8 +957,186 @@ impl AppearanceState {
     }
 }
 
+/// Build identity reported by every control transport. This deliberately
+/// excludes paths and host names so a remote coordinator can identify a
+/// Pealayer build without leaking user- or machine-specific information.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ApplicationIdentity {
+    pub name: String,
+    pub version: String,
+    pub commit: String,
+    pub dirty: bool,
+    pub platform: String,
+    pub arch: String,
+}
+
+impl ApplicationIdentity {
+    pub fn current(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            commit: env!("PEALAYER_GIT_COMMIT").to_string(),
+            dirty: env!("PEALAYER_GIT_DIRTY") == "true",
+            platform: std::env::consts::OS.to_string(),
+            arch: std::env::consts::ARCH.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RuntimeControlEndpoints {
+    pub port: u16,
+    pub web_ui: String,
+    pub health: String,
+    pub ipc: String,
+    pub json_rpc: String,
+    pub websocket: String,
+}
+
+impl RuntimeControlEndpoints {
+    fn current() -> Self {
+        let port = crate::config::control_port();
+        Self {
+            port,
+            web_ui: format!("http://127.0.0.1:{port}/"),
+            health: format!("http://127.0.0.1:{port}/healthz"),
+            ipc: format!("http://127.0.0.1:{port}/api/ipc"),
+            json_rpc: format!("http://127.0.0.1:{port}/api/rpc"),
+            websocket: format!("ws://127.0.0.1:{port}/ws"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RuntimeExecutableIdentity {
+    pub file_name: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+}
+
+/// Immutable process/runtime facts that are safe to expose through local IPC
+/// and authenticated/shared HTTP control. The potentially expensive file
+/// fingerprints are populated once in the background.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeIdentity {
+    pub process_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<u32>,
+    pub inspection: String,
+    pub control: RuntimeControlEndpoints,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable: Option<RuntimeExecutableIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub libmpv: Option<crate::update::LibmpvRuntimeIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl RuntimeIdentity {
+    fn pending() -> Self {
+        Self {
+            process_id: std::process::id(),
+            session_id: current_process_session_id(),
+            inspection: "pending".to_string(),
+            control: RuntimeControlEndpoints::current(),
+            executable: None,
+            libmpv: None,
+            error: None,
+        }
+    }
+}
+
+impl Default for RuntimeIdentity {
+    fn default() -> Self {
+        Self {
+            process_id: 0,
+            session_id: None,
+            inspection: "unavailable".to_string(),
+            control: RuntimeControlEndpoints::default(),
+            executable: None,
+            libmpv: None,
+            error: None,
+        }
+    }
+}
+
+fn current_process_session_id() -> Option<u32> {
+    #[cfg(target_os = "windows")]
+    {
+        return crate::platform::windows::current_session_id().ok();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
+}
+
+/// Return cached self-diagnostics without hashing the executable or libmpv on
+/// the UI/status publisher thread. A caller may briefly observe `pending` and
+/// poll the same status method until it becomes `ready` or `error`.
+pub fn runtime_identity() -> RuntimeIdentity {
+    static IDENTITY: std::sync::OnceLock<
+        std::sync::Arc<std::sync::Mutex<RuntimeIdentity>>,
+    > = std::sync::OnceLock::new();
+    let identity = IDENTITY.get_or_init(|| {
+        let identity = std::sync::Arc::new(std::sync::Mutex::new(RuntimeIdentity::pending()));
+        let background_identity = std::sync::Arc::clone(&identity);
+        let spawn_result = thread::Builder::new()
+            .name("pealayer-runtime-inspection".to_string())
+            .spawn(move || {
+                let result = crate::update::current_manifest().and_then(|manifest| {
+                    let executable = std::env::current_exe()
+                        .map_err(|error| format!("resolve current executable: {error}"))?;
+                    let file_name = executable
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("pealayer")
+                        .to_string();
+                    Ok((
+                        RuntimeExecutableIdentity {
+                            file_name,
+                            size_bytes: manifest.size,
+                            sha256: manifest.sha256,
+                        },
+                        manifest.libmpv_runtime,
+                    ))
+                });
+                if let Ok(mut current) = background_identity.lock() {
+                    match result {
+                        Ok((executable, libmpv)) => {
+                            current.inspection = "ready".to_string();
+                            current.executable = Some(executable);
+                            current.libmpv = libmpv;
+                            current.error = None;
+                        }
+                        Err(error) => {
+                            current.inspection = "error".to_string();
+                            current.error = Some(error);
+                        }
+                    }
+                }
+            });
+        if let Err(error) = spawn_result
+            && let Ok(mut current) = identity.lock()
+        {
+            current.inspection = "error".to_string();
+            current.error = Some(format!("start runtime inspection: {error}"));
+        }
+        identity
+    });
+    let snapshot = identity
+        .lock()
+        .map(|identity| identity.clone())
+        .unwrap_or_default();
+    snapshot
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerStatusResponse {
+    #[serde(default)]
+    pub application: ApplicationIdentity,
+    #[serde(default)]
+    pub runtime: RuntimeIdentity,
     #[serde(default)] pub rf: Value,
     #[serde(default)]
     pub remote_browser: crate::remote_location::BrowserState,
@@ -836,7 +1155,11 @@ pub struct PlayerStatusResponse {
     pub playback_rate: f64,
     pub playback_time: f64,
     pub duration: f64,
+    #[serde(default)]
+    pub media_fps: f64,
     pub current_video: Option<String>,
+    #[serde(default)]
+    pub media_tracks: Vec<WebMediaTrack>,
     #[serde(default)]
     pub chapters: Vec<WebMediaChapter>,
     #[serde(default)]
@@ -894,6 +1217,12 @@ pub struct PlayerStatusResponse {
     pub effect_recording: WebEffectRecording,
     #[serde(default)]
     pub cues: Vec<WebEffectCue>,
+    /// Exact ordered track inventory rendered by the native timeline.
+    #[serde(default)]
+    pub timeline_tracks: Vec<WebTimelineTrack>,
+    /// Currently visible native OSD, projected into every remote surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub osd: Option<WebOsdState>,
     #[serde(default)]
     pub hardware_details: Option<Value>,
     #[serde(default)]
@@ -905,6 +1234,69 @@ pub struct WebMediaChapter {
     pub index: i64,
     pub title: String,
     pub time_seconds: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebMediaTrack {
+    pub id: i64,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
+    #[serde(default)]
+    pub selected: bool,
+    #[serde(default)]
+    pub is_default: bool,
+    #[serde(default)]
+    pub forced: bool,
+    #[serde(default)]
+    pub external: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebTimelineTrack {
+    pub key: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_key: Option<String>,
+    pub active: bool,
+    pub enabled: bool,
+    pub linked: bool,
+    pub visible: bool,
+    pub dimmed: bool,
+    #[serde(default)]
+    pub selected: bool,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default)]
+    pub soloed: bool,
+    #[serde(default)]
+    pub locked: bool,
+    #[serde(default)]
+    pub supports_mute: bool,
+    #[serde(default)]
+    pub supports_solo: bool,
+    #[serde(default)]
+    pub supports_lock: bool,
+    #[serde(default)]
+    pub manageable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebOsdState {
+    pub message: String,
+    pub remaining_ms: u64,
+    pub default_position: OsdAnchor,
+    #[serde(default)]
+    pub options: OsdOptions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1065,6 +1457,8 @@ fn default_playback_rate() -> f64 {
 impl Default for PlayerStatusResponse {
     fn default() -> Self {
         Self {
+            application: ApplicationIdentity::default(),
+            runtime: RuntimeIdentity::default(),
             rf: Value::Null,
             status: String::new(),
             messages: crate::messaging::MessageSnapshot::default(),
@@ -1077,7 +1471,9 @@ impl Default for PlayerStatusResponse {
             playback_rate: default_playback_rate(),
             playback_time: 0.0,
             duration: 0.0,
+            media_fps: 0.0,
             current_video: None,
+            media_tracks: Vec::new(),
             chapters: Vec::new(),
             current_chapter_index: None,
             seekable: false,
@@ -1105,6 +1501,8 @@ impl Default for PlayerStatusResponse {
             controller_effect_groups: Vec::new(),
             effect_recording: WebEffectRecording::default(),
             cues: Vec::new(),
+            timeline_tracks: Vec::new(),
+            osd: None,
             hardware_details: None,
             update: crate::update::UpdateStatus::default(),
         }
@@ -1157,71 +1555,82 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
     let command = match request.method.as_str() {
         "pealayer.rf" | "rf_control" => Some(InteropCommand::RfControl { operation: string(&["operation"])?, params: request.params.get("params").cloned().unwrap_or_else(||serde_json::json!({})) }),
         "pealayer.rf.open" => Some(InteropCommand::OpenRfManager),
-        "play" | "pealayer.play" | "pealayer.player.play" => Some(InteropCommand::Play),
-        "pause" | "pealayer.pause" | "pealayer.player.pause" => Some(InteropCommand::Pause),
-        "toggle" | "toggle_pause" | "pealayer.toggle" | "pealayer.player.toggle" => {
+        "play" | "pealayer.play" => Some(InteropCommand::Play),
+        "pause" | "pealayer.pause" => Some(InteropCommand::Pause),
+        "toggle" | "toggle_pause" | "pealayer.toggle" => {
             Some(InteropCommand::TogglePause)
         }
-        "stop" | "pealayer.stop" | "pealayer.player.stop" => Some(InteropCommand::Stop),
-        "next" | "pealayer.next" | "pealayer.player.next" => Some(InteropCommand::Next),
-        "previous" | "prev" | "pealayer.previous" | "pealayer.player.previous" => {
+        "stop" | "pealayer.stop" => Some(InteropCommand::Stop),
+        "next" | "pealayer.next" => Some(InteropCommand::Next),
+        "previous" | "prev" | "pealayer.previous" => {
             Some(InteropCommand::Previous)
         }
         "chapter_previous"
         | "previous_chapter"
-        | "pealayer.chapter.previous"
-        | "pealayer.player.chapter.previous" => Some(InteropCommand::PreviousChapter),
+        | "pealayer.chapter.previous" => Some(InteropCommand::PreviousChapter),
         "chapter_next"
         | "next_chapter"
-        | "pealayer.chapter.next"
-        | "pealayer.player.chapter.next" => Some(InteropCommand::NextChapter),
-        "chapter" | "set_chapter" | "pealayer.chapter.set" | "pealayer.player.chapter.set" => {
+        | "pealayer.chapter.next" => Some(InteropCommand::NextChapter),
+        "chapter" | "set_chapter" | "pealayer.chapter.set" => {
             let index = request
                 .params
                 .get("index")
-                .or_else(|| request.params.get("chapter"))
                 .and_then(Value::as_i64)
                 .ok_or_else(|| "missing integer parameter: index".to_string())?;
             Some(InteropCommand::SetChapter { index })
         }
-        "seek" | "pealayer.seek" | "pealayer.player.seek" => Some(InteropCommand::Seek {
+        "seek" | "pealayer.seek" => Some(InteropCommand::Seek {
             seconds: number(&["seconds"])?,
         }),
-        "seek_to" | "pealayer.seek_to" | "pealayer.player.seek_to" => {
+        "seek_to" | "pealayer.seek_to" => {
             Some(InteropCommand::SeekTo {
-                seconds: number(&["seconds", "position"])?,
+                seconds: number(&["seconds"])?,
             })
         }
-        "seek_abs" | "pealayer.seek_absolute" | "pealayer.player.seek_absolute" => {
+        "seek_abs" | "pealayer.seek_absolute" => {
             Some(InteropCommand::SeekAbs {
                 percentage: number(&["percentage"])?,
             })
         }
-        "volume" | "set_volume" | "pealayer.volume.set" | "pealayer.player.volume.set" => {
+        "volume" | "set_volume" | "pealayer.volume.set" => {
             Some(InteropCommand::SetVolume {
-                value: number(&["value", "level"])?,
+                value: number(&["value"])?,
             })
         }
-        "mute" | "set_mute" | "pealayer.mute.set" | "pealayer.player.mute.set" => {
+        "mute" | "set_mute" | "pealayer.mute.set" => {
             let muted = request
                 .params
                 .get("muted")
-                .or_else(|| request.params.get("enabled"))
                 .and_then(Value::as_bool)
                 .ok_or_else(|| "missing boolean parameter: muted".to_string())?;
             Some(InteropCommand::SetMute { muted })
         }
-        "toggle_mute" | "pealayer.mute.toggle" | "pealayer.player.mute.toggle" => {
+        "toggle_mute" | "pealayer.mute.toggle" => {
             Some(InteropCommand::ToggleMute)
         }
-        "rate" | "set_rate" | "pealayer.rate.set" | "pealayer.player.rate.set" => {
+        "rate" | "set_rate" | "pealayer.rate.set" => {
             Some(InteropCommand::SetRate {
                 rate: number(&["rate", "value"])?,
             })
         }
-        "open" | "open_video" | "pealayer.open" | "pealayer.player.open" => {
+        "media.track.select" | "pealayer.media.track.select" => {
+            Some(InteropCommand::SelectMediaTrack {
+                kind: string(&["kind", "type"])?.trim().to_ascii_lowercase(),
+                id: request
+                    .params
+                    .get("id")
+                    .and_then(Value::as_i64)
+                    .ok_or_else(|| "missing media track id".to_string())?,
+            })
+        }
+        "media.track.disable" | "pealayer.media.track.disable" => {
+            Some(InteropCommand::DisableMediaTrack {
+                kind: string(&["kind", "type"])?.trim().to_ascii_lowercase(),
+            })
+        }
+        "open" | "pealayer.open" => {
             Some(InteropCommand::Open {
-                target: string(&["target", "path"])?,
+                target: string(&["target"])?,
             })
         }
         "browse_remote" | "pealayer.remote.browse" => Some(InteropCommand::BrowseRemote { target: request.params.get("target").and_then(Value::as_str).unwrap_or_default().into(), use_proxy: request.params.get("use_proxy").and_then(Value::as_bool) }),
@@ -1230,8 +1639,7 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "close_remote_browser" | "pealayer.remote.close" => Some(InteropCommand::CloseRemoteBrowser),
         "fullscreen"
         | "set_fullscreen"
-        | "pealayer.fullscreen.set"
-        | "pealayer.player.fullscreen.set" => {
+        | "pealayer.fullscreen.set" => {
             let enabled = request
                 .params
                 .get("enabled")
@@ -1362,6 +1770,22 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                     .ok_or_else(|| "missing workspace move direction".to_string())?,
             })
         }
+        "timeline.track.update" | "pealayer.timeline.track.update" => {
+            Some(InteropCommand::UpdateTimelineTrack {
+                key: string(&["key", "track"] )?,
+                linked: request.params.get("linked").and_then(Value::as_bool),
+                visible: request.params.get("visible").and_then(Value::as_bool),
+                muted: request.params.get("muted").and_then(Value::as_bool),
+                soloed: request.params.get("soloed").and_then(Value::as_bool),
+                locked: request.params.get("locked").and_then(Value::as_bool),
+                selected: request.params.get("selected").and_then(Value::as_bool),
+            })
+        }
+        "timeline.track.manage" | "pealayer.timeline.track.manage" => {
+            Some(InteropCommand::ManageTimelineTrack {
+                key: string(&["key", "track"] )?,
+            })
+        }
         "effect_cue.add" | "pealayer.effect_cue.add" | "pealayer.timeline.effect.add" => {
             Some(InteropCommand::AddEffectCue {
                 effect_id: string(&["effect_id", "effect"])?,
@@ -1456,14 +1880,20 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "controller_effect.stop" | "pealayer.controller_effect.stop" => {
             Some(InteropCommand::StopControllerEffect)
         }
-        "controller_effect.group.create" | "pealayer.controller_effect.group.create" => {
-            Some(InteropCommand::CreateControllerEffectGroup {
+        "controller_effect.group.save" | "pealayer.controller_effect.group.save" => {
+            Some(InteropCommand::SaveControllerEffectGroup {
+                original_name: request
+                    .params
+                    .get("original_name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing original_name".to_string())?
+                    .to_owned(),
                 name: string(&["name"])?,
                 icon: request
                     .params
                     .get("icon")
                     .and_then(Value::as_str)
-                    .unwrap_or_default()
+                    .ok_or_else(|| "missing group icon".to_string())?
                     .to_owned(),
             })
         }
@@ -1544,6 +1974,38 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 percent: number(&["percent", "value"])?,
             })
         }
+        "hardware.catalog.refresh" | "pealayer.hardware.catalog.refresh" => {
+            Some(InteropCommand::RefreshHardwareCatalog)
+        }
+        "hardware.buzzer.melody" | "pealayer.hardware.buzzer.melody" => {
+            let repeats = request
+                .params
+                .get("repeats")
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .ok_or_else(|| "missing valid melody repeat count".to_string())?;
+            Some(InteropCommand::PlayHardwareMelody {
+                name: string(&["name", "melody"])?,
+                repeats,
+            })
+        }
+        "hardware.buzzer.tone" | "pealayer.hardware.buzzer.tone" => {
+            let word = |name: &str| {
+                request
+                    .params
+                    .get(name)
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u16::try_from(value).ok())
+                    .ok_or_else(|| format!("missing valid buzzer {name}"))
+            };
+            Some(InteropCommand::PlayHardwareTone {
+                frequency_hz: word("frequency_hz")?,
+                duration_ms: word("duration_ms")?,
+            })
+        }
+        "hardware.buzzer.stop" | "pealayer.hardware.buzzer.stop" => {
+            Some(InteropCommand::StopHardwareBuzzer)
+        }
         "hardware.presentation.update" | "pealayer.hardware.presentation.update" => {
             Some(InteropCommand::UpdateHardwarePresentation {
                 key: string(&["key", "channel"])?,
@@ -1579,6 +2041,91 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 brightness: byte("brightness")?,
             })
         }
+        "hardware.strip.pixel" | "pealayer.hardware.strip.pixel" => {
+            let word = |name: &str| {
+                request
+                    .params
+                    .get(name)
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u16::try_from(value).ok())
+                    .ok_or_else(|| format!("missing valid strip {name}"))
+            };
+            let byte = |name: &str| {
+                request
+                    .params
+                    .get(name)
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u8::try_from(value).ok())
+                    .ok_or_else(|| format!("missing valid strip {name}"))
+            };
+            Some(InteropCommand::SetAddressableStripPixel {
+                pixel: word("pixel")?,
+                pixels: word("pixels")?,
+                red: byte("red")?,
+                green: byte("green")?,
+                blue: byte("blue")?,
+                brightness: byte("brightness")?,
+            })
+        }
+        "hardware.strip.frame" | "pealayer.hardware.strip.frame" => {
+            let pixels = request
+                .params
+                .get("pixels")
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .ok_or_else(|| "missing valid addressable strip pixel count".to_string())?;
+            let rgb = request
+                .params
+                .get("rgb")
+                .and_then(Value::as_array)
+                .ok_or_else(|| "missing valid strip RGB frame".to_string())?
+                .iter()
+                .map(|value| {
+                    value
+                        .as_u64()
+                        .and_then(|value| u8::try_from(value).ok())
+                        .ok_or_else(|| "strip RGB values must be bytes".to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Some(InteropCommand::SendAddressableStripFrame { pixels, rgb })
+        }
+        "hardware.strip.rainbow" | "pealayer.hardware.strip.rainbow" => {
+            let pixels = request
+                .params
+                .get("pixels")
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .ok_or_else(|| "missing valid addressable strip pixel count".to_string())?;
+            let fps = request
+                .params
+                .get("fps")
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .ok_or_else(|| "missing valid strip frame rate".to_string())?;
+            Some(InteropCommand::StartAddressableStripRainbow { pixels, fps })
+        }
+        "hardware.strip.effect" | "pealayer.hardware.strip.effect" => {
+            let id = string(&["id", "effect_id"])?;
+            let pixels = request
+                .params
+                .get("pixels")
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .ok_or_else(|| "missing valid addressable strip pixel count".to_string())?;
+            let fps = request
+                .params
+                .get("fps")
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .ok_or_else(|| "missing valid strip frame rate".to_string())?;
+            Some(InteropCommand::StartAddressableStripEffect { id, pixels, fps })
+        }
+        "hardware.strip.stop" | "pealayer.hardware.strip.stop" => {
+            Some(InteropCommand::StopAddressableStrip)
+        }
+        "hardware.strip.status" | "pealayer.hardware.strip.status" => {
+            Some(InteropCommand::RefreshAddressableStripStatus)
+        }
         "hardware.strip.clear" | "pealayer.hardware.strip.clear" => {
             Some(InteropCommand::ClearAddressableStrip)
         }
@@ -1594,7 +2141,7 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
             })
         }
         "config.reload" | "pealayer.config.reload" => Some(InteropCommand::ReloadConfig),
-        "get_status" | "player.status" | "pealayer.status" | "pealayer.player.status" | "pealayer.messages.state" => None,
+        "get_status" | "player.status" | "pealayer.status" | "pealayer.messages.state" => None,
         method => return Err(format!("unknown Pealayer JSON-RPC method: {method}")),
     };
     if let Some(command) = &command {
@@ -1614,6 +2161,7 @@ pub fn json_rpc_error(id: &Value, code: i32, message: &str) -> String {
 static LIVE_STATUS: std::sync::RwLock<Option<PlayerStatusResponse>> = std::sync::RwLock::new(None);
 static LIVE_CONFIG: std::sync::RwLock<Option<crate::config::AppConfig>> =
     std::sync::RwLock::new(None);
+static LIVE_CONFIG_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn set_live_status(status: PlayerStatusResponse) {
     if let Ok(mut lock) = LIVE_STATUS.write() {
@@ -1652,7 +2200,46 @@ pub fn get_live_status() -> PlayerStatusResponse {
 pub fn set_live_config(config: crate::config::AppConfig) {
     if let Ok(mut lock) = LIVE_CONFIG.write() {
         *lock = Some(config);
+        LIVE_CONFIG_REVISION.fetch_add(1, std::sync::atomic::Ordering::Release);
     }
+}
+
+/// Monotonic signal for consumers that only need to react when configuration
+/// changes. This avoids cloning the complete application configuration from a
+/// per-frame rendering path just to discover that it is unchanged.
+pub fn live_config_revision() -> u64 {
+    LIVE_CONFIG_REVISION.load(std::sync::atomic::Ordering::Acquire)
+}
+
+#[derive(Clone)]
+pub struct LiveFrameConfig {
+    pub web_sync_interval_ms: u32,
+    pub remote_folder_auto_next: bool,
+    pub remote_folder_thumbnails: bool,
+    pub appearance: AppearanceState,
+}
+
+impl LiveFrameConfig {
+    fn from_config(config: &crate::config::AppConfig, dark: bool) -> Self {
+        Self {
+            web_sync_interval_ms: config.web_sync_interval_ms,
+            remote_folder_auto_next: config.remote_folder_auto_next,
+            remote_folder_thumbnails: config.remote_folder_thumbnails,
+            appearance: AppearanceState::new(config, dark),
+        }
+    }
+}
+
+/// Return only the configuration needed by the per-frame publisher. Cloning
+/// the complete AppConfig here used to copy workspace, history and media state
+/// on every repaint even though the renderer reads only four small values.
+pub fn get_live_frame_config(dark: bool) -> LiveFrameConfig {
+    if let Ok(config) = LIVE_CONFIG.read()
+        && let Some(config) = config.as_ref()
+    {
+        return LiveFrameConfig::from_config(config, dark);
+    }
+    LiveFrameConfig::from_config(&crate::config::AppConfig::load(), dark)
 }
 
 pub fn get_live_config() -> crate::config::AppConfig {
@@ -2328,6 +2915,15 @@ fn gate_controller_subscription_message(
     Ok(Vec::new())
 }
 
+fn controller_subscription_params() -> Value {
+    serde_json::json!({
+        "topics":["state","events","status","opcodes"],
+        "interval_ms":500,
+        "state_interval_ms":250,
+        "after_id":0
+    })
+}
+
 fn run_pccontroller_action_bridge(
     tx: &std::sync::mpsc::Sender<ControllerDelivery>,
     egui_ctx: &eframe::egui::Context,
@@ -2354,11 +2950,7 @@ fn run_pccontroller_action_bridge(
         .send(controller_rpc(
             next_id,
             "controller.subscribe",
-            serde_json::json!({
-                "topics":["state","events","status","opcodes"],
-                "interval_ms":100,
-                "after_id":0
-            }),
+            controller_subscription_params(),
         ))
         .map_err(|error| format!("subscribe to PCController actions: {error}"))?;
     next_id += 1;
@@ -2534,6 +3126,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn live_frame_config_projects_only_render_loop_inputs() {
+        let config = crate::config::AppConfig {
+            web_sync_interval_ms: 321,
+            remote_folder_auto_next: false,
+            remote_folder_thumbnails: false,
+            ..Default::default()
+        };
+        let projected = LiveFrameConfig::from_config(&config, true);
+        assert_eq!(projected.web_sync_interval_ms, 321);
+        assert!(!projected.remote_folder_auto_next);
+        assert!(!projected.remote_folder_thumbnails);
+        assert_eq!(projected.appearance.resolved_theme, crate::config::AppTheme::Dark);
+    }
+
+    #[test]
+    fn controller_subscription_keeps_edges_immediate_and_bounds_continuous_frames() {
+        let params = controller_subscription_params();
+        assert_eq!(params["interval_ms"], 500);
+        assert_eq!(params["state_interval_ms"], 250);
+        assert!(params["topics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|topic| topic == "events"));
+    }
+
+    #[test]
     fn remote_folder_json_rpc_ipc_parity() {
         let target = "https://files.invalid/folder/";
         let expected = InteropCommand::BrowseRemote { target: target.into(), use_proxy: Some(false) };
@@ -2567,28 +3186,12 @@ mod tests {
             panic!("Expected Open command");
         }
 
-        let open_alias_json = r#"{"command":"open_video","path":"/video2.mp4"}"#;
-        let cmd: InteropCommand = serde_json::from_str(open_alias_json).unwrap();
-        if let InteropCommand::Open { target } = cmd {
-            assert_eq!(target, "/video2.mp4");
-        } else {
-            panic!("Expected Open command with aliases");
-        }
-
         let live_json = r#"{"command":"open","target":"rtsp://camera.invalid/live"}"#;
         let cmd: InteropCommand = serde_json::from_str(live_json).unwrap();
         assert!(matches!(
             cmd,
             InteropCommand::Open { target } if target == "rtsp://camera.invalid/live"
         ));
-
-        let vol_alias_json = r#"{"command":"volume","level":45.0}"#;
-        let cmd: InteropCommand = serde_json::from_str(vol_alias_json).unwrap();
-        if let InteropCommand::SetVolume { value } = cmd {
-            assert_eq!(value, 45.0);
-        } else {
-            panic!("Expected SetVolume command with aliases");
-        }
 
         assert_eq!(
             parse_text_command("preferences").unwrap(),
@@ -2799,19 +3402,26 @@ mod tests {
     #[test]
     fn web_controller_effect_commands_are_typed_and_validated() {
         let group: JsonRpcRequest = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":1,"method":"controller_effect.group.create","params":{"name":"Cinema lighting","icon":"lamp"}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"controller_effect.group.save","params":{"original_name":"Lighting","name":"Cinema lighting","icon":"lamp"}}"#,
         ).unwrap();
         assert!(matches!(command_from_json_rpc(&group).unwrap(),
-            Some(InteropCommand::CreateControllerEffectGroup { name, icon })
-                if name == "Cinema lighting" && icon == "lamp"));
+            Some(InteropCommand::SaveControllerEffectGroup { original_name, name, icon })
+                if original_name == "Lighting" && name == "Cinema lighting" && icon == "lamp"));
         assert!(
-            InteropCommand::CreateControllerEffectGroup {
+            InteropCommand::SaveControllerEffectGroup {
+                original_name: String::new(),
                 name: " ".to_owned(),
                 icon: String::new(),
             }
             .validate()
             .is_err()
         );
+
+        let obsolete_group_create: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":1,"method":"controller_effect.group.create","params":{"name":"Legacy","icon":"folder"}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&obsolete_group_create).is_err());
         let cue: JsonRpcRequest = serde_json::from_str(
             r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.controller_effect_cue.add","params":{"reference":"effect:lighting-primary","start_time_ms":1250}}"#,
         )
@@ -2935,6 +3545,16 @@ mod tests {
     #[test]
     fn test_status_response_serialization() {
         let resp = PlayerStatusResponse {
+            application: ApplicationIdentity::current("Pealayer Test"),
+            runtime: RuntimeIdentity {
+                inspection: "ready".to_string(),
+                executable: Some(RuntimeExecutableIdentity {
+                    file_name: "pealayer.exe".to_string(),
+                    size_bytes: 42,
+                    sha256: "a".repeat(64),
+                }),
+                ..RuntimeIdentity::default()
+            },
             status: "ok".to_string(),
             playing: true,
             estop_active: true,
@@ -2952,6 +3572,8 @@ mod tests {
         assert!(json.contains("\"volume\":80.0"));
         assert!(json.contains("\"fullscreen\":true"));
         assert!(json.contains("\"estop_active\":true"));
+        assert!(json.contains("\"name\":\"Pealayer Test\""));
+        assert!(json.contains("\"file_name\":\"pealayer.exe\""));
     }
 
     #[test]
@@ -3016,6 +3638,24 @@ mod tests {
     }
 
     #[test]
+    fn obsolete_player_namespace_and_parameter_aliases_are_rejected() {
+        let obsolete_method: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.player.open","params":{"target":"movie.mkv"}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&obsolete_method).is_err());
+
+        let obsolete_parameter: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":2,"method":"pealayer.open","params":{"path":"movie.mkv"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&obsolete_parameter).unwrap_err(),
+            "missing string parameter: target"
+        );
+    }
+
+    #[test]
     fn workspace_profile_rpc_uses_stable_ids_and_shared_crud_commands() {
         let restore = JsonRpcRequest {
             jsonrpc: Some("2.0".to_string()),
@@ -3050,6 +3690,75 @@ mod tests {
                 capture: true,
             })
         );
+    }
+
+    #[test]
+    fn timeline_track_rpc_uses_one_validated_cross_surface_contract() {
+        let update: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"track","method":"pealayer.timeline.track.update","params":{"key":"hardware:relay.5","visible":false,"muted":true,"selected":true}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&update).unwrap(),
+            Some(InteropCommand::UpdateTimelineTrack {
+                key: "hardware:relay.5".into(),
+                linked: None,
+                visible: Some(false),
+                muted: Some(true),
+                soloed: None,
+                locked: None,
+                selected: Some(true),
+            })
+        );
+
+        let manage: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"track","method":"timeline.track.manage","params":{"track":"hardware:pwm.1"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&manage).unwrap(),
+            Some(InteropCommand::ManageTimelineTrack {
+                key: "hardware:pwm.1".into(),
+            })
+        );
+
+        let empty: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"track","method":"timeline.track.update","params":{"key":"hardware:relay.5"}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&empty).is_err());
+    }
+
+    #[test]
+    fn media_track_rpc_uses_one_validated_cross_surface_contract() {
+        let select: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"track","method":"pealayer.media.track.select","params":{"kind":"audio","id":5}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&select).unwrap(),
+            Some(InteropCommand::SelectMediaTrack {
+                kind: "audio".into(),
+                id: 5,
+            })
+        );
+
+        let disable: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"track","method":"media.track.disable","params":{"kind":"subtitle"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&disable).unwrap(),
+            Some(InteropCommand::DisableMediaTrack {
+                kind: "subtitle".into(),
+            })
+        );
+
+        let invalid: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"track","method":"media.track.select","params":{"kind":"telemetry","id":1}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&invalid).is_err());
     }
 
     #[test]
@@ -3104,6 +3813,98 @@ mod tests {
             Some(InteropCommand::UpdateHardwarePresentation { key, fields })
                 if key == "relay.5" && fields["name"] == "Seat fan" && fields["order"] == 2
         ));
+
+        let refresh: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"melodies","method":"hardware.catalog.refresh"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&refresh).unwrap(),
+            Some(InteropCommand::RefreshHardwareCatalog)
+        ));
+    }
+
+    #[test]
+    fn parses_complete_buzzer_web_controls() {
+        let melody: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"melody","method":"hardware.buzzer.melody","params":{"name":"attention","repeats":3}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&melody).unwrap(),
+            Some(InteropCommand::PlayHardwareMelody { name, repeats: 3 }) if name == "attention"
+        ));
+
+        let tone: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"tone","method":"hardware.buzzer.tone","params":{"frequency_hz":440,"duration_ms":250}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&tone).unwrap(),
+            Some(InteropCommand::PlayHardwareTone {
+                frequency_hz: 440,
+                duration_ms: 250,
+            })
+        ));
+
+        let stop: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"stop","method":"hardware.buzzer.stop"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&stop).unwrap(),
+            Some(InteropCommand::StopHardwareBuzzer)
+        );
+
+        let invalid: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"tone","method":"hardware.buzzer.tone","params":{"frequency_hz":10,"duration_ms":0}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&invalid).is_err());
+    }
+
+    #[test]
+    fn parses_complete_addressable_strip_web_controls() {
+        let rainbow: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"rainbow","method":"hardware.strip.rainbow","params":{"pixels":100,"fps":20}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&rainbow).unwrap(),
+            Some(InteropCommand::StartAddressableStripRainbow { pixels: 100, fps: 20 })
+        ));
+
+        let pixel: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"pixel","method":"hardware.strip.pixel","params":{"pixel":4,"pixels":12,"red":1,"green":2,"blue":3,"brightness":128}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&pixel).unwrap(),
+            Some(InteropCommand::SetAddressableStripPixel {
+                pixel: 4,
+                pixels: 12,
+                red: 1,
+                green: 2,
+                blue: 3,
+                brightness: 128,
+            })
+        ));
+
+        let frame: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"frame","method":"hardware.strip.frame","params":{"pixels":2,"rgb":[255,0,0,0,0,255]}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&frame).unwrap(),
+            Some(InteropCommand::SendAddressableStripFrame { pixels: 2, rgb })
+                if rgb == vec![255, 0, 0, 0, 0, 255]
+        ));
+
+        let invalid_frame: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"bad-frame","method":"hardware.strip.frame","params":{"pixels":2,"rgb":[255,0,0]}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&invalid_frame).is_err());
     }
 
     #[test]

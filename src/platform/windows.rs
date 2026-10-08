@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::{
     Mutex, OnceLock,
     atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering},
@@ -150,15 +151,38 @@ static SIMPLE_VIDEO_CHROME_HEIGHT: AtomicI32 = AtomicI32::new(0);
 static WINDOW_MAGNETIC_SNAP_ENABLED: AtomicBool = AtomicBool::new(false);
 static WINDOW_MAGNETIC_SNAP_DISTANCE: AtomicI32 = AtomicI32::new(16);
 static WINDOW_MAGNETIC_DRAG: Mutex<MagneticDragSession> = Mutex::new(MagneticDragSession::new());
-static ORIGINAL_WINDOW_PROC: AtomicIsize = AtomicIsize::new(0);
-static SHELL_COMMAND: AtomicU32 = AtomicU32::new(0);
+static SHELL_SUBCLASS_HWND: AtomicIsize = AtomicIsize::new(0);
+static SHELL_COMMAND_MESSAGES: AtomicU64 = AtomicU64::new(0);
+static SHELL_COMMANDS_QUEUED: AtomicU64 = AtomicU64::new(0);
+static SHELL_COMMANDS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
 static SHELL_PAUSED: AtomicBool = AtomicBool::new(true);
 static SHELL_MUTED: AtomicBool = AtomicBool::new(false);
+static SHELL_FULLSCREEN: AtomicBool = AtomicBool::new(false);
 static SHELL_HAS_MEDIA: AtomicBool = AtomicBool::new(false);
+static SHELL_MEDIA_KEYS_ENABLED: AtomicBool = AtomicBool::new(true);
 static SHELL_REINITIALIZE: AtomicBool = AtomicBool::new(false);
 static TASKBAR_BUTTON_CREATED_MESSAGE: AtomicU32 = AtomicU32::new(0);
 static TASKBAR_THUMBNAIL_CLIP: Mutex<Option<(isize, Option<[i32; 4]>)>> = Mutex::new(None);
 static THUMBNAIL_METRICS_DIRTY: AtomicBool = AtomicBool::new(true);
+static THUMBNAIL_TOOLBAR_ADDED_HWND: AtomicIsize = AtomicIsize::new(0);
+static THUMBNAIL_TOOLBAR_ADD_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+static THUMBNAIL_TOOLBAR_ADD_SUCCESSES: AtomicU64 = AtomicU64::new(0);
+static THUMBNAIL_TOOLBAR_UPDATE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+static THUMBNAIL_TOOLBAR_UPDATE_SUCCESSES: AtomicU64 = AtomicU64::new(0);
+static TASKBAR_BUTTON_CREATED_EVENTS: AtomicU64 = AtomicU64::new(0);
+static THUMBNAIL_TOOLBAR_ENABLED: AtomicBool = AtomicBool::new(false);
+static THUMBNAIL_TOOLBAR_HAS_MEDIA: AtomicBool = AtomicBool::new(false);
+static THUMBNAIL_TOOLBAR_LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
+#[cfg(target_os = "windows")]
+static THUMBNAIL_TOOLBAR_ICONS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+
+fn queue_shell_command(command: u32) {
+    if let Ok(mut commands) = SHELL_COMMANDS.lock() {
+        commands.push_back(command);
+        SHELL_COMMANDS_QUEUED.fetch_add(1, Ordering::Relaxed);
+    }
+    crate::platform::taskbar_preview::request_repaint();
+}
 
 #[cfg(target_os = "windows")]
 pub struct GuiOwnershipGuard(windows::Win32::Foundation::HANDLE);
@@ -1596,6 +1620,39 @@ fn create_thumbnail_button_icon(
 }
 
 #[cfg(target_os = "windows")]
+fn retain_thumbnail_toolbar_icons(
+    icons: Vec<windows::Win32::UI::WindowsAndMessaging::HICON>,
+) {
+    use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, HICON};
+
+    let replacement = icons
+        .into_iter()
+        .map(|icon| icon.0 as isize)
+        .collect::<Vec<_>>();
+    let previous = THUMBNAIL_TOOLBAR_ICONS
+        .lock()
+        .map(|mut cached| std::mem::replace(&mut *cached, replacement))
+        .unwrap_or_default();
+    for raw in previous {
+        unsafe {
+            let _ = DestroyIcon(HICON(raw as *mut _));
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn destroy_thumbnail_toolbar_icons(
+    icons: Vec<windows::Win32::UI::WindowsAndMessaging::HICON>,
+) {
+    use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
+    for icon in icons {
+        unsafe {
+            let _ = DestroyIcon(icon);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn thumbnail_icon_pixels(glyph: ThumbnailGlyph, size: u32) -> image::RgbaImage {
     use ab_glyph::{Font, FontRef, PxScale, point};
     use crate::ui::icons;
@@ -1756,13 +1813,19 @@ fn taskbar_thumbnail_buttons(
 }
 
 #[cfg(target_os = "windows")]
-pub fn init_taskbar_thumbnail_toolbar(hwnd_raw: isize, enabled: bool) -> Result<(), String> {
+pub fn init_taskbar_thumbnail_toolbar(
+    hwnd_raw: isize,
+    is_paused: bool,
+    is_muted: bool,
+    is_fullscreen: bool,
+    has_media: bool,
+    enabled: bool,
+) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     };
     use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList};
-    use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
@@ -1776,19 +1839,62 @@ pub fn init_taskbar_thumbnail_toolbar(hwnd_raw: isize, enabled: bool) -> Result<
         taskbar
             .HrInit()
             .map_err(|e| format!("ITaskbarList3::HrInit failed: {e}"))?;
-        let (buttons, icons) = taskbar_thumbnail_buttons(hwnd_raw, true, false, false, false, enabled)?;
-        let result = taskbar
-            .ThumbBarAddButtons(hwnd, &buttons)
-            .map_err(|e| format!("ThumbBarAddButtons failed: {e}"));
-        for icon in icons {
-            let _ = DestroyIcon(icon);
+        THUMBNAIL_TOOLBAR_ENABLED.store(enabled, Ordering::Relaxed);
+        THUMBNAIL_TOOLBAR_HAS_MEDIA.store(has_media, Ordering::Relaxed);
+        let (buttons, icons) = taskbar_thumbnail_buttons(
+            hwnd_raw,
+            is_paused,
+            is_muted,
+            is_fullscreen,
+            has_media,
+            enabled,
+        )?;
+        THUMBNAIL_TOOLBAR_ADD_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+        let add_result = taskbar.ThumbBarAddButtons(hwnd, &buttons);
+        let result = match add_result {
+            Ok(()) => {
+                THUMBNAIL_TOOLBAR_ADD_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(add_error) => {
+                // A toolbar already accepted by Explorer rejects a duplicate
+                // Add with E_INVALIDARG. Updating that toolbar is a successful
+                // recovery, not an initialization failure that should hide it.
+                THUMBNAIL_TOOLBAR_UPDATE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+                taskbar.ThumbBarUpdateButtons(hwnd, &buttons).map(|()| {
+                    THUMBNAIL_TOOLBAR_UPDATE_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+                }).map_err(|update_error| format!(
+                    "ThumbBarAddButtons failed: {add_error}; ThumbBarUpdateButtons recovery failed: {update_error}"
+                ))
+            }
+        };
+        if result.is_ok() {
+            // Explorer may consume HICONs after this COM call returns. Keep
+            // the current state atlas alive until the next update.
+            retain_thumbnail_toolbar_icons(icons);
+            THUMBNAIL_TOOLBAR_ADDED_HWND.store(hwnd_raw, Ordering::Release);
+            if let Ok(mut error) = THUMBNAIL_TOOLBAR_LAST_ERROR.lock() {
+                *error = None;
+            }
+        } else {
+            destroy_thumbnail_toolbar_icons(icons);
+            if let Ok(mut error) = THUMBNAIL_TOOLBAR_LAST_ERROR.lock() {
+                *error = result.as_ref().err().cloned();
+            }
         }
         result
     }
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn init_taskbar_thumbnail_toolbar(_hwnd_raw: isize, _enabled: bool) -> Result<(), String> {
+pub fn init_taskbar_thumbnail_toolbar(
+    _hwnd_raw: isize,
+    _is_paused: bool,
+    _is_muted: bool,
+    _is_fullscreen: bool,
+    _has_media: bool,
+    _enabled: bool,
+) -> Result<(), String> {
     Ok(())
 }
 
@@ -1806,7 +1912,6 @@ pub fn update_taskbar_thumbnail_buttons(
         CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     };
     use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList};
-    use windows::Win32::UI::WindowsAndMessaging::DestroyIcon;
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
@@ -1820,13 +1925,41 @@ pub fn update_taskbar_thumbnail_buttons(
         taskbar
             .HrInit()
             .map_err(|e| format!("ITaskbarList3::HrInit failed: {e}"))?;
+        THUMBNAIL_TOOLBAR_ENABLED.store(enabled, Ordering::Relaxed);
+        THUMBNAIL_TOOLBAR_HAS_MEDIA.store(has_media, Ordering::Relaxed);
         let (buttons, icons) =
             taskbar_thumbnail_buttons(hwnd_raw, is_paused, is_muted, is_fullscreen, has_media, enabled)?;
-        let result = taskbar
-            .ThumbBarUpdateButtons(hwnd, &buttons)
-            .map_err(|e| format!("ThumbBarUpdateButtons failed: {e}"));
-        for icon in icons {
-            let _ = DestroyIcon(icon);
+        THUMBNAIL_TOOLBAR_UPDATE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+        let update_result = taskbar.ThumbBarUpdateButtons(hwnd, &buttons);
+        let result = match update_result {
+            Ok(()) => {
+                THUMBNAIL_TOOLBAR_UPDATE_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+            Err(update_error) => {
+                // Explorer may recreate the taskbar button without Pealayer
+                // observing the broadcast during a focus/minimize transition.
+                // Re-add the toolbar immediately instead of waiting for a
+                // future state change that may never occur.
+                THUMBNAIL_TOOLBAR_ADD_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+                taskbar.ThumbBarAddButtons(hwnd, &buttons).map(|()| {
+                    THUMBNAIL_TOOLBAR_ADD_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+                }).map_err(|add_error| format!(
+                    "ThumbBarUpdateButtons failed: {update_error}; ThumbBarAddButtons recovery failed: {add_error}"
+                ))
+            }
+        };
+        if result.is_ok() {
+            retain_thumbnail_toolbar_icons(icons);
+            THUMBNAIL_TOOLBAR_ADDED_HWND.store(hwnd_raw, Ordering::Release);
+            if let Ok(mut error) = THUMBNAIL_TOOLBAR_LAST_ERROR.lock() {
+                *error = None;
+            }
+        } else {
+            destroy_thumbnail_toolbar_icons(icons);
+            if let Ok(mut error) = THUMBNAIL_TOOLBAR_LAST_ERROR.lock() {
+                *error = result.as_ref().err().cloned();
+            }
         }
         result
     }
@@ -1878,10 +2011,12 @@ pub fn configure_video_taskbar_thumbnail(hwnd_raw: isize) -> Result<(), String> 
     update_video_taskbar_thumbnail(hwnd_raw, None)
 }
 
-/// Supplies the MPV-only iconic representation. A `None` rectangle restores
-/// Windows' ordinary full-window thumbnail. The shell is
-/// only called when the effective rectangle changes, so publishing the video
-/// layout every frame does not add idle COM traffic.
+/// Enables Pealayer's MPV-only iconic thumbnail while media is visible.
+///
+/// A compositor clip still samples the complete egui swapchain on Windows 11
+/// and regresses to an application-UI thumbnail. The explicit iconic bitmap is
+/// sourced from MPV's offscreen framebuffer instead, while the actual window
+/// and DWM Peek remain ordinary full-application surfaces.
 #[cfg(target_os = "windows")]
 pub fn update_video_taskbar_thumbnail(
     hwnd_raw: isize,
@@ -1912,14 +2047,11 @@ pub fn update_video_taskbar_thumbnail(
         taskbar
             .HrInit()
             .map_err(|error| format!("initialize taskbar thumbnail service: {error}"))?;
-        // The iconic bitmap already contains video only; clear the legacy
-        // client-coordinate crop instead of applying a second crop to it.
+        // Clear any clip left by an older build. The iconic bitmap already
+        // contains video only and must not be cropped a second time.
         taskbar
-            .SetThumbnailClip(
-                hwnd,
-                std::ptr::null(),
-            )
-            .map_err(|error| format!("clear legacy taskbar thumbnail crop: {error}"))?;
+            .SetThumbnailClip(hwnd, std::ptr::null())
+            .map_err(|error| format!("clear legacy taskbar thumbnail clip: {error}"))?;
     }
     if let Ok(mut cached) = TASKBAR_THUMBNAIL_CLIP.lock() {
         *cached = Some((hwnd_raw, normalized));
@@ -1946,6 +2078,28 @@ pub const TRAY_CMD_MUTE: u32 = 2002;
 pub const TRAY_CMD_OPEN: u32 = 2003;
 pub const TRAY_CMD_EXIT: u32 = 2004;
 pub const TRAY_CMD_SHOW: u32 = 2005;
+pub const MEDIA_KEY_CMD_PLAY: u32 = 2101;
+pub const MEDIA_KEY_CMD_PAUSE: u32 = 2102;
+pub const MEDIA_KEY_CMD_STOP: u32 = 2103;
+pub const MEDIA_KEY_CMD_NEXT: u32 = 2104;
+pub const MEDIA_KEY_CMD_PREVIOUS: u32 = 2105;
+
+fn shell_command_for_appcommand(appcommand: u32, enabled: bool, has_media: bool) -> Option<u32> {
+    if !enabled || !has_media {
+        return None;
+    }
+    // Foreground-window fallback for keyboards that emit WM_APPCOMMAND.
+    // Souvlaki remains the single global SMTC/MPRIS/Now Playing registration.
+    Some(match appcommand {
+        11 => MEDIA_KEY_CMD_NEXT,
+        12 => MEDIA_KEY_CMD_PREVIOUS,
+        13 => MEDIA_KEY_CMD_STOP,
+        14 => THUMB_BUTTON_PLAYPAUSE,
+        46 => MEDIA_KEY_CMD_PLAY,
+        47 => MEDIA_KEY_CMD_PAUSE,
+        _ => return None,
+    })
+}
 
 pub fn tray_menu_label(cmd: u32, active: bool) -> &'static str {
     match cmd {
@@ -1976,10 +2130,12 @@ unsafe extern "system" fn shell_window_proc(
     message: u32,
     wparam: windows::Win32::Foundation::WPARAM,
     lparam: windows::Win32::Foundation::LPARAM,
+    _subclass_id: usize,
+    _reference_data: usize,
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Foundation::LRESULT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_RBUTTONUP, WNDPROC,
+        WM_APPCOMMAND, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_RBUTTONUP,
     };
 
     observe_native_window_message(message);
@@ -1994,8 +2150,24 @@ unsafe extern "system" fn shell_window_proc(
 
     let taskbar_created = TASKBAR_BUTTON_CREATED_MESSAGE.load(Ordering::Acquire);
     if taskbar_created != 0 && message == taskbar_created {
-        crate::platform::taskbar_preview::reset_shell();
-        SHELL_REINITIALIZE.store(true, Ordering::Release);
+        TASKBAR_BUTTON_CREATED_EVENTS.fetch_add(1, Ordering::Relaxed);
+        THUMBNAIL_TOOLBAR_ADDED_HWND.store(0, Ordering::Release);
+        // Microsoft requires ThumbBarAddButtons after TaskbarButtonCreated.
+        // Rebuild immediately: paused, inactive and minimized eframe windows
+        // are not guaranteed to paint soon enough to restore missing actions.
+        // DWM's iconic-bitmap attributes belong to this HWND and survive an
+        // Explorer taskbar recreation, so preserve the video-only preview.
+        let restored = init_taskbar_thumbnail_toolbar(
+            hwnd.0 as isize,
+            SHELL_PAUSED.load(Ordering::Relaxed),
+            SHELL_MUTED.load(Ordering::Relaxed),
+            SHELL_FULLSCREEN.load(Ordering::Relaxed),
+            SHELL_HAS_MEDIA.load(Ordering::Relaxed),
+            THUMBNAIL_TOOLBAR_ENABLED.load(Ordering::Relaxed),
+        )
+        .is_ok();
+        SHELL_REINITIALIZE.store(!restored, Ordering::Release);
+        crate::platform::taskbar_preview::request_repaint();
     }
 
     if message == WM_MOVING_VALUE
@@ -2020,12 +2192,12 @@ unsafe extern "system" fn shell_window_proc(
                 SHELL_MUTED.load(Ordering::Relaxed),
                 SHELL_HAS_MEDIA.load(Ordering::Relaxed),
             ) {
-                SHELL_COMMAND.store(command, Ordering::Release);
+                queue_shell_command(command);
             }
             return LRESULT(0);
         }
         if mouse_message == WM_LBUTTONDBLCLK {
-            SHELL_COMMAND.store(TRAY_CMD_SHOW, Ordering::Release);
+            queue_shell_command(TRAY_CMD_SHOW);
             return LRESULT(0);
         }
     } else if message == WM_COMMAND {
@@ -2043,34 +2215,62 @@ unsafe extern "system" fn shell_window_proc(
                     | THUMB_BUTTON_FULLSCREEN
             )
         {
-            SHELL_COMMAND.store(command, Ordering::Release);
+            SHELL_COMMAND_MESSAGES.fetch_add(1, Ordering::Relaxed);
+            queue_shell_command(command);
             return LRESULT(0);
+        }
+    } else if message == WM_APPCOMMAND {
+        // GET_APPCOMMAND_LPARAM: high word with device bits masked out.
+        let appcommand = ((lparam.0 as usize >> 16) & 0x07ff) as u32;
+        if let Some(command) = shell_command_for_appcommand(
+            appcommand,
+            SHELL_MEDIA_KEYS_ENABLED.load(Ordering::Relaxed),
+            SHELL_HAS_MEDIA.load(Ordering::Relaxed),
+        ) {
+            queue_shell_command(command);
+            return LRESULT(1);
         }
     }
 
-    let original = ORIGINAL_WINDOW_PROC.load(Ordering::Acquire);
-    if original == 0 {
-        unsafe {
-            windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(hwnd, message, wparam, lparam)
-        }
-    } else {
-        let original: WNDPROC = unsafe { std::mem::transmute(original) };
-        unsafe { CallWindowProcW(original, hwnd, message, wparam, lparam) }
-    }
+    unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "comctl32")]
+unsafe extern "system" {
+    fn SetWindowSubclass(
+        hwnd: windows::Win32::Foundation::HWND,
+        callback: Option<
+            unsafe extern "system" fn(
+                windows::Win32::Foundation::HWND,
+                u32,
+                windows::Win32::Foundation::WPARAM,
+                windows::Win32::Foundation::LPARAM,
+                usize,
+                usize,
+            ) -> windows::Win32::Foundation::LRESULT,
+        >,
+        subclass_id: usize,
+        reference_data: usize,
+    ) -> windows::core::BOOL;
+    fn DefSubclassProc(
+        hwnd: windows::Win32::Foundation::HWND,
+        message: u32,
+        wparam: windows::Win32::Foundation::WPARAM,
+        lparam: windows::Win32::Foundation::LPARAM,
+    ) -> windows::Win32::Foundation::LRESULT;
 }
 
 #[cfg(target_os = "windows")]
 pub fn install_shell_message_hook(hwnd_raw: isize) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GWLP_WNDPROC, RegisterWindowMessageW, SetWindowLongPtrW,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::RegisterWindowMessageW;
     use windows::core::w;
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
     }
-    if ORIGINAL_WINDOW_PROC.load(Ordering::Acquire) != 0 {
+    if SHELL_SUBCLASS_HWND.load(Ordering::Acquire) == hwnd_raw {
         return Ok(());
     }
     let taskbar_created = unsafe { RegisterWindowMessageW(w!("TaskbarButtonCreated")) };
@@ -2078,17 +2278,19 @@ pub fn install_shell_message_hook(hwnd_raw: isize) -> Result<(), String> {
         return Err("RegisterWindowMessageW TaskbarButtonCreated failed".to_string());
     }
     TASKBAR_BUTTON_CREATED_MESSAGE.store(taskbar_created, Ordering::Release);
-    let previous = unsafe {
-        SetWindowLongPtrW(
+    const PEALAYER_SHELL_SUBCLASS_ID: usize = 0x5045_414c;
+    let installed = unsafe {
+        SetWindowSubclass(
             HWND(hwnd_raw as *mut _),
-            GWLP_WNDPROC,
-            shell_window_proc as *const () as isize,
+            Some(shell_window_proc),
+            PEALAYER_SHELL_SUBCLASS_ID,
+            0,
         )
     };
-    if previous == 0 {
-        return Err("SetWindowLongPtrW GWLP_WNDPROC failed".to_string());
+    if !installed.as_bool() {
+        return Err("SetWindowSubclass failed".to_string());
     }
-    ORIGINAL_WINDOW_PROC.store(previous, Ordering::Release);
+    SHELL_SUBCLASS_HWND.store(hwnd_raw, Ordering::Release);
     Ok(())
 }
 
@@ -2097,15 +2299,49 @@ pub fn install_shell_message_hook(_hwnd_raw: isize) -> Result<(), String> {
     Ok(())
 }
 
-pub fn update_shell_command_state(is_paused: bool, is_muted: bool, has_media: bool) {
+pub fn update_shell_command_state(
+    is_paused: bool,
+    is_muted: bool,
+    is_fullscreen: bool,
+    has_media: bool,
+    media_keys_enabled: bool,
+) {
     SHELL_PAUSED.store(is_paused, Ordering::Relaxed);
     SHELL_MUTED.store(is_muted, Ordering::Relaxed);
+    SHELL_FULLSCREEN.store(is_fullscreen, Ordering::Relaxed);
     SHELL_HAS_MEDIA.store(has_media, Ordering::Relaxed);
+    SHELL_MEDIA_KEYS_ENABLED.store(media_keys_enabled, Ordering::Relaxed);
 }
 
 pub fn take_shell_command() -> Option<u32> {
-    let command = SHELL_COMMAND.swap(0, Ordering::AcqRel);
-    (command != 0).then_some(command)
+    SHELL_COMMANDS
+        .lock()
+        .ok()
+        .and_then(|mut commands| commands.pop_front())
+}
+
+pub fn shell_command_diagnostics() -> serde_json::Value {
+    serde_json::json!({
+        "hook_hwnd": SHELL_SUBCLASS_HWND.load(Ordering::Acquire),
+        "registered_hwnd": get_registered_hwnd(),
+        "thumbnail_click_messages": SHELL_COMMAND_MESSAGES.load(Ordering::Relaxed),
+        "commands_queued": SHELL_COMMANDS_QUEUED.load(Ordering::Relaxed),
+        "queue_depth": SHELL_COMMANDS.lock().map(|queue| queue.len()).unwrap_or_default(),
+        "has_media": SHELL_HAS_MEDIA.load(Ordering::Relaxed),
+        "paused": SHELL_PAUSED.load(Ordering::Relaxed),
+        "muted": SHELL_MUTED.load(Ordering::Relaxed),
+        "thumbnail_toolbar": {
+            "added_hwnd": THUMBNAIL_TOOLBAR_ADDED_HWND.load(Ordering::Acquire),
+            "enabled": THUMBNAIL_TOOLBAR_ENABLED.load(Ordering::Relaxed),
+            "has_media": THUMBNAIL_TOOLBAR_HAS_MEDIA.load(Ordering::Relaxed),
+            "add_attempts": THUMBNAIL_TOOLBAR_ADD_ATTEMPTS.load(Ordering::Relaxed),
+            "add_successes": THUMBNAIL_TOOLBAR_ADD_SUCCESSES.load(Ordering::Relaxed),
+            "update_attempts": THUMBNAIL_TOOLBAR_UPDATE_ATTEMPTS.load(Ordering::Relaxed),
+            "update_successes": THUMBNAIL_TOOLBAR_UPDATE_SUCCESSES.load(Ordering::Relaxed),
+            "taskbar_button_created_events": TASKBAR_BUTTON_CREATED_EVENTS.load(Ordering::Relaxed),
+            "last_error": THUMBNAIL_TOOLBAR_LAST_ERROR.lock().ok().and_then(|error| error.clone()),
+        },
+    })
 }
 
 pub fn take_shell_reinitialize_request() -> bool {
@@ -2130,7 +2366,8 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::Shell::{
-        NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NOTIFYICONDATAW, Shell_NotifyIconW,
+        NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_MODIFY, NOTIFYICONDATAW,
+        Shell_NotifyIconW,
     };
     use windows::Win32::UI::WindowsAndMessaging::{GCLP_HICON, GetClassLongPtrW, HICON, LoadIconW};
     use windows::core::PCWSTR;
@@ -2161,11 +2398,17 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
             ..Default::default()
         };
 
-        let res = Shell_NotifyIconW(NIM_ADD, &mut nid);
-        if res.as_bool() {
+        let added = Shell_NotifyIconW(NIM_ADD, &mut nid);
+        // Explorer broadcasts TaskbarButtonCreated after recreating its taskbar
+        // surfaces.  The thumbnail toolbar must be added again, but the tray
+        // icon commonly survives that event.  Treat an existing icon as an
+        // idempotent registration and refresh it in place; otherwise a failed
+        // duplicate NIM_ADD keeps the whole shell initializer retrying every
+        // frame and repeatedly tears down/re-adds the thumbnail toolbar.
+        if added.as_bool() || Shell_NotifyIconW(NIM_MODIFY, &mut nid).as_bool() {
             Ok(())
         } else {
-            Err("Shell_NotifyIconW NIM_ADD failed".to_string())
+            Err("Shell_NotifyIconW NIM_ADD and NIM_MODIFY failed".to_string())
         }
     }
 }
@@ -2711,6 +2954,19 @@ mod tests {
             thumbnail_button_tooltip(THUMB_BUTTON_FULLSCREEN, false, false, true),
             "Exit fullscreen"
         );
+    }
+
+    #[test]
+    fn appcommand_media_keys_respect_configuration_and_media_state() {
+        assert_eq!(shell_command_for_appcommand(14, true, true), Some(THUMB_BUTTON_PLAYPAUSE));
+        assert_eq!(shell_command_for_appcommand(46, true, true), Some(MEDIA_KEY_CMD_PLAY));
+        assert_eq!(shell_command_for_appcommand(47, true, true), Some(MEDIA_KEY_CMD_PAUSE));
+        assert_eq!(shell_command_for_appcommand(13, true, true), Some(MEDIA_KEY_CMD_STOP));
+        assert_eq!(shell_command_for_appcommand(11, true, true), Some(MEDIA_KEY_CMD_NEXT));
+        assert_eq!(shell_command_for_appcommand(12, true, true), Some(MEDIA_KEY_CMD_PREVIOUS));
+        assert_eq!(shell_command_for_appcommand(14, false, true), None);
+        assert_eq!(shell_command_for_appcommand(14, true, false), None);
+        assert_eq!(shell_command_for_appcommand(999, true, true), None);
     }
 
     #[test]

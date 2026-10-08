@@ -31,6 +31,14 @@ pub struct HardwareOutput {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HardwarePWMChannelConfig {
+    pub output_type: String,
+    pub icon: String,
+    pub curve: String,
+    pub gamma_milli: u16,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareAction {
     pub id: String,
     pub verb: String,
@@ -84,6 +92,41 @@ pub struct HardwareMotionState {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HardwareMelodyNote {
+    pub frequency_hz: u16,
+    pub duration_ms: u16,
+    #[serde(default)]
+    pub gap_ms: u16,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HardwareMelody {
+    pub name: String,
+    pub notes: Vec<HardwareMelodyNote>,
+}
+
+impl HardwareMelody {
+    pub fn duration_ms(&self) -> u64 {
+        self.notes
+            .iter()
+            .map(|note| u64::from(note.duration_ms) + u64::from(note.gap_ms))
+            .sum()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HardwareBuzzerState {
+    pub melody_id: u64,
+    pub melody_name: String,
+}
+
+impl HardwareBuzzerState {
+    pub fn is_playing(&self) -> bool {
+        self.melody_id != 0
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareCapabilities {
     pub board_connected: bool,
     pub board_name: String,
@@ -98,6 +141,7 @@ pub struct HardwareCapabilities {
     pub peripheral_names: std::collections::BTreeMap<String, String>,
     pub relays: Vec<HardwareOutput>,
     pub pwm_channels: Vec<HardwareOutput>,
+    pub pwm_channel_config: std::collections::BTreeMap<u8, HardwarePWMChannelConfig>,
     pub peripherals: Vec<HardwareOutput>,
     pub supports_rf_transmit: bool,
     pub supports_segment_display: bool,
@@ -116,6 +160,8 @@ pub struct HardwareCapabilities {
     pub warnings: Vec<HardwareWarning>,
     pub strip_control: Option<HardwareStripControl>,
     pub strip_effects: Vec<HardwareStripEffect>,
+    pub buzzer: HardwareBuzzerState,
+    pub melodies: Vec<HardwareMelody>,
     pub macros: Vec<HardwareMacro>,
     pub effect_groups: Vec<HardwareEffectGroup>,
     pub effect_recording: HardwareEffectRecording,
@@ -390,6 +436,9 @@ pub struct HardwareTelemetry {
     /// Authoritative all-channel PWM readback indexed by the native logical
     /// channel number. `None` means PCController has not sampled that channel.
     pub pwm_values: Vec<Option<u16>>,
+    /// Controller-owned logical brightness in thousandths of one percent. This
+    /// is already inverse-mapped through each channel's configured curve.
+    pub pwm_logical_percent_milli: Vec<Option<u32>>,
     pub door_open: Option<bool>,
 }
 
@@ -535,6 +584,16 @@ impl HardwareStripControl {
 }
 
 impl HardwareCapabilities {
+    pub fn pwm_percent(&self, channel: u8, fallback_raw: u16) -> f64 {
+        self.telemetry
+            .pwm_logical_percent_milli
+            .get(usize::from(channel))
+            .copied()
+            .flatten()
+            .map(|value| f64::from(value) / 1000.0)
+            .unwrap_or_else(|| f64::from(fallback_raw.min(4095)) * 100.0 / 4095.0)
+    }
+
     /// Applies the typed status payload pushed by `controller.status`.
     /// Static capability/catalog data stays intact; only live board state is
     /// replaced. Returning `true` lets callers repaint only for real changes.
@@ -553,10 +612,20 @@ impl HardwareCapabilities {
         }
         let mut next_telemetry = telemetry_from_status(status, self.board_connected);
         next_telemetry.pwm_values = before_telemetry.pwm_values.clone();
+        next_telemetry.pwm_logical_percent_milli = before_telemetry.pwm_logical_percent_milli.clone();
         if let (Some(channel), Some(value)) = (next_telemetry.pwm_channel, next_telemetry.pwm_value)
             && let Some(slot) = next_telemetry.pwm_values.get_mut(usize::from(channel))
         {
+            let raw_changed = slot.is_some_and(|previous| previous != value);
             *slot = Some(value);
+            if raw_changed {
+                if let Some(percent) = next_telemetry
+                    .pwm_logical_percent_milli
+                    .get_mut(usize::from(channel))
+                {
+                    *percent = None;
+                }
+            }
         }
         self.telemetry = next_telemetry;
 
@@ -617,6 +686,7 @@ impl HardwareCapabilities {
                     false
                 } else {
                     self.telemetry.pwm_values = next;
+                    self.telemetry.pwm_logical_percent_milli = vec![None; 16];
                     true
                 }
             }
@@ -991,6 +1061,7 @@ fn telemetry_from_status(status: &Value, board_connected: bool) -> HardwareTelem
             .unwrap_or(false)
             .then(|| status.get("pwm_value").and_then(Value::as_u64).unwrap_or(0) as u16),
         pwm_values: Vec::new(),
+        pwm_logical_percent_milli: Vec::new(),
         door_open: board_connected.then(|| {
             status
                 .get("door_open")
@@ -1030,6 +1101,29 @@ pub struct ControllerClient {
     backend: ControllerBackend,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ControllerRpcError {
+    pub message: String,
+    pub kind: Option<String>,
+    pub resource: Option<String>,
+    pub retryable: bool,
+    pub retry_after_ms: Option<u64>,
+}
+
+impl ControllerRpcError {
+    fn from_message(message: String) -> Self {
+        Self { message, kind: None, resource: None, retryable: false, retry_after_ms: None }
+    }
+    pub(crate) fn is_resource_busy(&self, resource: &str) -> bool {
+        self.kind.as_deref() == Some("resource_busy")
+            && self.resource.as_deref() == Some(resource)
+            && self.retryable
+    }
+}
+impl From<String> for ControllerRpcError {
+    fn from(message: String) -> Self { Self::from_message(message) }
+}
+
 fn controller_json_rpc_error_message(error: &Value) -> String {
     error
         .get("message")
@@ -1045,6 +1139,17 @@ fn controller_json_rpc_error_message(error: &Value) -> String {
         .filter(|message| !message.is_empty())
         .unwrap_or("PCController rejected the request")
         .to_string()
+}
+
+fn controller_json_rpc_error(error: &Value) -> ControllerRpcError {
+    let data = error.get("data");
+    ControllerRpcError {
+        message: controller_json_rpc_error_message(error),
+        kind: data.and_then(|value| value.get("kind")).and_then(Value::as_str).map(str::to_string),
+        resource: data.and_then(|value| value.get("resource")).and_then(Value::as_str).map(str::to_string),
+        retryable: data.and_then(|value| value.get("retryable")).and_then(Value::as_bool).unwrap_or(false),
+        retry_after_ms: data.and_then(|value| value.get("retry_after_ms")).and_then(Value::as_u64),
+    }
 }
 
 fn same_coordinator_epoch(current: &Value, selected: &Value) -> bool {
@@ -1176,8 +1281,11 @@ impl ControllerClient {
     }
 
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.call_detailed(method, params).map_err(|error| error.message)
+    }
+    pub(crate) fn call_detailed(&mut self, method: &str, params: Value) -> Result<Value, ControllerRpcError> {
         let (writer, reader, next_id) = match &mut self.backend {
-            ControllerBackend::Embedded(host) => return host.call(method, params),
+            ControllerBackend::Embedded(host) => return host.call(method, params).map_err(ControllerRpcError::from_message),
             ControllerBackend::Tcp {
                 writer,
                 reader,
@@ -1213,7 +1321,7 @@ impl ControllerClient {
                 .read_line(&mut line)
                 .map_err(|error| format!("read PCController JSON-RPC response: {error}"))?;
             if read == 0 {
-                return Err("PCController closed the JSON-RPC connection".to_string());
+                return Err("PCController closed the JSON-RPC connection".to_string().into());
             }
             let response: Value = serde_json::from_str(line.trim())
                 .map_err(|error| format!("decode PCController JSON-RPC response: {error}"))?;
@@ -1222,7 +1330,7 @@ impl ControllerClient {
             }
             if let Some(error) = response.get("error").filter(|value| !value.is_null()) {
                 let _ = reader.get_ref().set_read_timeout(previous_timeout);
-                return Err(controller_json_rpc_error_message(error));
+                return Err(controller_json_rpc_error(error));
             }
             let _ = reader.get_ref().set_read_timeout(previous_timeout);
             return Ok(response.get("result").cloned().unwrap_or(Value::Null));
@@ -1251,10 +1359,10 @@ impl ControllerClient {
                 )?;
             }
             Command::PwmSet { channel, value } => {
-                let value = (u32::from(value) * 4095 / 255) as u16;
+                let percent = f64::from(value) * 100.0 / 255.0;
                 self.call(
                     "controller.pwm.set",
-                    json!({"channel": channel, "value": value}),
+                    json!({"channel": channel, "percent": percent}),
                 )?;
             }
             Command::AllOff => {
@@ -1271,6 +1379,12 @@ impl ControllerClient {
     pub fn hardware_capabilities(&mut self) -> Result<HardwareCapabilities, String> {
         let snapshot = self.call("controller.snapshot", json!({}))?;
         let peripherals = self.call("controller.peripherals.get", json!({}))?;
+        // Named melodies are host configuration, not board capability data,
+        // but they are part of the current coordinator contract. A malformed
+        // or unavailable catalog fails this refresh so the engine retains the
+        // last known-good snapshot and retries instead of publishing false
+        // empty state.
+        let melodies = self.call("controller.melodies.list", json!({}))?;
         let pwm_values = self.call("controller.pwm.values", json!({})).ok();
         // controller.snapshot already carries the latest authoritative
         // front-panel state. A synchronous controller.front_panel call waits
@@ -1282,6 +1396,7 @@ impl ControllerClient {
         if let Some(values) = pwm_values.as_ref() {
             apply_pwm_values(&mut capabilities.telemetry, values);
         }
+        capabilities.melodies = parse_melodies(&melodies)?;
         Ok(capabilities)
     }
 
@@ -1299,6 +1414,41 @@ impl ControllerClient {
     }
 }
 
+fn parse_melodies(value: &Value) -> Result<Vec<HardwareMelody>, String> {
+    let values = value
+        .as_array()
+        .ok_or_else(|| "PCController returned a non-array melody catalog".to_string())?;
+    let mut names = std::collections::BTreeSet::new();
+    Ok(values
+        .iter()
+        .take(32)
+        .filter_map(|value| serde_json::from_value::<HardwareMelody>(value.clone()).ok())
+        .filter_map(|mut melody| {
+            melody.name = melody.name.trim().to_string();
+            let normalized_name = melody.name.to_ascii_lowercase();
+            let valid_notes = !melody.notes.is_empty()
+                && melody.notes.len() <= 64
+                && melody.notes.iter().all(|note| {
+                    note.duration_ms > 0
+                        && note.duration_ms <= 5_000
+                        && (note.frequency_hz == 0
+                            || (20..=20_000).contains(&note.frequency_hz))
+                        && note.gap_ms <= 5_000
+                })
+                && melody.duration_ms() <= 5 * 60 * 1_000;
+            if melody.name.is_empty()
+                || melody.name.len() > 64
+                || !valid_notes
+                || !names.insert(normalized_name)
+            {
+                None
+            } else {
+                Some(melody)
+            }
+        })
+        .collect())
+}
+
 fn apply_pwm_values(telemetry: &mut HardwareTelemetry, values: &Value) -> bool {
     let Some(raw_values) = values.get("values").and_then(Value::as_array) else {
         return false;
@@ -1314,10 +1464,34 @@ fn apply_pwm_values(telemetry: &mut HardwareTelemetry, values: &Value) -> bool {
         .chain(std::iter::repeat(None))
         .take(16)
         .collect::<Vec<_>>();
-    if next == telemetry.pwm_values {
+    let logical = values
+        .get("channels")
+        .and_then(Value::as_array)
+        .map(|channels| {
+            let mut result = vec![None; 16];
+            for channel in channels {
+                let Some(index) = channel
+                    .get("channel")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok())
+                    .filter(|value| *value < 16)
+                else {
+                    continue;
+                };
+                result[index] = channel
+                    .get("logical_percent")
+                    .and_then(Value::as_f64)
+                    .filter(|value| value.is_finite() && (0.0..=100.0).contains(value))
+                    .map(|value| (value * 1000.0).round() as u32);
+            }
+            result
+        })
+        .unwrap_or_else(|| vec![None; 16]);
+    if next == telemetry.pwm_values && logical == telemetry.pwm_logical_percent_milli {
         false
     } else {
         telemetry.pwm_values = next;
+        telemetry.pwm_logical_percent_milli = logical;
         true
     }
 }
@@ -1978,6 +2152,49 @@ fn parse_hardware_capabilities_with_front_panel(
     } else {
         Vec::new()
     };
+    let pwm_channel_config = if board_connected && capability_bits & CAPABILITY_PWM != 0 {
+        catalog
+            .get("peripherals")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|entry| entry.get("kind").and_then(Value::as_str) == Some("pwm"))
+            .filter_map(|entry| {
+                let channel = entry
+                    .get("index")?
+                    .as_u64()
+                    .and_then(|value| u8::try_from(value).ok())?;
+                Some((
+                    channel,
+                    HardwarePWMChannelConfig {
+                        output_type: entry
+                            .get("output_type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("general")
+                            .to_string(),
+                        icon: entry
+                            .get("icon")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        curve: entry
+                            .get("curve")
+                            .and_then(Value::as_str)
+                            .unwrap_or("linear")
+                            .to_string(),
+                        gamma_milli: entry
+                            .get("gamma")
+                            .and_then(Value::as_f64)
+                            .filter(|value| value.is_finite())
+                            .map(|value| (value.clamp(0.1, 5.0) * 1000.0).round() as u16)
+                            .unwrap_or(1000),
+                    },
+                ))
+            })
+            .collect()
+    } else {
+        std::collections::BTreeMap::new()
+    };
     let peripherals = if board_connected {
         outputs.iter().map(|(_, output)| output.clone()).collect()
     } else {
@@ -2335,6 +2552,18 @@ fn parse_hardware_capabilities_with_front_panel(
     };
 
     let active_relays = active_relays_from_mask(&relays, active_relay_bits);
+    let buzzer = HardwareBuzzerState {
+        melody_id: snapshot
+            .pointer("/outputs/melody_id")
+            .and_then(value_as_u64)
+            .unwrap_or(0),
+        melody_name: snapshot
+            .pointer("/outputs/melody_name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string(),
+    };
 
     HardwareCapabilities {
         board_connected,
@@ -2350,6 +2579,7 @@ fn parse_hardware_capabilities_with_front_panel(
         peripheral_names,
         relays,
         pwm_channels,
+        pwm_channel_config,
         peripherals,
         supports_rf_transmit: board_connected && capability_bits & CAPABILITY_RF != 0,
         supports_segment_display: board_connected && capability_bits & CAPABILITY_SEGMENTS != 0,
@@ -2373,6 +2603,8 @@ fn parse_hardware_capabilities_with_front_panel(
         warnings,
         strip_control,
         strip_effects,
+        buzzer,
+        melodies: Vec::new(),
         macros,
         effect_groups: snapshot
             .get("effect_groups")
@@ -2444,6 +2676,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn json_rpc_resource_busy_preserves_machine_readable_retry_contract() {
+        let error = controller_json_rpc_error(&json!({"code":-32009,"message":"strip is busy","data":{
+            "kind":"resource_busy","resource":"addressable_strip","owner":"standalone_strip_stream",
+            "retryable":true,"retry_after_ms":2000}}));
+        assert_eq!(error.message, "strip is busy");
+        assert!(error.is_resource_busy("addressable_strip"));
+        assert_eq!(error.retry_after_ms, Some(2000));
+        assert!(!error.is_resource_busy("relay"));
+    }
     #[test]
     fn json_rpc_error_message_has_safe_string_and_missing_message_fallbacks() {
         assert_eq!(
@@ -2825,10 +3067,18 @@ mod tests {
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
-            for call in 0..3 {
+            let expected = [
+                "controller.ping",
+                "controller.snapshot",
+                "controller.peripherals.get",
+                "controller.melodies.list",
+                "controller.pwm.values",
+            ];
+            for call in 0..5 {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
                 let request: Value = serde_json::from_str(line.trim()).unwrap();
+                assert_eq!(request["method"], expected[call]);
                 let response = match call {
                     0 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"ok":true}}),
                     1 => json!({"jsonrpc":"2.0","id":request["id"],"result":{
@@ -2838,9 +3088,15 @@ mod tests {
                         "front_panel": {
                             "raw_segments": [63, 6, 91, 79],
                             "segments_active": true
-                        }
+                        },
+                        "outputs": {"melody_id": 17, "melody_name": "attention"}
                     }}),
                     2 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"peripherals":[]}}),
+                    3 => json!({"jsonrpc":"2.0","id":request["id"],"result":[{
+                        "name": "attention",
+                        "notes": [{"frequency_hz": 880, "duration_ms": 100, "gap_ms": 25}]
+                    }]}),
+                    4 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"values":[]}}),
                     _ => unreachable!(),
                 };
                 writeln!(stream, "{response}").unwrap();
@@ -2854,7 +3110,36 @@ mod tests {
             capabilities.front_panel.unwrap().raw_segments,
             vec![63, 6, 91, 79]
         );
+        assert_eq!(capabilities.melodies.len(), 1);
+        assert_eq!(capabilities.melodies[0].name, "attention");
+        assert!(capabilities.buzzer.is_playing());
+        assert_eq!(capabilities.buzzer.melody_id, 17);
+        assert_eq!(capabilities.buzzer.melody_name, "attention");
         server.join().unwrap();
+    }
+
+    #[test]
+    fn melody_catalog_parser_keeps_only_valid_unique_definitions() {
+        let parsed = parse_melodies(&json!([
+            {"name":" Attention ","notes":[
+                {"frequency_hz":880,"duration_ms":100,"gap_ms":25},
+                {"frequency_hz":0,"duration_ms":40}
+            ]},
+            {"name":"attention","notes":[{"frequency_hz":440,"duration_ms":100}]},
+            {"name":"bad-frequency","notes":[{"frequency_hz":10,"duration_ms":100}]},
+            {"name":"bad-duration","notes":[{"frequency_hz":440,"duration_ms":0}]}
+        ])).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].name, "Attention");
+        assert_eq!(parsed[0].duration_ms(), 165);
+    }
+
+    #[test]
+    fn melody_catalog_rejects_wrong_top_level_shape() {
+        assert_eq!(
+            parse_melodies(&json!({"melodies": []})).unwrap_err(),
+            "PCController returned a non-array melody catalog"
+        );
     }
 
     #[test]
@@ -3345,6 +3630,54 @@ mod tests {
         assert_eq!(capabilities.telemetry.pwm_values.len(), 16);
         assert_eq!(capabilities.telemetry.pwm_values[0], Some(0));
         assert_eq!(capabilities.telemetry.pwm_values[15], Some(1500));
+    }
+
+    #[test]
+    fn pwm_snapshot_uses_controller_logical_percent_without_reapplying_curve() {
+        let mut telemetry = HardwareTelemetry::default();
+        assert!(apply_pwm_values(
+            &mut telemetry,
+            &json!({
+                "values": [0, 3, 18, 4095],
+                "channels": [
+                    {"channel": 0, "logical_percent": 0.0},
+                    {"channel": 1, "logical_percent": 1.0},
+                    {"channel": 2, "logical_percent": 5.0},
+                    {"channel": 3, "logical_percent": 100.0}
+                ]
+            }),
+        ));
+        assert_eq!(telemetry.pwm_values[1], Some(3));
+        assert_eq!(telemetry.pwm_logical_percent_milli[1], Some(1_000));
+        assert_eq!(telemetry.pwm_logical_percent_milli[2], Some(5_000));
+        assert_eq!(telemetry.pwm_logical_percent_milli[3], Some(100_000));
+    }
+
+    #[test]
+    fn pwm_catalog_preserves_controller_output_identity_and_curve() {
+        let capabilities = parse_hardware_capabilities(
+            &json!({
+                "connected": true,
+                "hello": {"capabilities": CAPABILITY_PWM}
+            }),
+            &json!({"peripherals": [{
+                "key": "pwm.11",
+                "kind": "pwm",
+                "role": "lighting",
+                "index": 11,
+                "default_name": "Enclosure illumination",
+                "control": "pwm",
+                "output_type": "lighting",
+                "icon": "lightbulb",
+                "curve": "gamma",
+                "gamma": 2.2
+            }]}),
+        );
+        let config = capabilities.pwm_channel_config.get(&11).unwrap();
+        assert_eq!(config.output_type, "lighting");
+        assert_eq!(config.icon, "lightbulb");
+        assert_eq!(config.curve, "gamma");
+        assert_eq!(config.gamma_milli, 2_200);
     }
 
     #[test]

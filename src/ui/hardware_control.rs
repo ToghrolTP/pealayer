@@ -166,11 +166,10 @@ pub(crate) fn set_relay(app: &PealayerApp, relay: u8, on: bool) {
 }
 
 pub(crate) fn set_pwm(app: &PealayerApp, channel: u8, percent: f64) {
-    let raw = (percent.clamp(0.0, 100.0) * 4095.0 / 100.0).round() as u16;
     let _ = app.engine_handle.queue_controller_intent(
         format!("pwm.{channel}"),
         "controller.pwm.set",
-        serde_json::json!({"channel": channel, "value": raw}),
+        serde_json::json!({"channel": channel, "percent": percent.clamp(0.0, 100.0)}),
         false,
     );
 }

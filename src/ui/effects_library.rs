@@ -33,6 +33,51 @@ fn show_saved_effect_context_menu(
         });
 }
 
+pub(crate) fn saved_effect_preview_action_presentation(
+    app: &mut PealayerApp,
+    reference: &str,
+) -> (
+    crate::app::ControllerEffectPreviewPhase,
+    &'static str,
+    String,
+    bool,
+) {
+    let phase = app.controller_effect_preview_phase(reference);
+    let (icon, label) = match phase {
+        crate::app::ControllerEffectPreviewPhase::Run => {
+            (crate::ui::icons::PLAY, app.tr("Run now"))
+        }
+        crate::app::ControllerEffectPreviewPhase::Starting => {
+            (crate::ui::icons::PLAY, app.tr("Starting…"))
+        }
+        crate::app::ControllerEffectPreviewPhase::Stop => {
+            (crate::ui::icons::STOP_CIRCLE, app.tr("Stop"))
+        }
+        crate::app::ControllerEffectPreviewPhase::Stopping => {
+            (crate::ui::icons::STOP_CIRCLE, app.tr("Stopping…"))
+        }
+    };
+    let enabled = app.controller_effect_preview_action_enabled(phase);
+    (phase, icon, label, enabled)
+}
+
+pub(crate) fn draw_saved_effect_preview_action(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    reference: &str,
+) {
+    let (_, icon, label, enabled) = saved_effect_preview_action_presentation(app, reference);
+    if ui
+        .add_enabled(enabled, egui::Button::new(format!("{icon} {label}")))
+        .clicked()
+    {
+        if let Err(error) = app.invoke_controller_effect_preview_action(reference) {
+            app.set_osd(error);
+        }
+        ui.close();
+    }
+}
+
 pub(crate) fn select_sequence(
     app: &mut PealayerApp,
     effect: &crate::four_d::controller::HardwareMacro,
@@ -135,6 +180,38 @@ pub(crate) fn save_advertised_effect_identity(
     app.save_controller_effect()
 }
 
+pub(crate) fn move_dragged_effect_to_group(
+    app: &mut PealayerApp,
+    payload: &crate::app::EffectDragPayload,
+    category: String,
+) -> Result<(), String> {
+    let category = category.trim();
+    if category.is_empty() || category.len() > 64 || category.chars().any(char::is_control) {
+        return Err("Effect group must be a bounded printable value".to_string());
+    }
+    let selected = if let Some(effect) = payload.controller_macro.as_ref() {
+        select_advertised_effect(
+            app,
+            crate::app::EffectPresetSource::ControllerMacro(effect.id),
+            None,
+        )
+    } else if let Some(effect) = payload.controller_strip_effect.as_ref() {
+        select_advertised_effect(
+            app,
+            crate::app::EffectPresetSource::ControllerStrip,
+            Some(effect.id.as_str()),
+        )
+    } else {
+        None
+    };
+    selected.ok_or_else(|| app.tr("Effect is no longer available"))?;
+    if app.effect_library_draft.category == category {
+        return Ok(());
+    }
+    app.effect_library_draft.category = category.to_string();
+    app.save_controller_effect()
+}
+
 pub(crate) fn duplicate_selected(app: &mut PealayerApp) {
     let duplicate_id = if app.effect_library_draft.kind == "sequence" {
         let used = app
@@ -183,28 +260,7 @@ fn draw_saved_effect_context_menu(
         app.show_effect_library_editor = true;
         ui.close();
     }
-    if ui
-        .button(format!("{} {}", crate::ui::icons::PLAY, app.tr("Run now")))
-        .clicked()
-    {
-        if let Err(error) = app.play_controller_effect(reference) {
-            app.set_osd(error);
-        }
-        ui.close();
-    }
-    if ui
-        .button(format!(
-            "{} {}",
-            crate::ui::icons::STOP_CIRCLE,
-            app.tr("Stop")
-        ))
-        .clicked()
-    {
-        if let Err(error) = app.stop_controller_effect(reference) {
-            app.set_osd(error);
-        }
-        ui.close();
-    }
+    draw_saved_effect_preview_action(app, ui, reference);
     if ui
         .button(format!(
             "{} {}",
@@ -500,6 +556,40 @@ pub(crate) fn sequence_duration_ms(steps: &[crate::four_d::controller::HardwareM
         .max(1)
 }
 
+fn append_melody_steps(
+    steps: &mut Vec<crate::four_d::controller::HardwareMacroStep>,
+    melody: &crate::four_d::controller::HardwareMelody,
+) -> Option<usize> {
+    let first = steps.len();
+    let base_us = if steps.is_empty() {
+        0
+    } else {
+        sequence_duration_ms(steps).saturating_mul(1_000)
+    };
+    let mut offset_ms = 0_u64;
+    for note in &melody.notes {
+        steps.push(crate::four_d::controller::HardwareMacroStep {
+            at_us: base_us.saturating_add(offset_ms.saturating_mul(1_000)),
+            kind: "beep".to_string(),
+            frequency_hz: Some(note.frequency_hz),
+            duration_ms: Some(note.duration_ms),
+            ..Default::default()
+        });
+        offset_ms = offset_ms.saturating_add(u64::from(note.duration_ms));
+        if note.gap_ms > 0 {
+            steps.push(crate::four_d::controller::HardwareMacroStep {
+                at_us: base_us.saturating_add(offset_ms.saturating_mul(1_000)),
+                kind: "beep".to_string(),
+                frequency_hz: Some(0),
+                duration_ms: Some(note.gap_ms),
+                ..Default::default()
+            });
+            offset_ms = offset_ms.saturating_add(u64::from(note.gap_ms));
+        }
+    }
+    (steps.len() > first).then_some(first)
+}
+
 #[derive(Clone, Copy, Debug)]
 struct SequenceCueDragState {
     index: usize,
@@ -648,6 +738,7 @@ fn sequence_cue_label(step: &crate::four_d::controller::HardwareMacroStep) -> St
         ),
         "display" => step.text.clone(),
         "rf" => format!("0x{:X}", step.code.unwrap_or_default()),
+        "beep" if step.frequency_hz.unwrap_or_default() == 0 => "Rest".to_string(),
         "beep" => format!("{} Hz", step.frequency_hz.unwrap_or_default()),
         _ => step.kind.clone(),
     }
@@ -843,11 +934,113 @@ fn sequence_cue_context_menu(
     action
 }
 
+fn sequence_cue_drag_mode(
+    duration_resizable: bool,
+    left: f32,
+    right: f32,
+    pointer_x: f32,
+) -> crate::app::DragMode {
+    if duration_resizable {
+        crate::app::classify_clip_drag_mode(left, right, pointer_x)
+    } else {
+        crate::app::DragMode::Move
+    }
+}
+
+fn paint_sequence_resize_handles(
+    painter: &egui::Painter,
+    cue: egui::Rect,
+    color: egui::Color32,
+) {
+    painter.line_segment(
+        [
+            cue.left_top() + egui::vec2(4.0, 5.0),
+            cue.left_bottom() + egui::vec2(4.0, -5.0),
+        ],
+        egui::Stroke::new(1.5, color),
+    );
+    painter.line_segment(
+        [
+            cue.right_top() + egui::vec2(-4.0, 5.0),
+            cue.right_bottom() + egui::vec2(-4.0, -5.0),
+        ],
+        egui::Stroke::new(1.5, color),
+    );
+}
+
+fn paint_sequence_move_grip(
+    painter: &egui::Painter,
+    cue: egui::Rect,
+    color: egui::Color32,
+) {
+    let center_x = if cue.width() < 40.0 {
+        cue.center().x
+    } else {
+        cue.left() + 10.0
+    };
+    let half_height = ((cue.height() - 10.0) / 2.0).clamp(3.0, 7.0);
+    for offset in [-2.5_f32, 0.0, 2.5] {
+        painter.line_segment(
+            [
+                egui::pos2(center_x + offset, cue.center().y - half_height),
+                egui::pos2(center_x + offset, cue.center().y + half_height),
+            ],
+            egui::Stroke::new(1.35, color.gamma_multiply(0.82)),
+        );
+    }
+}
+
+fn paint_sequence_cue_label(
+    painter: &egui::Painter,
+    cue: egui::Rect,
+    label: &str,
+    font_id: egui::FontId,
+    color: egui::Color32,
+    hide_overflow: bool,
+    duration_resizable: bool,
+) {
+    let left_padding = if duration_resizable { 8.0 } else { 18.0 };
+    if !hide_overflow {
+        painter.text(
+            cue.left_center() + egui::vec2(left_padding, 0.0),
+            egui::Align2::LEFT_CENTER,
+            label,
+            font_id,
+            color,
+        );
+        return;
+    }
+
+    let right_padding = if duration_resizable { 8.0 } else { 5.0 };
+    let content_rect = egui::Rect::from_min_max(
+        egui::pos2(cue.left() + left_padding, cue.top() + 2.0),
+        egui::pos2(cue.right() - right_padding, cue.bottom() - 2.0),
+    );
+    if content_rect.width() < 2.0 || content_rect.height() < 2.0 {
+        return;
+    }
+    let mut job = egui::text::LayoutJob {
+        wrap: egui::text::TextWrapping::truncate_at_width(content_rect.width()),
+        ..Default::default()
+    };
+    job.append(label, 0.0, egui::TextFormat::simple(font_id, color));
+    let galley = painter.layout_job(job);
+    painter.with_clip_rect(content_rect).galley(
+        egui::pos2(
+            content_rect.left(),
+            content_rect.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        color,
+    );
+}
+
 fn draw_sequence_timeline(
     ui: &mut egui::Ui,
     draft: &mut ControllerEffectDraft,
     selected_index: &mut usize,
     human_readable_time_units: bool,
+    hide_cue_text_overflow: bool,
 ) {
     let state_prefix = (
         "effect-sequence-timeline",
@@ -1027,6 +1220,7 @@ fn draw_sequence_timeline(
 
                         for &index in indexes {
                             let step = &draft.steps[index];
+                            let duration_resizable = step.duration_ms.is_some();
                             let start_ms = step.at_us.div_ceil(1_000);
                             let display_duration =
                                 u64::from(step.duration_ms.unwrap_or_default()).max(60);
@@ -1039,11 +1233,40 @@ fn draw_sequence_timeline(
                                     row.bottom() - 6.0,
                                 ),
                             );
-                            let response = ui.interact(
+                            let mut response = ui.interact(
                                 cue,
                                 egui::Id::new((state_prefix.clone(), "cue", index)),
                                 egui::Sense::click_and_drag(),
                             );
+                            let cue_label = sequence_cue_label(step);
+                            let duration_label = step.duration_ms.map_or_else(
+                                || "Instant cue (drag to move)".to_string(),
+                                |duration| crate::duration::format_time_value_ms(u64::from(duration)),
+                            );
+                            response = response.on_hover_text(format!(
+                                "{}\nLane: {}\nStarts: {}\nDuration: {}",
+                                cue_label,
+                                label,
+                                crate::duration::format_time_value_ms(start_ms),
+                                duration_label,
+                            ));
+                            if response.hovered()
+                                && let Some(pointer) = ui.ctx().pointer_latest_pos()
+                            {
+                                let drag_mode = sequence_cue_drag_mode(
+                                    duration_resizable,
+                                    cue.left(),
+                                    cue.right(),
+                                    pointer.x,
+                                );
+                                ui.ctx().set_cursor_icon(match drag_mode {
+                                    crate::app::DragMode::Move => egui::CursorIcon::Grab,
+                                    crate::app::DragMode::ResizeLeft
+                                    | crate::app::DragMode::ResizeRight => {
+                                        egui::CursorIcon::ResizeHorizontal
+                                    }
+                                });
+                            }
                             let selected = *selected_index == index;
                             let interaction = ui.style().interact_selectable(&response, selected);
                             let fill = if selected {
@@ -1067,31 +1290,32 @@ fn draw_sequence_timeline(
                                 ),
                                 egui::StrokeKind::Inside,
                             );
-                            painter.text(
-                                cue.left_center() + egui::vec2(8.0, 0.0),
-                                egui::Align2::LEFT_CENTER,
-                                sequence_cue_label(step),
+                            paint_sequence_cue_label(
+                                &painter,
+                                cue,
+                                &cue_label,
                                 egui::FontId::proportional(11.5),
                                 if selected {
                                     visuals.selection.stroke.color
                                 } else {
                                     interaction.fg_stroke.color
                                 },
+                                hide_cue_text_overflow,
+                                duration_resizable,
                             );
-                            if response.hovered() || selected {
-                                painter.line_segment(
-                                    [
-                                        cue.left_top() + egui::vec2(4.0, 5.0),
-                                        cue.left_bottom() + egui::vec2(4.0, -5.0),
-                                    ],
-                                    egui::Stroke::new(1.5, interaction.fg_stroke.color),
-                                );
-                                painter.line_segment(
-                                    [
-                                        cue.right_top() + egui::vec2(-4.0, 5.0),
-                                        cue.right_bottom() + egui::vec2(-4.0, -5.0),
-                                    ],
-                                    egui::Stroke::new(1.5, interaction.fg_stroke.color),
+                            if duration_resizable {
+                                if response.hovered() || selected {
+                                    paint_sequence_resize_handles(
+                                        &painter,
+                                        cue,
+                                        interaction.fg_stroke.color,
+                                    );
+                                }
+                            } else {
+                                paint_sequence_move_grip(
+                                    &painter,
+                                    cue,
+                                    interaction.fg_stroke.color,
                                 );
                             }
                             if response.clicked() || response.double_clicked() {
@@ -1105,7 +1329,8 @@ fn draw_sequence_timeline(
                                             drag_id,
                                             SequenceCueDragState {
                                                 index,
-                                                mode: crate::app::classify_clip_drag_mode(
+                                                mode: sequence_cue_drag_mode(
+                                                    duration_resizable,
                                                     cue.left(),
                                                     cue.right(),
                                                     pointer.x,
@@ -1414,6 +1639,7 @@ fn draw_sequence_step_editor(
     rtl_ui: bool,
     capabilities: Option<&crate::four_d::controller::HardwareCapabilities>,
     human_readable_time_units: bool,
+    hide_cue_text_overflow: bool,
 ) {
     let selection_id = egui::Id::new((
         "effect-sequence-selected-cue",
@@ -1428,6 +1654,7 @@ fn draw_sequence_step_editor(
         draft,
         &mut selected_index,
         human_readable_time_units,
+        hide_cue_text_overflow,
     );
     ui.data_mut(|data| data.insert_persisted(selection_id, selected_index));
     ui.add_space(8.0);
@@ -1753,7 +1980,7 @@ fn draw_sequence_step_editor(
                                 ui.label("Frequency");
                                 ui.add(
                                     egui::DragValue::new(step.frequency_hz.get_or_insert(1_000))
-                                        .range(1..=20_000)
+                                        .range(0..=20_000)
                                         .suffix(" Hz"),
                                 );
                                 ui.end_row();
@@ -1987,6 +2214,12 @@ fn recording_color(value: &str) -> egui::Color32 {
     egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2])
 }
 
+fn record_action_color() -> egui::Color32 {
+    // Recording is a live-state affordance, not a preview of the effect's
+    // timeline color. Keep it unmistakably red in every palette.
+    egui::Color32::from_rgb(205, 42, 54)
+}
+
 fn paint_recording_swatch(ui: &egui::Ui, rect: egui::Rect, value: &str) {
     let center = egui::pos2(rect.left() + 12.0, rect.center().y);
     ui.painter()
@@ -2061,6 +2294,8 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
     let mut start = false;
     let mut finish = false;
     let mut discard = false;
+    let mut selected_melody = None;
+    let mut refresh_melodies = false;
     ui.horizontal_wrapped(|ui| {
         ui.strong("Sequence steps");
         if ui.add_enabled(!active && !busy, egui::Button::new(format!("{} Add step", crate::ui::icons::PLUS))).clicked() {
@@ -2073,6 +2308,39 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
             let selection_id = egui::Id::new(("effect-sequence-selected-cue", draft.reference.clone(), draft.id.clone()));
             ui.data_mut(|data| data.insert_persisted(selection_id, draft.steps.len() - 1));
         }
+        ui.add_enabled_ui(!active && !busy && connected, |ui| {
+            let has_melodies = hardware.as_ref().is_some_and(|value| !value.melodies.is_empty());
+            let response = egui::ComboBox::from_id_salt("effect_add_melody")
+                .selected_text(if has_melodies {
+                    format!("{} Add melody", crate::ui::icons::MUSIC_NOTE)
+                } else {
+                    "No melodies".to_string()
+                })
+                .show_ui(ui, |ui| {
+                    let Some(hardware) = hardware.as_ref() else {
+                        ui.weak("PCController is unavailable");
+                        return;
+                    };
+                    if hardware.melodies.is_empty() {
+                        ui.weak("No configured melodies");
+                    }
+                    for melody in &hardware.melodies {
+                        let duration = crate::duration::format_effect_duration_for_language(
+                            app.language,
+                            melody.duration_ms(),
+                        );
+                        if ui.selectable_label(
+                            false,
+                            format!("{}  {} · {duration}", crate::ui::icons::MUSIC_NOTE, melody.name),
+                        ).clicked() {
+                            selected_melody = Some(melody.clone());
+                            ui.close();
+                        }
+                    }
+                })
+                .response;
+            refresh_melodies = response.clicked();
+        });
         ui.add_enabled_ui(!active && !busy, |ui| {
             egui::ComboBox::from_id_salt("effect_capture_clock").width(160.0)
                 .selected_text(match app.hardware_effect_authoring.capture_mode.as_str() {
@@ -2087,20 +2355,37 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
         });
         if active {
             ui.label(egui::RichText::new(format!("{} {} actions", crate::ui::icons::RECORD, recording.steps))
-                .color(recording_color(&app.effect_library_draft.color)));
+                .color(record_action_color()));
             finish = ui.add_enabled(!busy, egui::Button::new(format!("{} Finish", crate::ui::icons::STOP_CIRCLE))).clicked();
             discard = ui.add_enabled(!busy, egui::Button::new(format!("{} Discard take", crate::ui::icons::TRASH)))
                 .on_hover_text("Discard only this capture; existing sequence steps are retained").clicked();
         } else {
             start = ui.add_enabled(connected && !busy && !app.effect_library_draft.name.trim().is_empty(),
                 egui::Button::new(egui::RichText::new(format!("{} Record", crate::ui::icons::RECORD))
-                    .color(recording_color(&app.effect_library_draft.color))))
+                    .color(egui::Color32::WHITE))
+                    .fill(record_action_color())
+                    .stroke(egui::Stroke::new(1.0, record_action_color())))
                 .on_hover_text("Publish the current sequence and capture at its end. Delete existing steps first to replace them.").clicked();
         }
         if busy { ui.spinner(); }
         if !active { ui.weak(format!("{} · {}", app.effect_library_draft.steps.len(), crate::duration::format_effect_duration_for_language(app.language, sequence_duration_ms(&app.effect_library_draft.steps)))); }
         if !recording.last_error.is_empty() { ui.colored_label(ui.visuals().error_fg_color, &recording.last_error); }
     });
+    if refresh_melodies {
+        // Events keep this catalog current in the background; opening the
+        // picker is also an explicit freshness boundary for user choice.
+        app.engine_handle.request_catalog_refresh();
+    }
+    if let Some(melody) = selected_melody
+        && let Some(first) = append_melody_steps(&mut app.effect_library_draft.steps, &melody)
+    {
+        let selection_id = egui::Id::new((
+            "effect-sequence-selected-cue",
+            app.effect_library_draft.reference.clone(),
+            app.effect_library_draft.id.clone(),
+        ));
+        ui.data_mut(|data| data.insert_persisted(selection_id, first));
+    }
     let result = if start { app.start_hardware_effect_recording() }
         else if finish { app.save_hardware_effect_recording() }
         else if discard { app.discard_hardware_effect_recording() }
@@ -2115,6 +2400,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let mut open = app.show_effect_library_editor;
     let display_language = app.language;
     let human_readable_time_units = app.human_readable_time_units;
+    let hide_cue_text_overflow = app.timeline_hide_cue_text_overflow;
     let capabilities = app.advertised_hardware();
     let capture_locked = app.hardware_effect_authoring.active
         || app.hardware_effect_authoring.pending_operation.is_some()
@@ -2443,6 +2729,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     rtl_ui,
                                     capabilities.as_ref(),
                                     human_readable_time_units,
+                                    hide_cue_text_overflow,
                                 ));
                                 ui.add_space(8.0);
                                 if crate::ui::icons::disclosure_header(
@@ -2670,6 +2957,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn instantaneous_sequence_cues_are_move_only() {
+        assert_eq!(
+            sequence_cue_drag_mode(false, 10.0, 110.0, 10.0),
+            crate::app::DragMode::Move,
+        );
+        assert_eq!(
+            sequence_cue_drag_mode(false, 10.0, 110.0, 110.0),
+            crate::app::DragMode::Move,
+        );
+        assert_eq!(
+            sequence_cue_drag_mode(true, 10.0, 110.0, 10.0),
+            crate::app::DragMode::ResizeLeft,
+        );
+        assert_eq!(
+            sequence_cue_drag_mode(true, 10.0, 110.0, 110.0),
+            crate::app::DragMode::ResizeRight,
+        );
+    }
+
+    #[test]
     fn sequence_cue_menu_values_are_channel_specific() {
         assert_eq!(
             sequence_cue_value_options("motion"),
@@ -2741,7 +3048,7 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ui| draw_sequence_timeline(ui, draft, selected, true),
+                    |ui| draw_sequence_timeline(ui, draft, selected, true, true),
                 );
                 output.textures_delta.clear();
                 output
@@ -2864,6 +3171,13 @@ mod tests {
             }
         }
         assert_eq!(recording_color("purple"), recording_color("violet"));
+    }
+
+    #[test]
+    fn record_action_is_always_solid_red_instead_of_the_effect_color() {
+        assert_eq!(record_action_color(), egui::Color32::from_rgb(205, 42, 54));
+        assert_ne!(record_action_color(), recording_color("blue"));
+        assert_ne!(record_action_color(), recording_color("green"));
     }
 
     #[test]
@@ -3045,6 +3359,33 @@ mod tests {
     }
 
     #[test]
+    fn named_melody_expands_notes_and_gaps_into_portable_beep_steps() {
+        let melody = crate::four_d::controller::HardwareMelody {
+            name: "attention".to_string(),
+            notes: vec![
+                crate::four_d::controller::HardwareMelodyNote {
+                    frequency_hz: 880,
+                    duration_ms: 100,
+                    gap_ms: 25,
+                },
+                crate::four_d::controller::HardwareMelodyNote {
+                    frequency_hz: 990,
+                    duration_ms: 75,
+                    gap_ms: 0,
+                },
+            ],
+        };
+        let mut steps = Vec::new();
+        assert_eq!(append_melody_steps(&mut steps, &melody), Some(0));
+        assert_eq!(steps.len(), 3);
+        assert_eq!(steps[0].at_us, 0);
+        assert_eq!(steps[1].frequency_hz, Some(0));
+        assert_eq!(steps[1].at_us, 100_000);
+        assert_eq!(steps[2].at_us, 125_000);
+        assert_eq!(sequence_duration_ms(&steps), 200);
+    }
+
+    #[test]
     fn strip_delay_preserves_relative_timing() {
         let mut steps = vec![
             crate::four_d::controller::HardwareMacroStep {
@@ -3200,7 +3541,7 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ui| draw_sequence_timeline(ui, draft, selected, true),
+                |ui| draw_sequence_timeline(ui, draft, selected, true, true),
             );
             output.textures_delta.clear();
             output

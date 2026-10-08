@@ -43,6 +43,117 @@ pub struct TimelineWheelPreferences {
     pub alt: TimelineWheelBehavior,
 }
 
+/// Stable, persisted actions available in the native timeline toolbar.
+///
+/// The overflow button is deliberately not represented here: it is always
+/// available so a user can never hide the only route back to customization.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineToolbarAction {
+    ZoomIn,
+    ZoomOut,
+    PanLeft,
+    PanRight,
+    BringPlayheadIntoView,
+    FollowPlayhead,
+    AddKeyframe,
+    PreviousCue,
+    NextCue,
+    NudgeCueLeft,
+    NudgeCueRight,
+    SelectAll,
+    ClearSelection,
+    DeleteSelection,
+}
+
+impl TimelineToolbarAction {
+    pub const ALL: [Self; 14] = [
+        Self::ZoomIn,
+        Self::ZoomOut,
+        Self::PanLeft,
+        Self::PanRight,
+        Self::BringPlayheadIntoView,
+        Self::FollowPlayhead,
+        Self::AddKeyframe,
+        Self::PreviousCue,
+        Self::NextCue,
+        Self::NudgeCueLeft,
+        Self::NudgeCueRight,
+        Self::SelectAll,
+        Self::ClearSelection,
+        Self::DeleteSelection,
+    ];
+
+    pub const DEFAULT_VISIBLE: [Self; 6] = [
+        Self::ZoomIn,
+        Self::ZoomOut,
+        Self::PanLeft,
+        Self::PanRight,
+        Self::BringPlayheadIntoView,
+        Self::FollowPlayhead,
+    ];
+}
+
+pub fn default_timeline_toolbar_order() -> Vec<TimelineToolbarAction> {
+    TimelineToolbarAction::ALL.to_vec()
+}
+
+pub fn default_timeline_toolbar_hidden() -> Vec<TimelineToolbarAction> {
+    TimelineToolbarAction::ALL
+        .into_iter()
+        .filter(|action| !TimelineToolbarAction::DEFAULT_VISIBLE.contains(action))
+        .collect()
+}
+
+/// Remove duplicates and append actions introduced by newer builds. This
+/// keeps the alpha configuration self-correcting without version branches.
+pub fn normalize_timeline_toolbar_order(
+    configured: &[TimelineToolbarAction],
+) -> Vec<TimelineToolbarAction> {
+    let mut normalized = Vec::with_capacity(TimelineToolbarAction::ALL.len());
+    for action in configured
+        .iter()
+        .copied()
+        .chain(TimelineToolbarAction::ALL)
+    {
+        if !normalized.contains(&action) {
+            normalized.push(action);
+        }
+    }
+    normalized
+}
+
+#[cfg(test)]
+mod timeline_toolbar_tests {
+    use super::*;
+
+    #[test]
+    fn timeline_toolbar_order_self_heals_duplicates_and_missing_actions() {
+        let normalized = normalize_timeline_toolbar_order(&[
+            TimelineToolbarAction::PanRight,
+            TimelineToolbarAction::ZoomIn,
+            TimelineToolbarAction::PanRight,
+        ]);
+        assert_eq!(normalized[0], TimelineToolbarAction::PanRight);
+        assert_eq!(normalized[1], TimelineToolbarAction::ZoomIn);
+        assert_eq!(normalized.len(), TimelineToolbarAction::ALL.len());
+        for action in TimelineToolbarAction::ALL {
+            assert_eq!(
+                normalized.iter().filter(|candidate| **candidate == action).count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn advanced_cue_controls_start_hidden_but_navigation_starts_visible() {
+        let hidden = default_timeline_toolbar_hidden();
+        assert!(!hidden.contains(&TimelineToolbarAction::FollowPlayhead));
+        assert!(hidden.contains(&TimelineToolbarAction::AddKeyframe));
+        assert!(hidden.contains(&TimelineToolbarAction::DeleteSelection));
+    }
+}
+
 /// Per-field adjustment sizes shared by native controls and configuration clients.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct NumericInputSteps {
@@ -482,6 +593,9 @@ pub struct AppConfig {
     pub playback_positions: Vec<PlaybackPositionEntry>,
     pub app_name: Option<String>,
     pub app_icon: Option<PathBuf>,
+    pub app_icon_playing: Option<PathBuf>,
+    pub app_icon_paused: Option<PathBuf>,
+    pub app_icon_stopped: Option<PathBuf>,
     pub app_publisher: Option<String>,
     pub app_copyright: Option<String>,
     pub theme: AppTheme,
@@ -527,6 +641,9 @@ pub struct AppConfig {
     pub motion_control_mode: MotionControlMode,
     pub compact_hardware_controls: bool,
     pub compact_timeline_tracks: bool,
+    /// Keep cue labels inside their clip bounds and elide long text. Disable
+    /// this to preserve the legacy overflow behavior for users who prefer it.
+    pub timeline_hide_cue_text_overflow: bool,
     pub timeline_header_wheel_vertical_scroll: bool,
     pub timeline_plain_wheel_action: TimelineWheelBehavior,
     pub timeline_ctrl_wheel_action: TimelineWheelBehavior,
@@ -536,8 +653,12 @@ pub struct AppConfig {
     pub timeline_middle_axis_lock_modifiers: bool,
     pub timeline_animated_navigation: bool,
     pub timeline_navigation_transition_ms: u32,
+    /// Follow an advancing playhead and ease the viewport forward before it
+    /// reaches the trailing edge.
+    pub timeline_follow_playhead: bool,
+    pub timeline_toolbar_order: Vec<TimelineToolbarAction>,
+    pub timeline_toolbar_hidden: Vec<TimelineToolbarAction>,
     pub non_user_control_visibility: NonUserControlVisibility,
-    #[serde(alias = "prefix_relay_numbers")]
     pub prefix_relay_identifiers: bool,
     pub live_pwm_updates: bool,
     pub hardware_actions_on_press: bool,
@@ -606,8 +727,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub workspace_profiles_initialized: bool,
     #[serde(default)]
-    pub workspace_profiles_revision: u32,
-    #[serde(default)]
     pub active_workspace_profile: Option<String>,
     /// One unsynchronised working copy. PCController remains the effect
     /// catalog owner; this lets authors keep editing while it is offline and
@@ -652,6 +771,9 @@ impl Default for AppConfig {
             playback_positions: Vec::new(),
             app_name: None,
             app_icon: None,
+            app_icon_playing: None,
+            app_icon_paused: None,
+            app_icon_stopped: None,
             app_publisher: None,
             app_copyright: None,
             theme: AppTheme::System,
@@ -695,6 +817,7 @@ impl Default for AppConfig {
             motion_control_mode: MotionControlMode::Hold,
             compact_hardware_controls: false,
             compact_timeline_tracks: true,
+            timeline_hide_cue_text_overflow: true,
             timeline_header_wheel_vertical_scroll: true,
             timeline_plain_wheel_action: TimelineWheelBehavior::VerticalScroll,
             timeline_ctrl_wheel_action: TimelineWheelBehavior::Zoom,
@@ -704,6 +827,9 @@ impl Default for AppConfig {
             timeline_middle_axis_lock_modifiers: true,
             timeline_animated_navigation: true,
             timeline_navigation_transition_ms: 100,
+            timeline_follow_playhead: false,
+            timeline_toolbar_order: default_timeline_toolbar_order(),
+            timeline_toolbar_hidden: default_timeline_toolbar_hidden(),
             non_user_control_visibility: NonUserControlVisibility::Dimmed,
             prefix_relay_identifiers: true,
             live_pwm_updates: true,
@@ -755,7 +881,6 @@ impl Default for AppConfig {
             workspace_session: WorkspaceProfile::default(),
             workspace_profiles: default_workspace_profiles(),
             workspace_profiles_initialized: true,
-            workspace_profiles_revision: 1,
             active_workspace_profile: Some("nle".to_string()),
             effect_working_draft: None,
             effect_cue_session: None,
@@ -1037,6 +1162,7 @@ pub fn resolved_app_icon(config: &AppConfig) -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| config.app_icon.clone())
         .or_else(application_brand_app_icon)
+        .filter(|path| !path.as_os_str().is_empty())
 }
 
 fn application_brand() -> Option<(PathBuf, serde_json::Value)> {
@@ -1164,8 +1290,7 @@ impl AppConfig {
 
     fn normalize_workspace_profiles(&mut self) {
         self.normalize_playback_positions();
-        let migrating_profile_metadata = self.workspace_profiles_revision < 1;
-        if !self.workspace_profiles_initialized || migrating_profile_metadata {
+        if !self.workspace_profiles_initialized {
             for (id, profile) in default_workspace_profiles() {
                 self.workspace_profiles.entry(id).or_insert(profile);
             }
@@ -1182,13 +1307,6 @@ impl AppConfig {
         for (id, profile) in &mut self.workspace_profiles {
             if profile.name.trim().is_empty() {
                 profile.name = id.clone();
-            }
-            if migrating_profile_metadata {
-                if id == "simple" && profile.name == "simple" {
-                    profile.name = "Simple".to_string();
-                } else if id == "nle" && profile.name == "nle" {
-                    profile.name = "NLE".to_string();
-                }
             }
             if profile.icon.trim().is_empty() {
                 profile.icon = if profile.nle { "timeline" } else { "monitor" }.to_string();
@@ -1217,7 +1335,6 @@ impl AppConfig {
                 profile.order = order as i32;
             }
         }
-        self.workspace_profiles_revision = 1;
         if self
             .active_workspace_profile
             .as_ref()
@@ -1276,23 +1393,7 @@ impl AppConfig {
                     }
                 }
 
-                // Transparent Migration from legacy recent.json if present
-                let legacy_path =
-                    PathBuf::from(std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).unwrap_or_else(|_| ".".to_string()))
-                        .join(".config")
-                        .join("pealayer")
-                        .join("recent.json");
-
-                let mut config = Self::default();
-                if legacy_path.exists() {
-                    if let Ok(data) = std::fs::read_to_string(&legacy_path) {
-                        if let Ok(list) = serde_json::from_str::<Vec<PathBuf>>(&data) {
-                            config.recent_media = list;
-                        }
-                    }
-                }
-
-                config
+                Self::default()
             }
         }
     }
@@ -1863,6 +1964,9 @@ mod tests {
         assert!(cfg.playback_positions.is_empty());
         assert!(cfg.app_name.is_none());
         assert!(cfg.app_icon.is_none());
+        assert!(cfg.app_icon_playing.is_none());
+        assert!(cfg.app_icon_paused.is_none());
+        assert!(cfg.app_icon_stopped.is_none());
         assert!(cfg.app_publisher.is_none());
         assert!(cfg.app_copyright.is_none());
         assert_eq!(cfg.theme, AppTheme::System);
@@ -1924,7 +2028,6 @@ mod tests {
         assert!(!migrated.workspace_profiles_initialized);
         migrated.normalize_workspace_profiles();
         assert!(migrated.workspace_profiles_initialized);
-        assert_eq!(migrated.workspace_profiles_revision, 1);
         assert_eq!(
             migrated
                 .workspace_profiles
@@ -1958,39 +2061,6 @@ mod tests {
 
         assert_eq!(config.playback_positions.len(), 2);
         assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn first_profile_metadata_migration_repairs_seed_captions_and_order_once() {
-        let mut migrated = AppConfig::default();
-        migrated.workspace_profiles_revision = 0;
-        {
-            let simple = migrated.workspace_profiles.get_mut("simple").unwrap();
-            simple.name = "simple".to_string();
-            simple.order = 0;
-        }
-        {
-            let nle = migrated.workspace_profiles.get_mut("nle").unwrap();
-            nle.name = "nle".to_string();
-            nle.order = 0;
-        }
-        migrated.normalize_workspace_profiles();
-
-        assert_eq!(migrated.workspace_profiles["simple"].name, "Simple");
-        assert_eq!(migrated.workspace_profiles["simple"].order, 0);
-        assert_eq!(migrated.workspace_profiles["nle"].name, "NLE");
-        assert_eq!(migrated.workspace_profiles["nle"].order, 1);
-
-        {
-            let simple = migrated.workspace_profiles.get_mut("simple").unwrap();
-            simple.name = "Cinema".to_string();
-            simple.order = 1;
-        }
-        migrated.workspace_profiles.get_mut("nle").unwrap().order = 0;
-        migrated.normalize_workspace_profiles();
-        assert_eq!(migrated.workspace_profiles["simple"].name, "Cinema");
-        assert_eq!(migrated.workspace_profiles["nle"].order, 0);
-        assert_eq!(migrated.workspace_profiles["simple"].order, 1);
     }
 
     #[test]

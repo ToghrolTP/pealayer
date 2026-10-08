@@ -32,11 +32,6 @@ export const RfManager: React.FC<Props> = ({ rf, sendCmd }) => {
     }
     if (rf?.last_operation === 'rf-binding.remove' && Array.isArray(rf.last_result) && !(rf.last_result as Binding[]).some(binding => binding.name === previousName)) setPreviousName('');
   }, [rf?.last_result, rf?.last_operation]);
-  useEffect(() => {
-    if (!open) return;
-    const timer = window.setInterval(() => { if (!rf?.pending) command('catalog'); }, 1200);
-    return () => window.clearInterval(timer);
-  }, [open, rf?.pending, sendCmd]);
   const assign = (entry: Entry) => {
     const binding = blank(); binding.name = entry.name || `RF ${entry.id}`;
     binding.match = { ...binding.match, rf_code: entry.code, rf_bits: entry.bits, rf_protocol: entry.protocol };
@@ -106,7 +101,7 @@ export const RfManager: React.FC<Props> = ({ rf, sendCmd }) => {
         </> },
         { key: 'remotes', label: 'Remotes', children: <>
           <Space style={{ marginBottom: 12 }}>{catalog.learning?.active ? <><Tag color="processing">Learning · {Math.ceil(catalog.learning.remaining_ms / 1000)} s</Tag><Button onClick={() => command('learn.cancel')}>Stop learning</Button></> : <Button icon={<PlusOutlined />} disabled={!catalog.connected || rf?.pending} onClick={() => command('learn.start', { mode: 'timer', timeout_ms: 30000 })}>Learn buttons</Button>}</Space>
-          <Table<Entry> size="small" pagination={false} rowKey="id" dataSource={catalog.entries ?? []} columns={[
+          <Table<Entry> size="small" pagination={false} rowKey="id" dataSource={catalog.entries ?? []} locale={{ emptyText: 'No learned RF buttons. Use Refresh to read the board or learn a new button.' }} columns={[
             { title: 'Button', render: (_, entry) => <Space direction="vertical" size={0}><strong>{entry.name || `RF ${entry.id}`}</strong><Typography.Text code>{entry.code_display}</Typography.Text></Space> },
             { title: 'Signal', render: (_, entry) => `${entry.bits} bits · Protocol ${entry.protocol} · ${entry.pulse_us} µs` },
             { title: 'Board action', render: (_, entry) => entry.action_kind ? <Tag color="warning">Assigned</Tag> : <Tag>Unassigned</Tag> },

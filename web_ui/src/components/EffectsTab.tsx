@@ -30,6 +30,7 @@ import {
   PlayCircleOutlined,
   PlusOutlined,
   SaveOutlined,
+  SoundOutlined,
   StopOutlined,
   UnorderedListOutlined,
 } from '@ant-design/icons';
@@ -38,8 +39,9 @@ import { tr, UiLocale } from '../i18n';
 import { EffectIconPicker, effectGlyph, effectIconOptions } from '../effectIcons';
 import { EffectRecorder } from './EffectRecorder';
 import { GroupSelect } from './GroupSelect';
-import { EffectGroupDialog } from './EffectGroupDialog';
+import { EffectGroupDialog, EffectGroupDraft } from './EffectGroupDialog';
 import recordingColors from '../../../assets/themes/recording-colors.json';
+import { appendMelodySteps, sequenceDurationMs } from '../melodyCatalog';
 
 interface EffectsTabProps {
   state: PlayerState;
@@ -119,14 +121,25 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
   const [saving, setSaving] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [inlineEdit, setInlineEdit] = useState<InlineEffectEdit | null>(null);
-  const [newGroupName, setNewGroupName] = useState<string | null>(null);
+  const [groupDraft, setGroupDraft] = useState<EffectGroupDraft | null>(null);
+  const [draggingEffect, setDraggingEffect] = useState<string | null>(null);
+  const [dropGroup, setDropGroup] = useState<string | null>(null);
+  const [movingEffect, setMovingEffect] = useState<string | null>(null);
   const captureBusy = Boolean(state.effect_recording?.active || state.effect_recording?.pending);
   const selectedEffect = effects.find((effect) => effect.reference === selected);
+  const draggedEffect = effects.find((effect) => effect.reference === draggingEffect);
+  const effectGroupName = (effect: typeof effects[number]) => effect.category || tr(locale, 'Other');
   const grouped = useMemo(() => {
-    const groups = new Map<string, typeof effects>();
-    for (const group of state.controller_effect_groups ?? []) groups.set(group.name, []);
-    for (const effect of effects) groups.set(effect.category || tr(locale, 'Other'), [...(groups.get(effect.category || tr(locale, 'Other')) ?? []), effect]);
-    return [...groups.entries()];
+    const groups = new Map<string, { name: string; icon: string; items: typeof effects }>();
+    for (const group of state.controller_effect_groups ?? []) {
+      groups.set(group.name, { name: group.name, icon: group.icon || 'folder', items: [] });
+    }
+    for (const effect of effects) {
+      const name = effectGroupName(effect);
+      const group = groups.get(name) ?? { name, icon: 'folder', items: [] };
+      groups.set(name, { ...group, items: [...group.items, effect] });
+    }
+    return [...groups.values()];
   }, [effects, locale, state.controller_effect_groups]);
 
   const openEditor = (effect?: typeof effects[number], category?: string) => {
@@ -155,11 +168,21 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
     });
   };
 
-  const createGroup = () => {
-    const category = newGroupName?.trim();
-    if (!category) return;
-    sendCmd('controller_effect.group.create', { name: category });
-    setNewGroupName(null);
+  const openGroupEditor = (group?: { name: string; icon: string }) => {
+    setGroupDraft({
+      original_name: group?.name ?? '',
+      name: group?.name ?? '',
+      icon: group?.icon || 'folder',
+    });
+  };
+
+  const saveGroup = async () => {
+    if (!groupDraft?.name.trim()) return;
+    if (await sendCmd('controller_effect.group.save', {
+      original_name: groupDraft.original_name,
+      name: groupDraft.name.trim(),
+      icon: groupDraft.icon || 'folder',
+    })) setGroupDraft(null);
   };
 
   const updateStep = (index: number, patch: Partial<EffectStep>) => {
@@ -174,6 +197,13 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
     const steps = [...draft.steps];
     [steps[index], steps[destination]] = [steps[destination], steps[index]];
     setDraft({ ...draft, steps });
+  };
+  const addMelody = (name: string) => {
+    if (!draft) return;
+    const melody = state.hardware_details?.melodies?.find((item) => item.name === name);
+    if (!melody) return;
+    const steps = appendMelodySteps(draft.steps, melody);
+    setDraft({ ...draft, steps, duration_ms: sequenceDurationMs(steps) });
   };
 
   const save = async () => {
@@ -208,6 +238,33 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
     setInlineEdit(null);
   };
 
+  const moveEffectToGroup = async (effect: typeof effects[number], category: string) => {
+    if (effectGroupName(effect) === category || movingEffect) return;
+    const parts = programParts(effect.program);
+    setMovingEffect(effect.reference);
+    try {
+      await sendCmd('controller_effect.save', {
+        reference: effect.reference,
+        id: effect.id,
+        name: effect.name,
+        icon: effect.icon,
+        category,
+        description: effect.description,
+        kind: effect.kind,
+        duration_ms: effect.duration_ms,
+        ...(parts.properties.color ? { color: String(parts.properties.color) } : {}),
+        default_fps: effect.default_fps ?? 20,
+        default_pixels: effect.default_pixels ?? 100,
+        program: effect.program,
+        is_new: false,
+      });
+    } finally {
+      setMovingEffect(null);
+      setDraggingEffect(null);
+      setDropGroup(null);
+    }
+  };
+
   return <section className="surface-page effects-library-page">
     <header className="surface-page__header">
       <div>
@@ -217,17 +274,46 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       </div>
       <Space>
         {state.hardware_details?.strip?.running && <Button icon={<StopOutlined />} onClick={() => sendCmd('controller_effect.stop')}>{tr(locale, 'Stop preview')}</Button>}
-        <Button icon={<FolderAddOutlined />} onClick={() => setNewGroupName('')}>{tr(locale, 'New group')}</Button>
+        <Button icon={<FolderAddOutlined />} onClick={() => openGroupEditor()}>{tr(locale, 'New group')}</Button>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => openEditor()}>{tr(locale, 'New effect')}</Button>
       </Space>
     </header>
 
-    {grouped.length === 0 ? <Card className="surface-card"><Empty description={tr(locale, 'No effects')}><Space wrap><Button type="primary" icon={<PlusOutlined />} onClick={() => openEditor()}>{tr(locale, 'Create effect')}</Button><Button icon={<FolderAddOutlined />} onClick={() => setNewGroupName('')}>{tr(locale, 'New group')}</Button></Space></Empty></Card> :
-      <Collapse className="effect-groups" defaultActiveKey={grouped.map(([group]) => group)} items={grouped.map(([group, items]) => ({
-        key: group,
-        label: <span className="effect-group-title"><strong>{group}</strong><span className="effect-group-count">{items.length}</span></span>,
-        extra: <Tooltip title={tr(locale, 'New effect in this group')}><Button type="text" size="small" icon={<PlusOutlined />} aria-label={tr(locale, 'New effect in this group')} onClick={(event) => { event.stopPropagation(); openEditor(undefined, group); }} /></Tooltip>,
-        children: <div className="effect-card-grid">{items.map((effect) => {
+    {grouped.length === 0 ? <Card className="surface-card"><Empty description={tr(locale, 'No effects')}><Space wrap><Button type="primary" icon={<PlusOutlined />} onClick={() => openEditor()}>{tr(locale, 'Create effect')}</Button><Button icon={<FolderAddOutlined />} onClick={() => openGroupEditor()}>{tr(locale, 'New group')}</Button></Space></Empty></Card> :
+      <Collapse className="effect-groups" defaultActiveKey={grouped.filter((group) => group.items.length > 0).map((group) => group.name)} items={grouped.map((group) => ({
+        key: group.name,
+        className: `effect-group ${group.items.length === 0 ? 'is-empty' : ''}`,
+        showArrow: group.items.length > 0,
+        collapsible: group.items.length === 0 ? 'icon' as const : undefined,
+        label: <span
+          className={`effect-group-title ${dropGroup === group.name ? 'is-drop-target' : ''}`}
+          onDragEnter={(event) => {
+            if (!draggedEffect || effectGroupName(draggedEffect) === group.name) return;
+            event.preventDefault();
+            setDropGroup(group.name);
+          }}
+          onDragOver={(event) => {
+            if (!draggedEffect || effectGroupName(draggedEffect) === group.name) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+          }}
+          onDragLeave={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropGroup((current) => current === group.name ? null : current);
+          }}
+          onDrop={(event) => {
+            const reference = event.dataTransfer.getData('application/x-pealayer-effect') || draggingEffect;
+            const effect = effects.find((candidate) => candidate.reference === reference);
+            if (!effect || effectGroupName(effect) === group.name) return;
+            event.preventDefault();
+            event.stopPropagation();
+            void moveEffectToGroup(effect, group.name);
+          }}
+        ><span className="effect-group-icon">{effectGlyph(group.icon || 'folder')}</span><strong>{group.name}</strong><span className="effect-group-count">{group.items.length}</span></span>,
+        extra: <Space.Compact className="effect-group-actions">
+          <Tooltip title={tr(locale, 'Manage effect group')}><Button type="text" size="small" icon={<EditOutlined />} aria-label={tr(locale, 'Manage effect group')} onClick={(event) => { event.stopPropagation(); openGroupEditor(group); }} /></Tooltip>
+          <Tooltip title={tr(locale, 'New effect in this group')}><Button type="text" size="small" icon={<PlusOutlined />} aria-label={tr(locale, 'New effect in this group')} onClick={(event) => { event.stopPropagation(); openEditor(undefined, group.name); }} /></Tooltip>
+        </Space.Compact>,
+        children: <div className="effect-card-grid">{group.items.map((effect) => {
           const actions = [
             { key: 'rename', label: tr(locale, 'Rename'), icon: <EditOutlined /> },
             { key: 'play', label: tr(locale, 'Play effect'), icon: <PlayCircleOutlined /> },
@@ -249,7 +335,18 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
             name: effect.name,
             icon: effect.icon || 'plug',
           });
-          return <Dropdown key={effect.reference} trigger={['contextMenu']} menu={{ items: actions, onClick: ({ key }) => run(key) }}><article className={`effect-card ${selected === effect.reference ? 'is-selected' : ''} ${editing ? 'is-editing' : ''}`} onClick={() => setSelected(effect.reference)}>
+          return <Dropdown key={effect.reference} trigger={['contextMenu']} menu={{ items: actions, onClick: ({ key }) => run(key) }}><article
+            className={`effect-card ${selected === effect.reference ? 'is-selected' : ''} ${editing ? 'is-editing' : ''} ${draggingEffect === effect.reference ? 'is-dragging' : ''} ${movingEffect === effect.reference ? 'is-moving' : ''}`}
+            draggable={!editing && movingEffect === null}
+            aria-grabbed={draggingEffect === effect.reference}
+            onDragStart={(event) => {
+              event.dataTransfer.effectAllowed = 'move';
+              event.dataTransfer.setData('application/x-pealayer-effect', effect.reference);
+              setDraggingEffect(effect.reference);
+            }}
+            onDragEnd={() => { setDraggingEffect(null); setDropGroup(null); }}
+            onClick={() => setSelected(effect.reference)}
+          >
             {editing ? <>
               <Select
                 className="effect-card__inline-icon"
@@ -306,10 +403,10 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
     <Dropdown trigger={['contextMenu']} menu={{ items: [
       { key: 'effect', icon: <PlusOutlined />, label: tr(locale, 'New effect') },
       { key: 'group', icon: <FolderAddOutlined />, label: tr(locale, 'New group') },
-    ], onClick: ({ key }) => { if (key === 'group') setNewGroupName(''); else openEditor(); } }}>
+    ], onClick: ({ key }) => { if (key === 'group') openGroupEditor(); else openEditor(); } }}>
       <div className="effects-library-empty-space" style={{ minHeight: 140, flex: 1 }} aria-label={tr(locale, 'Effects Library')} />
     </Dropdown>
-    <EffectGroupDialog name={newGroupName} setName={setNewGroupName} create={createGroup} locale={locale} />
+    <EffectGroupDialog draft={groupDraft} setDraft={setGroupDraft} save={saveGroup} locale={locale} />
 
     <Modal
       className="effect-editor-modal"
@@ -332,7 +429,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
           <label><span>{tr(locale, 'ID')}</span><Input value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} /></label>
           <label><span>{tr(locale, 'Name')}</span><Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
           <label><span>{tr(locale, 'Icon')}</span><EffectIconPicker value={draft.icon} searchPlaceholder={tr(locale, 'Search icons...')} presetsLabel={tr(locale, 'Presets')} emptyLabel={tr(locale, 'No matching icons')} onChange={(icon) => setDraft({ ...draft, icon })} /></label>
-          <label><span>{tr(locale, 'Group')}</span><GroupSelect value={draft.category} groups={(state.controller_effect_groups ?? []).map((group) => group.name)} locale={locale} onChange={(category) => setDraft({ ...draft, category })} onCreate={() => setNewGroupName('')} /></label>
+          <label><span>{tr(locale, 'Group')}</span><GroupSelect value={draft.category} groups={(state.controller_effect_groups ?? []).map((group) => group.name)} locale={locale} onChange={(category) => setDraft({ ...draft, category })} onCreate={() => openGroupEditor()} /></label>
           <label className="effect-editor__wide"><span>{tr(locale, 'Description')}</span><Input value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
           <label><span>{tr(locale, 'Duration')}</span><InputNumber min={1} addonAfter="ms" value={draft.duration_ms} onChange={(duration_ms) => setDraft({ ...draft, duration_ms: duration_ms ?? 1 })} /></label>
           <label><span>{tr(locale, 'Color')}</span>{draft.kind === 'sequence' ? <Select disabled={captureBusy} value={draft.color} onChange={(color) => setDraft({ ...draft, color })} options={recordingColors.map((color) => ({ value: color.id, label: <span className="recording-color-option"><span className="recording-color-swatch" style={{ backgroundColor: color.hex }} />{tr(locale, color.label)}</span> }))} /> : <ColorPicker value={draft.color} disabledAlpha onChangeComplete={(color) => setDraft({ ...draft, color: color.toHexString().toUpperCase() })} />}</label>
@@ -341,6 +438,19 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
           <div className="effect-editor__toolbar"><strong>{tr(locale, 'Sequence steps')}</strong><Space wrap>
             <EffectRecorder state={state} sendCmd={sendCmd} locale={locale} effect={draftPayload(draft)} onSequenceChange={(steps, id) => setDraft((current) => current ? { ...current, id: String(id), reference: `effect:${id}`, is_new: false, steps } : current)} />
             <Button disabled={captureBusy} icon={<PlusOutlined />} onClick={() => setDraft({ ...draft, steps: [...draft.steps, defaultStep()] })}>{tr(locale, 'Add step')}</Button>
+            <Select
+              className="effect-melody-picker"
+              disabled={captureBusy || !state.controller_connected}
+              placeholder={<><SoundOutlined /> {tr(locale, 'Add melody')}</>}
+              value={undefined}
+              options={(state.hardware_details?.melodies ?? []).map((melody) => ({
+                value: melody.name,
+                label: `${melody.name} · ${melody.duration_ms} ms`,
+              }))}
+              notFoundContent={tr(locale, 'No configured melodies')}
+              onOpenChange={(open) => { if (open) void sendCmd('hardware.catalog.refresh'); }}
+              onChange={addMelody}
+            />
             <Popconfirm title={tr(locale, 'Delete all sequence steps?')} onConfirm={() => setDraft({ ...draft, steps: [] })}><Button disabled={captureBusy || draft.steps.length === 0} icon={<DeleteOutlined />}>{tr(locale, 'Clear steps')}</Button></Popconfirm>
           </Space></div>
           <ConfigProvider componentDisabled={captureBusy}>

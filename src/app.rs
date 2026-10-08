@@ -2,6 +2,19 @@ use crate::mpv::render::RenderContextWrapper;
 use eframe::egui;
 use std::sync::{Arc, Mutex};
 
+const IDLE_WEB_SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+fn effective_web_sync_interval(
+    configured: std::time::Duration,
+    playback_or_operation_active: bool,
+) -> std::time::Duration {
+    if playback_or_operation_active {
+        configured
+    } else {
+        configured.max(IDLE_WEB_SYNC_INTERVAL)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DragMode {
     Move,
@@ -260,6 +273,9 @@ pub struct HardwareEffectAuthoringState {
     pub capture_mode: String,
     pub active: bool,
     pub preview_active: bool,
+    pub preview_reference: Option<String>,
+    preview_duration: Option<std::time::Duration>,
+    preview_deadline: Option<std::time::Instant>,
     pub anchor_ms: u64,
     pub pending_operation: Option<String>,
     pub pending_saved_macro_id: Option<u64>,
@@ -286,6 +302,9 @@ impl Default for HardwareEffectAuthoringState {
             capture_mode: "automatic".to_string(),
             active: false,
             preview_active: false,
+            preview_reference: None,
+            preview_duration: None,
+            preview_deadline: None,
             anchor_ms: 0,
             pending_operation: None,
             pending_saved_macro_id: None,
@@ -316,19 +335,85 @@ impl HardwareEffectAuthoringState {
             self.acknowledged_effect_reference.as_ref() == Some(&reference)
         })
     }
+
+    fn begin_effect_preview(
+        &mut self,
+        reference: &str,
+        duration: Option<std::time::Duration>,
+    ) {
+        self.preview_reference = canonical_effect_reference(reference);
+        self.preview_duration = duration;
+        self.preview_deadline = None;
+        self.preview_active = false;
+    }
+
+    fn acknowledge_effect_preview(&mut self, now: std::time::Instant) {
+        self.preview_active = true;
+        self.preview_deadline = self.preview_duration.map(|duration| now + duration);
+    }
+
+    fn finish_effect_preview(&mut self) {
+        self.preview_active = false;
+        self.preview_reference = None;
+        self.preview_duration = None;
+        self.preview_deadline = None;
+    }
+
+    fn expire_effect_preview(&mut self, now: std::time::Instant) {
+        if self.pending_operation.is_none()
+            && self
+                .preview_deadline
+                .is_some_and(|deadline| deadline <= now)
+        {
+            self.finish_effect_preview();
+        }
+    }
+
+    fn preview_repaint_after(&self, now: std::time::Instant) -> Option<std::time::Duration> {
+        self.preview_deadline
+            .and_then(|deadline| deadline.checked_duration_since(now))
+    }
+
+    fn effect_preview_phase(
+        &mut self,
+        reference: &str,
+        now: std::time::Instant,
+    ) -> ControllerEffectPreviewPhase {
+        self.expire_effect_preview(now);
+        let same_effect = canonical_effect_reference(reference).is_some_and(|reference| {
+            self.preview_reference.as_ref() == Some(&reference)
+        });
+        match self.pending_operation.as_deref() {
+            Some("effect-play" | "effect-preview") if same_effect => {
+                ControllerEffectPreviewPhase::Starting
+            }
+            Some("effect-stop") if same_effect => ControllerEffectPreviewPhase::Stopping,
+            _ if same_effect && self.preview_active => ControllerEffectPreviewPhase::Stop,
+            _ => ControllerEffectPreviewPhase::Run,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ControllerEffectPreviewPhase {
+    Run,
+    Starting,
+    Stop,
+    Stopping,
 }
 
 fn canonical_effect_reference(reference: &str) -> Option<String> {
     let reference = reference.trim();
-    let id = if reference
-        .get(.."effect:".len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("effect:"))
-    {
-        &reference["effect:".len()..]
-    } else {
-        reference
-    }
-    .trim();
+    let id = ["effect:", "strip:"]
+        .into_iter()
+        .find_map(|prefix| {
+            reference
+                .get(..prefix.len())
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
+                .then(|| &reference[prefix.len()..])
+        })
+        .unwrap_or(reference)
+        .trim();
     (!id.is_empty()).then(|| format!("effect:{}", id.to_ascii_lowercase()))
 }
 
@@ -529,6 +614,8 @@ pub struct PealayerApp {
     pub(crate) is_connected: bool,
     pub(crate) lasso_origin: Option<egui::Pos2>,
     pub(crate) lasso_rect: Option<egui::Rect>,
+    pub(crate) lasso_initial_instance_ids: std::collections::HashSet<uuid::Uuid>,
+    pub(crate) lasso_initial_keyframes: std::collections::HashSet<(uuid::Uuid, usize)>,
     pub(crate) rtt_state: Arc<Mutex<RttState>>,
     pub(crate) current_video_path: Option<std::path::PathBuf>,
     pub(crate) show_remaining_time: bool,
@@ -626,6 +713,7 @@ pub struct PealayerApp {
     pub(crate) held_motion_action: Option<(String, String, String)>,
     pub(crate) compact_hardware_controls: bool,
     pub(crate) compact_timeline_tracks: bool,
+    pub(crate) timeline_hide_cue_text_overflow: bool,
     pub(crate) timeline_header_wheel_vertical_scroll: bool,
     pub(crate) timeline_plain_wheel_action: crate::config::TimelineWheelBehavior,
     pub(crate) timeline_ctrl_wheel_action: crate::config::TimelineWheelBehavior,
@@ -635,6 +723,9 @@ pub struct PealayerApp {
     pub(crate) timeline_middle_axis_lock_modifiers: bool,
     pub(crate) timeline_animated_navigation: bool,
     pub(crate) timeline_navigation_transition_ms: u32,
+    pub(crate) timeline_follow_playhead: bool,
+    pub(crate) timeline_toolbar_order: Vec<crate::config::TimelineToolbarAction>,
+    pub(crate) timeline_toolbar_hidden: Vec<crate::config::TimelineToolbarAction>,
     pub(crate) non_user_control_visibility: crate::config::NonUserControlVisibility,
     pub(crate) prefix_relay_identifiers: bool,
     pub(crate) live_pwm_updates: bool,
@@ -847,6 +938,23 @@ impl eframe::App for PealayerApp {
             self.process_shell_commands(ui.ctx());
         }
         self.process_controller_call_results();
+        if !self.rf.pending && self.engine_handle.take_rf_catalog_refresh_request() {
+            if let Err(error) = self.request_rf(
+                "catalog",
+                serde_json::json!({"read_board": true}),
+            ) {
+                self.rf.error = error;
+            }
+        }
+        let preview_now = std::time::Instant::now();
+        self.hardware_effect_authoring
+            .expire_effect_preview(preview_now);
+        if let Some(remaining) = self
+            .hardware_effect_authoring
+            .preview_repaint_after(preview_now)
+        {
+            ui.ctx().request_repaint_after(remaining);
+        }
         self.refresh_controller_effect_timeline_metadata();
         self.poll_external_config(ui.ctx());
 
@@ -1000,14 +1108,24 @@ impl eframe::App for PealayerApp {
 
         // Keep the read-only status snapshot current at the configured cadence;
         // WebSocket delivery itself can be disabled independently.
-        let web_config = crate::platform::interop::get_live_config();
-        crate::peer::publish_timeline(crate::peer::TimelineState{timeline:self.timeline.clone(),muted:self.track_muted.clone(),soloed:self.track_soloed.clone()});
-        let appearance = crate::platform::interop::AppearanceState::new(
-            &web_config,
+        let web_config = crate::platform::interop::get_live_frame_config(
             ui.ctx().theme() == egui::Theme::Dark,
         );
-        let web_sync_interval =
+        crate::peer::publish_timeline(crate::peer::TimelineState{timeline:self.timeline.clone(),muted:self.track_muted.clone(),soloed:self.track_soloed.clone()});
+        let appearance = web_config.appearance.clone();
+        let configured_web_sync_interval =
             std::time::Duration::from_millis(u64::from(web_config.web_sync_interval_ms));
+        let web_sync_active = (self.current_video_path.is_some() && !self.is_paused)
+            || self.is_scrubbing
+            || self.pending_scrub_commit.is_some()
+            || self.hardware_effect_authoring.pending_operation.is_some()
+            || self.board_operation.is_some();
+        // Real controller, WebSocket, media and input changes request their own
+        // repaint. Keep the configured fast cadence only while work is active;
+        // an idle/paused player needs a low-rate status backstop, not a full NLE
+        // recomposition ten times per second.
+        let web_sync_interval =
+            effective_web_sync_interval(configured_web_sync_interval, web_sync_active);
         let now = std::time::Instant::now();
         let appearance_changed =
             crate::platform::interop::get_live_appearance().as_ref() != Some(&appearance);
@@ -1118,6 +1236,8 @@ impl eframe::App for PealayerApp {
             let chapters = self.media_chapters();
             let current_chapter_index = self.active_media_chapter().map(|chapter| chapter.index);
             let status_resp = crate::platform::interop::PlayerStatusResponse {
+                application: crate::platform::interop::ApplicationIdentity::current(&self.app_name),
+                runtime: crate::platform::interop::runtime_identity(),
                 rf: self.rf.snapshot(),
                 remote_browser: crate::remote_location::snapshot(),
                 messages,
@@ -1142,10 +1262,34 @@ impl eframe::App for PealayerApp {
                 playback_rate: self.playback_rate,
                 playback_time: self.playback_time,
                 duration: self.duration,
+                media_fps: self.media_fps,
                 current_video: self
                     .current_video_path
                     .as_ref()
                     .map(|p| crate::media::redact_media_target(&p.to_string_lossy())),
+                media_tracks: self
+                    .media_tracks
+                    .iter()
+                    .map(|track| crate::platform::interop::WebMediaTrack {
+                        id: track.id,
+                        kind: match track.kind {
+                            MediaTrackType::Video => "video",
+                            MediaTrackType::Audio => "audio",
+                            MediaTrackType::Subtitle => "subtitle",
+                        }
+                        .to_string(),
+                        title: track.title.clone(),
+                        language: track.language.clone(),
+                        codec: track
+                            .codec_description
+                            .clone()
+                            .or_else(|| track.codec.clone()),
+                        selected: track.selected.unwrap_or(false),
+                        is_default: track.is_default.unwrap_or(false),
+                        forced: track.forced.unwrap_or(false),
+                        external: track.external.unwrap_or(false),
+                    })
+                    .collect(),
                 chapters: chapters
                     .into_iter()
                     .map(|chapter| crate::platform::interop::WebMediaChapter {
@@ -1195,7 +1339,7 @@ impl eframe::App for PealayerApp {
                         "revision":plan.revision,"prepared_revision":plan.acknowledged_revision,
                         "clock_ack_revision":plan.clock_ack_revision,"clock_ack_epoch":plan.clock_ack_epoch,
                         "ack_age_ms":plan.last_ack.map(|ack|ack.elapsed().as_millis() as u64),
-                        "error":plan.error,"timeline":plan.feedback
+                        "error":plan.error,"deferred_reason":plan.deferred_reason,"timeline":plan.feedback
                     })).unwrap_or(serde_json::Value::Null),
                 hardware_error: self
                     .engine_handle
@@ -1317,6 +1461,29 @@ impl eframe::App for PealayerApp {
                             })
                     })
                     .collect(),
+                timeline_tracks: crate::ui::layout::web_timeline_tracks(self),
+                osd: self.osd_message.as_ref().and_then(|(message, started)| {
+                    let options = self.osd_display_options.clone().unwrap_or_default();
+                    let timeout = options
+                        .timeout_seconds
+                        .unwrap_or(self.osd_timeout_seconds)
+                        .max(0.25);
+                    let remaining = std::time::Duration::from_secs_f32(timeout)
+                        .checked_sub(started.elapsed())?;
+                    Some(crate::platform::interop::WebOsdState {
+                        message: message.clone(),
+                        remaining_ms: remaining.as_millis().min(u64::MAX as u128) as u64,
+                        default_position: match self.osd_position {
+                            crate::config::OsdPosition::TopLeft => {
+                                crate::platform::interop::OsdAnchor::TopLeft
+                            }
+                            crate::config::OsdPosition::Center => {
+                                crate::platform::interop::OsdAnchor::Center
+                            }
+                        },
+                        options,
+                    })
+                }),
                 update: crate::update::manager().status(),
             };
             crate::peer::publish_media_view(crate::peer::MediaView {
@@ -1412,6 +1579,14 @@ impl eframe::App for PealayerApp {
         }
         self.schedule_playback_repaint(&ctx);
         self.update_shell_state();
+        crate::branding::sync_native_window_icon(
+            &ctx,
+            crate::branding::PlaybackIconState::from_player(
+                self.current_video_path.is_some(),
+                self.is_paused,
+                self.is_eof,
+            ),
+        );
         if let Some(ref mut mc) = self.media_controls {
             mc.update_playback(
                 self.current_video_path.is_some(),
@@ -2343,6 +2518,10 @@ impl PealayerApp {
                     .and_then(|_| {
                         crate::platform::windows::init_taskbar_thumbnail_toolbar(
                             hwnd,
+                            self.is_paused,
+                            self.is_muted,
+                            self.was_fullscreen,
+                            self.current_video_path.is_some(),
                             self.windows_thumbnail_toolbar,
                         )
                     })
@@ -2367,7 +2546,9 @@ impl PealayerApp {
         crate::platform::windows::update_shell_command_state(
             self.is_paused,
             self.is_muted,
+            self.was_fullscreen,
             self.current_video_path.is_some(),
+            self.media_keys_enabled,
         );
         while let Some(command) = crate::platform::windows::take_shell_command() {
             match command {
@@ -2381,6 +2562,16 @@ impl PealayerApp {
                 crate::platform::windows::THUMB_BUTTON_FULLSCREEN => {
                     self.toggle_fullscreen(ctx);
                 }
+                crate::platform::windows::MEDIA_KEY_CMD_PLAY => self.apply_interop_command(
+                    ctx, crate::platform::interop::InteropCommand::Play, "Media key"),
+                crate::platform::windows::MEDIA_KEY_CMD_PAUSE => self.apply_interop_command(
+                    ctx, crate::platform::interop::InteropCommand::Pause, "Media key"),
+                crate::platform::windows::MEDIA_KEY_CMD_STOP => self.apply_interop_command(
+                    ctx, crate::platform::interop::InteropCommand::Stop, "Media key"),
+                crate::platform::windows::MEDIA_KEY_CMD_NEXT => self.apply_interop_command(
+                    ctx, crate::platform::interop::InteropCommand::Next, "Media key"),
+                crate::platform::windows::MEDIA_KEY_CMD_PREVIOUS => self.apply_interop_command(
+                    ctx, crate::platform::interop::InteropCommand::Previous, "Media key"),
                 crate::platform::windows::TRAY_CMD_MUTE => {
                     self.toggle_audio_muted();
                 }
@@ -2474,17 +2665,18 @@ impl PealayerApp {
         if self.shell_initialized
             && hwnd != 0
             && self.last_thumbnail_button_state != Some(thumbnail_state)
-            && crate::platform::windows::update_taskbar_thumbnail_buttons(
+        {
+            match crate::platform::windows::update_taskbar_thumbnail_buttons(
                 hwnd,
                 thumbnail_state.0,
                 thumbnail_state.1,
                 thumbnail_state.2,
                 thumbnail_state.3,
                 thumbnail_state.4,
-            )
-            .is_ok()
-        {
-            self.last_thumbnail_button_state = Some(thumbnail_state);
+            ) {
+                Ok(()) => self.last_thumbnail_button_state = Some(thumbnail_state),
+                Err(error) => log::warn!("Could not synchronize taskbar actions: {error}"),
+            }
         }
     }
 
@@ -2689,7 +2881,10 @@ impl PealayerApp {
         if !advertised {
             return Err("the selected strip effect is no longer advertised".to_string());
         }
-        self.request_hardware_effect_command("effect-preview", format!("effect play {id}"))
+        self.request_hardware_effect_command("effect-preview", format!("effect play {id}"))?;
+        self.hardware_effect_authoring
+            .begin_effect_preview(&format!("effect:{id}"), None);
+        Ok(())
     }
 
     pub(crate) fn stop_strip_preview(&mut self) -> Result<(), String> {
@@ -2977,10 +3172,68 @@ impl PealayerApp {
                     .to_string(),
             );
         }
+        let canonical = canonical_effect_reference(reference)
+            .ok_or_else(|| "Select a PCController effect first".to_string())?;
+        let duration = self.controller_effect_preview_duration(&canonical);
         self.request_hardware_effect_command(
             "effect-play",
             format!("effect play {}", reference.trim()),
-        )
+        )?;
+        self.hardware_effect_authoring
+            .begin_effect_preview(&canonical, duration);
+        Ok(())
+    }
+
+    fn controller_effect_preview_duration(
+        &self,
+        reference: &str,
+    ) -> Option<std::time::Duration> {
+        let reference = canonical_effect_reference(reference)?;
+        let id = reference.strip_prefix("effect:")?;
+        let duration_ms = self
+            .advertised_hardware()?
+            .macros
+            .iter()
+            .find(|effect| {
+                effect.id.to_string() == id || effect.name.eq_ignore_ascii_case(id)
+            })?
+            .duration_ms;
+        (duration_ms > 0).then(|| std::time::Duration::from_millis(duration_ms))
+    }
+
+    pub(crate) fn controller_effect_preview_phase(
+        &mut self,
+        reference: &str,
+    ) -> ControllerEffectPreviewPhase {
+        self.hardware_effect_authoring
+            .effect_preview_phase(reference, std::time::Instant::now())
+    }
+
+    pub(crate) fn controller_effect_preview_action_enabled(
+        &self,
+        phase: ControllerEffectPreviewPhase,
+    ) -> bool {
+        self.hardware_effect_authoring.pending_operation.is_none()
+            && matches!(
+                phase,
+                ControllerEffectPreviewPhase::Run | ControllerEffectPreviewPhase::Stop
+            )
+    }
+
+    pub(crate) fn invoke_controller_effect_preview_action(
+        &mut self,
+        reference: &str,
+    ) -> Result<(), String> {
+        match self.controller_effect_preview_phase(reference) {
+            ControllerEffectPreviewPhase::Run => self.play_controller_effect(reference),
+            ControllerEffectPreviewPhase::Stop => self.stop_controller_effect(reference),
+            ControllerEffectPreviewPhase::Starting => {
+                Err("This effect is still starting".to_string())
+            }
+            ControllerEffectPreviewPhase::Stopping => {
+                Err("This effect is still stopping".to_string())
+            }
+        }
     }
 
     pub(crate) fn controller_effect_is_advertised(&self, reference: &str) -> bool {
@@ -3033,6 +3286,51 @@ impl PealayerApp {
         self.board_operation = Some(operation.to_string());
         self.board_operation_status = "Waiting for PCController…".to_string();
         Ok(())
+    }
+
+    pub(crate) fn play_buzzer_melody(
+        &mut self,
+        name: &str,
+        repeats: u8,
+    ) -> Result<(), String> {
+        if repeats > 20 {
+            return Err("Melody repeats must be 0–20; zero loops until stopped".to_string());
+        }
+        let name = Self::controller_command_argument(name)
+            .ok_or_else(|| "Select a valid configured melody".to_string())?;
+        self.request_board_operation(
+            "board-buzzer-melody",
+            "controller.command.execute",
+            serde_json::json!({"command": format!("melody play {name} {repeats}")}),
+        )
+    }
+
+    pub(crate) fn play_buzzer_tone(
+        &mut self,
+        frequency_hz: u16,
+        duration_ms: u16,
+    ) -> Result<(), String> {
+        if !(20..=20_000).contains(&frequency_hz) {
+            return Err("Tone frequency must be 20–20000 Hz".to_string());
+        }
+        if duration_ms == 0 {
+            return Err("Tone duration must be at least 1 ms".to_string());
+        }
+        self.request_board_operation(
+            "board-buzzer-tone",
+            "controller.command.execute",
+            serde_json::json!({"command": format!("buzzer {frequency_hz} {duration_ms}")}),
+        )
+    }
+
+    pub(crate) fn stop_buzzer(&mut self) -> Result<(), String> {
+        // Frequency zero is PCController's immediate all-buzzer stop: it
+        // cancels the host-streamed melody before sending the board stop opcode.
+        self.request_board_operation(
+            "board-buzzer-stop",
+            "controller.command.execute",
+            serde_json::json!({"command": "buzzer 0 1"}),
+        )
     }
 
     pub(crate) fn rename_board(&mut self) -> Result<(), String> {
@@ -3230,19 +3528,23 @@ impl PealayerApp {
                             self.hardware_effect_authoring.pending_saved_macro_id = self.hardware_effect_authoring.append_target;
                             self.engine_handle.request_catalog_refresh();
                         }
-                        "effect-preview" | "strip-rainbow" => {
-                            self.hardware_effect_authoring.preview_active = true;
+                        "effect-play" | "effect-preview" | "strip-rainbow" => {
+                            self.hardware_effect_authoring
+                                .acknowledge_effect_preview(std::time::Instant::now());
                             self.engine_handle.request_catalog_refresh();
                         }
                         "effect-stop" | "strip-stop" | "strip-clear" => {
-                            self.hardware_effect_authoring.preview_active = false;
+                            self.hardware_effect_authoring.finish_effect_preview();
                             self.engine_handle.request_catalog_refresh();
                         }
                         "board-name"
                         | "board-settings"
                         | "board-status-led-override"
                         | "board-status-led-release"
-                        | "board-reboot" => {
+                        | "board-reboot"
+                        | "board-buzzer-melody"
+                        | "board-buzzer-tone"
+                        | "board-buzzer-stop" => {
                             if result.operation == "board-settings" {
                                 self.board_settings_dirty = false;
                             }
@@ -3293,8 +3595,8 @@ impl PealayerApp {
                         // The authoritative response has already updated the
                         // rendered catalog and revision. Refresh in the
                         // background to verify the complete catalog and to
-                        // recover gracefully from an older controller that did
-                        // not return the typed presentation payload.
+                        // self-correct after a dropped/reordered event or a
+                        // malformed current-contract response.
                         self.engine_handle.request_catalog_refresh();
                     }
                     if is_board_operation {
@@ -3316,8 +3618,8 @@ impl PealayerApp {
                 Err(error) => {
                     if result.operation == "effect-save" { self.hardware_effect_authoring.record_after_publish = None; }
                     if result.operation == "macro-start" { self.hardware_effect_authoring.append_target = None; }
-                    if result.operation == "effect-preview" {
-                        self.hardware_effect_authoring.preview_active = false;
+                    if matches!(result.operation.as_str(), "effect-play" | "effect-preview") {
+                        self.hardware_effect_authoring.finish_effect_preview();
                     }
                     if is_board_operation {
                         self.board_operation_status = error.clone();
@@ -3501,6 +3803,32 @@ impl PealayerApp {
             InteropCommand::SetRate { rate } => {
                 self.set_playback_speed(rate, true);
             }
+            InteropCommand::SelectMediaTrack { kind, id } => {
+                let kind = match kind.as_str() {
+                    "video" => MediaTrackType::Video,
+                    "audio" => MediaTrackType::Audio,
+                    "subtitle" => MediaTrackType::Subtitle,
+                    _ => return,
+                };
+                if self
+                    .media_tracks
+                    .iter()
+                    .any(|track| track.kind == kind && track.id == id)
+                {
+                    self.select_media_track(MediaTrackKey { kind, id });
+                } else {
+                    self.set_osd(self.tr("Media track is no longer available"));
+                }
+            }
+            InteropCommand::DisableMediaTrack { kind } => {
+                let kind = match kind.as_str() {
+                    "video" => MediaTrackType::Video,
+                    "audio" => MediaTrackType::Audio,
+                    "subtitle" => MediaTrackType::Subtitle,
+                    _ => return,
+                };
+                self.disable_media_track(kind);
+            }
             InteropCommand::Open { target } => self.load_media_target(&target),
             InteropCommand::BrowseRemote { target, use_proxy } => { if let Err(error) = crate::remote_location::request(&target, use_proxy, false, ctx) { self.set_osd(error); } },
             InteropCommand::SelectRemote { target, play } => { if let Err(error) = crate::remote_location::select(&target, play) { self.set_osd(error); } },
@@ -3608,6 +3936,32 @@ impl PealayerApp {
             }
             InteropCommand::MoveWorkspaceProfile { id, direction } => {
                 self.move_workspace_profile(&id, direction);
+            }
+            InteropCommand::UpdateTimelineTrack {
+                key,
+                linked,
+                visible,
+                muted,
+                soloed,
+                locked,
+                selected,
+            } => {
+                let patch = crate::ui::layout::TimelineTrackPatch {
+                    linked,
+                    visible,
+                    muted,
+                    soloed,
+                    locked,
+                    selected,
+                };
+                if let Err(error) = crate::ui::layout::update_timeline_track(self, &key, patch) {
+                    self.set_osd(error);
+                }
+            }
+            InteropCommand::ManageTimelineTrack { key } => {
+                if let Err(error) = crate::ui::layout::manage_timeline_track_by_key(self, &key) {
+                    self.set_osd(error);
+                }
             }
             InteropCommand::AddEffectCue {
                 effect_id,
@@ -3774,9 +4128,13 @@ impl PealayerApp {
                     return;
                 }
             }
-            InteropCommand::CreateControllerEffectGroup { name, icon } => {
+            InteropCommand::SaveControllerEffectGroup {
+                original_name,
+                name,
+                icon,
+            } => {
                 if let Err(error) = self.save_controller_effect_group(ControllerEffectGroupDraft {
-                    original_name: String::new(),
+                    original_name,
                     name,
                     icon,
                 }) {
@@ -3938,13 +4296,36 @@ impl PealayerApp {
                 }
             }
             InteropCommand::SetHardwarePwm { channel, percent } => {
-                let value = (percent.clamp(0.0, 100.0) * 4095.0 / 100.0).round() as u16;
                 let _ = self.engine_handle.queue_controller_intent(
                     format!("pwm.{channel}"),
                     "controller.pwm.set",
-                    serde_json::json!({"channel": channel, "value": value}),
+                    serde_json::json!({"channel": channel, "percent": percent.clamp(0.0, 100.0)}),
                     false,
                 );
+            }
+            InteropCommand::RefreshHardwareCatalog => {
+                self.engine_handle.request_catalog_refresh();
+            }
+            InteropCommand::PlayHardwareMelody { name, repeats } => {
+                if let Err(error) = self.play_buzzer_melody(&name, repeats) {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::PlayHardwareTone {
+                frequency_hz,
+                duration_ms,
+            } => {
+                if let Err(error) = self.play_buzzer_tone(frequency_hz, duration_ms) {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::StopHardwareBuzzer => {
+                if let Err(error) = self.stop_buzzer() {
+                    self.set_osd(error);
+                    return;
+                }
             }
             InteropCommand::UpdateHardwarePresentation { key, fields } => {
                 let Some(capabilities) = self
@@ -3984,6 +4365,51 @@ impl PealayerApp {
                 brightness,
             } => {
                 if let Err(error) = self.fill_addressable_strip(red, green, blue, brightness) {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::SetAddressableStripPixel {
+                pixel,
+                pixels,
+                red,
+                green,
+                blue,
+                brightness,
+            } => {
+                if let Err(error) = self.set_addressable_strip_pixel(
+                    pixel, pixels, red, green, blue, brightness,
+                ) {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::SendAddressableStripFrame { pixels, rgb } => {
+                if let Err(error) = self.send_addressable_strip_frame(pixels, &rgb) {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::StartAddressableStripRainbow { pixels, fps } => {
+                if let Err(error) = self.start_addressable_strip_rainbow(pixels, fps) {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::StartAddressableStripEffect { id, pixels, fps } => {
+                if let Err(error) = self.start_addressable_strip_effect(&id, pixels, fps) {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::StopAddressableStrip => {
+                if let Err(error) = self.stop_addressable_strip() {
+                    self.set_osd(error);
+                    return;
+                }
+            }
+            InteropCommand::RefreshAddressableStripStatus => {
+                if let Err(error) = self.refresh_addressable_strip_status() {
                     self.set_osd(error);
                     return;
                 }
@@ -5809,6 +6235,7 @@ impl PealayerApp {
         cfg.motion_control_mode = self.motion_control_mode;
         cfg.compact_hardware_controls = self.compact_hardware_controls;
         cfg.compact_timeline_tracks = self.compact_timeline_tracks;
+        cfg.timeline_hide_cue_text_overflow = self.timeline_hide_cue_text_overflow;
         cfg.timeline_header_wheel_vertical_scroll = self.timeline_header_wheel_vertical_scroll;
         cfg.timeline_plain_wheel_action = self.timeline_plain_wheel_action;
         cfg.timeline_ctrl_wheel_action = self.timeline_ctrl_wheel_action;
@@ -5818,6 +6245,10 @@ impl PealayerApp {
         cfg.timeline_middle_axis_lock_modifiers = self.timeline_middle_axis_lock_modifiers;
         cfg.timeline_animated_navigation = self.timeline_animated_navigation;
         cfg.timeline_navigation_transition_ms = self.timeline_navigation_transition_ms;
+        cfg.timeline_follow_playhead = self.timeline_follow_playhead;
+        cfg.timeline_toolbar_order =
+            crate::config::normalize_timeline_toolbar_order(&self.timeline_toolbar_order);
+        cfg.timeline_toolbar_hidden = self.timeline_toolbar_hidden.clone();
         cfg.non_user_control_visibility = self.non_user_control_visibility;
         cfg.prefix_relay_identifiers = self.prefix_relay_identifiers;
         cfg.live_pwm_updates = self.live_pwm_updates;
@@ -6013,6 +6444,7 @@ impl PealayerApp {
         self.motion_control_mode = config.motion_control_mode;
         self.compact_hardware_controls = config.compact_hardware_controls;
         self.compact_timeline_tracks = config.compact_timeline_tracks;
+        self.timeline_hide_cue_text_overflow = config.timeline_hide_cue_text_overflow;
         self.timeline_header_wheel_vertical_scroll = config.timeline_header_wheel_vertical_scroll;
         self.timeline_plain_wheel_action = config.timeline_plain_wheel_action;
         self.timeline_ctrl_wheel_action = config.timeline_ctrl_wheel_action;
@@ -6022,6 +6454,10 @@ impl PealayerApp {
         self.timeline_middle_axis_lock_modifiers = config.timeline_middle_axis_lock_modifiers;
         self.timeline_animated_navigation = config.timeline_animated_navigation;
         self.timeline_navigation_transition_ms = config.timeline_navigation_transition_ms;
+        self.timeline_follow_playhead = config.timeline_follow_playhead;
+        self.timeline_toolbar_order =
+            crate::config::normalize_timeline_toolbar_order(&config.timeline_toolbar_order);
+        self.timeline_toolbar_hidden = config.timeline_toolbar_hidden.clone();
         self.non_user_control_visibility = config.non_user_control_visibility;
         self.prefix_relay_identifiers = config.prefix_relay_identifiers;
         self.live_pwm_updates = config.live_pwm_updates;
@@ -7459,11 +7895,27 @@ fn web_hardware_details(
             "audio_temperature_centi_c": capabilities.telemetry.audio_temperature_centi_c,
             "door_open": capabilities.telemetry.door_open,
         },
+        "status_led": capabilities.status_led.as_ref().map(|status| serde_json::json!({
+            "red": status.red,
+            "green": status.green,
+            "blue": status.blue,
+        })),
         "warnings": capabilities.warnings.iter().map(|warning| serde_json::json!({
             "code": warning.code,
             "severity": warning.severity,
             "message": warning.message,
         })).collect::<Vec<_>>(),
+        "melodies": capabilities.melodies.iter().map(|melody| serde_json::json!({
+            "name": melody.name,
+            "duration_ms": melody.duration_ms(),
+            "notes": melody.notes,
+        })).collect::<Vec<_>>(),
+        "buzzer": {
+            "playing": capabilities.buzzer.is_playing(),
+            "melody_id": capabilities.buzzer.melody_id,
+            "melody_name": capabilities.buzzer.melody_name,
+            "board_silent": capabilities.settings.as_ref().map(|settings| settings.silent),
+        },
         "settings": settings,
         "front_panel": front_panel,
         "strip": strip,
@@ -7684,6 +8136,8 @@ impl Default for PealayerApp {
             is_connected: false,
             lasso_origin: None,
             lasso_rect: None,
+            lasso_initial_instance_ids: std::collections::HashSet::new(),
+            lasso_initial_keyframes: std::collections::HashSet::new(),
             rtt_state: Arc::new(Mutex::new(RttState {
                 video_texture: None,
                 video_fbo: None,
@@ -7787,6 +8241,7 @@ impl Default for PealayerApp {
             held_motion_action: None,
             compact_hardware_controls: false,
             compact_timeline_tracks: true,
+            timeline_hide_cue_text_overflow: true,
             timeline_header_wheel_vertical_scroll: true,
             timeline_plain_wheel_action: crate::config::TimelineWheelBehavior::VerticalScroll,
             timeline_ctrl_wheel_action: crate::config::TimelineWheelBehavior::Zoom,
@@ -7796,6 +8251,9 @@ impl Default for PealayerApp {
             timeline_middle_axis_lock_modifiers: true,
             timeline_animated_navigation: true,
             timeline_navigation_transition_ms: 100,
+            timeline_follow_playhead: false,
+            timeline_toolbar_order: crate::config::default_timeline_toolbar_order(),
+            timeline_toolbar_hidden: crate::config::default_timeline_toolbar_hidden(),
             non_user_control_visibility: crate::config::NonUserControlVisibility::Dimmed,
             prefix_relay_identifiers: true,
             live_pwm_updates: true,
@@ -7885,6 +8343,20 @@ pub(crate) mod tests {
         APP_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[test]
+    fn web_sync_uses_fast_cadence_only_while_playback_or_operations_are_active() {
+        let configured = std::time::Duration::from_millis(100);
+        assert_eq!(effective_web_sync_interval(configured, true), configured);
+        assert_eq!(
+            effective_web_sync_interval(configured, false),
+            std::time::Duration::from_secs(1)
+        );
+        assert_eq!(
+            effective_web_sync_interval(std::time::Duration::from_secs(2), false),
+            std::time::Duration::from_secs(2)
+        );
     }
 
     #[test]
@@ -8767,8 +9239,82 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn effect_preview_phase_is_contextual_per_effect_and_expires() {
+        let mut authoring = HardwareEffectAuthoringState::default();
+        let started_at = std::time::Instant::now();
+        authoring.begin_effect_preview(
+            "effect:7",
+            Some(std::time::Duration::from_millis(750)),
+        );
+        authoring.pending_operation = Some("effect-play".to_string());
+
+        assert_eq!(
+            authoring.effect_preview_phase("effect:7", started_at),
+            ControllerEffectPreviewPhase::Starting
+        );
+        assert_eq!(
+            authoring.effect_preview_phase("effect:8", started_at),
+            ControllerEffectPreviewPhase::Run
+        );
+
+        authoring.pending_operation = None;
+        authoring.acknowledge_effect_preview(started_at);
+        assert_eq!(
+            authoring.effect_preview_phase(
+                "effect:7",
+                started_at + std::time::Duration::from_millis(749),
+            ),
+            ControllerEffectPreviewPhase::Stop
+        );
+
+        assert_eq!(
+            authoring.effect_preview_phase(
+                "effect:7",
+                started_at + std::time::Duration::from_millis(750),
+            ),
+            ControllerEffectPreviewPhase::Run
+        );
+        assert!(!authoring.preview_active);
+        assert_eq!(authoring.preview_reference, None);
+    }
+
+    #[test]
+    fn effect_preview_phase_reports_stopping_only_for_the_running_card() {
+        let mut authoring = HardwareEffectAuthoringState::default();
+        let now = std::time::Instant::now();
+        authoring.begin_effect_preview("strip:Aurora", None);
+        authoring.acknowledge_effect_preview(now);
+        authoring.pending_operation = Some("effect-stop".to_string());
+
+        assert_eq!(
+            authoring.effect_preview_phase("effect:aurora", now),
+            ControllerEffectPreviewPhase::Stopping
+        );
+        assert_eq!(
+            authoring.effect_preview_phase("effect:other", now),
+            ControllerEffectPreviewPhase::Run
+        );
+        assert_eq!(
+            canonical_effect_reference("STRIP:Aurora").as_deref(),
+            Some("effect:aurora")
+        );
+    }
+
+    #[test]
     fn web_hardware_details_publish_every_sampled_pwm_channel() {
         let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
+        capabilities.melodies = vec![crate::four_d::controller::HardwareMelody {
+            name: "attention".to_string(),
+            notes: vec![crate::four_d::controller::HardwareMelodyNote {
+                frequency_hz: 880,
+                duration_ms: 100,
+                gap_ms: 25,
+            }],
+        }];
+        capabilities.buzzer = crate::four_d::controller::HardwareBuzzerState {
+            melody_id: 42,
+            melody_name: "attention".to_string(),
+        };
         capabilities.controls = vec![crate::four_d::controller::HardwareControl {
             key: "pwm.3".to_string(),
             kind: "pwm".to_string(),
@@ -8788,6 +9334,11 @@ pub(crate) mod tests {
             web_hardware_details(&capabilities, crate::config::MotionControlMode::default());
         let percent = details["controls"][0]["percent"].as_f64().unwrap();
         assert!((percent - (2048.0 * 100.0 / 4095.0)).abs() < f64::EPSILON);
+        assert_eq!(details["melodies"][0]["name"], "attention");
+        assert_eq!(details["melodies"][0]["duration_ms"], 125);
+        assert_eq!(details["buzzer"]["playing"], true);
+        assert_eq!(details["buzzer"]["melody_id"], 42);
+        assert_eq!(details["buzzer"]["melody_name"], "attention");
 
         capabilities.controls[0].key = "pwm.15".to_string();
         capabilities.pwm_channels[0] = crate::four_d::controller::HardwareOutput {

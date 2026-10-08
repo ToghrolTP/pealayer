@@ -58,6 +58,14 @@ impl PlaybackSample {
     }
 }
 
+fn playback_publish_interval(sample: &PlaybackSample) -> Duration {
+    if sample.playing {
+        Duration::from_millis(40)
+    } else {
+        Duration::from_secs(1)
+    }
+}
+
 pub fn spawn(
     lifecycle: Weak<()>,
     sample: Arc<Mutex<PlaybackSample>>,
@@ -74,6 +82,8 @@ pub fn spawn(
         let mut sent_at = Instant::now();
         let mut reported_at = Instant::now();
         let mut retry_at = Instant::now();
+        let mut preparation_retry_at = Instant::now();
+        let mut preparation_retry_revision = 0_u64;
         let mut last_error = String::new();
         loop {
             let alive = lifecycle.strong_count() > 0;
@@ -92,7 +102,9 @@ pub fn spawn(
                 if let Ok(mut plan) = timeline.lock() {
                     plan.acknowledged_revision = 0;
                     plan.last_ack = None;
+                    plan.deferred_reason = None;
                 }
+                preparation_retry_revision = 0;
                 if !alive {
                     return;
                 }
@@ -124,12 +136,10 @@ pub fn spawn(
                     }
                 }
             }
-            let has_hardware = timeline.lock().is_ok_and(|plan| plan.has_items());
-            let interval = if current.playing || has_hardware {
-                Duration::from_millis(40)
-            } else {
-                Duration::from_secs(1)
-            };
+            // A prepared hardware timeline does not make a paused media clock
+            // active. Publish at 25 Hz only while playback advances; explicit
+            // state changes still bypass the interval through changed_from().
+            let interval = playback_publish_interval(&current);
             let due = previous
                 .as_ref()
                 .is_none_or(|old| current.changed_from(old))
@@ -137,7 +147,8 @@ pub fn spawn(
             let pending = timeline.lock().ok().and_then(|plan| {
                 (plan.compilation_error.is_none()
                     && plan.revision != 0
-                    && plan.revision != plan.acknowledged_revision)
+                    && plan.revision != plan.acknowledged_revision
+                    && (plan.revision != preparation_retry_revision || Instant::now() >= preparation_retry_at))
                     .then(|| (plan.revision, plan.payload.clone()))
             });
             if let Some((revision, mut payload)) = pending
@@ -149,7 +160,7 @@ pub fn spawn(
                 }
                 payload["client_id"] = json!(id);
                 payload["revision"] = json!(revision);
-                match rpc.call("controller.media.timeline.prepare", payload) {
+                match rpc.call_detailed("controller.media.timeline.prepare", payload) {
                     Ok(feedback) => {
                         sequence += 1;
                         let arm_result = rpc.call(
@@ -171,6 +182,7 @@ pub fn spawn(
                         {
                             plan.acknowledged_revision = revision;
                             plan.error = None;
+                            plan.deferred_reason = None;
                             if let Ok(ref arm_feedback) = arm_result {
                                 if arm_feedback["epoch"].as_u64() == Some(current.epoch)
                                     && arm_feedback["plan_revision"].as_u64() == Some(revision)
@@ -188,14 +200,27 @@ pub fn spawn(
                                 plan.last_ack = None;
                             }
                         }
+                        preparation_retry_revision = 0;
                         previous = None;
                     }
                     Err(error) => {
+                        preparation_retry_revision = revision;
+                        if error.is_resource_busy("addressable_strip") {
+                            let retry_ms = error.retry_after_ms.unwrap_or(2_000).clamp(500, 10_000);
+                            preparation_retry_at = Instant::now() + Duration::from_millis(retry_ms);
+                            if let Ok(mut plan) = timeline.lock() {
+                                plan.error = None;
+                                plan.deferred_reason = Some(format!("Hardware timeline is waiting: {}", error.message));
+                                plan.play_requested = false;
+                            }
+                            continue;
+                        }
+                        preparation_retry_at = Instant::now() + Duration::from_secs(5);
                         if let Ok(mut plan) = timeline.lock() {
-                            plan.error = Some(format!("Hardware timeline not prepared: {error}"));
+                            plan.deferred_reason = None;
+                            plan.error = Some(format!("Hardware timeline not prepared: {}", error.message));
                             plan.play_requested = false;
                         }
-                        std::thread::sleep(Duration::from_millis(250));
                         continue;
                     }
                 }
@@ -208,6 +233,7 @@ pub fn spawn(
                 if current.playing && current.observed_at.elapsed() > Duration::from_millis(250) {
                     continue;
                 }
+                let has_hardware = timeline.lock().is_ok_and(|plan| plan.has_items());
                 let is_armed_for_epoch = timeline.lock().ok().is_some_and(|plan| {
                     plan.feedback["armed_epoch"].as_u64() == Some(current.epoch)
                         && plan.clock_ack_epoch == current.epoch
@@ -239,6 +265,9 @@ pub fn spawn(
                                 plan.clock_ack_revision = revision;
                                 plan.clock_ack_epoch = current.epoch;
                                 plan.feedback = feedback["timeline"].clone();
+                                // A transient transport failure must not remain visible once
+                                // the controller has acknowledged a newer clock sample.
+                                plan.error = None;
                                 if plan.feedback["state"] == "faulted" {
                                     plan.error = Some(
                                         plan.feedback["error"]
@@ -350,5 +379,16 @@ mod tests {
         value.rate = 2.;
         value.duration_ms = Some(11_000);
         assert_eq!(value.position_now(), 11_000);
+    }
+
+    #[test]
+    fn paused_hardware_timeline_uses_idle_publish_cadence() {
+        let mut value = PlaybackSample::default();
+        assert_eq!(playback_publish_interval(&value), Duration::from_secs(1));
+        value.playing = true;
+        assert_eq!(
+            playback_publish_interval(&value),
+            Duration::from_millis(40)
+        );
     }
 }

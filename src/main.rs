@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod application_shortcuts;
+pub mod branding;
 pub mod cli;
 pub mod config;
 pub mod diagnostics;
@@ -258,9 +259,9 @@ fn main() -> eframe::Result {
         launch_config.compositor_paced_window_move,
     );
     let initial_window_title = app_name.clone();
-    let icon_data = (!crate::peer::active()).then(||crate::config::resolved_app_icon(&launch_config)).flatten()
+    let icon_data = (!crate::peer::active()).then(||crate::branding::resolved_icon_path(&launch_config, crate::branding::PlaybackIconState::Stopped)).flatten()
         .and_then(|path| std::fs::read(path).ok())
-        .and_then(|bytes| eframe::icon_data::from_png_bytes(&bytes).ok())
+        .and_then(|bytes| crate::branding::icon_data_from_bytes(&bytes))
         .or_else(|| {
             eframe::icon_data::from_png_bytes(include_bytes!("../assets/pealayer-icon.png")).ok()
         });
@@ -737,6 +738,8 @@ fn main() -> eframe::Result {
                 is_connected: false,
                 lasso_origin: None,
                 lasso_rect: None,
+                lasso_initial_instance_ids: std::collections::HashSet::new(),
+                lasso_initial_keyframes: std::collections::HashSet::new(),
                 current_video_path: None,
                 show_remaining_time: loaded_config.show_remaining_time,
                 editing_elapsed_time: false,
@@ -849,6 +852,7 @@ fn main() -> eframe::Result {
                 held_motion_action: None,
                 compact_hardware_controls: loaded_config.compact_hardware_controls,
                 compact_timeline_tracks: loaded_config.compact_timeline_tracks,
+                timeline_hide_cue_text_overflow: loaded_config.timeline_hide_cue_text_overflow,
                 timeline_header_wheel_vertical_scroll: loaded_config
                     .timeline_header_wheel_vertical_scroll,
                 timeline_plain_wheel_action: loaded_config.timeline_plain_wheel_action,
@@ -860,6 +864,11 @@ fn main() -> eframe::Result {
                     .timeline_middle_axis_lock_modifiers,
                 timeline_animated_navigation: loaded_config.timeline_animated_navigation,
                 timeline_navigation_transition_ms: loaded_config.timeline_navigation_transition_ms,
+                timeline_follow_playhead: loaded_config.timeline_follow_playhead,
+                timeline_toolbar_order: crate::config::normalize_timeline_toolbar_order(
+                    &loaded_config.timeline_toolbar_order,
+                ),
+                timeline_toolbar_hidden: loaded_config.timeline_toolbar_hidden.clone(),
                 non_user_control_visibility: loaded_config.non_user_control_visibility,
                 prefix_relay_identifiers: loaded_config.prefix_relay_identifiers,
                 live_pwm_updates: loaded_config.live_pwm_updates,

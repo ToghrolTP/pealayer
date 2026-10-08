@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Table, Breadcrumb, Button, Input, Tag, Space, Avatar, message, Popconfirm, Spin, Typography } from 'antd';
+import { Card, Table, Breadcrumb, Button, Input, Tag, Space, Avatar, message, Popconfirm, Spin, Typography, Dropdown } from 'antd';
 import {
   FolderOutlined,
   VideoCameraOutlined,
@@ -8,6 +8,7 @@ import {
   ReloadOutlined,
   DeleteOutlined,
   SearchOutlined,
+  CopyOutlined,
 } from '@ant-design/icons';
 import { tr, UiLocale } from '../i18n';
 
@@ -34,6 +35,17 @@ interface MediaLibraryTabProps {
   locale: UiLocale;
   apiBaseUrl: string;
 }
+
+const filesystemPath = (value: string) => {
+  const withoutNamespace = value.replace(/^\\\\\?\\/, '');
+  const windows = /^[A-Za-z]:[\\/]/.test(withoutNamespace);
+  const separator = windows ? '\\' : '/';
+  const normalized = withoutNamespace.replace(/[\\/]+/g, separator);
+  const drive = windows ? normalized.slice(0, 2) : '';
+  const parts = normalized.slice(windows ? 2 : 0).split(separator).filter(Boolean);
+  const root = windows ? `${drive}\\` : '/';
+  return { windows, separator, drive, parts, root };
+};
 
 export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMediaPlayStarted, locale, apiBaseUrl }) => {
   const [data, setData] = useState<BrowseResponse | null>(null);
@@ -65,12 +77,38 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
   }, []);
 
   const handlePlayMedia = (filePath: string, fileName: string) => {
-    sendCmd('open_video', { path: filePath });
+    sendCmd('pealayer.open', { target: filePath });
     message.success(`${tr(locale, 'Playing:')} ${fileName}`);
     if (onMediaPlayStarted) {
       onMediaPlayStarted();
     }
   };
+
+  const entryContextMenu = (record: FileEntry) => ({
+    items: [
+      record.is_dir
+        ? { key: 'open', icon: <FolderOutlined />, label: tr(locale, 'Open folder') }
+        : record.is_media
+          ? { key: 'play', icon: <PlayCircleOutlined />, label: tr(locale, 'Play') }
+          : null,
+      { key: 'copy', icon: <CopyOutlined />, label: tr(locale, 'Copy full path') },
+      { type: 'divider' as const },
+      { key: 'refresh', icon: <ReloadOutlined />, label: tr(locale, 'Refresh') },
+    ].filter(Boolean) as any,
+    onClick: async ({ key }: { key: string }) => {
+      if (key === 'open') await fetchDirectory(record.path);
+      if (key === 'play') handlePlayMedia(record.path, record.name);
+      if (key === 'refresh') await fetchDirectory(currentPath);
+      if (key === 'copy') {
+        try {
+          await navigator.clipboard.writeText(record.path);
+          void message.success(tr(locale, 'Path copied'));
+        } catch {
+          void message.error(tr(locale, 'Unable to copy path'));
+        }
+      }
+    },
+  });
 
   const handleDeleteFile = async (filePath: string) => {
     try {
@@ -108,7 +146,8 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
       dataIndex: 'name',
       key: 'name',
       render: (_: any, record: FileEntry) => (
-        <Space size="middle">
+        <Dropdown trigger={['contextMenu']} menu={entryContextMenu(record)}>
+        <Space size="middle" className="media-library__entry">
           {record.is_dir ? (
             <Avatar shape="square" icon={<FolderOutlined />} className="media-library__avatar media-library__avatar--folder" />
           ) : record.has_thumbnail ? (
@@ -136,6 +175,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
             </Text>
           )}
         </Space>
+        </Dropdown>
       ),
     },
     {
@@ -192,18 +232,19 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
     },
   ];
 
-  const pathParts = data?.current_path ? data.current_path.split('/').filter(Boolean) : [];
+  const path = filesystemPath(data?.current_path || '/');
 
   const breadcrumbItems = [
     {
       title: (
-        <a onClick={() => fetchDirectory('/')}>
-          {tr(locale, 'Root')}
+        <a onClick={() => fetchDirectory(path.root)}>
+          {path.windows ? path.drive : tr(locale, 'Root')}
         </a>
       ),
     },
-    ...pathParts.map((part, index) => {
-      const subPath = '/' + pathParts.slice(0, index + 1).join('/');
+    ...path.parts.map((part, index) => {
+      const prefix = path.windows ? `${path.drive}\\` : '/';
+      const subPath = prefix + path.parts.slice(0, index + 1).join(path.separator);
       return {
         title: (
           <a onClick={() => fetchDirectory(subPath)}>

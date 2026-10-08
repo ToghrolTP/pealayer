@@ -23,6 +23,14 @@ fn web_dist_root() -> std::path::PathBuf {
     {
         return override_root;
     }
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(binary_directory) = executable.parent() {
+            let packaged = binary_directory.join("web_ui/dist");
+            if packaged.join("index.html").is_file() {
+                return packaged;
+            }
+        }
+    }
     if !cfg!(debug_assertions) {
         return std::path::PathBuf::new();
     }
@@ -32,10 +40,6 @@ fn web_dist_root() -> std::path::PathBuf {
     }
     if let Ok(executable) = std::env::current_exe() {
         if let Some(binary_directory) = executable.parent() {
-            let packaged = binary_directory.join("web_ui/dist");
-            if packaged.join("index.html").is_file() {
-                return packaged;
-            }
             let canonical_source = binary_directory.join("../source/Pealayer/web_ui/dist");
             if canonical_source.join("index.html").is_file() {
                 return canonical_source;
@@ -749,9 +753,9 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
         ("GET", "/api/runtime/config") => {
             HttpResponse::json(200, "OK", state.runtime_config_json.to_string())
         }
-        ("GET", "/api/runtime/app-icon") => runtime_app_icon_response(),
-        ("GET", "/api/runtime/app-icon-192.png") => runtime_pwa_icon_response(192),
-        ("GET", "/api/runtime/app-icon-512.png") => runtime_pwa_icon_response(512),
+        ("GET", "/api/runtime/app-icon") => runtime_app_icon_response(&request.target),
+        ("GET", "/api/runtime/app-icon-192.png") => runtime_pwa_icon_response(&request.target, 192),
+        ("GET", "/api/runtime/app-icon-512.png") => runtime_pwa_icon_response(&request.target, 512),
         ("GET", "/manifest.webmanifest") => pwa_manifest_response(state),
         ("GET", "/api/config") => HttpResponse::json(
             200,
@@ -1049,12 +1053,19 @@ fn update_error_response(status: u16, reason: &'static str, error: impl ToString
     )
 }
 
-fn runtime_app_icon_response() -> HttpResponse {
+fn requested_icon_state(target: &str) -> crate::branding::PlaybackIconState {
+    query_value(target, "state")
+        .as_deref()
+        .and_then(crate::branding::PlaybackIconState::parse)
+        .unwrap_or_else(crate::branding::current_state)
+}
+
+fn runtime_app_icon_response(target: &str) -> HttpResponse {
     let config = crate::platform::interop::get_live_config();
-    if let Some(path) = crate::config::resolved_app_icon(&config)
-        && let Ok(bytes) = std::fs::read(&path)
+    if let Some((path, bytes)) = crate::branding::icon_bytes(&config, requested_icon_state(target))
     {
-        return HttpResponse::bytes(200, "OK", mime_for_path(&path), bytes);
+        return HttpResponse::bytes(200, "OK", crate::branding::icon_mime(&path), bytes)
+            .with_cache_control("no-cache");
     }
     HttpResponse::bytes(
         200,
@@ -1062,13 +1073,12 @@ fn runtime_app_icon_response() -> HttpResponse {
         "image/png",
         include_bytes!("../../assets/pealayer-icon.png").to_vec(),
     )
+    .with_cache_control("no-cache")
 }
 
-fn runtime_pwa_icon_response(size: u32) -> HttpResponse {
+fn runtime_pwa_icon_response(target: &str, size: u32) -> HttpResponse {
     let config = crate::platform::interop::get_live_config();
-    let configured = crate::config::resolved_app_icon(&config)
-        .and_then(|path| std::fs::read(path).ok())
-        .and_then(|bytes| image::load_from_memory(&bytes).ok());
+    let configured = crate::branding::icon_image(&config, requested_icon_state(target));
     let source = configured
         .or_else(|| image::load_from_memory(include_bytes!("../../assets/pealayer-icon.png")).ok());
     let Some(source) = source else {
@@ -1079,7 +1089,7 @@ fn runtime_pwa_icon_response(size: u32) -> HttpResponse {
     if resized.write_to(&mut png, image::ImageFormat::Png).is_err() {
         return HttpResponse::text(500, "Internal Server Error", "Application icon unavailable");
     }
-    HttpResponse::bytes(200, "OK", "image/png", png.into_inner())
+    HttpResponse::bytes(200, "OK", "image/png", png.into_inner()).with_cache_control("no-cache")
 }
 
 fn pwa_manifest_response(state: &ControlState) -> HttpResponse {
@@ -1115,13 +1125,13 @@ fn pwa_manifest_response(state: &ControlState) -> HttpResponse {
             "launch_handler": {"client_mode": ["navigate-existing", "auto"]},
             "icons": [
                 {
-                    "src": "/api/runtime/app-icon-192.png",
+                    "src": "/api/runtime/app-icon-192.png?state=stopped",
                     "sizes": "192x192",
                     "type": "image/png",
                     "purpose": "any maskable"
                 },
                 {
-                    "src": "/api/runtime/app-icon-512.png",
+                    "src": "/api/runtime/app-icon-512.png?state=stopped",
                     "sizes": "512x512",
                     "type": "image/png",
                     "purpose": "any maskable"
@@ -1759,7 +1769,7 @@ mod tests {
     #[test]
     fn pwa_icons_are_served_as_real_square_png_sizes() {
         for size in [192, 512] {
-            let response = runtime_pwa_icon_response(size);
+            let response = runtime_pwa_icon_response("/api/runtime/app-icon?state=stopped", size);
             assert_eq!(response.status, 200);
             assert_eq!(response.content_type, "image/png");
             let icon = image::load_from_memory(&response.body).unwrap();

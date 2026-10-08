@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import type { RfSnapshot } from './RfManager';
 import { Button, Select, Slider, Tooltip } from 'antd';
 import {
@@ -14,9 +14,13 @@ import {
 } from '@ant-design/icons';
 import { tr, UiLocale } from '../i18n';
 import { mediaBasename } from '../mediaLabel';
+import { MediaSurface } from './MediaSurface';
+import type { MediaGesturePreferences } from './MediaSurface';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
 import type { AppearanceState } from '../appearance';
 import type { TimelineWheelPreferences } from '../timelineWheel';
+import type { HardwareMelody } from '../melodyCatalog';
+import { MediaTrackSelectors } from './MediaTrackSelectors';
 
 export interface PlayerState {
   rf?: RfSnapshot;
@@ -29,7 +33,19 @@ export interface PlayerState {
   volume?: number;
   playback_time?: number;
   duration?: number;
+  media_fps?: number;
   current_video?: string | null;
+  media_tracks?: Array<{
+    id: number;
+    kind: 'video' | 'audio' | 'subtitle';
+    title?: string | null;
+    language?: string | null;
+    codec?: string | null;
+    selected: boolean;
+    is_default: boolean;
+    forced: boolean;
+    external: boolean;
+  }>;
   chapters?: Array<{ index: number; title: string; time_seconds: number }>;
   current_chapter_index?: number | null;
   seekable?: boolean;
@@ -48,6 +64,9 @@ export interface PlayerState {
   }>;
   controller_connected?: boolean;
   hardware_connected?: boolean;
+  hardware_endpoint?: string;
+  hardware_transport?: string | null;
+  hardware_error?: string | null;
   hardware_sync?: { revision: number; prepared_revision: number; error?: string | null; ack_age_ms?: number | null;
     timeline?: { state?: string; acknowledged?: number; step_count?: number; max_ack_lateness_ms?: number } } | null;
   controller_effect_groups?: Array<{ name: string; icon: string }>;
@@ -76,7 +95,10 @@ export interface PlayerState {
       actions: Array<{ id: string; verb: string; name: string; icon: string }>;
     }>;
     telemetry?: Record<string, number | boolean | null>;
+    status_led?: { red: number; green: number; blue: number } | null;
     warnings?: Array<{ code: string; severity: string; message: string }>;
+    melodies?: HardwareMelody[];
+    buzzer?: { playing: boolean; melody_id: number; melody_name: string; board_silent: boolean };
     settings?: Record<string, number | boolean> | null;
     front_panel?: {
       raw_segments: number[]; brightness: number; blink: boolean; segments_active: boolean;
@@ -152,6 +174,39 @@ export interface PlayerState {
     control_key?: string | null;
     value_basis_points?: number | null;
   }>;
+  timeline_tracks?: Array<{
+    key: string;
+    name: string;
+    detail?: string | null;
+    kind: 'video' | 'audio' | 'subtitle' | 'effect' | 'hardware';
+    lane?: string | null;
+    control_key?: string | null;
+    active: boolean;
+    enabled: boolean;
+    linked: boolean;
+    visible: boolean;
+    dimmed: boolean;
+    selected: boolean;
+    muted: boolean;
+    soloed: boolean;
+    locked: boolean;
+    supports_mute: boolean;
+    supports_solo: boolean;
+    supports_lock: boolean;
+    manageable: boolean;
+  }>;
+  osd?: {
+    message: string;
+    remaining_ms: number;
+    default_position: 'top_left' | 'top_center' | 'top_right' | 'center_left' | 'center' | 'center_right' | 'bottom_left' | 'bottom_center' | 'bottom_right';
+    options: {
+      position?: 'top_left' | 'top_center' | 'top_right' | 'center_left' | 'center' | 'center_right' | 'bottom_left' | 'bottom_center' | 'bottom_right' | null;
+      x_percent?: number | null; y_percent?: number | null; font_size?: number | null;
+      icon?: string | null; text_color?: string | null; background_color?: string | null;
+      timeout_seconds?: number | null; padding_x?: number | null; padding_y?: number | null;
+      corner_radius?: number | null;
+    };
+  } | null;
   update?: {
     operation_id?: string | null;
     state: string;
@@ -167,12 +222,13 @@ export interface PlayerState {
 
 interface RemoteControlTabProps {
   state: PlayerState;
-  sendCmd: (command: string, payload?: Record<string, any>) => void;
+  sendCmd: (command: string, payload?: Record<string, any>) => Promise<boolean>;
   onOpenLibraryTab?: () => void;
   locale: UiLocale;
   quickSeekSeconds: number;
   apiBaseUrl: string;
   seekbarHoverThumbnails: boolean;
+  mediaGestures: MediaGesturePreferences;
 }
 
 const formatTime = (seconds?: number) => {
@@ -191,15 +247,9 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
   quickSeekSeconds,
   apiBaseUrl,
   seekbarHoverThumbnails,
+  mediaGestures,
 }) => {
-  const [frameTimestamp, setFrameTimestamp] = useState(Date.now());
   const [seekDraft, setSeekDraft] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (!state.playing) return;
-    const timer = window.setInterval(() => setFrameTimestamp(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [state.playing]);
 
   const videoName = state.current_video
     ? mediaBasename(state.current_video, tr(locale, 'Untitled'))
@@ -212,7 +262,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
     <section className="remote-player">
       <div className="remote-player__preview">
         {state.current_video ? (
-          <img src={`${apiBaseUrl}/api/player/frame?t=${frameTimestamp}`} alt={tr(locale, 'Video Preview')} />
+          <MediaSurface state={state} apiBaseUrl={apiBaseUrl} emptyLabel={tr(locale, 'Video Preview')} sendCmd={sendCmd} gestures={mediaGestures} locale={locale} />
         ) : (
           <div className="remote-player__empty">
             <VideoCameraOutlined />
@@ -295,6 +345,8 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
           </Tooltip>
         </div>
       )}
+
+      <MediaTrackSelectors state={state} sendCmd={sendCmd} locale={locale} />
 
       <div className="remote-player__volume">
         <Button

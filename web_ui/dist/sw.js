@@ -1,46 +1,45 @@
-const PRECACHE = 'pealayer-precache-f7119937572e64ab';
-const RUNTIME = 'pealayer-runtime-f7119937572e64ab';
+const PRECACHE = 'pealayer-precache-46049e7f4f781347';
+const RUNTIME = 'pealayer-runtime-46049e7f4f781347';
 const PRECACHE_URLS = [
   "/",
-  "/assets/DeleteOutlined.js?v=f7119937572e64ab",
-  "/assets/DesktopOutlined.js?v=f7119937572e64ab",
-  "/assets/EditOutlined.js?v=f7119937572e64ab",
-  "/assets/EffectRecorder.js?v=f7119937572e64ab",
-  "/assets/EffectsTab.js?v=f7119937572e64ab",
-  "/assets/ExperimentOutlined.js?v=f7119937572e64ab",
-  "/assets/GroupSelect.js?v=f7119937572e64ab",
-  "/assets/HardwareTab.js?v=f7119937572e64ab",
-  "/assets/MediaLibraryTab.js?v=f7119937572e64ab",
-  "/assets/PlayerInfoTab.js?v=f7119937572e64ab",
-  "/assets/PlusOutlined.js?v=f7119937572e64ab",
-  "/assets/PoweroffOutlined.js?v=f7119937572e64ab",
-  "/assets/PreferencesTab.js?v=f7119937572e64ab",
-  "/assets/RemoteControlTab.js?v=f7119937572e64ab",
-  "/assets/SafetyCertificateOutlined.js?v=f7119937572e64ab",
-  "/assets/SaveOutlined.js?v=f7119937572e64ab",
-  "/assets/SeekThumbnailPreview.js?v=f7119937572e64ab",
-  "/assets/StudioTab.js?v=f7119937572e64ab",
-  "/assets/VideoCameraOutlined.js?v=f7119937572e64ab",
-  "/assets/WifiOutlined.js?v=f7119937572e64ab",
-  "/assets/app.css?v=f7119937572e64ab",
-  "/assets/app.js?v=f7119937572e64ab",
-  "/assets/card.js?v=f7119937572e64ab",
-  "/assets/color-picker.js?v=f7119937572e64ab",
-  "/assets/jsx-runtime.js?v=f7119937572e64ab",
-  "/assets/popconfirm.js?v=f7119937572e64ab",
-  "/assets/rolldown-runtime.js?v=f7119937572e64ab",
-  "/assets/row.js?v=f7119937572e64ab",
-  "/assets/select.js?v=f7119937572e64ab",
-  "/assets/slider.js?v=f7119937572e64ab",
-  "/assets/typography.js?v=f7119937572e64ab",
-  "/assets/useBreakpoint.js?v=f7119937572e64ab",
+  "/assets/DeleteOutlined.js?v=46049e7f4f781347",
+  "/assets/DesktopOutlined.js?v=46049e7f4f781347",
+  "/assets/EditOutlined.js?v=46049e7f4f781347",
+  "/assets/EffectsTab.js?v=46049e7f4f781347",
+  "/assets/ExperimentOutlined.js?v=46049e7f4f781347",
+  "/assets/GroupSelect.js?v=46049e7f4f781347",
+  "/assets/HardwareTab.js?v=46049e7f4f781347",
+  "/assets/LinkOutlined.js?v=46049e7f4f781347",
+  "/assets/MediaLibraryTab.js?v=46049e7f4f781347",
+  "/assets/MediaTrackSelectors.js?v=46049e7f4f781347",
+  "/assets/PlayCircleOutlined.js?v=46049e7f4f781347",
+  "/assets/PlayerInfoTab.js?v=46049e7f4f781347",
+  "/assets/PlusOutlined.js?v=46049e7f4f781347",
+  "/assets/PreferencesTab.js?v=46049e7f4f781347",
+  "/assets/RemoteControlTab.js?v=46049e7f4f781347",
+  "/assets/SafetyCertificateOutlined.js?v=46049e7f4f781347",
+  "/assets/StopOutlined.js?v=46049e7f4f781347",
+  "/assets/StudioTab.js?v=46049e7f4f781347",
+  "/assets/UnlockOutlined.js?v=46049e7f4f781347",
+  "/assets/VideoCameraOutlined.js?v=46049e7f4f781347",
+  "/assets/WifiOutlined.js?v=46049e7f4f781347",
+  "/assets/app.css?v=46049e7f4f781347",
+  "/assets/app.js?v=46049e7f4f781347",
+  "/assets/card.js?v=46049e7f4f781347",
+  "/assets/color-picker.js?v=46049e7f4f781347",
+  "/assets/effectIcons.js?v=46049e7f4f781347",
+  "/assets/jsx-runtime.js?v=46049e7f4f781347",
+  "/assets/melodyCatalog.js?v=46049e7f4f781347",
+  "/assets/popconfirm.js?v=46049e7f4f781347",
+  "/assets/rolldown-runtime.js?v=46049e7f4f781347",
+  "/assets/row.js?v=46049e7f4f781347",
+  "/assets/slider.js?v=46049e7f4f781347",
+  "/assets/typography.js?v=46049e7f4f781347",
+  "/assets/useBreakpoint.js?v=46049e7f4f781347",
   "/fuji-loader.css",
   "/fuji-loader.svg",
   "/index.html",
-  "/manifest.webmanifest",
-  "/api/runtime/app-icon",
-  "/api/runtime/app-icon-192.png",
-  "/api/runtime/app-icon-512.png"
+  "/manifest.webmanifest"
 ];
 
 const notifyClients = async (message) => {
@@ -63,7 +62,7 @@ self.addEventListener('activate', (event) => {
         .filter((key) => key.startsWith('pealayer-') && ![PRECACHE, RUNTIME].includes(key))
         .map((key) => caches.delete(key))))
       .then(() => self.clients.claim())
-      .then(() => notifyClients({ type: 'PEALAYER_SW_READY', version: 'f7119937572e64ab' })),
+      .then(() => notifyClients({ type: 'PEALAYER_SW_READY', version: '46049e7f4f781347' })),
   );
 });
 
