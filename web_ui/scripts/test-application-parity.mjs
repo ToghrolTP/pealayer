@@ -16,8 +16,13 @@ const effects = read('src/components/EffectsTab.tsx');
 const effectRecorder = read('src/components/EffectRecorder.tsx');
 const effectGroupDialog = read('src/components/EffectGroupDialog.tsx');
 const css = read('src/styles.css');
+const preferences = read('src/components/PreferencesTab.tsx');
+const filePicker = read('src/components/ServerFilePicker.tsx');
 
 const contracts = [
+  [preferences.includes("control.kind === 'file'") && preferences.includes('<ServerFilePicker') && preferences.includes('FolderOpenOutlined'), 'file preferences expose a real Browse action'],
+  [preferences.includes('contract?.groups.filter') && preferences.includes('group.default_open') && preferences.includes('<Collapse'), 'preference cards use shared ordering and optional disclosure'],
+  [filePicker.includes('/api/fs/browse') && filePicker.includes('AbortController') && filePicker.includes('setDirectory(null)'), 'preference file picker browses authoritative server files without stale failed listings'],
   [hardware.includes("trigger={['contextMenu']}"), 'hardware cards expose a context menu'],
   [hardware.includes('onPointerDown') && hardware.includes("hardware.action.invoke"), 'hardware actions dispatch on pointer-down'],
   [hardware.includes('hardware-control__indicator') && hardware.includes('immediateToggle'), 'hardware indicators are actionable'],

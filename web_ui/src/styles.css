@@ -140,6 +140,16 @@ body {
 .preferences-group .ant-card-head-title { color: var(--text); font-size: 14px; }
 .preferences-group .ant-card-body { padding: 8px 18px 12px; }
 .preferences-group__controls { display: grid; }
+.preferences-group--optional.ant-collapse { background: var(--surface-1); border-color: var(--line); }
+.preferences-group--optional .ant-collapse-header { color: var(--text); font-weight: 600; }
+.preferences-group--optional .ant-collapse-content { background: transparent; border-color: var(--line); }
+.preference-control__file { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.preference-control__file > .ant-input { flex: 1; min-width: 0; }
+.preference-control__file > .ant-btn { flex: 0 0 auto; }
+.server-file-picker__navigation { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.server-file-picker__navigation > .ant-input { flex: 1; min-width: 0; }
+.server-file-picker__files { margin-top: 12px; }
+.server-file-picker__files .ant-table-row { cursor: pointer; }
 .preference-control { min-width: 0; min-height: 56px; padding: 10px 0; display: grid; grid-template-columns: minmax(170px, .8fr) minmax(180px, 1.2fr); align-items: center; gap: 12px; border-bottom: 1px solid color-mix(in srgb, var(--line) 64%, transparent); color: var(--text); }
 .preference-control:last-child { border-bottom: 0; }
 .preference-control--boolean { grid-template-columns: minmax(0, 1fr) auto; }

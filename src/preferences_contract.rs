@@ -20,6 +20,7 @@ fn is_false(value: &bool) -> bool {
 pub enum PreferenceControlKind {
     Accent,
     Boolean,
+    File,
     Number,
     MultiSelect,
     ReplacementList,
@@ -66,6 +67,37 @@ pub struct PreferenceControl {
     pub placeholder: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_key: Option<&'static str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub file_extensions: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PreferenceGroup {
+    pub section: &'static str,
+    pub name: &'static str,
+    pub collapsible: bool,
+    pub default_open: bool,
+    pub configured_count: usize,
+}
+
+pub fn preference_groups(controls: &[PreferenceControl], values: &serde_json::Value) -> Vec<PreferenceGroup> {
+    let mut groups: Vec<PreferenceGroup> = Vec::new();
+    for control in controls {
+        if groups.iter().any(|group| group.section == control.section && group.name == control.group) {
+            continue;
+        }
+        let members = controls.iter().filter(|candidate| candidate.section == control.section && candidate.group == control.group);
+        let collapsible = members.clone().all(|control| matches!(control.kind, PreferenceControlKind::File));
+        let configured_count = members.filter(|control| value_at_path(values, control.key)
+            .and_then(serde_json::Value::as_str).is_some_and(|value| !value.trim().is_empty())).count();
+        groups.push(PreferenceGroup { section: control.section, name: control.group,
+            collapsible, default_open: !collapsible || configured_count > 0, configured_count });
+    }
+    // Optional appearance overrides follow the common appearance settings;
+    // configuration-file operations close Advanced on every surface.
+    groups.sort_by_key(|group| matches!((group.section, group.name),
+        ("appearance", "Application icons") | ("advanced", "Config file")));
+    groups
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,6 +112,7 @@ pub struct PreferencesContract {
     pub format: &'static str,
     pub sections: Vec<PreferenceSection>,
     pub controls: Vec<PreferenceControl>,
+    pub groups: Vec<PreferenceGroup>,
     pub values: serde_json::Value,
     pub defaults: serde_json::Value,
 }
@@ -107,6 +140,7 @@ impl PreferenceControl {
             inverted: false,
             placeholder: None,
             custom_key: None,
+            file_extensions: Vec::new(),
         }
     }
 
@@ -274,6 +308,13 @@ pub fn preference_sections() -> Vec<PreferenceSection> {
     ]
 }
 
+fn application_icon_control(key: &'static str, label: &'static str, placeholder: &'static str) -> PreferenceControl {
+    let mut control = PreferenceControl::text(key, "appearance", "Application icons", label, placeholder);
+    control.kind = PreferenceControlKind::File;
+    control.file_extensions = vec!["png", "jpg", "jpeg", "webp", "ico"];
+    control
+}
+
 pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceControl> {
     let mut controls = vec![
         PreferenceControl::select(
@@ -291,27 +332,10 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Color palette",
             &[("native", "Neutral (default)"), ("studio", "Studio")],
         ),
-        {
-            let mut control = PreferenceControl::text(
-                "app_icon_playing", "appearance", "Application icons", "Playing icon", "PNG, JPEG, WebP, or ICO path",
-            );
-            control.description = Some("Shown by the native window, taskbar, Web UI, favicon, and media session while media is playing.");
-            control
-        },
-        {
-            let mut control = PreferenceControl::text(
-                "app_icon_paused", "appearance", "Application icons", "Paused icon", "PNG, JPEG, WebP, or ICO path",
-            );
-            control.description = Some("Shown while loaded media is paused. Leave empty to use the base application icon.");
-            control
-        },
-        {
-            let mut control = PreferenceControl::text(
-                "app_icon_stopped", "appearance", "Application icons", "Stopped icon", "PNG, JPEG, WebP, or ICO path",
-            );
-            control.description = Some("Shown when no media is loaded or playback has ended. This is also the best shortcut and executable icon.");
-            control
-        },
+        application_icon_control("app_icon", "Default icon", "Bundled application icon"),
+        application_icon_control("app_icon_playing", "Playing", "Use default icon"),
+        application_icon_control("app_icon_paused", "Paused", "Use default icon"),
+        application_icon_control("app_icon_stopped", "Stopped", "Use default icon"),
         PreferenceControl::select(
             "language",
             "appearance",
@@ -1047,6 +1071,13 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
     );
     recent_click.inverted = true;
     controls.insert(14, recent_click);
+    let mut hints = std::collections::HashSet::new();
+    for control in &mut controls {
+        if let Some(description) = control.description
+            && !hints.insert((control.section, control.group, description)) {
+            control.description = None;
+        }
+    }
     controls
 }
 
@@ -1061,6 +1092,7 @@ pub fn preferences_contract(config: &crate::config::AppConfig) -> PreferencesCon
     PreferencesContract {
         format: "pealayer-preferences",
         sections: preference_sections(),
+        groups: preference_groups(&controls, &values),
         controls,
         values,
         defaults: serde_json::to_value(crate::config::AppConfig::default()).unwrap_or_default(),
@@ -1099,6 +1131,53 @@ pub fn set_value_at_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preference_cards_and_help_are_unique_and_ordered() {
+        let contract = preferences_contract(&crate::config::AppConfig::default());
+        let mut controls = std::collections::HashSet::new();
+        let mut hints = std::collections::HashSet::new();
+        let mut cards = std::collections::HashSet::new();
+        for control in &contract.controls {
+            assert!(controls.insert(control.key), "duplicate control: {}", control.key);
+            if let Some(description) = control.description {
+                assert!(hints.insert((control.section, control.group, description)), "duplicate help in {}", control.group);
+            }
+        }
+        for group in &contract.groups {
+            assert!(cards.insert((group.section, group.name)), "duplicate card: {}", group.name);
+        }
+        assert_eq!(contract.groups.iter().filter(|group| group.section == "advanced").last().unwrap().name, "Config file");
+        assert_eq!(contract.groups.iter().filter(|group| group.section == "appearance").last().unwrap().name, "Application icons");
+    }
+
+    #[test]
+    fn application_icons_share_file_controls_and_optional_disclosure() {
+        let mut config = crate::config::AppConfig::default();
+        let contract = preferences_contract(&config);
+        let group = contract.groups.iter().find(|group| group.name == "Application icons").unwrap();
+        assert!(group.collapsible);
+        assert!(!group.default_open);
+        assert_eq!(group.configured_count, 0);
+        let controls = contract.controls.iter().filter(|control| control.group == group.name).collect::<Vec<_>>();
+        assert_eq!(controls.iter().map(|control| control.key).collect::<Vec<_>>(),
+            ["app_icon", "app_icon_playing", "app_icon_paused", "app_icon_stopped"]);
+        for control in controls {
+            assert!(matches!(control.kind, PreferenceControlKind::File));
+            assert!(control.description.is_none());
+            assert_eq!(control.file_extensions, ["png", "jpg", "jpeg", "webp", "ico"]);
+            assert_eq!(serde_json::to_value(control).unwrap()["kind"], "file");
+        }
+        assert!(contract.groups.iter().filter(|group| !group.collapsible).all(|group| group.default_open));
+        config.app_icon_paused = Some("custom-paused.png".into());
+        let configured = preferences_contract(&config);
+        let group = configured.groups.iter().find(|group| group.name == "Application icons").unwrap();
+        assert!(group.default_open);
+        assert_eq!(group.configured_count, 1);
+        config.app_icon_paused = Some("  ".into());
+        let empty = preferences_contract(&config);
+        assert!(!empty.groups.iter().find(|group| group.name == "Application icons").unwrap().default_open);
+    }
 
     #[test]
     fn application_shortcuts_are_shared_editable_controls() {

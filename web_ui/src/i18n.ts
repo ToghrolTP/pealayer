@@ -1,6 +1,16 @@
 export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
+  'Application icons': 'نمادهای برنامه',
+  'Default icon': 'نماد پیش‌فرض',
+  'Bundled application icon': 'نماد همراه برنامه',
+  'Use default icon': 'استفاده از نماد پیش‌فرض',
+  'Browse…': 'مرور…',
+  'Choose an image file': 'انتخاب پروندهٔ تصویر',
+  'Parent folder': 'پوشهٔ والد',
+  'Folder path': 'مسیر پوشه',
+  'Load folder': 'بارگذاری پوشه',
+  'Filter files': 'فیلتر پرونده‌ها',
   'Web Studio': 'استودیوی وب',
   'Connected workspace': 'فضای کاری متصل',
   'Connecting': 'در حال اتصال',

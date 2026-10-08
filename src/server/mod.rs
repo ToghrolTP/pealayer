@@ -23,6 +23,12 @@ fn web_dist_root() -> std::path::PathBuf {
     {
         return override_root;
     }
+    // The peer updater replaces the executable, not an adjacent asset tree.
+    // Release assets must match the Rust contract embedded in that executable.
+    // Custom Web deployments remain explicitly selectable via PEALAYER_WEB_ROOT.
+    if !cfg!(debug_assertions) {
+        return std::path::PathBuf::new();
+    }
     if let Ok(executable) = std::env::current_exe() {
         if let Some(binary_directory) = executable.parent() {
             let packaged = binary_directory.join("web_ui/dist");
@@ -30,9 +36,6 @@ fn web_dist_root() -> std::path::PathBuf {
                 return packaged;
             }
         }
-    }
-    if !cfg!(debug_assertions) {
-        return std::path::PathBuf::new();
     }
     let working_tree = std::path::PathBuf::from("web_ui/dist");
     if working_tree.join("index.html").is_file() {
