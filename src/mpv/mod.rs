@@ -2,3 +2,4 @@ pub mod proxy;
 pub mod player;
 pub mod render;
 pub mod seek;
+pub mod frame_cache;
