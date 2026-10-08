@@ -3069,10 +3069,12 @@ mod tests {
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
-            for _ in 0..2 {
+            for expected in ["controller.ping", "controller.app.instance.report", "controller.snapshot"] {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
                 let request: Value = serde_json::from_str(line.trim()).unwrap();
+                assert_eq!(request["method"],expected);
+                if expected == "controller.snapshot" { assert!(request["client_id"].as_str().is_some_and(|id|id.starts_with("pealayer:"))); }
                 let response = json!({"jsonrpc":"2.0","id":request["id"],"result":{"ok":true}});
                 writeln!(stream, "{response}").unwrap();
             }
@@ -3093,19 +3095,20 @@ mod tests {
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let expected = [
                 "controller.ping",
+                "controller.app.instance.report",
                 "controller.snapshot",
                 "controller.peripherals.get",
                 "controller.melodies.list",
                 "controller.pwm.values",
             ];
-            for call in 0..5 {
+            for call in 0..expected.len() {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
                 let request: Value = serde_json::from_str(line.trim()).unwrap();
                 assert_eq!(request["method"], expected[call]);
-                let response = match call {
-                    0 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"ok":true}}),
-                    1 => json!({"jsonrpc":"2.0","id":request["id"],"result":{
+                let response = match expected[call] {
+                    "controller.ping" | "controller.app.instance.report" => json!({"jsonrpc":"2.0","id":request["id"],"result":{"ok":true}}),
+                    "controller.snapshot" => json!({"jsonrpc":"2.0","id":request["id"],"result":{
                         "connected": true,
                         "hello": {"capabilities": CAPABILITY_ADDRESSABLE_LED | CAPABILITY_SEGMENTS},
                         "have_front_panel": true,
@@ -3115,12 +3118,12 @@ mod tests {
                         },
                         "outputs": {"melody_id": 17, "melody_name": "attention"}
                     }}),
-                    2 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"peripherals":[]}}),
-                    3 => json!({"jsonrpc":"2.0","id":request["id"],"result":[{
+                    "controller.peripherals.get" => json!({"jsonrpc":"2.0","id":request["id"],"result":{"peripherals":[]}}),
+                    "controller.melodies.list" => json!({"jsonrpc":"2.0","id":request["id"],"result":[{
                         "name": "attention",
                         "notes": [{"frequency_hz": 880, "duration_ms": 100, "gap_ms": 25}]
                     }]}),
-                    4 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"values":[]}}),
+                    "controller.pwm.values" => json!({"jsonrpc":"2.0","id":request["id"],"result":{"values":[]}}),
                     _ => unreachable!(),
                 };
                 writeln!(stream, "{response}").unwrap();
