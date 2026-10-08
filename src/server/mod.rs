@@ -180,6 +180,28 @@ pub fn spawn_web_server_configured(
     (state_tx, command_rx)
 }
 
+/// Start on an already-bound socket. Embedders/tests can request port zero and
+/// retain ownership of the actual listener, without a close/rebind race or
+/// accidentally sending commands to another application on a fixed port.
+pub fn spawn_web_server_on_listener(
+    listener: TcpListener,
+    egui_ctx: eframe::egui::Context,
+    runtime_config: WebRuntimeConfig,
+) -> (Sender<String>, Receiver<crate::platform::interop::InteropCommand>) {
+    let (command_tx, command_rx) = channel();
+    let (state_tx, state_rx) = channel();
+    let state_tx = spawn_control_server_on_listeners_with_channel(
+        vec![listener],
+        egui_ctx,
+        runtime_config.clone(),
+        command_tx,
+        runtime_config.app_name.clone(),
+        state_tx,
+        state_rx,
+    );
+    (state_tx, command_rx)
+}
+
 /// Starts every TCP-facing control protocol on one listener. HTTP and REST use
 /// their normal paths, WebSocket upgrades use `/ws`, and CLI/native automation
 /// posts newline-compatible JSON to `/api/ipc`.
@@ -266,6 +288,39 @@ fn spawn_control_server_on_addresses_with_channel(
     state_tx: Sender<String>,
     state_rx: Receiver<String>,
 ) -> Sender<String> {
+    let listeners = addresses
+        .into_iter()
+        .filter_map(|ip| {
+            let address = std::net::SocketAddr::new(ip, port);
+            match TcpListener::bind(address) {
+                Ok(listener) => Some(listener),
+                Err(error) => {
+                    log::error!("Could not bind unified Pealayer control port {address}: {error}");
+                    None
+                }
+            }
+        })
+        .collect();
+    spawn_control_server_on_listeners_with_channel(
+        listeners,
+        egui_ctx,
+        runtime_config,
+        command_tx,
+        application_identity,
+        state_tx,
+        state_rx,
+    )
+}
+
+fn spawn_control_server_on_listeners_with_channel(
+    listeners: Vec<TcpListener>,
+    egui_ctx: eframe::egui::Context,
+    runtime_config: WebRuntimeConfig,
+    command_tx: Sender<crate::platform::interop::InteropCommand>,
+    application_identity: String,
+    state_tx: Sender<String>,
+    state_rx: Receiver<String>,
+) -> Sender<String> {
     crate::update::manager().register_gui_context(egui_ctx.clone());
     let latest_status = Arc::new(Mutex::new(None));
     let websocket_clients: Arc<Mutex<Vec<Sender<String>>>> = Arc::new(Mutex::new(Vec::new()));
@@ -304,18 +359,13 @@ fn spawn_control_server_on_addresses_with_channel(
         application_identity: Arc::from(application_identity),
         expected_session_id,
     };
-    let mut listening = 0_usize;
-    for ip in addresses {
-        let address = std::net::SocketAddr::new(ip, port);
-        let listener = match TcpListener::bind(address) {
-            Ok(listener) => listener,
-            Err(error) => {
-                log::error!("Could not bind unified Pealayer control port {address}: {error}");
-                continue;
-            }
-        };
-        listening += 1;
-        log::info!("Pealayer Web UI and APIs listening on http://{address}/");
+    if listeners.is_empty() {
+        log::error!("Pealayer Web UI could not start any configured listener");
+    }
+    for listener in listeners {
+        if let Ok(address) = listener.local_addr() {
+            log::info!("Pealayer Web UI and APIs listening on http://{address}/");
+        }
         let listener_state = state.clone();
         thread::spawn(move || {
             for stream in listener.incoming() {
@@ -324,9 +374,6 @@ fn spawn_control_server_on_addresses_with_channel(
                 thread::spawn(move || handle_connection(stream, connection_state));
             }
         });
-    }
-    if listening == 0 {
-        log::error!("Pealayer Web UI could not start any configured listener");
     }
 
     state_tx
