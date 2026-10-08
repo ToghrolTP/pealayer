@@ -425,9 +425,9 @@ pub enum EngineMessage {
     },
 }
 
-type StateNotifier = Arc<dyn Fn() + Send + Sync>;
+pub(super) type StateNotifier = Arc<dyn Fn() + Send + Sync>;
 
-fn notify_state_change(notifier: &Mutex<Option<StateNotifier>>) {
+pub(super) fn notify_state_change(notifier: &Mutex<Option<StateNotifier>>) {
     // Never invoke an interface callback while holding the engine's lock.
     let callback = notifier.lock().ok().and_then(|slot| slot.clone());
     if let Some(callback) = callback { callback(); }
@@ -787,7 +787,8 @@ pub fn spawn_engine() -> EngineHandle {
 
     let (tx, rx) = mpsc::channel();
     super::media_sync::spawn(Arc::downgrade(&lifecycle), Arc::clone(&media_playback),
-        Arc::clone(&is_connected), Arc::clone(&serial_port),Arc::clone(&prepared_timeline));
+        Arc::clone(&is_connected), Arc::clone(&serial_port),Arc::clone(&prepared_timeline),
+        Arc::clone(&state_notifier));
 
     let engine_time = Arc::clone(&playback_time_ms);
     let engine_playing = Arc::clone(&is_playing);

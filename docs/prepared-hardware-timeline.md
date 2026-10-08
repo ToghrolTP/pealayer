@@ -45,6 +45,9 @@ cue, seek before its start and prepare again; continuing after the failed cue is
 not automatic recovery.
 
 The egui status bar and Web Effects Library expose preparation/timing faults.
+Semantic preparation, authority, execution-ledger and fault transitions wake the
+existing UI/Web state publisher; ordinary clock echoes and ACK-age changes do
+not force idle repaint loops. The wake callback runs outside timeline locks.
 `/api/player/status.hardware_sync` exposes plan and clock acknowledgements,
 their age, any deferred resource reason, and the PCController ledger. PCController also publishes
 `media.timeline` state events and includes the ledger in its playback snapshot.

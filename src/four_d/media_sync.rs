@@ -71,12 +71,53 @@ fn handoff_pause_acknowledged(sample: &PlaybackSample, valid_echo: bool) -> bool
         && sample.observed_at.elapsed() < Duration::from_millis(250)
 }
 
+// Wake idle UI/Web consumers for semantic transitions, not for every clock echo
+// or changing ACK age. The executor/observer never waits for a repaint.
+#[derive(PartialEq)]
+struct SyncPresentation {
+    authority: Option<super::authority::Status>,
+    revision: u64,
+    prepared_revision: u64,
+    clock_revision: u64,
+    clock_epoch: u64,
+    error: Option<String>,
+    deferred: Option<String>,
+    requires_reprepare: bool,
+    executor_state: Option<String>,
+    acknowledged: Option<u64>,
+}
+
+fn notify_sync_change(
+    timeline: &Mutex<super::media_timeline::PreparedTimeline>,
+    notifier: &Mutex<Option<super::engine::StateNotifier>>,
+    previous: &mut Option<SyncPresentation>,
+) {
+    let presentation = timeline.lock().ok().map(|plan| SyncPresentation {
+        authority: plan.authority.clone(),
+        revision: plan.revision,
+        prepared_revision: plan.acknowledged_revision,
+        clock_revision: plan.clock_ack_revision,
+        clock_epoch: plan.clock_ack_epoch,
+        error: plan.error.clone(),
+        deferred: plan.deferred_reason.clone(),
+        requires_reprepare: plan.requires_reprepare,
+        executor_state: plan.feedback["state"].as_str().map(str::to_owned),
+        acknowledged: plan.feedback["acknowledged"].as_u64(),
+    });
+    if presentation != *previous {
+        *previous = presentation;
+        // Callback may read timeline state; no application lock is held here.
+        super::engine::notify_state_change(notifier);
+    }
+}
+
 pub fn spawn(
     lifecycle: Weak<()>,
     sample: Arc<Mutex<PlaybackSample>>,
     connected: Arc<AtomicBool>,
     endpoint: Arc<Mutex<String>>,
     timeline: Arc<Mutex<super::media_timeline::PreparedTimeline>>,
+    notifier: Arc<Mutex<Option<super::engine::StateNotifier>>>,
 ) {
     std::thread::spawn(move || {
         let id = crate::platform::interop::controller_instance_id();
@@ -96,7 +137,9 @@ pub fn spawn(
         let mut owner_endpoint_cache: (String, Option<String>) = (String::new(), None);
         let mut owner_endpoint_at = Instant::now() - Duration::from_secs(10);
         let mut unattended_attempt: Option<(String, String)> = None;
+        let mut previous_presentation = None;
         loop {
+            notify_sync_change(&timeline, &notifier, &mut previous_presentation);
             let alive = lifecycle.strong_count() > 0;
             let requested_endpoint = endpoint.lock().map(|s| s.clone()).unwrap_or_default();
             let usable = alive
@@ -426,6 +469,40 @@ fn identity(id: &str, name: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sync_notifications_wake_on_transitions_not_clock_echoes_and_release_locks() {
+        let plan = Arc::new(Mutex::new(super::super::media_timeline::PreparedTimeline::default()));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let callback_plan = plan.clone();
+        let callback_calls = calls.clone();
+        let callback: super::super::engine::StateNotifier = Arc::new(move || {
+            assert!(callback_plan.try_lock().is_ok());
+            callback_calls.fetch_add(1, Ordering::Relaxed);
+        });
+        let notifier = Mutex::new(Some(callback));
+        let mut previous = None;
+        notify_sync_change(&plan, &notifier, &mut previous);
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        {
+            let mut plan = plan.lock().unwrap();
+            plan.last_ack = Some(Instant::now());
+            plan.feedback = json!({"clock_sequence":20});
+        }
+        notify_sync_change(&plan, &notifier, &mut previous);
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        plan.lock().unwrap().acknowledged_revision = 1;
+        notify_sync_change(&plan, &notifier, &mut previous);
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        plan.lock().unwrap().feedback = json!({"state":"playing","acknowledged":1});
+        notify_sync_change(&plan, &notifier, &mut previous);
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
+        plan.lock().unwrap().error = Some("cue deadline failed".into());
+        notify_sync_change(&plan, &notifier, &mut previous);
+        assert_eq!(calls.load(Ordering::Relaxed), 4);
+        notify_sync_change(&plan, &notifier, &mut previous);
+        assert_eq!(calls.load(Ordering::Relaxed), 4);
+    }
+
     #[test]
     fn playback_and_action_subscriptions_share_one_complete_client_identity() {
         let id = crate::platform::interop::controller_instance_id();
