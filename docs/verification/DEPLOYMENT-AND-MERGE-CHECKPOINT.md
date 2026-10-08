@@ -18,6 +18,63 @@ historical requests or branches are complete.
 | Consolidate useful work and merge safe PRs | Peer polling PR #82 and Vite PR #83 reviewed and merged; combined Preferences branch includes main plus exact PR #77/#79 heads | Remaining CI faults, experiment integration and old-ref/stash reconciliation |
 | Keep D3D11 optional and disabled | Preserved experiment already defines renderer selection with OpenGL default and detached video disabled | Not integrated into main Preferences yet; do not activate or silently deploy the experimental executable |
 
+## Unattended handoff and authority connection: tested, deployment blocked
+
+On 8 October, source `ce630d14e2f47e2060c913564702c8f16f5e481a` on
+`release/preferences-organization` / PR #87 implements the owner's opt-in
+`allow_unattended_hardware_takeover`, default false. The existing libmpv observer
+pauses actual playback; a fresh observed paused/non-buffering sample and matching
+clock echo precede the existing controller acceptance/acknowledged cleanup.
+Production lock is never bypassed. Failed acceptance is attempted once per claim
+and reports the real error; previous-owner arming is invalidated on transfer.
+
+Native/Web use one Preferences control. Both conflict surfaces offer Connect to
+authority using the matching registered Pealayer's validated optional origin.
+Native allows editing it for a tunnel; Web disables it when not advertised.
+Address lookup is only on the observer path, not the active publisher's clock
+path. No live physical handoff/output command was issued for acceptance testing.
+
+An additional deployment defect was found: consumers forwarded `/api/update/*`
+to their authority. Those routes now stay process-local. Session Preferences,
+media and hardware APIs still relay. Do not blindly target the old installed
+David consumer's API for an update—it currently reports Cafe's update manifest.
+
+Verification: 17 focused Rust library tests passed (authority, media sync,
+prepared timeline and consumer update routing), release binary build passed,
+Web build passed with 35 parity / 24 responsive contracts and installable PWA
+validation. Seven native quick-action icon resources were verified. Staging
+smoke tests exited 0 with each independently checked destination runtime.
+This is not a claim that the entire suite or live handoff has passed.
+
+Canonical staging was reused at `staging/preferences-organization` (David) and
+`staging/preferences-cafe` (Cafe); source and artifact/runtime identities are in
+their private host manifests. No new worktree or Cafe compilation was performed.
+David's own persisted policy is true; Cafe's old stored field is absent and the
+new default is false. David currently consumes Cafe's session, so its local
+opt-in applies only when it later becomes a direct publisher, not to Cafe's
+forwarded Preferences.
+
+The Cafe peer-updater invocation was rejected by the tool execution policy.
+No alternate route was attempted. Both installed apps remain running; Cafe's
+last read-back source is `2821f994e005e2bdeb232cdcb94dc1550c272baf`. Neither new
+package is installed yet. The user was asked to run the staged Cafe executable's
+`--deploy-to http://127.0.0.1:18088` command. Next: verify the installed source,
+live owner origin, Cafe's false policy, board connectivity and retained paused
+media, then finish David's process-local consumer update without forwarding Quit
+or replacing Cafe with David's runtime.
+
+Controller coordination: no PCController checkout, branch or PR was mutated.
+Required deployed contracts are `controller.media.authority.get/change` with
+owner-only acceptance and production lock, matching
+`controller.media.playback.update` echoes, and exact leased
+`controller.app.instance.get/report`. `values.peer_origin` is optional Pealayer
+registry metadata, not a firmware change. Wait for the controller consolidation
+owner's finished main rather than redeploying an older feature branch.
+
+All six Pealayer worktrees were inspected with command-scoped ownership checks
+where necessary and were clean before this documentation checkpoint. Other
+branches, runtimes, private settings, caches and experiments were preserved.
+
 ## Connection reporting and publishing authority: controller delivered, application pending
 
 On 8 October, the connection path was found to collapse controller-domain
