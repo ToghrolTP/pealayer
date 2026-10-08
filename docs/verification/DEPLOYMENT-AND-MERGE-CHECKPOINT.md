@@ -18,6 +18,63 @@ historical requests or branches are complete.
 | Consolidate useful work and merge safe PRs | Peer polling PR #82 and Vite PR #83 reviewed and merged; combined Preferences branch includes main plus exact PR #77/#79 heads | Remaining CI faults, experiment integration and old-ref/stash reconciliation |
 | Keep D3D11 optional and disabled | Preserved experiment already defines renderer selection with OpenGL default and detached video disabled | Not integrated into main Preferences yet; do not activate or silently deploy the experimental executable |
 
+## Connection reporting and publishing authority: controller delivered, application pending
+
+On 8 October, the connection path was found to collapse controller-domain
+rejections into a disconnected state. Status-stream sampling errors also lacked
+authoritative board connection context. These are not evidence of a physical
+unplug. The replacement preserves typed RPC errors, distinguishes transport,
+board/status and command failures, and publishes the actual reason with shared
+warning icons. A stale remote link pauses only the consumer preview. Connecting
+a monitor no longer implicitly stops effects.
+
+Native and Web Hardware Monitor now share publishing-authority commands and
+conflict/handoff dialogs. The owner must consent to a paused handoff. Unlocked
+observers may control idle outputs; an executing prepared timeline keeps its
+existing exclusion. Production lock reserves publishing and live output control,
+while monitoring and E-STOP activation remain available. Authority is presently
+RAM-resident and resets on controller restart; registered IDs are attribution,
+not authentication. See [Hardware authority](../HARDWARE-AUTHORITY.md).
+
+PCController PR [#607](https://github.com/atomicdeploy/PCController/pull/607)
+is based on the current unified-effects branch. Its executable was installed on
+Cafe through the primary-owned host updater, which returned terminal verification
+after restart. Installed executable SHA-256:
+`5cb198a291f64ef7242e38ad4776262deb4e9fa04dbd128b6d112f36a6d416eb`.
+The updated C ABI was built and smoke-tested but has not been installed as a
+replacement embedded runtime on Cafe. No firmware flash was required this pass.
+
+Live Cafe RPC checks verified a queued observer request, denial of requester
+self-acceptance, owner rejection, production lock, typed locked rejection and
+rejection of a foreign empty prepared plan. No output actions were sent. The
+temporary observer was removed, the original owner stayed assigned and unlocked,
+and the media remained paused at 1196.24 seconds. Cafe's old application later
+re-prepared its timeline after the controller restart. Its status still records
+a real TCP abort during capability refresh while `hardware_connected` is true;
+do not erase that diagnostic or report a physical disconnect from it.
+
+Verification: 84 focused Rust hardware tests, the peer-link transition test,
+the process-local updater shutdown test, React build and responsive/parity
+contract guards passed. The controller package passed 44 Go packages plus vet,
+353 Web tests, C ABI smoke and its packaged executable smoke. Existing native
+binary-suite/physical timing gates below remain open. Phone/tablet/desktop live
+interaction and the new native popups have not been visually accepted this pass.
+
+The clean Pealayer candidate is source
+`eb84f9698d5b989c34b6883bb81b301d478ebe06`, executable SHA-256
+`d9b1db070b787a9f55ef416a55cb638b7b6c55de2fbaef1e55dd6f00c54407a3`.
+David packaging smoke passed. Cafe staging has that exact executable through
+the existing hardlink and preserves Cafe's distinct DLL identity. A stale
+staging-file removal was blocked by tool policy; it was not retried. The final
+updater launch was also blocked, so no Pealayer installation is claimed. The
+user was given the scoped Cafe updater command. No compilation occurred on Cafe.
+
+The new updater sends an internal, process-local Quit rather than forwarding
+session Quit to the remote authority. David still runs the old healthy consumer,
+whose session Quit is forwarded to Cafe. Do not use its remote Quit to install a
+local update or forcibly terminate that healthy process. Finish the scoped
+consumer update separately and verify the running manifest on both machines.
+
 ## Cafe: real playback recovered; precise cue timing remains open
 
 The latest live manifest identifies source `2821f994e005e2bdeb232cdcb94dc1550c272baf`,
