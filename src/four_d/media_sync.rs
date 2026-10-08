@@ -101,6 +101,29 @@ fn invalidate_coordinator_session(plan: &mut super::media_timeline::PreparedTime
     plan.play_requested = false;
 }
 
+#[derive(serde::Deserialize)]
+struct ControllerPlanIdentity {
+    client_id: String,
+    revision: u64,
+}
+
+fn reconcile_controller_revision(
+    plan: &mut super::media_timeline::PreparedTimeline,
+    feedback: serde_json::Value,
+) -> Result<(), String> {
+    let remote: ControllerPlanIdentity = serde_json::from_value(feedback)
+        .map_err(|error| format!("Invalid hardware timeline identity: {error}"))?;
+    // Revisions are monotonic per publisher, not per Pealayer process. The
+    // coordinator can retain our old plan across an application update.
+    if remote.client_id == plan.authority_client_id && remote.revision >= plan.revision {
+        let next = remote.revision.checked_add(1)
+            .ok_or_else(|| "Hardware timeline revision exhausted".to_string())?;
+        invalidate_coordinator_session(plan);
+        plan.revision = next;
+    }
+    Ok(())
+}
+
 // Wake idle UI/Web consumers for semantic transitions, not for every clock echo
 // or changing ACK age. The executor/observer never waits for a repaint.
 #[derive(PartialEq)]
@@ -164,6 +187,7 @@ pub fn spawn(
         let mut authority_at = Instant::now()-Duration::from_secs(2);
         let mut automatic_claim = AutomaticClaim::default();
         let mut authority_ready = false;
+        let mut reconcile_revision = true;
         let mut owner_endpoint_cache: (String, Option<String>) = (String::new(), None);
         let mut owner_endpoint_at = Instant::now() - Duration::from_secs(10);
         let mut unattended_attempt: Option<(String, String)> = None;
@@ -215,6 +239,7 @@ pub fn spawn(
                         authority_ready = false;
                         authority_at = Instant::now() - Duration::from_secs(2);
                         automatic_claim = AutomaticClaim::default();
+                        reconcile_revision = true;
                     }
                     Err(error) => {
                         if error != last_error {
@@ -292,6 +317,28 @@ pub fn spawn(
                     }
                     std::thread::sleep(Duration::from_millis(20));continue;
                 }
+            }
+            if reconcile_revision && let Some(ref mut rpc) = client {
+                let result = rpc.call("controller.media.timeline.get", json!({}))
+                    .and_then(|feedback| {
+                        let mut plan = timeline.lock()
+                            .map_err(|_| "Hardware timeline state unavailable".to_string())?;
+                        reconcile_controller_revision(&mut plan, feedback)
+                    });
+                if let Err(error) = result {
+                    if let Ok(mut plan) = timeline.lock() {
+                        invalidate_coordinator_session(&mut plan);
+                        plan.error = Some(format!("Hardware timeline state unavailable: {error}"));
+                    }
+                    client = None;
+                    authority_ready = false;
+                    previous = None;
+                    retry_at = Instant::now() + Duration::from_secs(2);
+                    continue;
+                }
+                reconcile_revision = false;
+                preparation_retry_revision = 0;
+                previous = None;
             }
             // A prepared hardware timeline does not make a paused media clock
             // active. Publish at 25 Hz only while playback advances; explicit
@@ -566,6 +613,51 @@ mod tests {
         assert!(plan.last_ack.is_none());
         assert!(!plan.play_requested);
         assert!(!plan.ready_for(3));
+    }
+
+    #[test]
+    fn restarted_publisher_adopts_its_retained_revision_without_resuming() {
+        let mut plan = super::super::media_timeline::PreparedTimeline::default();
+        plan.revision = 3;
+        plan.acknowledged_revision = 3;
+        plan.clock_ack_revision = 3;
+        plan.clock_ack_epoch = 2;
+        plan.play_requested = true;
+        plan.requires_reprepare = true;
+        plan.feedback = json!({"state":"faulted"});
+        let actor = plan.authority_client_id.clone();
+        reconcile_controller_revision(&mut plan, json!({"client_id":actor,"revision":17})).unwrap();
+        assert_eq!(plan.revision, 18);
+        assert_eq!(plan.acknowledged_revision, 0);
+        assert_eq!(plan.clock_ack_revision, 0);
+        assert!(!plan.play_requested);
+        assert!(plan.requires_reprepare);
+        assert!(plan.feedback.is_null());
+    }
+
+    #[test]
+    fn revision_reconciliation_leaves_other_publishers_and_newer_local_plans_untouched() {
+        let mut plan = super::super::media_timeline::PreparedTimeline::default();
+        plan.revision = 8;
+        plan.acknowledged_revision = 8;
+        reconcile_controller_revision(&mut plan, json!({"client_id":"other","revision":99})).unwrap();
+        assert_eq!(plan.revision, 8);
+        let actor = plan.authority_client_id.clone();
+        reconcile_controller_revision(&mut plan, json!({"client_id":actor,"revision":7})).unwrap();
+        assert_eq!(plan.revision, 8);
+        assert_eq!(plan.acknowledged_revision, 8);
+    }
+
+    #[test]
+    fn revision_reconciliation_rejects_malformed_identity_and_overflow_without_mutation() {
+        let mut plan = super::super::media_timeline::PreparedTimeline::default();
+        plan.revision = 3;
+        let actor = plan.authority_client_id.clone();
+        for feedback in [json!({"revision":5}), json!({"client_id":actor,"revision":"5"}),
+            json!({"client_id":actor,"revision":u64::MAX})] {
+            assert!(reconcile_controller_revision(&mut plan, feedback).is_err());
+            assert_eq!(plan.revision, 3);
+        }
     }
 
     #[test]
