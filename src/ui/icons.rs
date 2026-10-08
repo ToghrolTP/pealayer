@@ -213,6 +213,55 @@ fn icon_preset<'a>(
         .find(|(key, _, _)| key.eq_ignore_ascii_case(value.trim()))
 }
 
+fn icon_grid_tile(
+    ui: &mut eframe::egui::Ui,
+    size: eframe::egui::Vec2,
+    text: eframe::egui::text::LayoutJob,
+    selected: bool,
+    hover_label: &str,
+) -> eframe::egui::Response {
+    use eframe::egui;
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact_selectable(&response, selected);
+        let (fill, stroke) = if selected {
+            (
+                ui.visuals().selection.bg_fill,
+                ui.visuals().selection.stroke,
+            )
+        } else if response.hovered() || response.highlighted() {
+            (
+                visuals.bg_fill,
+                visuals.bg_stroke,
+            )
+        } else {
+            (
+                visuals.bg_fill,
+                ui.visuals().widgets.noninteractive.bg_stroke,
+            )
+        };
+        ui.painter().rect(
+            rect,
+            visuals.corner_radius,
+            fill,
+            stroke,
+            egui::StrokeKind::Inside,
+        );
+        let galley = ui.fonts_mut(|fonts| fonts.layout_job(text));
+        let pos = egui::pos2(
+            rect.center().x - galley.rect.center().x,
+            rect.center().y - galley.rect.center().y,
+        );
+        let text_color = if selected {
+            ui.visuals().selection.stroke.color
+        } else {
+            visuals.text_color()
+        };
+        ui.painter().galley(pos, galley, text_color);
+    }
+    response.on_hover_text(hover_label)
+}
+
 /// Draw the popup body used by both combobox selectors and compact icon
 /// buttons. The first row is always search; optional defaults and preset
 /// results form separate, consistently divided sections below it.
@@ -319,17 +368,15 @@ pub fn searchable_icon_picker_contents(
                     .show(ui, |ui| {
                         for (index, (key, label, glyph)) in matching.iter().enumerate() {
                             let text = icon_result_text(ui, glyph, label, search, true);
-                            if ui
-                                .add_sized(
-                                    [cell_width, 54.0],
-                                    egui::Button::new(text)
-                                        .selected(value.eq_ignore_ascii_case(key))
-                                        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-                                        .wrap(),
-                                )
-                                .on_hover_text(*label)
-                                .clicked()
-                            {
+                            let selected_state = value.eq_ignore_ascii_case(key);
+                            let response = icon_grid_tile(
+                                ui,
+                                egui::vec2(cell_width, 54.0),
+                                text,
+                                selected_state,
+                                label,
+                            );
+                            if response.clicked() {
                                 selected = Some(*key);
                             }
                             if (index + 1) % columns == 0 {
@@ -658,6 +705,23 @@ mod tests {
             assert_eq!(tile.galley.rows.len(), 2);
             assert_eq!(tile.galley.job.sections[0].format.font_id.size, 18.0);
             assert_eq!(tile.galley.job.sections.last().unwrap().format.font_id.size, 11.0);
+            let tile_rect = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Rect(rect)
+                    if (rect.rect.height() - 54.0).abs() < 0.1
+                        && rect.stroke.width > 0.0
+                        && rect.rect.contains(tile.pos) =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            }).expect("enclosing button rect for tile");
+            let text_center_x = tile.pos.x + tile.galley.rect.center().x;
+            assert!(
+                (text_center_x - tile_rect.center().x).abs() < 1.0,
+                "icon tile text must be horizontally centered in button tile (text_center_x={}, tile_center_x={})",
+                text_center_x,
+                tile_rect.center().x
+            );
             assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
                 egui::epaint::Shape::Rect(rect) if (rect.rect.height() - 54.0).abs() < 0.1 && rect.stroke.width > 0.0)));
         }

@@ -153,6 +153,103 @@ impl Default for ControllerEffectDraft {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaybackRepaintPacing {
+    VSync,
+    Paced(std::time::Duration),
+}
+
+/// Resolves the desktop display refresh rate from monitor millihertz reported by the windowing system,
+/// falling back safely to 60.0 Hz when unknown, zero, or uncalibrated.
+pub fn resolve_display_refresh_rate(mhz: Option<u32>) -> f64 {
+    match mhz {
+        Some(val) if val >= 20_000 => {
+            let rate = f64::from(val) / 1000.0;
+            if rate.is_finite() && rate >= 20.0 {
+                rate
+            } else {
+                60.0
+            }
+        }
+        _ => 60.0,
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FrameRateTracker {
+    samples: std::collections::VecDeque<std::time::Instant>,
+    window_duration: std::time::Duration,
+    max_gap: std::time::Duration,
+    last_interaction: Option<std::time::Instant>,
+    last_computed_fps: Option<f64>,
+}
+
+impl Default for FrameRateTracker {
+    fn default() -> Self {
+        Self {
+            samples: std::collections::VecDeque::with_capacity(128),
+            window_duration: std::time::Duration::from_millis(1000),
+            max_gap: std::time::Duration::from_millis(250),
+            last_interaction: None,
+            last_computed_fps: None,
+        }
+    }
+}
+
+impl FrameRateTracker {
+    pub fn record_frame(&mut self, now: std::time::Instant) {
+        if let Some(&last) = self.samples.back() {
+            if now.saturating_duration_since(last) > self.max_gap {
+                // Gap was too long (reactive UI was idle); reset window so the long pause
+                // doesn't artificially drag down the measured active FPS.
+                self.samples.clear();
+            }
+        }
+        self.samples.push_back(now);
+        let cutoff = now.checked_sub(self.window_duration);
+        if let Some(cutoff) = cutoff {
+            while let Some(&front) = self.samples.front() {
+                if front < cutoff && self.samples.len() > 2 {
+                    self.samples.pop_front();
+                } else {
+                    break;
+                }
+            }
+        }
+        if self.samples.len() >= 2 {
+            let first = *self.samples.front().unwrap();
+            let last = *self.samples.back().unwrap();
+            let duration = last.saturating_duration_since(first).as_secs_f64();
+            if duration > 0.001 {
+                let count = (self.samples.len() - 1) as f64;
+                self.last_computed_fps = Some(count / duration);
+            }
+        }
+    }
+
+    pub fn live_fps(&self) -> Option<f64> {
+        self.last_computed_fps
+    }
+
+    pub fn record_interaction(&mut self, now: std::time::Instant) {
+        self.last_interaction = Some(now);
+    }
+
+    pub fn is_interacting(&self, now: std::time::Instant, threshold: std::time::Duration) -> bool {
+        self.last_interaction
+            .is_some_and(|last| now.saturating_duration_since(last) <= threshold)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FpsDisplayInfo {
+    pub value: f64,
+    pub formatted: String,
+    pub active_mode_label: String,
+    pub tooltip: String,
+    pub is_ui_rate: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectDragPayload {
     pub name: String,
@@ -443,6 +540,8 @@ pub struct PealayerApp {
     pub(crate) is_scrubbing: bool,
     pub(crate) pending_scrub_commit: Option<PendingScrubCommit>,
     pub(crate) last_mouse_activity: std::time::Instant,
+    pub(crate) frame_rate_tracker: FrameRateTracker,
+    pub display_refresh_rate: f64,
     pub(crate) pin_controls: bool,
 
     pub show_error: Option<String>,
@@ -556,6 +655,8 @@ pub struct PealayerApp {
     pub(crate) board_name_draft: String,
     pub(crate) show_hardware_channels_dialog: bool,
     pub(crate) show_workspace_profiles_dialog: bool,
+    pub(crate) effect_controls_ping_at: Option<f64>,
+    pub(crate) pending_tab_reveals: Vec<crate::ui::layout::PealayerTab>,
     pub(crate) workspace_profile_name_draft: String,
     pub(crate) workspace_profile_icon_draft: String,
     pub(crate) workspace_profiles:
@@ -788,6 +889,15 @@ pub struct MediaTrackInfo {
 
 impl eframe::App for PealayerApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        if let Some(winit_window) = frame.winit_window() {
+            if let Some(monitor) = winit_window.current_monitor() {
+                let detected = resolve_display_refresh_rate(monitor.refresh_rate_millihertz());
+                if detected >= 20.0 {
+                    self.display_refresh_rate = detected;
+                }
+            }
+        }
+        self.frame_rate_tracker.record_frame(std::time::Instant::now());
         for request in crate::peer::take_gui_requests() {
             let result=if request.deadline< std::time::Instant::now(){Err("Request expired before application; change was not applied".into())}else{self.apply_peer_request(ui.ctx(),&request.path,request.value)};
             let _=request.reply.send(result);
@@ -1467,6 +1577,7 @@ impl eframe::App for PealayerApp {
             // the old permanent idle repaint loop.
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
+        self.schedule_playback_repaint(&ctx);
         self.update_shell_state();
         crate::branding::sync_native_window_icon(
             &ctx,
@@ -1587,156 +1698,22 @@ impl eframe::App for PealayerApp {
             crate::ui::status_bar::draw(self, ui);
         }
 
-        // Track mouse movement
+        // Track user interaction
         if ctx.input(|i| {
-            i.pointer.delta().length() > 0.0 || i.pointer.any_click() || i.pointer.any_pressed()
+            i.pointer.delta().length() > 0.0
+                || i.pointer.any_click()
+                || i.pointer.any_pressed()
+                || i.pointer.any_down()
+                || !i.raw.events.is_empty()
         }) {
-            self.last_mouse_activity = std::time::Instant::now();
+            self.record_ui_interaction(std::time::Instant::now());
         } else if self.last_mouse_activity.elapsed().as_secs_f32() > 3.0 && !self.pin_controls {
             // Hide mouse cursor when inactive
             ctx.set_cursor_icon(egui::CursorIcon::None);
         }
 
         // Handle Keyboard Shortcuts
-        self.process_application_shortcuts(&ctx);
-        let timeline_keyboard_active =
-            ctx.memory(|memory| memory.has_focus(crate::ui::layout::timeline_keyboard_focus_id()));
-        let transport_shortcuts_enabled = self.keyboard_shortcuts_enabled
-            && !ctx.egui_wants_keyboard_input()
-            && !timeline_keyboard_active;
-        self.process_hardware_key_bindings(
-            &ctx,
-            transport_shortcuts_enabled && self.hardware_binding_dialog_channel.is_none(),
-        );
-        if let Some(direction) = crate::application_shortcuts::take_frame_step_shortcut(
-            &ctx,
-            self.keyboard_shortcuts_enabled,
-        ) {
-            self.step_frames(direction);
-        }
-        if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::Space)) {
-            self.toggle_playback();
-        }
-        if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::F)) {
-            self.toggle_fullscreen(&ctx);
-        }
-        if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::M)) {
-            self.toggle_audio_muted();
-        }
-        if transport_shortcuts_enabled
-            && ctx.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::ArrowLeft))
-        {
-            self.seek_relative(-self.quick_seek_seconds);
-        }
-        if transport_shortcuts_enabled
-            && ctx.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::ArrowRight))
-        {
-            self.seek_relative(self.quick_seek_seconds);
-        }
-        if transport_shortcuts_enabled
-            && ctx.input(|i| {
-                i.key_pressed(egui::Key::Period) || i.key_pressed(egui::Key::CloseBracket)
-            })
-        {
-            self.step_frames(1);
-        }
-        if transport_shortcuts_enabled
-            && ctx
-                .input(|i| i.key_pressed(egui::Key::Comma) || i.key_pressed(egui::Key::OpenBracket))
-        {
-            self.step_frames(-1);
-        }
-        if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
-            let _ = self.mpv.command("add", &["volume", "5"]);
-            self.volume = (self.volume + 5.0).clamp(0.0, 130.0);
-            self.set_osd(format!("Volume: {:.0}%", self.volume));
-        }
-        if transport_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
-            let _ = self.mpv.command("add", &["volume", "-5"]);
-            self.volume = (self.volume - 5.0).clamp(0.0, 130.0);
-            self.set_osd(format!("Volume: {:.0}%", self.volume));
-        }
-
-        const MACRO_KEYS: [egui::Key; 8] = [
-            egui::Key::F1,
-            egui::Key::F2,
-            egui::Key::F3,
-            egui::Key::F4,
-            egui::Key::F5,
-            egui::Key::F6,
-            egui::Key::F7,
-            egui::Key::F8,
-        ];
-        let shortcut_relays = self
-            .advertised_hardware()
-            .filter(|capabilities| capabilities.board_connected)
-            .map(|capabilities| capabilities.relays)
-            .unwrap_or_default();
-
-        let mut timeline_dirty = false;
-
-        for (index, key) in MACRO_KEYS.into_iter().enumerate() {
-            if transport_shortcuts_enabled
-                && ctx.input(|i| i.key_pressed(key))
-                && !self.recording_keys.contains_key(&key)
-            {
-                let Some(relay) = shortcut_relays.get(index) else {
-                    continue;
-                };
-                let start_time = (self.playback_time * 1000.0) as u64;
-
-                let actions = crate::four_d::patterns::generate_constant(relay.id, true, 100);
-                let template = crate::four_d::models::Effect::with_target(
-                    relay.name.clone(),
-                    String::new(),
-                    100,
-                    crate::four_d::models::HardwareTarget::Relay(relay.id),
-                    actions,
-                );
-                let template_id = template.id;
-                self.timeline.templates.push(template);
-
-                let instance = crate::four_d::models::EffectInstance::new(template_id, start_time);
-                let instance_id = instance.id;
-                self.timeline.instances.push(instance);
-
-                self.recording_keys
-                    .insert(key, (instance_id, std::time::Instant::now(), relay.id));
-                timeline_dirty = true;
-            }
-
-            if ctx.input(|i| i.key_released(key)) {
-                if let Some((instance_id, start_instant, relay_id)) =
-                    self.recording_keys.remove(&key)
-                {
-                    if let Some(instance) =
-                        self.timeline.instances.iter().find(|i| i.id == instance_id)
-                    {
-                        let mut duration = start_instant.elapsed().as_millis() as u64;
-                        if duration < 100 {
-                            duration = 100; // minimum duration
-                        }
-
-                        if let Some(template) = self
-                            .timeline
-                            .templates
-                            .iter_mut()
-                            .find(|t| t.id == instance.effect_id)
-                        {
-                            template.duration_ms = duration;
-                            template.actions = crate::four_d::patterns::generate_constant(
-                                relay_id, true, duration,
-                            );
-                        }
-                        timeline_dirty = true;
-                    }
-                }
-            }
-        }
-
-        if timeline_dirty {
-            self.sync_timeline_engine();
-        }
+        self.process_keyboard_shortcuts(&ctx);
 
         let mut frame = egui::Frame::central_panel(&ui.style());
         frame.inner_margin = egui::Margin::same(0);
@@ -1778,6 +1755,18 @@ impl eframe::App for PealayerApp {
                                 .show_inside(ui, &mut tab_viewer);
                         });
                         self.dock_state = dock_state;
+                        if !self.pending_tab_reveals.is_empty() {
+                            let mut layout_changed = false;
+                            for tab in std::mem::take(&mut self.pending_tab_reveals) {
+                                if crate::ui::layout::reveal_and_focus_tab(&mut self.dock_state, tab) {
+                                    layout_changed = true;
+                                }
+                            }
+                            if layout_changed {
+                                self.save_dock_layout();
+                            }
+                            ui.ctx().request_repaint();
+                        }
                         crate::ui::layout::paint_dock_disclosure_icons(
                             ui,
                             &self.dock_state,
@@ -2070,11 +2059,175 @@ fn board_settings_command(
 }
 
 impl PealayerApp {
+    pub(crate) fn process_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
+        if !self.keyboard_shortcuts_enabled {
+            return;
+        }
+
+        self.process_application_shortcuts(ctx);
+
+        let text_editing = ctx.text_edit_focused()
+            || egui::Popup::is_any_open(ctx)
+            || self.hardware_binding_dialog_channel.is_some()
+            || self.hardware_binding_capturing;
+
+        let timeline_keyboard_active =
+            ctx.memory(|memory| memory.has_focus(crate::ui::layout::timeline_keyboard_focus_id()));
+
+        if let Some(direction) = crate::application_shortcuts::take_frame_step_shortcut(
+            ctx,
+            self.keyboard_shortcuts_enabled,
+        ) {
+            self.step_frames(direction);
+        }
+
+        // Global playback and viewer controls:
+        // Accessible even when the timeline has focus, as long as the user is not actively
+        // typing into a TextEdit or interacting with a modal popup.
+        if !text_editing {
+            if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+                ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));
+                self.toggle_playback();
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::F)) {
+                self.toggle_fullscreen(ctx);
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::M)) {
+                self.toggle_audio_muted();
+            }
+            if ctx.input(|i| {
+                i.key_pressed(egui::Key::Period) || i.key_pressed(egui::Key::CloseBracket)
+            }) {
+                self.step_frames(1);
+            }
+            if ctx.input(|i| {
+                i.key_pressed(egui::Key::Comma) || i.key_pressed(egui::Key::OpenBracket)
+            }) {
+                self.step_frames(-1);
+            }
+        }
+
+        // Navigation shortcuts that conflict with timeline editing:
+        // When timeline has focus, ArrowLeft/Right performs frame-stepping
+        // and ArrowUp/Down scrolls tracks vertically. Therefore, quick seek
+        // and master volume are only enabled when the timeline is NOT focused.
+        let non_timeline_shortcuts_enabled = !text_editing
+            && !timeline_keyboard_active
+            && !ctx.egui_wants_keyboard_input();
+
+        self.process_hardware_key_bindings(
+            ctx,
+            non_timeline_shortcuts_enabled && self.hardware_binding_dialog_channel.is_none(),
+        );
+
+        if non_timeline_shortcuts_enabled
+            && ctx.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::ArrowLeft))
+        {
+            self.seek_relative(-self.quick_seek_seconds);
+        }
+        if non_timeline_shortcuts_enabled
+            && ctx.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::ArrowRight))
+        {
+            self.seek_relative(self.quick_seek_seconds);
+        }
+        if non_timeline_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+            let _ = self.mpv.command("add", &["volume", "5"]);
+            self.volume = (self.volume + 5.0).clamp(0.0, 130.0);
+            self.set_osd(format!("Volume: {:.0}%", self.volume));
+        }
+        if non_timeline_shortcuts_enabled && ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+            let _ = self.mpv.command("add", &["volume", "-5"]);
+            self.volume = (self.volume - 5.0).clamp(0.0, 130.0);
+            self.set_osd(format!("Volume: {:.0}%", self.volume));
+        }
+
+        const MACRO_KEYS: [egui::Key; 8] = [
+            egui::Key::F1,
+            egui::Key::F2,
+            egui::Key::F3,
+            egui::Key::F4,
+            egui::Key::F5,
+            egui::Key::F6,
+            egui::Key::F7,
+            egui::Key::F8,
+        ];
+        let shortcut_relays = self
+            .advertised_hardware()
+            .filter(|capabilities| capabilities.board_connected)
+            .map(|capabilities| capabilities.relays)
+            .unwrap_or_default();
+
+        let mut timeline_dirty = false;
+
+        for (index, key) in MACRO_KEYS.into_iter().enumerate() {
+            if !text_editing
+                && ctx.input(|i| i.key_pressed(key))
+                && !self.recording_keys.contains_key(&key)
+            {
+                let Some(relay) = shortcut_relays.get(index) else {
+                    continue;
+                };
+                let start_time = (self.playback_time * 1000.0) as u64;
+
+                let actions = crate::four_d::patterns::generate_constant(relay.id, true, 100);
+                let template = crate::four_d::models::Effect::with_target(
+                    relay.name.clone(),
+                    String::new(),
+                    100,
+                    crate::four_d::models::HardwareTarget::Relay(relay.id),
+                    actions,
+                );
+                let template_id = template.id;
+                self.timeline.templates.push(template);
+
+                let instance = crate::four_d::models::EffectInstance::new(template_id, start_time);
+                let instance_id = instance.id;
+                self.timeline.instances.push(instance);
+
+                self.recording_keys
+                    .insert(key, (instance_id, std::time::Instant::now(), relay.id));
+                timeline_dirty = true;
+            }
+
+            if ctx.input(|i| i.key_released(key)) {
+                if let Some((instance_id, start_instant, relay_id)) =
+                    self.recording_keys.remove(&key)
+                {
+                    if let Some(instance) =
+                        self.timeline.instances.iter().find(|i| i.id == instance_id)
+                    {
+                        let mut duration = start_instant.elapsed().as_millis() as u64;
+                        if duration < 100 {
+                            duration = 100; // minimum duration
+                        }
+
+                        if let Some(template) = self
+                            .timeline
+                            .templates
+                            .iter_mut()
+                            .find(|t| t.id == instance.effect_id)
+                        {
+                            template.duration_ms = duration;
+                            template.actions = crate::four_d::patterns::generate_constant(
+                                relay_id, true, duration,
+                            );
+                        }
+                        timeline_dirty = true;
+                    }
+                }
+            }
+        }
+
+        if timeline_dirty {
+            self.sync_timeline_engine();
+        }
+    }
+
     fn process_application_shortcuts(&mut self, ctx: &egui::Context) {
         if !self.keyboard_shortcuts_enabled || self.hardware_binding_capturing {
             return;
         }
-        let text_editing = ctx.egui_wants_keyboard_input();
+        let text_editing = ctx.text_edit_focused() || egui::Popup::is_any_open(ctx);
         let mut actions = Vec::new();
         ctx.input_mut(|input| {
             input.events.retain(|event| {
@@ -3511,6 +3664,8 @@ impl PealayerApp {
             return;
         }
         let effect_id = effect.id;
+        let mut effect = effect;
+        effect.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
         self.undo_stack.push(self.snapshot_timeline());
         self.timeline.templates.push(effect);
         let instance = crate::four_d::models::EffectInstance::new(
@@ -4374,11 +4529,15 @@ impl PealayerApp {
             ));
 
         if self.was_playing_before_scrub {
-            let _ = self.mpv.set_property("pause", false);
-            self.is_paused = false;
-            self.engine_handle
-                .is_playing
-                .store(true, std::sync::atomic::Ordering::Relaxed);
+            if self.engine_handle.request_prepared_play() {
+                let _ = self.mpv.set_property("pause", true);
+            } else {
+                let _ = self.mpv.set_property("pause", false);
+                self.is_paused = false;
+                self.engine_handle
+                    .is_playing
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
         }
         self.was_playing_before_scrub = false;
     }
@@ -4411,9 +4570,12 @@ impl PealayerApp {
                             sample.position_ms = (v.max(0.0) * 1000.0).round() as u64;
                             sample.sampled_at = std::time::Instant::now();
                         }
+                        if !self.is_paused {
+                            self.seek_pos = None;
+                        }
                         if !self.is_scrubbing
                             && self.pending_scrub_commit.is_none()
-                            && self.seek_pos.is_none()
+                            && (self.seek_pos.is_none() || !self.is_paused)
                         {
                             self.playback_time = v;
                             self.engine_handle
@@ -4428,6 +4590,10 @@ impl PealayerApp {
                         self.engine_handle
                             .is_playing
                             .store(!v, std::sync::atomic::Ordering::Relaxed);
+                        if !v {
+                            self.seek_pos = None;
+                            self.is_scrubbing = false;
+                        }
                         if self.current_video_path.is_some() && prev_paused != v {
                             self.set_osd(if v {
                                 "Pause".to_string()
@@ -4647,6 +4813,114 @@ impl PealayerApp {
                 || (self.duration > 0.0 && self.playback_time >= self.duration && self.is_paused))
     }
 
+    /// Returns true when media is loaded and actively playing (not paused and not finished).
+    pub fn is_active_playback(&self) -> bool {
+        self.current_video_path.is_some() && !self.is_paused && !self.is_playback_finished()
+    }
+
+    /// Determines the presentation repaint pacing for the UI during playback.
+    /// Returns None when playback is inactive (idle, paused, finished, or no media).
+    pub fn playback_repaint_pacing(&self) -> Option<PlaybackRepaintPacing> {
+        if !self.is_active_playback() {
+            return None;
+        }
+        let target_hz = self.display_refresh_rate.clamp(20.0, 360.0);
+        let target_interval = std::time::Duration::from_secs_f64(1.0 / target_hz);
+        Some(PlaybackRepaintPacing::Paced(target_interval))
+    }
+
+    /// Requests repaints during active playback to decouple the UI frame rate from
+    /// the video stream rate while preventing idle GPU spin.
+    pub fn schedule_playback_repaint(&self, ctx: &egui::Context) {
+        match self.playback_repaint_pacing() {
+            Some(PlaybackRepaintPacing::VSync) => {
+                ctx.request_repaint();
+            }
+            Some(PlaybackRepaintPacing::Paced(delay)) => {
+                ctx.request_repaint_after(delay);
+            }
+            None => {}
+        }
+    }
+
+    /// Records user interaction to ensure the frame rate display and control visibility
+    /// reflect active user manipulation.
+    pub fn record_ui_interaction(&mut self, now: std::time::Instant) {
+        self.last_mouse_activity = now;
+        self.frame_rate_tracker.record_interaction(now);
+    }
+
+    /// Returns the effective video playback frame rate taking playback rate multiplier into account.
+    pub fn effective_playback_fps(&self) -> Option<f64> {
+        if self.media_fps.is_finite() && self.media_fps > 0.0 {
+            let rate = if self.playback_rate > 0.0 {
+                self.playback_rate
+            } else {
+                1.0
+            };
+            Some(self.media_fps * rate)
+        } else {
+            None
+        }
+    }
+
+    /// Computes the dynamic FPS display information for the status bar indicator.
+    /// When interacting with the UI, this prioritizes the real UI rendering frame rate.
+    /// When passively watching video playback, this reflects the playback frame rate.
+    pub fn current_fps_display(&self, now: std::time::Instant) -> Option<FpsDisplayInfo> {
+        let ui_fps = self.frame_rate_tracker.live_fps().unwrap_or(self.display_refresh_rate);
+        let playback_fps = self.effective_playback_fps();
+        let is_interacting = self
+            .frame_rate_tracker
+            .is_interacting(now, std::time::Duration::from_millis(1500));
+        let is_active_playback = self.is_active_playback();
+
+        let show_ui_rate = is_interacting || (!is_active_playback && playback_fps.is_none());
+
+        let (value, formatted, active_mode_label, is_ui_rate) = if show_ui_rate {
+            (
+                ui_fps,
+                format!("{:.1} fps", ui_fps),
+                self.tr("UI interaction"),
+                true,
+            )
+        } else if let Some(media_rate) = playback_fps {
+            (
+                media_rate,
+                format!("{:.2} fps", media_rate),
+                self.tr("Video playback"),
+                false,
+            )
+        } else {
+            (
+                ui_fps,
+                format!("{:.1} fps", ui_fps),
+                self.tr("UI rendering"),
+                true,
+            )
+        };
+
+        let mut tooltip = format!("{}: {:.1} fps", self.tr("UI render rate"), ui_fps);
+        if let Some(media_rate) = playback_fps {
+            tooltip.push_str(&format!(
+                "\n{}: {:.2} fps (source: {:.2} fps @ {:.2}x)",
+                self.tr("Video playback rate"),
+                media_rate,
+                self.media_fps,
+                self.playback_rate
+            ));
+        }
+        tooltip.push_str(&format!("\n{}: {}", self.tr("Active mode"), active_mode_label));
+
+        Some(FpsDisplayInfo {
+            value,
+            formatted,
+            active_mode_label,
+            tooltip,
+            is_ui_rate,
+        })
+    }
+
     /// Restarts playback of the current video from the beginning (0.0s).
     pub fn replay(&mut self) {
         if self.current_video_path.is_none() {
@@ -4679,6 +4953,7 @@ impl PealayerApp {
             return;
         }
         if self.is_playback_finished() { self.replay(); return; }
+        self.reset_scrub_state();
         if self.engine_handle.request_prepared_play() {
             let _=self.mpv.set_property("pause",true);
             return;
@@ -4834,6 +5109,26 @@ impl PealayerApp {
         if crate::ui::layout::reveal_and_focus_tab(&mut self.dock_state, tab) {
             self.save_dock_layout();
         }
+        if !self.pending_tab_reveals.contains(&tab) {
+            self.pending_tab_reveals.push(tab);
+        }
+    }
+
+    pub const EFFECT_CONTROLS_PING_DURATION: f64 = 1.2;
+
+    pub fn trigger_effect_controls_ping(&mut self, now: f64) {
+        self.effect_controls_ping_at = Some(now);
+    }
+
+    pub fn effect_controls_ping_strength(&self, now: f64) -> f32 {
+        if let Some(ping_at) = self.effect_controls_ping_at {
+            if now >= ping_at && now < ping_at + Self::EFFECT_CONTROLS_PING_DURATION {
+                let elapsed = (now - ping_at) as f32;
+                let duration = Self::EFFECT_CONTROLS_PING_DURATION as f32;
+                return (1.0 - (elapsed / duration)).clamp(0.0, 1.0);
+            }
+        }
+        0.0
     }
 
     pub fn toggle_tab(&mut self, tab: crate::ui::layout::PealayerTab) {
@@ -5820,9 +6115,13 @@ impl PealayerApp {
         // loadfile inherits MPV's pause flag. A browser Play/Next command must
         // start the selected file even when the previous file was paused or
         // kept open at EOF. Startup restoration applies its saved pause later.
-        let _ = self.mpv.set_property("pause", false);
-        self.is_paused = false;
-        self.engine_handle.is_playing.store(true, std::sync::atomic::Ordering::Relaxed);
+        if self.engine_handle.request_prepared_play() {
+            let _ = self.mpv.set_property("pause", true);
+        } else {
+            let _ = self.mpv.set_property("pause", false);
+            self.is_paused = false;
+            self.engine_handle.is_playing.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     pub fn media_timeline_state(&self) -> crate::media::MediaTimelineState {
@@ -7246,6 +7545,7 @@ impl PealayerApp {
         let mut new_template = template.clone();
         let new_id = uuid::Uuid::new_v4();
         new_template.id = new_id;
+        new_template.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
         self.timeline.templates.push(new_template);
 
         if let Some(inst) = self
@@ -7334,6 +7634,10 @@ fn reconcile_controller_effect_templates(
         refreshed.id = template.id;
         refreshed.icon.clone_from(&catalog_entry.icon);
         refreshed.controller_lane = Some(catalog_entry.lane);
+        if template.duration_policy == crate::four_d::models::CueDurationPolicy::Resizable {
+            refreshed.duration_ms = template.duration_ms;
+            refreshed.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
+        }
         if *template != refreshed {
             *template = refreshed;
             changed = true;
@@ -7773,6 +8077,8 @@ impl Default for PealayerApp {
             is_scrubbing: false,
             pending_scrub_commit: None,
             last_mouse_activity: std::time::Instant::now(),
+            frame_rate_tracker: FrameRateTracker::default(),
+            display_refresh_rate: 60.0,
             pin_controls: false,
             show_error: None,
             show_sub_settings: false,
@@ -7877,6 +8183,8 @@ impl Default for PealayerApp {
             board_name_draft: String::new(),
             show_hardware_channels_dialog: false,
             show_workspace_profiles_dialog: false,
+            effect_controls_ping_at: None,
+            pending_tab_reveals: Vec::new(),
             workspace_profile_name_draft: String::new(),
             workspace_profile_icon_draft: "window".to_string(),
             workspace_profiles: crate::config::default_workspace_profiles(),
@@ -7935,14 +8243,14 @@ impl Default for PealayerApp {
             compact_timeline_tracks: true,
             timeline_hide_cue_text_overflow: true,
             timeline_header_wheel_vertical_scroll: true,
-            timeline_plain_wheel_action: crate::config::TimelineWheelBehavior::Zoom,
-            timeline_ctrl_wheel_action: crate::config::TimelineWheelBehavior::VerticalScroll,
+            timeline_plain_wheel_action: crate::config::TimelineWheelBehavior::VerticalScroll,
+            timeline_ctrl_wheel_action: crate::config::TimelineWheelBehavior::Zoom,
             timeline_shift_wheel_action: crate::config::TimelineWheelBehavior::HorizontalScroll,
             timeline_alt_wheel_action: crate::config::TimelineWheelBehavior::Zoom,
             timeline_middle_button_pan: true,
             timeline_middle_axis_lock_modifiers: true,
             timeline_animated_navigation: true,
-            timeline_navigation_transition_ms: 220,
+            timeline_navigation_transition_ms: 100,
             timeline_follow_playhead: false,
             timeline_toolbar_order: crate::config::default_timeline_toolbar_order(),
             timeline_toolbar_hidden: crate::config::default_timeline_toolbar_hidden(),
@@ -7958,7 +8266,7 @@ impl Default for PealayerApp {
             windows_video_taskbar_thumbnail: true,
             windows_thumbnail_toolbar: true,
             windows_jump_list_quick_actions: true,
-            opengl_vsync: false,
+            opengl_vsync: true,
             live_video_during_window_move: true,
             compositor_paced_window_move: true,
             native_dialog_windows: true,
@@ -8026,12 +8334,12 @@ fn hardware_connection_was_lost(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     static APP_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    fn lock_app_tests() -> std::sync::MutexGuard<'static, ()> {
+    pub(crate) fn lock_app_tests() -> std::sync::MutexGuard<'static, ()> {
         APP_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -8095,6 +8403,128 @@ mod tests {
             !ctx.input(|input| input.key_pressed(egui::Key::Comma)),
             "preferences accelerator must not also frame-step backward"
         );
+    }
+
+    fn discard_ui_output(mut output: egui::FullOutput) {
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn spacebar_toggles_playback_when_timeline_is_focused() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.current_video_path = Some(std::path::PathBuf::from("test-data/jellyfish.mp4"));
+        app.is_paused = true;
+        let ctx = egui::Context::default();
+
+        // 1. Give keyboard focus to the timeline canvas
+        discard_ui_output(ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.interact(
+                ui.max_rect(),
+                crate::ui::layout::timeline_keyboard_focus_id(),
+                egui::Sense::click_and_drag(),
+            );
+            ui.ctx().memory_mut(|memory| {
+                memory.request_focus(crate::ui::layout::timeline_keyboard_focus_id());
+            });
+        }));
+        assert!(ctx.memory(|memory| memory.has_focus(crate::ui::layout::timeline_keyboard_focus_id())));
+
+        // 2. Press Space while timeline is focused
+        discard_ui_output(ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Space,
+                    physical_key: Some(egui::Key::Space),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                ui.interact(
+                    ui.max_rect(),
+                    crate::ui::layout::timeline_keyboard_focus_id(),
+                    egui::Sense::click_and_drag(),
+                );
+                app.process_keyboard_shortcuts(&ctx);
+            },
+        ));
+
+        // Playback should now be playing (unpaused) and timeline must retain focus
+        assert!(!app.is_paused, "Space must toggle playback even when timeline is focused");
+        assert!(
+            ctx.memory(|memory| memory.has_focus(crate::ui::layout::timeline_keyboard_focus_id())),
+            "Timeline must retain focus after pressing Space"
+        );
+
+        // 3. Press Space again while timeline is still focused
+        discard_ui_output(ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Space,
+                    physical_key: Some(egui::Key::Space),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                ui.interact(
+                    ui.max_rect(),
+                    crate::ui::layout::timeline_keyboard_focus_id(),
+                    egui::Sense::click_and_drag(),
+                );
+                app.process_keyboard_shortcuts(&ctx);
+            },
+        ));
+
+        // Playback should now be paused and timeline still retains focus
+        assert!(app.is_paused, "Space must pause playback even when timeline is focused");
+        assert!(
+            ctx.memory(|memory| memory.has_focus(crate::ui::layout::timeline_keyboard_focus_id())),
+            "Timeline must retain focus after pausing with Space"
+        );
+    }
+
+    #[test]
+    fn spacebar_does_not_toggle_playback_when_typing_in_text_edit() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.current_video_path = Some(std::path::PathBuf::from("test-data/jellyfish.mp4"));
+        app.is_paused = true;
+        let ctx = egui::Context::default();
+        let mut text = "search".to_string();
+
+        // Focus a text edit
+        for _ in 0..2 {
+            discard_ui_output(ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.text_edit_singleline(&mut text).request_focus();
+            }));
+        }
+        assert!(ctx.text_edit_focused());
+
+        // Press Space while text edit is focused
+        discard_ui_output(ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Space,
+                    physical_key: Some(egui::Key::Space),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |_| {
+                app.process_keyboard_shortcuts(&ctx);
+            },
+        ));
+
+        // Playback must remain paused (not toggled)
+        assert!(app.is_paused, "Space must not toggle playback while typing text");
     }
 
     #[test]
@@ -8928,5 +9358,172 @@ mod tests {
             web_hardware_details(&capabilities, crate::config::MotionControlMode::default());
         let percent = details["controls"][0]["percent"].as_f64().unwrap();
         assert!((percent - (160.0 * 100.0 / 255.0)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn active_playback_decouples_ui_frame_rate_without_idle_spin() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+
+        // 1. Idle state: no media loaded
+        assert!(!app.is_active_playback(), "No media must not be active playback");
+        assert_eq!(app.playback_repaint_pacing(), None, "Idle state must not request continuous playback repaints");
+
+        // 2. Active playback state: video loaded, playing, and not finished
+        app.current_video_path = Some(std::path::PathBuf::from("test.mp4"));
+        app.is_paused = false;
+        app.is_eof = false;
+        app.duration = 100.0;
+        app.playback_time = 10.0;
+        assert!(app.is_active_playback(), "Unpaused loaded media must be active playback");
+
+        // Playback pacing should adapt to the desktop display refresh rate
+        app.display_refresh_rate = 60.0;
+        match app.playback_repaint_pacing() {
+            Some(PlaybackRepaintPacing::Paced(dur)) => {
+                let ms = dur.as_secs_f64() * 1000.0;
+                assert!((ms - (1000.0 / 60.0)).abs() < 0.1, "Expected ~16.67ms, got {ms}ms");
+            }
+            other => panic!("Expected Paced duration for 60Hz, got {other:?}"),
+        }
+
+        app.display_refresh_rate = 144.0;
+        match app.playback_repaint_pacing() {
+            Some(PlaybackRepaintPacing::Paced(dur)) => {
+                let ms = dur.as_secs_f64() * 1000.0;
+                assert!((ms - (1000.0 / 144.0)).abs() < 0.1, "Expected ~6.94ms, got {ms}ms");
+            }
+            other => panic!("Expected Paced duration for 144Hz, got {other:?}"),
+        }
+
+        // 3. Paused state: video loaded but paused
+        app.is_paused = true;
+        assert!(!app.is_active_playback(), "Paused video must not be active playback");
+        assert_eq!(app.playback_repaint_pacing(), None, "Paused video must return to zero idle repaint");
+
+        // 4. Playback finished state
+        app.is_paused = false;
+        app.is_eof = true;
+        assert!(!app.is_active_playback(), "Finished video must not be active playback");
+        assert_eq!(app.playback_repaint_pacing(), None, "Finished video must not spin GPU");
+    }
+
+    #[test]
+    fn frame_rate_tracker_measures_accurate_fps_over_sliding_window() {
+        let mut tracker = FrameRateTracker::default();
+        let start = std::time::Instant::now();
+        let frame_interval = std::time::Duration::from_secs_f64(1.0 / 60.0);
+
+        // Record 60 frames spaced by ~16.67ms
+        for i in 0..60 {
+            tracker.record_frame(start + frame_interval * i);
+        }
+
+        let fps = tracker.live_fps().expect("FPS should be available after frames");
+        assert!(
+            (fps - 60.0).abs() < 1.0,
+            "Expected ~60 FPS, got {fps}"
+        );
+    }
+
+    #[test]
+    fn frame_rate_tracker_handles_idle_gaps_without_skewing_fps() {
+        let mut tracker = FrameRateTracker::default();
+        let start = std::time::Instant::now();
+        let frame_interval = std::time::Duration::from_secs_f64(1.0 / 60.0);
+
+        // Record 30 frames at 60 FPS
+        for i in 0..30 {
+            tracker.record_frame(start + frame_interval * i);
+        }
+
+        // Simulate 3 seconds of idle wait
+        let resume = start + std::time::Duration::from_secs(3);
+
+        // Record 10 frames at 60 FPS after idle wait
+        for i in 0..10 {
+            tracker.record_frame(resume + frame_interval * i);
+        }
+
+        let fps = tracker.live_fps().expect("FPS should be available after resume");
+        assert!(
+            (fps - 60.0).abs() < 1.5,
+            "Expected ~60 FPS after idle gap, got {fps}"
+        );
+    }
+
+    #[test]
+    fn dynamic_fps_display_switches_between_ui_interaction_and_media_playback() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        let now = std::time::Instant::now();
+
+        // Feed some 60 FPS frames to tracker
+        let frame_interval = std::time::Duration::from_secs_f64(1.0 / 60.0);
+        for i in 0..30 {
+            app.frame_rate_tracker.record_frame(now + frame_interval * i);
+        }
+        let current_time = now + frame_interval * 30;
+
+        // Load 23.976 FPS video
+        app.current_video_path = Some(std::path::PathBuf::from("test.mp4"));
+        app.media_fps = 23.976;
+        app.playback_rate = 1.0;
+        app.is_paused = false;
+        app.is_eof = false;
+
+        // 1. When passively playing (no recent UI interaction)
+        let display_passive = app.current_fps_display(current_time + std::time::Duration::from_secs(2));
+        assert!(display_passive.is_some());
+        let info_passive = display_passive.unwrap();
+        assert_eq!(info_passive.is_ui_rate, false, "Must display playback rate when not interacting");
+        assert!(info_passive.formatted.contains("23.98"), "Expected playback rate 23.98 fps, got {}", info_passive.formatted);
+
+        // 2. When actively interacting with UI
+        app.record_ui_interaction(current_time + std::time::Duration::from_secs(3));
+        let display_active = app.current_fps_display(current_time + std::time::Duration::from_secs(3));
+        assert!(display_active.is_some());
+        let info_active = display_active.unwrap();
+        assert_eq!(info_active.is_ui_rate, true, "Must display UI rate when interacting");
+        assert!(info_active.formatted.contains("60"), "Expected UI rate ~60 fps, got {}", info_active.formatted);
+        assert!(info_active.tooltip.contains("UI render rate"));
+        assert!(info_active.tooltip.contains("23.98"));
+    }
+
+    #[test]
+    fn display_refresh_rate_resolution_and_desktop_pacing() {
+        assert_eq!(resolve_display_refresh_rate(Some(144_000)), 144.0);
+        assert_eq!(resolve_display_refresh_rate(Some(120_000)), 120.0);
+        assert!((resolve_display_refresh_rate(Some(59_940)) - 59.94).abs() < 0.01);
+        assert_eq!(resolve_display_refresh_rate(None), 60.0);
+        assert_eq!(resolve_display_refresh_rate(Some(0)), 60.0);
+
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.current_video_path = Some(std::path::PathBuf::from("test.mp4"));
+        app.is_paused = false;
+        app.is_eof = false;
+
+        // 144 Hz display pacing
+        app.display_refresh_rate = 144.0;
+        let pacing_144 = app.playback_repaint_pacing().expect("Should pace during playback");
+        match pacing_144 {
+            PlaybackRepaintPacing::Paced(dur) => {
+                let ms = dur.as_secs_f64() * 1000.0;
+                assert!((ms - (1000.0 / 144.0)).abs() < 0.1, "Expected ~6.94ms, got {ms}ms");
+            }
+            PlaybackRepaintPacing::VSync => panic!("Expected paced interval matching 144Hz"),
+        }
+
+        // 60 Hz display pacing
+        app.display_refresh_rate = 60.0;
+        let pacing_60 = app.playback_repaint_pacing().expect("Should pace during playback");
+        match pacing_60 {
+            PlaybackRepaintPacing::Paced(dur) => {
+                let ms = dur.as_secs_f64() * 1000.0;
+                assert!((ms - (1000.0 / 60.0)).abs() < 0.1, "Expected ~16.67ms, got {ms}ms");
+            }
+            PlaybackRepaintPacing::VSync => panic!("Expected paced interval matching 60Hz"),
+        }
     }
 }

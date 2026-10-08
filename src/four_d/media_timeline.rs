@@ -190,6 +190,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
     let endpoint = handle.serial_port.clone();
     let estop = handle.estop_active.clone();
     let error = handle.connection_error.clone();
+    let connected = handle.is_connected.clone();
     std::thread::spawn(move || {
         let mut previous_path = String::new();
         let mut seeking = false;
@@ -226,9 +227,10 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                 .get_property::<f64>("duration")
                 .ok()
                 .filter(|value| value.is_finite() && *value > 0.0);
-            let coordinator = endpoint
-                .lock()
-                .is_ok_and(|value| super::controller::is_controller_endpoint(&value));
+            let coordinator = connected.load(std::sync::atomic::Ordering::Acquire)
+                && endpoint
+                    .lock()
+                    .is_ok_and(|value| super::controller::is_controller_endpoint(&value));
             let mut playing = loaded
                 && !paused
                 && !eof
@@ -356,6 +358,30 @@ mod tests {
         assert!(!plan.ready_for(1));
         plan.replace(Ok(json!({"cues":[],"actions":[{"id":"b"}]})));
         assert!(plan.deferred_reason.is_none());
+    }
+
+    #[test]
+    fn epoch_transition_requires_new_arming_feedback() {
+        let mut plan = PreparedTimeline::default();
+        let value = json!({"cues":[],"actions":[{"id":"a"}],"max_lateness_ms":50});
+        plan.replace(Ok(value));
+        plan.acknowledged_revision = 1;
+        plan.clock_ack_revision = 1;
+        plan.clock_ack_epoch = 1;
+        plan.feedback = json!({"state":"paused","armed_epoch":1});
+        assert!(plan.ready_for(1));
+
+        // When epoch increments to 2 (e.g. after a seek or media switch)
+        assert!(!plan.ready_for(2));
+
+        // Feedback in faulted state must not be ready
+        plan.feedback = json!({"state":"faulted","armed_epoch":2,"error":"hardware timeline is not armed for this media epoch"});
+        plan.clock_ack_epoch = 2;
+        assert!(!plan.ready_for(2));
+
+        // Proper arming restores ready_for
+        plan.feedback = json!({"state":"paused","armed_epoch":2});
+        assert!(plan.ready_for(2));
     }
 
     #[test]

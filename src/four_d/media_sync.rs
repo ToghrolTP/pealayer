@@ -158,20 +158,47 @@ pub fn spawn(
                     std::thread::sleep(Duration::from_millis(10));
                     continue;
                 }
-                sequence += 1;
-                if rpc.call("controller.media.playback.update",json!({"client_id":id,"sequence":sequence,"position_ms":current.position_now(),"duration_ms":current.duration_ms,"playing":false,"loaded":current.loaded,"rate":current.rate,"epoch":current.epoch})).is_err() {client=None;previous=None;continue}
                 payload["client_id"] = json!(id);
                 payload["revision"] = json!(revision);
                 match rpc.call_detailed("controller.media.timeline.prepare", payload) {
                     Ok(feedback) => {
+                        sequence += 1;
+                        let arm_result = rpc.call(
+                            "controller.media.playback.update",
+                            json!({
+                                "client_id": id,
+                                "sequence": sequence,
+                                "position_ms": current.position_now(),
+                                "duration_ms": current.duration_ms,
+                                "playing": false,
+                                "loaded": current.loaded,
+                                "rate": current.rate,
+                                "epoch": current.epoch,
+                                "plan_revision": revision,
+                            }),
+                        );
                         if let Ok(mut plan) = timeline.lock()
                             && plan.revision == revision
                         {
                             plan.acknowledged_revision = revision;
-                            plan.feedback = feedback;
                             plan.error = None;
                             plan.deferred_reason = None;
-                            plan.last_ack = None;
+                            if let Ok(ref arm_feedback) = arm_result {
+                                if arm_feedback["epoch"].as_u64() == Some(current.epoch)
+                                    && arm_feedback["plan_revision"].as_u64() == Some(revision)
+                                {
+                                    plan.clock_ack_revision = revision;
+                                    plan.clock_ack_epoch = current.epoch;
+                                    plan.feedback = arm_feedback["timeline"].clone();
+                                    plan.last_ack = Some(Instant::now());
+                                } else {
+                                    plan.feedback = feedback;
+                                    plan.last_ack = None;
+                                }
+                            } else {
+                                plan.feedback = feedback;
+                                plan.last_ack = None;
+                            }
                         }
                         preparation_retry_revision = 0;
                         previous = None;
@@ -206,10 +233,22 @@ pub fn spawn(
                 if current.playing && current.observed_at.elapsed() > Duration::from_millis(250) {
                     continue;
                 }
+                let has_hardware = timeline.lock().is_ok_and(|plan| plan.has_items());
+                let is_armed_for_epoch = timeline.lock().ok().is_some_and(|plan| {
+                    plan.feedback["armed_epoch"].as_u64() == Some(current.epoch)
+                        && plan.clock_ack_epoch == current.epoch
+                        && plan.clock_ack_revision == revision
+                        && plan.acknowledged_revision == revision
+                });
+                let outgoing_playing = if has_hardware {
+                    current.playing && is_armed_for_epoch
+                } else {
+                    current.playing
+                };
                 sequence += 1;
                 let result = rpc.call("controller.media.playback.update",json!({
                     "client_id":id,"sequence":sequence,"position_ms":current.position_now(),
-                    "duration_ms":current.duration_ms,"playing":current.playing,"loaded":current.loaded,"rate":current.rate,"epoch":current.epoch,"plan_revision":revision}));
+                    "duration_ms":current.duration_ms,"playing":outgoing_playing,"loaded":current.loaded,"rate":current.rate,"epoch":current.epoch,"plan_revision":revision}));
                 match result {
                     Ok(feedback) => {
                         if let Ok(mut plan) = timeline.lock() {
