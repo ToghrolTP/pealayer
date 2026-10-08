@@ -7,5 +7,6 @@ const modules = source => [...source.matchAll(/^\s*(?:pub\s+)?mod\s+(\w+)\s*;/gm
 const shared = new Set(modules(library));
 assert.deepEqual(modules(binary).filter(name => shared.has(name)), [],
   'The binary must reuse library modules, not compile a second set of contracts and process globals');
-assert.match(binary, /^pub use pealayer::\*;/m, 'The executable must import the authoritative library');
+assert.match(binary, /pealayer::startup::run\(\)/, 'The executable must delegate startup to the authoritative library');
+assert.equal(modules(binary).length, 0, 'The executable must remain a thin entry point');
 console.log(`Single-crate contract guard passed (${shared.size} shared modules).`);
